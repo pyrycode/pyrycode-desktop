@@ -229,8 +229,8 @@ Split from #672 (the not-yet-known relay state half is [#719](../codebase/719.md
 as a fourth `LegCategory` picked up here with no code change — see below). Each host row ends with
 two label-less 6px dots at its trailing edge — the host (daemon)
 leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
-mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
-rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
+mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962)
+verbatim rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
 })` renders `<span className="channel-list__host-status">` holding two
 `<span className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label}
 />`; a module-local `HostConnectionDotsControl` reads `useSessionStore(selectStatus)` and
@@ -247,14 +247,19 @@ Two reuse decisions, at the two levels the contract exists on:
   relay first there. Both props share one type, so a copied call site would swap them silently;
   a leg-order test pins it.
 - **CSS.** The colour contract lives one level below the TS mapping, in `.conn-dot--up` /
-  `--in-progress` / `--down` (`conversation.css`). The sidebar dot wears that modifier *without*
-  its `.conn-dot` 8px base — `.channel-list__host-dot` in `channels.css` supplies 6px geometry
-  only. This keeps the category → colour binding to one copy in the renderer
-  (`grep -rn "color-success" src/renderer --include='*.css'` proves it), at the cost of a
-  cross-file dependency the node-environment unit tier cannot see: if `.conn-dot--*` ever leaves
-  `conversation.css`, the sidebar dots go invisible with no test failure. Mitigated by a comment
-  on those three rules naming the sidebar as a second consumer — see
-  [conversation-shell.md](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330).
+  `--in-progress` / `--down` / `--unknown` — declared in **this file**, `channels.css`, directly below
+  `.channel-list__host-dot`, since [#962](https://github.com/pyrycode/pyrycode-desktop/issues/962)
+  moved the four rules here from `conversation.css` when it deleted the row that used to host their
+  first (and, until #962, only other) consumer, `ConnectionStatusIndicator`. The sidebar dot wears the
+  modifier *without* a `.conn-dot` base class — `.conn-dot` itself had no surviving consumer once that
+  indicator went and was deleted with it — `.channel-list__host-dot` supplies 6px geometry only. This
+  keeps the category → colour binding to one copy in the renderer
+  (`grep -rn "color-success" src/renderer --include='*.css'` proves it), and the move closed the
+  cross-file dependency the node-environment unit tier could not see: before #962 a `.conn-dot--*`
+  rule leaving `conversation.css` would have blanked these dots with no test failure; now both halves
+  live in the same file, and `e2e/connection-dot-colours.spec.ts` (added by #962) reads the shipped
+  `getComputedStyle().backgroundColor` back off all four to guard the CSS-deletion risk directly. See
+  [conversation-shell-chrome.md](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962).
 
 The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/"Relay
 Unknown"/etc. — on a

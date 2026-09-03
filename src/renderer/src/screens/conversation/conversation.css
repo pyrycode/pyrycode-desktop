@@ -1925,117 +1925,14 @@
   display: block;
 }
 
-/* The collapsed status row (#177) — the trigger that opens the Run configuration sheet. A slim
-   full-width button between the thread and the composer, with a top border separating it from the
-   thread. Never grows or shrinks. The top border is --color-outline-variant and the muted icon is
-   --color-on-surface-variant: trust the token names, not the Figma export's swapped fallback hexes.
-   The Figma's 6px vertical padding is off the 4px grid → --space-2 (the 2px delta is imperceptible). */
-.status-row {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  border-top: 1px solid var(--color-outline-variant);
-  background: var(--color-surface);
-  color: var(--color-on-surface-variant);
-  cursor: pointer;
-  font-family: var(--font-sans);
-}
-
-.status-row:hover {
-  background: var(--color-surface-container);
-}
-
-.status-row:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-.status-row__chevron {
-  display: block;
-  flex: 0 0 auto;
-}
-
-/* The status-row summary slot (Figma node 16-58). A flex row so the #330 two-dot connection indicator and
-   #181/#182's future run-config summary text ("Opus 4.7 · high · 73% used") coexist side by side; neither
-   claims the slot exclusively. min-width: 0 lets it shrink/truncate once that text lands. */
-.status-row__summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-/* #330 — the two-dot connection indicator: a relay leg and a daemon leg, each a coloured dot + a muted
-   label. The dot colour is redundant with the label text (legible without colour, AC2). */
-.status-row__connection {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.conn-leg {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-/* An 8px status dot — structural component geometry (the .run-config__context-bar precedent), not off a
-   spacing token. flex: 0 0 auto keeps it a perfect circle when the label truncates. */
-.conn-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-full);
-}
-
-/* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
-   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach, and since #719
-   unknown = neutral outline grey.
-   These four rules have a SECOND consumer since #718: the sidebar host row's dot pair wears them without
-   `.conn-dot` above (whose 8px box is this row's, not the sidebar's), so they are the renderer's single
-   copy of the contract and not the status row's private detail. Removing this indicator — a live operator
-   decision — must not take them with it: the sidebar's dots would then render at 6px with no background
-   and go invisible SILENTLY, since the unit tier asserts markup in a node environment and never a computed
-   colour. Whoever deletes the rest of `.status-row__connection` moves these four rather than dropping
-   them. For the same reason a NEW category's binding belongs here, flat beside its siblings — nested under
-   `.conn-dot` it would be declared exactly once and still leave the 6px sidebar dot unpainted. */
-.conn-dot--up {
-  background: var(--color-success);
-}
-
-.conn-dot--in-progress {
-  background: var(--color-warning);
-}
-
-.conn-dot--down {
-  background: var(--color-error);
-}
-
-/* #719's not-yet-known relay state: outline grey, the achromatic neutral. Deliberately none of the three
-   above — no status has arrived, which is neither good news nor bad, and #560's not-yet-known line
-   (below, ~:2109) set the in-repo precedent that such a state declines --color-error rather than claiming
-   a failure. --color-outline already fills a small --radius-full off-state chip here (the run-config and
-   settings switch knobs) meaning "not on", the same shape and the same valence-free semantic; it is also
-   the only achromatic option, so this dot separates from green/amber/peach by chroma as well as hue and
-   stays tellable apart at 6px. NOT --color-on-surface-variant, which is `.conn-leg__label`'s own colour —
-   a dot in the colour of the text beside it reads as a bullet, not a status chip. */
-.conn-dot--unknown {
-  background: var(--color-outline);
-}
-
-/* The leg's status label — body-small, muted, matching the row's existing summary treatment. nowrap so a
-   leg reads as one dot + label unit and never wraps mid-phrase. */
-.conn-leg__label {
-  color: var(--color-on-surface-variant);
-  white-space: nowrap;
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-}
+/* #962 retired the collapsed status row (#177) and #330's two-dot indicator inside it — `.status-row`,
+   its summary slot and chevron, `.status-row__connection`, `.conn-leg`, `.conn-dot` and
+   `.conn-leg__label` all went with them. The desktop design (Figma 102:4) draws nothing between the
+   message area and the input area, and the row's own controls moved into the input footer
+   (#682/#683/#811). The four `.conn-dot--*` category → colour bindings did NOT go: they are the
+   sidebar host row's since #718 and are declared in `channels.css` beside `.channel-list__host-dot`,
+   which is their only consumer now. The sheet those retired triggers opened is still here below,
+   reached from the thread's overflow menu until #683 lands. */
 
 /* The Run configuration sheet overlay (#177) — bottom-anchored inside .conversation (which is the
    position: relative containing block), not a portal. flex-end anchors the panel to the bottom. */
@@ -3423,29 +3320,10 @@
    `.status-sheet …` descendant selector and no row carries positional CSS: #580 can swap the outer chrome
    for a docked sidebar without touching the list. All token-based — no color/size/spacing literals. */
 
-/* The trigger beside the status row — an icon-only button in the same between-thread-and-composer region,
-   self-aligned to the start so it does not stretch full-width (the .conversation__back treatment: the same
-   `flex: 0 0 auto; align-self: flex-start` idiom on another icon-only affordance), muted like the status
-   row it sits with. */
-.background-task-trigger {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  display: flex;
-  align-items: center;
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  background: transparent;
-  color: var(--color-on-surface-variant);
-  cursor: pointer;
-}
-
-.background-task-trigger:hover {
-  background: var(--color-surface-container);
-}
-
-.background-task-trigger:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
+/* #962 retired `.background-task-trigger`, the clock button that sat beside the status row: the design
+   draws no home for it in that region, and #580 owns the panel's final trigger. Until that drawing lands
+   the panel is opened from a `Background tasks` item in the thread's overflow menu, which wears
+   `.conversation__overflow-item` and needs no rule here. The panel chrome below is unchanged. */
 
 /* The task list — a plain semantic <ul> with the browser's list chrome reset away; the rows carry the
    panel's own padding. */

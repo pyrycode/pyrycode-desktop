@@ -11,15 +11,14 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 ```
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
+├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962)
 ├── UnpairControl              .conversation__header (slim header row, #166)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279)
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── (ApiRetryIndicator / CompactingIndicator / StallIndicator — the three problem-state bubbles right after Timeline; unaffected by #796, see below)
-├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
-│   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
-├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
+├── (the region between the thread and the composer is EMPTY since #962 — the run-config row (#177) and the background-task trigger (#581) that used to mount here are retired; both overlays still open, now from the overflow menu above)
 ├── ComposerStatusArea         .composer-status     (fixed-height row above the composer; NEVER null, #796)
 │   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
 │   └── ComposerErrorChipControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797)
@@ -34,7 +33,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
 
-`MessageBubble`, `Composer`, `UnpairControl`, `StatusRow`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, `UnpairControl`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ## Data shape (coarse path — retired residue since #179)
 
@@ -203,17 +202,25 @@ Not security-sensitive: a pure renderer read of already-store-held status, no tr
 code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,
 and the apostrophe-escaping test lesson.
 
-## Two-dot Relay/Pyrycode connection-status indicator (#330)
+## Two-dot Relay/Pyrycode connection-status leg mapping (#330, its render retired from this screen by #962)
 
-The final slice of the two-dot connection indicator, split from [#149](../codebase/149.md):
-[#328](../codebase/328.md) (relay-leg transport) → [#329](../codebase/329.md) (renderer [relay-link
-store](relay-link-store.md)) → this ticket (render). Two independently-read legs — the relay-socket
-leg from `relayLinkStore` and the daemon-session leg from [session store](session-store.md)'s
-`ConnectionStatus` — render as two labelled, colour-coded dots inside `StatusRow`'s
-`.status-row__summary` slot (Figma node `16-58`), mirroring mobile's `ConnectionStatusLine`
-(mobile #397/#398, not itself drawn in the locked Figma file). Complements the disconnected-only
-[Connection banner](#connection-banner-279) — the banner announces failure, this is the persistent
-at-a-glance state.
+Split from [#149](../codebase/149.md): [#328](../codebase/328.md) (relay-leg transport) →
+[#329](../codebase/329.md) (renderer [relay-link store](relay-link-store.md)) → #330 (render, in a
+`StatusRow`-hosted `ConnectionStatusIndicator`, Figma node `16-58`, mirroring mobile's
+`ConnectionStatusLine`). **#962 deleted `ConnectionStatusIndicator` and its store-bound container
+`ConnectionStatusIndicatorControl`, along with the `StatusRow` that hosted them** — the desktop design
+draws nothing in that region (see [above](#structure)). What survives in this file is the two
+exported pure mapping functions below: `relayLeg`/`daemonLeg`/`ConnectionLeg` are still imported by
+`channels/ChannelList.tsx`, whose `HostConnectionDots` (#718) has rendered the same two legs on the
+sidebar's host row since before this ticket and is now the app's **only** two-dot connection surface.
+See the [Channel List home screen](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
+doc for the current UI, and [below](#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
+for what replaced the row that hosted this indicator.
+
+Two independently-read legs — the relay-socket leg from `relayLinkStore` and the daemon-session leg
+from [session store](session-store.md)'s `ConnectionStatus` — turn into two labelled, colour-coded
+dots. Complements the disconnected-only [Connection banner](#connection-banner-279) — the banner
+announces failure, the dots are the persistent at-a-glance state.
 
 Two exported pure mapping functions turn each leg's raw status into a `{ category, label }` pair —
 `category: 'up' | 'in-progress' | 'down' | 'unknown'` (the fourth member added by
@@ -253,52 +260,107 @@ while daemon = down is a legitimate, intended render, not a bug the mapping func
 retryable `daemon-absent` (4404) close similarly leaves the daemon leg at `connecting` (in-progress,
 never down) while the relay leg reads up/"Reachable" — both legs are honest about their own hop only.
 
-`ConnectionStatusIndicator({ relay, daemon })` is the exported pure view: a
+**Retired by #962 (kept as history — the render no longer exists, the mapping below still does).**
+`ConnectionStatusIndicator({ relay, daemon })` used to be the exported pure view: a
 `<span className="status-row__connection" role="group" aria-label="Connection status">` holding one
 `.conn-leg` per leg (relay first, then daemon), each a `.conn-dot--{category}` (`aria-hidden`,
-decorative — colour is redundant with the label) plus a `.conn-leg__label` span. A static
-`role="group"`, not a live region — the banner (#279) already announces disconnect transitions, so a
-second live region here would double-announce. `ConnectionStatusIndicatorControl`, the in-file
-container, reads `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)` (the
+decorative — colour is redundant with the label) plus a `.conn-leg__label` span, mounted inside
+`StatusRow`'s `.status-row__summary` span by a store-bound container, `ConnectionStatusIndicatorControl`
+(`useRelayLinkStore(selectRelayLinkStatus)` + `useSessionStore(selectStatus)`, the
 `QueuedBacklogControl` two-independent-store precedent — re-anchored here by [#618](../codebase/618.md)
-after the original, `ScreenSnapshotControl`, was removed) and passes the mapped legs down; no
-`window.pyry`, no IPC, no effects, so the server-rendered smoke test touches no bridge. Initial state
-is one Unknown dot and one Offline dot — the relay leg's `null` sentinel reads `unknown`/`Relay
-Unknown` since [#719](../codebase/719.md) (previously collapsed into a second `down`/`Relay
-Offline`, #330's original choice), while the daemon leg's `disconnected` still reads `down`/`Pyrycode
-Offline`.
+after the original, `ScreenSnapshotControl`, was removed). Initial state was one Unknown dot and one
+Offline dot — the relay leg's `null` sentinel reads `unknown`/`Relay Unknown` since
+[#719](../codebase/719.md) (previously collapsed into a second `down`/`Relay Offline`, #330's original
+choice), while the daemon leg's `disconnected` still reads `down`/`Pyrycode Offline`; that initial-state
+fact still holds for `HostConnectionDots` on the sidebar, the surface that now owns this render. Its
+`useRelayLinkStore`/`selectRelayLinkStatus` import went with it — `ConversationScreen.tsx` no longer
+reads the relay-link store at all.
 
-Mounted inside `StatusRow`'s previously-empty `.status-row__summary` span, now a flex row
-(`gap: var(--space-3); min-width: 0`) so the dots and #181/#182's future run-config summary text
-("Opus 4.7 · high · 73% used") can sit side by side — this slice does not claim the slot
-exclusively. New theme token `--color-warning: #ffca45` (`tokens.css`, after `--color-error`) drives
-the in-progress dot — M3 has no warning role and the design-system file has no such variable (the
+New theme token `--color-warning: #ffca45` (`tokens.css`, after `--color-error`) drives the
+in-progress category — M3 has no warning role and the design-system file has no such variable (the
 two-dot line post-dates the 2026-05-08 Figma lock, a code-era addition like the dots themselves).
 [#719](../codebase/719.md)'s `unknown` category reuses the existing `--color-outline` token (no new
 token added) — the same achromatic fill already used for the `.run-config__switch-knob`/
 `.settings__switch-knob` off-state chips, chosen because it is the only achromatic option among the
-four categories and carries no success/failure valence. `.conn-dot` is an 8px circle (structural
-component geometry, the `.run-config__context-bar` precedent, not a spacing token); `.conn-leg__label`
-is `body-small` on `--color-on-surface-variant`, `white-space: nowrap`.
-
-**Screen-reader note (accepted, not a gap):** the indicator sits inside `StatusRow`, a `<button
-aria-label="Run configuration">` — the button's `aria-label` overrides its inner text as the
-accessible *name*, so the connection labels are visible content but not announced as part of the
-button's name. This satisfies AC2 (colour-independence via visible text) and matches Figma's summary
-placement inside the row button; a dedicated live-region announcement was left out of scope, since
-the banner (#279) already announces the disconnect transition.
+four categories and carries no success/failure valence. `.conn-leg__label` (`.status-row__connection`'s
+per-leg text, retired with it) was `body-small` on `--color-on-surface-variant`, `white-space: nowrap`
+— `.conn-dot`, the shared 8px-circle base both this indicator and the sidebar dot once could have worn,
+had no consumer once this indicator went and was deleted with it; **[#962 confirmed that before
+deleting it](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)** — the
+sidebar dots wear the four category modifiers flat, with no base class, and always have.
 
 Not security-sensitive: pure presentation over already-classified, content-free store state (#328's
 guarantee) — no transport, crypto, or socket code touched. See [#330 codebase
-notes](../codebase/330.md) for the full design, the leg → category → label matrix tests, and the
-code-review record.
+notes](../codebase/330.md) for the full original design, the leg → category → label matrix tests, and
+the code-review record — and [#962](https://github.com/pyrycode/pyrycode-desktop/issues/962) for the
+retirement.
 
-**Second consumer since [#718](../codebase/718.md).** `relayLeg`/`daemonLeg`/`ConnectionLeg` are now
-also imported into `channels/ChannelList.tsx`, whose `HostConnectionDots` renders the same two legs
-as a label-less dot pair on the sidebar's host row (host leg first, the reverse of this section's
-`ConnectionStatusIndicator(relay, daemon)` order). The TS mapping has one copy, imported across
-screens; the CSS category → colour binding (`.conn-dot--up/--in-progress/--down/--unknown`, just
-above, four rules since [#719](../codebase/719.md)) also has one copy, worn by the sidebar dot
-without the `.conn-dot` 8px base it sits beside here — so removing this indicator would need to
-relocate those four rules rather than deleting them. See the [Channel List home
-screen](channel-list.md) doc and [#718 codebase notes](../codebase/718.md).
+**The four `.conn-dot--*` colour rules moved to `channels.css` in #962**, landing beside
+`.channel-list__host-dot` — the block's own comment had instructed whoever deleted the rest of
+`.status-row__connection` to move rather than drop them, since the sidebar wears the modifiers with no
+base class and a lost binding would blank its dots silently, invisible to the `renderToStaticMarkup`
+unit tier. `e2e/connection-dot-colours.spec.ts` now reads the shipped `getComputedStyle().backgroundColor`
+back off all four to guard exactly that regression. `relayLeg`/`daemonLeg`/`ConnectionLeg` — the TS
+mapping above — stayed in this file and are imported into `channels/ChannelList.tsx` unchanged, whose
+`HostConnectionDots` (#718) has rendered the same two legs as a label-less dot pair on the sidebar's
+host row (host leg first, the reverse of this section's retired `ConnectionStatusIndicator(relay,
+daemon)` order) since before this ticket, and is now the app's only two-dot connection surface. See the
+[Channel List home screen](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
+doc and [#718 codebase notes](../codebase/718.md) for the sidebar's own design, and
+[below](#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
+for what happened to the row and trigger that used to sit either side of this indicator.
+
+## Run-configuration row and background-task trigger retired, overflow menu grows to three items (#962)
+
+The desktop design (Figma `102:4`) stacks the message area straight onto the input area, so the region
+between the thread and the composer is empty — nothing is drawn there. Two mobile-era controls used to
+mount in that region and both are retired: the run-configuration trigger row, `StatusRow` (#177, which
+hosted the two-dot indicator just above), and the background-task trigger, `BackgroundTaskTrigger`
+(#581, the clock icon — see [Background-task panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
+Both overlays they opened — `StatusSheet` and `BackgroundTaskPanel` — stay: the sheet is still the
+only surface for the model/effort/YOLO writes until #683 lands and the only home of the log-data
+download (#72), and the panel is unchanged pending #580's drawing of its final form and trigger.
+
+Both keep an entry point in the thread's overflow menu (`ThreadOverflowMenu` / `ThreadOverflowMenuView`,
+\#276 — see the [structure diagram](#structure) above and
+[Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) for the
+menu's first item), which grows from one hardcoded `Channel info` item to three, in order: `Channel
+info`, `Run configuration`, `Background tasks`. The three labels are **literals inside the pure view**
+(`ThreadOverflowMenuView`), mapped from a local array rather than injected as props — deliberately: the
+container `ThreadOverflowMenu` is in-file and not exported, the screen gates the menu on `onBack`, and
+the `renderToStaticMarkup`-only unit tier fires no clicks, so this view is the only surface on which
+the unit tier can see the shipped copy and its order at all, and those two new strings are also the
+accessible names the e2e suite's re-pointed opens locate by. `ThreadOverflowMenu`'s single `select`
+became a factory (`select = (action) => () => { close; action(); returnFocus }`) so the same
+close → invoke → return-focus sequence AC2 asks for is written once and shared by all three items, and
+its three action props (`onChannelInfo`, `onRunConfiguration`, `onBackgroundTasks`) are now **required**
+rather than #276's optional `onChannelInfo?` — that optionality only ever existed because the menu
+shipped before #365 wired its one item; with all three wired at the single mount site now, a required
+prop turns a forgotten wire into a compile error instead of a menu item that silently closes and does
+nothing. None of the three items advertises `aria-haspopup="dialog"`, matching `Channel info`'s existing
+posture — a hint on two of three items and not the first would read as a difference between them, and
+the bare-tree `aria-haspopup="menu"` count assertion stays correct at 1.
+
+The two retired triggers' bodies moved verbatim onto the menu: `onRunConfiguration={() =>
+setSheetOpen(true)}` and `onBackgroundTasks={() => setPanelOpen(true)}` are exactly what the deleted
+`StatusRow`/`BackgroundTaskTrigger` did from their own mounts — the overlays and their `useState`
+open/closed cells ([ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)) are
+untouched, only the affordance that flips them moved. `ThreadOverflowMenu` is itself mobile-era chrome
+that a later ticket retires together with the sheet, once #683 lands the footer's model and effort
+controls.
+
+**One known gap, left deliberately.** The `Background tasks` item's wire (`onBackgroundTasks={() =>
+setPanelOpen(true)}`) has no test at any tier — the unit tier sees the menuitem's label and position but
+not what it flips, and no e2e spec touches the panel at all (a gap #581 shipped with, not one #962
+opened). Code review flagged it [SHOULD FIX], not blocking: the sibling wire through the identical
+`select` factory and the identical menu shape is proven end to end by `run-config-settings.spec.ts` and
+`stall-bundle.spec.ts`, so a structural bug in the factory would redden there, and #580 owns the panel's
+final trigger and will re-point whatever lands here anyway. A ~10-line fake-tier spec (overflow trigger
+→ menuitem `Background tasks` → `.background-task-panel` visible) is the fix, whenever #580 lands.
+
+Four comments elsewhere had to be corrected on the move (`channels.css`'s `.channel-list__host-dot`
+comment — see [above](#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962)
+— and its two `.conversation-status-dot` doc comments, plus `ChannelList.tsx`'s `HostConnectionDots`
+comment, both documented in the [Channel List home screen](channel-list.md) doc). Nineteen other sites
+naming the deleted classes and components are left untouched — prose anchors citing a precedent that
+did exist, not claims about current state.

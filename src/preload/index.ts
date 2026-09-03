@@ -28,6 +28,12 @@ import {
   type AttachmentSaveEvent,
   type AttachmentSaveRequest
 } from '../shared/ipc/attachmentSave'
+import {
+  ATTACHMENT_BYTES_CHANNEL,
+  ATTACHMENT_BYTES_EVENT_CHANNEL,
+  type AttachmentBytesEvent,
+  type AttachmentBytesRequest
+} from '../shared/ipc/attachmentBytes'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -251,6 +257,50 @@ const api = {
     const handler = (_event: IpcRendererEvent, event: AttachmentSaveEvent): void => listener(event)
     ipcRenderer.on(ATTACHMENT_SAVE_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(ATTACHMENT_SAVE_EVENT_CHANNEL, handler)
+  },
+
+  /**
+   * Ask the background process for the bytes of an attachment already on this machine, so the window
+   * can display it (#866). Fire-and-forget (no reply); the bytes arrive later on the push channel
+   * below, matching the retrieval and save pairs rather than an invoke.
+   *
+   * CALLED WITH AN IDENTIFIER AND NOTHING ELSE, because the window cannot be handed a path: the
+   * attachment directory is computed in the background process from Electron, never from anything
+   * this window sends, and `setWindowOpenHandler`'s `file:` and custom-protocol denies stay closed.
+   * NO PATH, NO DIRECTORY AND NO URL crosses in either direction. The identifier is UNTRUSTED at this
+   * boundary regardless of the declared type, so the main side re-checks the shape with
+   * `isAttachmentBytesRequest` and drops a malformed ask, then refuses a non-canonical one at
+   * `resolveAttachmentPath` before any filesystem call. ATTACHMENT_BYTES_CHANNEL is fixed here so the
+   * renderer cannot address arbitrary IPC channels, and ipcRenderer never crosses the bridge.
+   *
+   * IT DOES NOT FETCH. An attachment that is not on this machine answers `unavailable`; fetching it
+   * is `requestAttachment` above. No caller is wired yet — the thumbnail is #868.
+   */
+  requestAttachmentBytes: (request: AttachmentBytesRequest): void => {
+    ipcRenderer.send(ATTACHMENT_BYTES_CHANNEL, request)
+  },
+
+  /**
+   * Subscribe to attachment-bytes outcomes from the background process (#866); returns an unsubscribe
+   * handle the renderer must call on teardown so listeners don't accumulate across remounts. The
+   * onDaemonEvent shape — the raw IpcRendererEvent (exposing .sender/.ports) is stripped before the
+   * listener runs, and removeListener uses the exact handler registered.
+   *
+   * Correlate on the event's `attachmentId`: it is this window's OWN value coming back, echoed even on
+   * a refused identifier. Exactly one event arrives per ask that passed the boundary guard — asks are
+   * NOT coalesced, so two asks for one attachment deliver two events — and a malformed ask delivers
+   * nothing at all, so a listener must not assume one event per call.
+   *
+   * THIS IS THE ONE ATTACHMENT EVENT THAT CARRIES CONTENT: `delivered` holds the file's bytes, copied
+   * into a buffer of exactly that length in the background process. It still carries no path, no
+   * directory, no URL, no file name and no media type. Building a `blob:` or `data:` URL from those
+   * bytes is #868's, and needs the renderer's `default-src 'self'` CSP widened with an `img-src`
+   * directive first (`src/renderer/index.html`) — currently that URL form is blocked outright.
+   */
+  onAttachmentBytesEvent: (listener: (event: AttachmentBytesEvent) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: AttachmentBytesEvent): void => listener(event)
+    ipcRenderer.on(ATTACHMENT_BYTES_EVENT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(ATTACHMENT_BYTES_EVENT_CHANNEL, handler)
   }
 }
 

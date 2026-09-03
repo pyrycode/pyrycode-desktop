@@ -1575,6 +1575,120 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
   })
 })
 
+// #1014: the timestamp #969 left the slot empty for. What this tier owns is the WIRING — which items put
+// a string in `bubble__meta-time`, that an unstamped one still emits the empty span #969 ships, and that
+// nothing else in the row moved. WHICH characters the string is made of is messageTime.test.ts, which can
+// assert them exactly without rendering anything; the fixtures here therefore use one moment and one
+// expected string rather than re-testing the format.
+describe('Timeline — the meta row timestamp (#1014)', () => {
+  const TIME_SLOT = 'bubble__meta-time'
+  // The empty slot exactly as #969 emits it — a self-closing JSX span renders as an open/close pair with
+  // no children, and `{null}` children render identically, which is what makes AC3 a markup fact.
+  const EMPTY_SLOT = `<span class="${TIME_SLOT}"></span>`
+
+  // Local construction, the inverse of the formatter's local getters, so this expectation holds on a
+  // runner in any zone (messageTime.test.ts's header records why nothing here may be a literal epoch).
+  const CREATED_AT = new Date(2026, 0, 13, 13, 55).getTime()
+  const DRAWN = '13.01.2026 - 13:55'
+
+  it('renders the stamp inside the time slot on the settled assistant bubble', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          { kind: 'assistantText', turnId: 't1', text: 'a settled reply', createdAt: CREATED_AT },
+          { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+        ]}
+      />
+    )
+    expect(markup).toContain(`<span class="${TIME_SLOT}">${DRAWN}</span>`)
+  })
+
+  it('renders the stamp on the in-progress tail and on the user bubble too', () => {
+    // The same three text bubbles #969's own first case names. The streaming tail is included for the
+    // reason #969 gave: excluding it would reflow the bubble the moment the turn settles.
+    const tail = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'growing', createdAt: CREATED_AT }]} />
+    )
+    const user = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'userText', text: 'typed by the operator', createdAt: CREATED_AT }]} />
+    )
+    for (const markup of [tail, user]) {
+      expect(markup).toContain(`<span class="${TIME_SLOT}">${DRAWN}</span>`)
+    }
+  })
+
+  it('leaves the slot EMPTY for an item carrying no stamp — no placeholder, no `Invalid Date`, no NaN', () => {
+    // #1013's contract: an absent `createdAt` is a LEGAL item, not a defect — it is what every producer
+    // with no injected clock yields, which is also why the 39 stamp-free item literals elsewhere in this
+    // file needed no edit. The read is `=== undefined`; `'createdAt' in item` would be TRUE here, because
+    // the reducer assigns the field unconditionally, and an implementation using it renders the string
+    // "undefined" instead of nothing.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          { kind: 'userText', text: 'no clock was injected' },
+          { kind: 'assistantText', turnId: 't1', text: 'nor here' },
+          { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+        ]}
+      />
+    )
+    expect(markup.match(new RegExp(EMPTY_SLOT, 'g'))?.length ?? 0).toBe(2)
+    for (const wrong of ['Invalid Date', 'NaN', 'undefined', 'null']) {
+      expect(markup).not.toContain(wrong)
+    }
+  })
+
+  it('adds a text child and nothing else — the slot, the row and the control are otherwise unchanged', () => {
+    // AC4. `bubble__meta-time` stays the sink: the string lands inside that span and nowhere else in the
+    // bubble, the copy control still follows it in the same row, and no new element or class appeared.
+    const markup = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
+    )
+    expect(markup).toContain(
+      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span><button type="button" class="bubble__copy" aria-label="Copy message"`
+    )
+    // Once, in that one sink — not duplicated into an attribute, a title or a second element.
+    expect(markup.match(new RegExp(DRAWN.replace(/\./g, '\\.'), 'g'))?.length ?? 0).toBe(1)
+  })
+
+  it('gives no other row kind a timestamp — the tool rows, the separator and the queued rows are untouched', () => {
+    // AC4's fence. None of these renders a BubbleMeta at all, so none can gain a time slot; asserting it
+    // here is what keeps that structural rather than incidental.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: 'toolCall',
+            turnId: 't1',
+            toolUseId: 'u1',
+            name: 'Read',
+            inputSummary: 'a file',
+            result: null
+          },
+          {
+            kind: 'sessionBoundary',
+            reason: 'clear',
+            workspaceCwd: null,
+            occurredAt: '2026-01-13T13:55:00.000Z'
+          }
+        ]}
+      />
+    )
+    expect(markup).not.toContain(TIME_SLOT)
+
+    const queued = renderToStaticMarkup(
+      <QueuedBacklog
+        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
+        onDrop={() => {}}
+      />
+    )
+    // The wire `ts` a queued message carries has never reached the renderer, and this ticket does not
+    // start: nothing here reads it, so no formatted time appears.
+    expect(queued).not.toContain(TIME_SLOT)
+    expect(queued).not.toContain(DRAWN)
+  })
+})
+
 // #286/#690: the session-boundary delimiter row, redrawn as the desktop inline separator (Figma node
 // 119-3843): rule / centred label / rule on one line, with no relative time and so no `now` prop.
 // The label's per-reason copy is asserted exactly in sessionBoundaryViewModel.test.ts; here we prove

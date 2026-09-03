@@ -70,13 +70,38 @@ about. `.bubble__meta--user` adds `justify-content: flex-end` (the drawing's `ju
 the assistant row carries none, so the base rule's `flex-start` is already right).
 
 **`min-height: var(--text-body-small-line)` is load-bearing, not decorative.** The row holds two
-children today: an empty `<span className="bubble__meta-time" />` reserved for
-[#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) to fill, and the copy control. #970 split
-into a data slice ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), shipped — gives the
-`assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional `createdAt`) and this
-render slice (#1014, open); #1013 lands no visible change, so the slot stays empty until #1014. An empty
-inline element generates no line box, so without the `min-height` the row would collapse to the glyph's
-12px height rather than the drawn 16px.
+children: `bubble__meta-time` and the copy control. #970 split into a data slice
+([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — gives the `assistantText`/`userText`
+[timeline items](thread-timeline.md#types) an optional `createdAt`) and a render slice
+([#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — formats it into this slot), both
+shipped. An empty inline element generates no line box, so without the `min-height` the row would collapse
+to the glyph's 12px height rather than the drawn 16px whenever `createdAt` is absent — see below.
+
+**The time itself is `formatMessageTime(epochMs)` in `messageTime.ts` (new, beside the bubble, the
+`copyMessageText.ts` module-plus-spec shape again — 46 + 98 lines).** Pure: `new Date(epochMs)` read with
+**local** `getDate`/`getMonth`/`getFullYear`/`getHours`/`getMinutes`, `padStart`-assembled into
+`DD.MM.YYYY - HH:MM` (Figma 132:4477/132:4508's `Meta data` node — the full string on every bubble, no
+relative or same-day short form). No `toLocaleString`/`toLocaleDateString`/`Intl`: those introduce locale
+variation the drawing doesn't call for, and would make an exact-string assertion machine-dependent — one
+of the formatter's own unit cases proves this by deleting those methods from `Date.prototype` and `Intl`
+out from under the call and asserting the same string still comes back. This is the mirror image of
+[`channelListViewModel.formatLastActivity`](channel-list.md)'s **UTC** getters: that formatter
+dodges TZ-dependence because a relative-activity label reads the same everywhere, but the drawing's
+timestamp is the viewer's own wall clock, so UTC would show the wrong time to everyone outside it. Local
+getters are correct here and the flakiness risk moves to the *test* side instead — every expected string in
+`messageTime.test.ts` is built from `new Date(y, m, d, h, min)` (never a hardcoded epoch constant), the
+exact inverse of local getters, so each case yields the same string in any zone the suite runs in. No
+`NaN`/non-finite branch: the only producer of `createdAt` is `Date.now`, so a non-finite epoch is not a
+reachable input.
+
+**The render slot: `createdAt === undefined ? null : formatMessageTime(createdAt)`, never `'createdAt' in
+item`.** `BubbleMeta` gained one optional prop, `createdAt?: number`, threaded from the `assistantText` and
+`userText` arms of `TimelineRow` only — no other row kind gained a call (the tool rows aren't bubbles, the
+session-reset separator draws its own timestamp, `QueuedBacklog` still renders no `BubbleMeta` at all).
+React renders a `null` child as no children, so the absent case is byte-identical to what #969 always
+emitted (`<span class="bubble__meta-time"></span>`) — #1013's contract fixes the read as `=== undefined`
+because the reducer assigns the field unconditionally on every arm that carries it, so the key is always
+present and only its value distinguishes a stamped item from an unstamped one.
 
 **Accepted consequence: the row fails WCAG AA, built as drawn anyway.**
 `--color-inverse-primary` on the two new bubble fills measures 2.67:1 (assistant) and 2.04:1 (user),
@@ -203,12 +228,23 @@ in-progress) and the user bubble each end in `.bubble__meta` as the bubble's *la
 ordering against the message text and against `.bubble__markdown`), the user row carries
 `bubble__meta--user` and the assistant row does not, the control is a `<button type="button">` with
 `COPY_MESSAGE_LABEL`, and the queued row / `MessageBubble` residue render **zero** `.bubble__meta` (a
-count assertion over the whole markup, not a per-string absence).
+count assertion over the whole markup, not a per-string absence). `messageTime.test.ts` covers the
+formatter alone — the drawing's own moment verbatim, a single-digit day/month/hour/minute together
+(proving all four `padStart`s at once), midnight and 23:59 (24-hour, no meridiem), a sub-minute component
+that must not leak into the string, a sub-four-digit year, and the `toLocaleString`/`Intl`-removal case
+above. #1014 also added stamped `assistantText`/`userText` cases to the #969 meta-row `describe` in
+`ConversationScreen.test.tsx` alongside an absent-stamp case; the 39 pre-existing stamp-free item literals
+in that file were left unedited — #1013's optional field is what keeps them compiling, and they remain the
+coverage for the empty-slot path.
 
 **Playwright** (`e2e/message-copy.spec.ts`, fake-transport tier): the clipboard-permission measurement
 above; the keyboard path (focus + Enter, same clipboard read-back); and the restyle's geometry as
 computed style — all four `border-radius` corners equal, `padding` 16/20, and the meta row's
-`justify-content` differing between the two sides.
+`justify-content` differing between the two sides. Filling the slot broke thirteen *other* specs' bubble
+text assertions across the fake tier plus four raw `textContent` reads in the real-claude tier — see
+[E2E test harness](e2e-harness.md#edge-cases-and-limitations) and [Real-claude liveness
+e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the fix and the sweep
+method that finds the next one.
 
 ## Related
 
@@ -218,7 +254,7 @@ computed style — all four `border-radius` corners equal, `padding` 16/20, and 
   timestamp slot was reserved for; split into [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)
   (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional
   `createdAt`, no visible change) and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
-  (open — the render slice that fills this slot), both blocked on this ticket.
+  (shipped — `messageTime.ts` and the render slot, covered in full above), both blocked on this ticket.
 - [#691](https://github.com/pyrycode/pyrycode-desktop/issues/691) / [#686](https://github.com/pyrycode/pyrycode-desktop/issues/686) —
   the image thumbnail and file row, instances of the same `Message` component whose bubble this ticket
   restyles; their slot contents are unaffected.

@@ -1,4 +1,5 @@
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type {
   AssistantDeltaPayload,
@@ -109,7 +110,7 @@ test('send a message and see the streamed daemon reply render in the thread', as
   // NOT the retired MessageThread's `data-message-role`. Asserted as a distinct step before the daemon
   // assertion; NOT paired with a daemon-absent check (the reply is a real round-trip that could land fast
   // — a "user present AND daemon absent" assert is racy).
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(TYPED_TEXT)
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(bubbleTextExactly(TYPED_TEXT))
 
   // --- Streamed daemon bubble (AC4): auto-waited through the genuine handshake + Noise round-trip. The
   // assistant text renders as an `assistantText` timeline row — `.bubble[data-thread-role="assistant"]`
@@ -117,7 +118,8 @@ test('send a message and see the streamed daemon reply render in the thread', as
   // regression to echoing the `send_message` (the default-echo trap) decodes to no assistant_delta and
   // times out here; the [assistant_delta, turn_end] stream is the guard, and turn_end drops the streaming
   // cursor so the bubble text matches REPLY_TEXT exactly. ---
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveText(REPLY_TEXT, {
-    timeout: MESSAGE_TIMEOUT_MS
-  })
+  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveText(
+    bubbleTextExactly(REPLY_TEXT),
+    { timeout: MESSAGE_TIMEOUT_MS }
+  )
 })

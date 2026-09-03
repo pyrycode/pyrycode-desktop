@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { AT_BOTTOM_TOLERANCE_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import type {
@@ -300,7 +301,7 @@ async function primeOverflowingThread(page: Page): Promise<void> {
   await page.getByPlaceholder('Message…').fill(PRIMER_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(assistantBubbles).toHaveCount(REPLY_TURNS, { timeout: STREAM_TIMEOUT_MS })
-  await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS))
+  await expect(assistantBubbles.last()).toHaveText(bubbleTextExactly(replyText(REPLY_TURNS)))
 
   // #650: the primer's turn has fully ENDED — the stream's trailing `turn_state{idle}` closed the working
   // indicator that the composer's accept opened locally. This is a NON-VACUITY gate of the same kind as the
@@ -548,7 +549,7 @@ test('sending from far up the history jumps to the bottom and leaves the thread 
   // The exact-text wait is the settle gate (the primer's idiom): the trailing streaming cursor drops only
   // when this turn's `turn_end` lands, so the match proves the layout is final before it is measured.
   daemon.pushFrame(turnEndFrame(REPLY_TURNS + 1))
-  await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS + 1))
+  await expect(assistantBubbles.last()).toHaveText(bubbleTextExactly(replyText(REPLY_TURNS + 1)))
   await expectPinnedToBottom(page)
 })
 
@@ -608,7 +609,7 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   // trailing streaming cursor is not on this bubble.
   const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
   await expect(assistantBubbles).toHaveCount(REPLY_TURNS)
-  await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS))
+  await expect(assistantBubbles.last()).toHaveText(bubbleTextExactly(replyText(REPLY_TURNS)))
 
   // Non-vacuity on the RE-ENTERED thread specifically, not merely in the primer: this is a freshly mounted
   // scroll node, and a thread shorter than its viewport reads as at-bottom unconditionally.

@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { COMPOSER_OPTIONS_WINDOW_MARGIN_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
 import type {
@@ -192,9 +193,10 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
 
   // --- 5. The SECOND Enter sends, through the composer's unchanged path (AC3). ---
   await page.keyboard.press('Enter')
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText('/compact', {
-    timeout: ROUNDTRIP_TIMEOUT_MS
-  })
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+    bubbleTextExactly('/compact'),
+    { timeout: ROUNDTRIP_TIMEOUT_MS }
+  )
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
   expect(sent[0].text).toBe('/compact')
   await expect(box).toHaveValue('')

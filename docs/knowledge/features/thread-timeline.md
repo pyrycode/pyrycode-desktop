@@ -135,8 +135,9 @@ no wall-clock default** — an absent
 clock means no stamp, at every seam, which is what keeps all 135 pre-existing `assistantText`/`userText`
 fixture sites compiling and passing unedited. `appendDelta` (below) is the one place the two branches
 diverge: only the fresh-append case takes the incoming stamp, so a coalesced bubble keeps its *first*
-delta's time. Ships dormant — [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) is the
-still-open sibling slice that renders it into the meta row [#969](../codebase/969.md) left empty.
+delta's time. [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) (shipped) is the sibling
+slice that renders it into the meta row [#969](../codebase/969.md) left empty — see [Conversation shell —
+message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row).
 
 ### The reducer
 
@@ -350,8 +351,12 @@ Nothing imports this module yet.
   covered in full above (§ Types). No new arm, no new item kind, and `reduceTimeline`'s own signature is
   untouched — the clock rides the event rather than a reducer parameter, since both timeline stores call
   `reduceTimeline` from production code and a parameter there would have stamped the items 13 of the
-  ticket's 19 fenced `toEqual` expectations assert on. No render — [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
-  is the still-open sibling slice that fills [#969](../codebase/969.md)'s empty meta-row time slot.
+  ticket's 19 fenced `toEqual` expectations assert on.
+- **[#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) (shipped)** is the render sibling
+  that fills [#969](../codebase/969.md)'s empty meta-row time slot — no change to this module: it reads
+  `item.createdAt` as `=== undefined` per the contract above and formats it, no new arm and no reducer
+  change. See [Conversation shell — message bubble § The meta
+  row](conversation-shell-message-bubble.md#the-meta-row).
 
 ## Edge cases and limitations
 
@@ -448,8 +453,10 @@ Nothing imports this module yet.
   `assistantText`/`userText`, covered in full above (§ Types, § Configuration and usage). Producers:
   [conversation timeline store](conversation-timeline-store.md)'s `translateTimelineEvent`/
   `subscribeTimeline` (assistant side) and [composer send](composer-send.md)'s `ComposerSendDeps.now`
-  (user side). [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — the still-open sibling
-  slice that renders the stamp into [#969](../codebase/969.md)'s empty meta-row time slot.
+  (user side). [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — shipped; the sibling
+  slice that renders the stamp into [#969](../codebase/969.md)'s empty meta-row time slot. [Conversation
+  shell — message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row) has the
+  formatter and render-slot design.
 - [#286 codebase notes](../codebase/286.md) — added the fifth `ThreadItem` kind, `sessionBoundary`,
   and its `TimelineRow` render row + pure long-form relative-time view-model.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md) — full

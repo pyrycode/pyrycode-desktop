@@ -103,6 +103,13 @@ const ASSISTANT_ROW = '[data-thread-role="assistant"]'
 const CURSOR_CHAR = '▎'
 // turn_end appends a turnBoundary that drops the cursor — its absence is the per-turn quiesce signal.
 const CURSOR_SELECTOR = '.bubble__cursor'
+// #1014 filled the meta row's timestamp slot, and `.bubble__meta` is a child of the bubble, so a row's
+// textContent now ends in `13.01.2026 - 13:55` whatever the reply says. Strip that subtree before reading
+// too: an unstripped read here would also break `continuationOf`'s prefix invariant, since the stamp
+// trails EACH row's text and an in-place continuation therefore no longer starts with what came before.
+// Structural rather than digit-shape matching: it survives whatever the row grows next. Kept verbatim
+// across the four real-claude specs that read a bubble's text — `rg META_SELECTOR e2e/` finds them all.
+const META_SELECTOR = '.bubble__meta'
 
 // --- The panel surface, fake-tier-proven by #922 -----------------------------
 // Located by STRUCTURE only. `__option-label` is the <p> the panel renders for an offered option, drawn
@@ -175,18 +182,26 @@ function questionAnswerTrigger(nonce: number): string {
 }
 
 /**
- * The concatenated text of every assistant row, with the streaming cursor stripped. Generalises
- * real-claude.spec.ts's `nonEmptyAssistantCount` from the count to the text it already computes: the
- * cursor span lives INSIDE the row, so an unstripped read would report a still-empty streaming bubble as
- * having content.
+ * The concatenated text of every assistant row, with the streaming cursor and the meta row stripped.
+ * Generalises real-claude.spec.ts's `nonEmptyAssistantCount` from the count to the text it already
+ * computes: both the cursor span and #1014's timestamp live INSIDE the row, so an unstripped read would
+ * report a still-empty streaming bubble as having content. The strip runs on a detached copy, so the live
+ * DOM this spec's panel assertions read is untouched.
  */
 function assistantText(page: Page): Promise<string> {
   return page
     .locator(ASSISTANT_ROW)
     .evaluateAll(
-      (els, cursor) =>
-        els.map((el) => (el.textContent ?? '').split(cursor).join('').trim()).join('\n'),
-      CURSOR_CHAR
+      (els, { cursor, meta }) =>
+        els
+          .map((el) => {
+            const content = document.createElement('div')
+            content.append(el.cloneNode(true))
+            content.querySelectorAll(meta).forEach((node) => node.remove())
+            return (content.textContent ?? '').split(cursor).join('').trim()
+          })
+          .join('\n'),
+      { cursor: CURSOR_CHAR, meta: META_SELECTOR }
     )
 }
 

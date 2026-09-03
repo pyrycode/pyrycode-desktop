@@ -88,6 +88,12 @@ const ASSISTANT_ROW = '[data-thread-role="assistant"]'
 const CURSOR_CHAR = '▎'
 // turn_end appends a turnBoundary that drops the cursor — its absence is the per-turn quiesce signal.
 const CURSOR_SELECTOR = '.bubble__cursor'
+// #1014 filled the meta row's timestamp slot, and `.bubble__meta` is a child of the bubble, so a row's
+// textContent now ends in `13.01.2026 - 13:55` whatever the reply says. Strip that subtree before the
+// non-empty check too, or this tier's liveness gates green on any assistant row that merely EXISTS.
+// Structural rather than digit-shape matching: it survives whatever the row grows next. Kept verbatim
+// across the four real-claude specs that read a bubble's text — `rg META_SELECTOR e2e/` finds them all.
+const META_SELECTOR = '.bubble__meta'
 
 // --- Timeouts (verbatim from real-claude.spec.ts) ----------------------------
 // Generous to absorb real daemon startup latency (registration on /v1/server is async after spawn) plus a
@@ -106,17 +112,24 @@ const SPEC_TIMEOUT_MS = 300_000
 const SETTLE_MS = 3_000
 
 /**
- * Count assistant rows whose text is non-empty once the streaming cursor ▎ is stripped. Runs in the page
- * context. Content-agnostic liveness: a naive "row exists" or unstripped-textContent check would pass on an
- * empty streaming bubble (the cursor span is inside the row).
+ * Count assistant rows whose text is non-empty once the streaming cursor ▎ and the meta row are stripped.
+ * Runs in the page context. Content-agnostic liveness: a naive "row exists" or unstripped-textContent
+ * check would pass on an empty streaming bubble — both the cursor span and #1014's timestamp live INSIDE
+ * the row. The strip runs on a detached copy, so the live DOM this spec's other assertions read is
+ * untouched.
  */
 function nonEmptyAssistantCount(page: Page): Promise<number> {
   return page
     .locator(ASSISTANT_ROW)
     .evaluateAll(
-      (els, cursor) =>
-        els.filter((el) => (el.textContent ?? '').split(cursor).join('').trim().length > 0).length,
-      CURSOR_CHAR
+      (els, { cursor, meta }) =>
+        els.filter((el) => {
+          const content = document.createElement('div')
+          content.append(el.cloneNode(true))
+          content.querySelectorAll(meta).forEach((node) => node.remove())
+          return (content.textContent ?? '').split(cursor).join('').trim().length > 0
+        }).length,
+      { cursor: CURSOR_CHAR, meta: META_SELECTOR }
     )
 }
 

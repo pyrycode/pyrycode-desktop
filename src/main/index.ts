@@ -42,11 +42,17 @@ import {
   isAttachmentRetrievalRequest
 } from '../shared/ipc/attachmentRetrieval'
 import { createAttachmentSave } from './attachmentSave'
+import { createAttachmentBytes } from './attachmentBytes'
 import {
   ATTACHMENT_SAVE_CHANNEL,
   ATTACHMENT_SAVE_EVENT_CHANNEL,
   isAttachmentSaveRequest
 } from '../shared/ipc/attachmentSave'
+import {
+  ATTACHMENT_BYTES_CHANNEL,
+  ATTACHMENT_BYTES_EVENT_CHANNEL,
+  isAttachmentBytesRequest
+} from '../shared/ipc/attachmentBytes'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -645,6 +651,41 @@ app.whenReady().then(() => {
   }
   ipcMain.on(ATTACHMENT_SAVE_CHANNEL, attachmentSaveListener)
   app.on('will-quit', () => ipcMain.removeListener(ATTACHMENT_SAVE_CHANNEL, attachmentSaveListener))
+
+  // The display edge (#866) — the second consumer of what the retrieval edge puts on this machine,
+  // and the THIRD READER of the one `attachmentDir` joined above. It adds no Electron path call and no
+  // second join, so the directory these bytes are confined to is still named exactly once in this
+  // file and never derived from anything the window sent.
+  //
+  // ONE DRIVER FOR THE APP LIFETIME, not one per ask: its in-flight count is state that only means
+  // anything ACROSS asks, so rebuilding it per ask would silently disable the concurrency cap.
+  //
+  // setWindowOpenHandler's `file:` and custom-protocol denies are deliberately UNTOUCHED, and are why
+  // this feature needs its own channel: the window addresses an attachment by IDENTIFIER and never
+  // holds a path or a URL, and a privileged-scheme registration would additionally be unable to tell
+  // a refused identifier from a missing file — a protocol handler's only failure surface is a
+  // response status, so both would reach the window as one indistinguishable image error.
+  const readAttachmentBytes = createAttachmentBytes({ attachmentDir, diagnosticLog })
+
+  // The save listener's posture, one field narrower: this ask carries an untrusted identifier and
+  // nothing else, and still owes the same boundary check. A malformed ask is DROPPED — no filesystem
+  // call, no event — the only sound answer when there is no identifier to address a reply to.
+  //
+  // The bare `void` is safe because the driver never rejects — a property of that module, not of a
+  // `.catch()` anyone must remember. `event.sender` is closed into the reply so the bytes go back to
+  // the window that asked, behind the upload edge's isDestroyed() guard for a window closed mid-read.
+  const attachmentBytesListener = (event: Electron.IpcMainEvent, request: unknown): void => {
+    if (!isAttachmentBytesRequest(request)) return
+    const sender = event.sender
+    void readAttachmentBytes(request).then((bytesEvent) => {
+      if (sender.isDestroyed()) return
+      sender.send(ATTACHMENT_BYTES_EVENT_CHANNEL, bytesEvent)
+    })
+  }
+  ipcMain.on(ATTACHMENT_BYTES_CHANNEL, attachmentBytesListener)
+  app.on('will-quit', () =>
+    ipcMain.removeListener(ATTACHMENT_BYTES_CHANNEL, attachmentBytesListener)
+  )
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

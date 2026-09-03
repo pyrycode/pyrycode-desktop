@@ -635,6 +635,29 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   ever reaching a log; a `__proto__` guard fixture must be built with `JSON.parse`, not an object
   literal, or it's inert. Renderer wiring (#815/#816) not started. Verifier PASS, one NIT (an unreached
   exported constant, plan-sanctioned). Architect self-review PASS, no MUST FIX.
+- [Attachment bytes](features/attachment-bytes.md) — the fourth attachment channel pair and the first
+  one that is not content-free (#866, split from #691): the window names an attachment already on this
+  machine by identifier, and `src/main/attachmentBytes.ts` answers exactly one terminal — the bytes, or
+  one of three client-owned literals (`refused`/`unavailable`/`busy`, split on what a consumer can do
+  next, departing from [attachment save](features/attachment-save.md)'s two-reason merge). A protocol
+  handler was the rejected alternative: its only failure surface is a response status, so a refusal and
+  a missing file would reach the window as one indistinguishable image error. `resolveAttachmentPath`
+  (#818) is the sole gate, consumed with no second escape check, and no size ceiling is added since
+  `storeAttachment` already bounds the only writer into that directory. The exact-sized `Uint8Array`
+  copy is the load-bearing fix: `fs.readFile` serves a file under 4096 bytes from Node's shared 8 KB
+  buffer pool, and structured clone would otherwise ship the whole pool — up to 8 KB of adjacent
+  main-process heap, in a process holding decrypted daemon plaintext — across the bridge; pinned by a
+  `byteOffset === 0` / `buffer.byteLength === length` test on a sub-4096-byte file. A concurrency cap of
+  4 (`ATTACHMENT_MAX_CONCURRENT_READS`, [attachment retrieval](features/attachment-retrieval.md)'s
+  ceiling argument transferred) is not optional here, unlike save's declined cap, because these bytes
+  do enter this process; the cap's check-then-increment must stay in one synchronous block before the
+  first `await`, tested by firing `CAP + 1` asks in one tick. No coalescing, the deliberate departure
+  from `createAttachmentRetrieval`: the terminal is a promise to **one** caller, so a dropped duplicate
+  would leave it unanswered, and the in-flight state is a plain counter rather than a map. The
+  `contextBridge` structured-clone hop is documented as unobservable from this repo's test tiers;
+  #868 (thumbnail) is the first end-to-end proof. Third reader of the composition root's one
+  `attachmentDir` join — no new `app.getPath` call. Architect self-review PASS, no MUST FIX. Renderer
+  wiring (#868 thumbnail, #867 OS-viewer open) not started.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

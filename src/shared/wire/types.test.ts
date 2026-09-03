@@ -46,6 +46,7 @@ import type {
   DequeueMessagePayload,
   AttachmentChunkPayload,
   AttachmentStoredPayload,
+  RequestAttachmentPayload,
   WireQuestionOption,
   WireQuestion,
   QuestionShownPayload,
@@ -1591,6 +1592,76 @@ describe('attachment-stored wire vocabulary (#964)', () => {
     // of the shape rule here would fail-close valid traffic the moment the two disagreed.
     const notCanonical: AttachmentStoredPayload['attachment_id'] = 'ATT-1'
     expect(notCanonical).toBe('ATT-1')
+  })
+})
+
+describe('request-attachment wire vocabulary (#993)', () => {
+  // The ids below are lifted VERBATIM from the daemon's committed fixture
+  // (internal/protocol/testdata/request_attachment.json, whose whole envelope reads
+  // `{"id":91,"type":"request_attachment","ts":"2026-08-25T09:14:05Z","payload":{"conversation_id":"9d4e…","attachment_id":"7c1d…"}}`)
+  // and from the round-trip literal in TestRequestAttachmentPayload_WireKeys, so a contract change
+  // shows up here as a fixture diff rather than as a disagreement between two hand-written guesses.
+  const CONVERSATION_ID = '9d4e7a21-8c05-4f3b-b6e2-1a7c9e30d5f4'
+  const ATTACHMENT_ID = '7c1d5e92-4a30-4b8f-9e21-6d4c3b0a8f55'
+
+  it('admits the request_attachment outbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType, and it is
+    // the only thing in the tree that catches a dropped one — `Envelope.type` is
+    // `EnvelopeType | string`, so the builder's own round-trip test compiles green whether or not
+    // the member was ever added.
+    const request: EnvelopeType = 'request_attachment'
+    expect(request).toBe('request_attachment')
+  })
+
+  it('shapes RequestAttachmentPayload as { conversation_id, attachment_id } — two fields, no third', () => {
+    const payload: RequestAttachmentPayload = {
+      conversation_id: CONVERSATION_ID,
+      attachment_id: ATTACHMENT_ID
+    }
+    expect(payload).toEqual({ conversation_id: CONVERSATION_ID, attachment_id: ATTACHMENT_ID })
+    expect(Object.keys(payload)).toEqual(['conversation_id', 'attachment_id'])
+
+    // NO request-id key of any spelling. Correlation rides the ENVELOPE — the daemon's answering
+    // chunks and its reject both name this frame through `Envelope.in_reply_to`, and its committed
+    // retrieval-chunk fixture rides `in_reply_to: 91` against this fixture's `id: 91`. A request-id
+    // key invented here would leave a landed upstream fixture describing a different scheme.
+    expect(payload).not.toHaveProperty('request_id')
+    expect(payload).not.toHaveProperty('requestId')
+  })
+
+  it('requires both keys — no omitempty daemon-side, so an absent key is a defect not a zero', () => {
+    // @ts-expect-error `attachment_id` is required
+    const missingAttachment: RequestAttachmentPayload = { conversation_id: CONVERSATION_ID }
+    // @ts-expect-error `conversation_id` is required
+    const missingConversation: RequestAttachmentPayload = { attachment_id: ATTACHMENT_ID }
+
+    expect(missingAttachment.conversation_id).toBe(CONVERSATION_ID)
+    expect(missingConversation.attachment_id).toBe(ATTACHMENT_ID)
+  })
+
+  it('carries a conversation_id where attachment_chunk deliberately carries none', () => {
+    // The asymmetry is the daemon's and it is deliberate on both sides. An upload lands in the
+    // conversation the authenticated session is already on, so naming one THERE would only let a
+    // client steer bytes into another conversation's directory; a retrieval has to be able to say
+    // WHICH conversation's file it wants. Do not "harmonise" the two frames in either direction.
+    const request: RequestAttachmentPayload = {
+      conversation_id: CONVERSATION_ID,
+      attachment_id: ATTACHMENT_ID
+    }
+    expect(request).toHaveProperty('conversation_id')
+
+    // And naming one is NOT authorization. The daemon validates the id against its own registry
+    // before it reaches a path join and confines resolution to that conversation's directory;
+    // confinement is what bounds a paired but hostile client, never the id's shape or its secrecy.
+    // Both ids are plain `string`s, deliberately NOT branded or validated types: the canonical
+    // lowercase-UUIDv4 shape is DOCUMENTED here and enforced by the daemon, which is the posture
+    // both sibling payload types already ship with. A non-canonical value therefore compiles.
+    const notCanonical: RequestAttachmentPayload = {
+      conversation_id: 'CONV-1',
+      attachment_id: 'ATT-1'
+    }
+    expect(notCanonical.conversation_id).toBe('CONV-1')
+    expect(notCanonical.attachment_id).toBe('ATT-1')
   })
 })
 

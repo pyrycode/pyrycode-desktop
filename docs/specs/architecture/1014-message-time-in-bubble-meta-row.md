@@ -210,6 +210,46 @@ text — the only `textContent` reads in the tier are on a code fence's header a
 tier holds no bubble-geometry assertion that the timestamp's width could move. `message-copy.spec.ts` is
 unaffected by construction: the copy control closes over the item's own `text`, never the rendered DOM.
 
+### 2026-09-03 — the e2e cascade is THIRTEEN sites, not nine; the sentence above is wrong
+
+**The correction, first.** The paragraph immediately above claims "no other assertion in the fake tier
+reads a bubble's text". That is false as written, and the QA gate proved it: `npx playwright test` went
+red on `conversation-switch-keeps-both-threads.spec.ts`, whose received text read
+`"a message typed in the seeded channel03.09.2026 - 16:03"` — this ticket's own fill. The sentence
+stands above unedited, because a plan that quietly rewrites a claim the gate falsified destroys the
+audit trail the Phase-A commit exists to create. Read it as superseded by this entry.
+
+**Why the sweep missed four sites.** Both the ticket body's table and § The e2e cascade enumerate the
+sites whose `.bubble[data-thread-role=…]` locator sits on the same line as its assertion — the shape a
+grep for the selector finds. `conversation-switch-keeps-both-threads.spec.ts` binds its locator to a
+const, `const userRows = page.locator('.bubble[data-thread-role="user"]')`, eleven lines above the first
+of its **four** assertions, so neither the selector nor the word `bubble` appears on any of them. The
+grep walked straight past the file. The count is thirteen: the nine already fixed, plus lines 72, 87, 98
+and 107 of that spec.
+
+Only line 72 appeared in the failure log — Playwright aborts a test at its first failed expect, so the
+other three were invisible behind it and would have bounced the next gate run one at a time. All four
+are fixed in one pass.
+
+**The fix needed no design change.** `toHaveText`'s array form takes `Array<string | RegExp>` and
+compares each element's entire normalized text exactly as the string form does, so
+`bubbleTextExactly(SENT_IN_SEED)` drops in per element. `bubbleText.ts` is untouched, as are each site's
+locator, the step-2 `toHaveCount(0)` gate between them, and what each assertion proves: still exactly one
+row, still that row's own message, with only the stamp relaxed to a digit shape.
+
+**The corrected sweep, done by the method that would have caught it.** Grep the whole of `e2e/` for
+`toHaveText|toContainText` — no `bubble` filter — and resolve every const-bound locator. The remaining
+hits are all non-bubble elements: tool-row parts, menu items, the status label, the run-config values,
+the question panel's copy, the workspace labels, `assistant-link-opens-externally`'s anchor (the `<a>`
+inside a bubble, not the bubble), and `unrecognized-message`'s row internals. `message-copy.spec.ts` and
+`queued-backlog-interrupt.spec.ts` bind bubble locators to consts too but assert only visibility, count
+and geometry, never text. Thirteen is the complete count.
+
+**The lesson, stated for the next text-bearing child of `.bubble`.** A selector grep is not a sweep of
+this tier — a bound locator hides the assertion from it, and a first-expect abort hides its siblings from
+the failure log. Sweep by assertion name across all of `e2e/`, then resolve the consts. The spec now
+carries that warning as a comment above the `userRows` const, where the next person will meet it.
+
 ## Size
 
 Re-counted against this written plan, not the opening sketch:
@@ -219,12 +259,16 @@ Re-counted against this written plan, not the opening sketch:
 | Production source files created or modified | ≤ 5 | **2** — `messageTime.ts` (new), `ConversationScreen.tsx` (edited) |
 | Total written work | ≤ 800 | ~500 |
 | New exported types / interfaces / components / stores | ≤ 5 | **0** (two functions, no new type) |
-| Consumer call sites needing simultaneous update | ≤ 10 | **11** — see below |
+| Consumer call sites needing simultaneous update | ≤ 10 | **15** — see below |
 | Acceptance criteria | ≤ 5 | **5** |
 | Distinct error / reject branches | ≤ 10 | **1** |
 
-**The call-site line is over by one, stated rather than split.** Two real consumers (`BubbleMeta`'s call
-sites, both in one file) plus the nine one-line e2e text-expectation edits reaches 11. The refiner's own
+**The call-site line is over, stated rather than split.** Two real consumers (`BubbleMeta`'s call sites,
+both in one file) plus thirteen one-line e2e text-expectation edits reaches 15 — the count read 11 when
+this table was first written, before the QA gate found the four const-bound sites the 2026-09-03
+Revisions entry above corrects. The overage is wider than it looked and the reading does not change: it
+is still entirely mechanical test edits in one-line form, and it is still the sizing floor that settles
+the ticket's shape rather than this line. The refiner's own
 boundary reading concluded the same and kept it whole, and the sizing floor is what settles it: the
 formatter has exactly one consumer, so splitting it out would mint a ticket whose only deliverable is
 consumed by its sibling — and the render half would inherit the entire e2e cascade regardless, so the

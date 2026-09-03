@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the READER CUTOVER (#758): the chat pane renders the OPEN conversation's own
@@ -61,6 +62,12 @@ test("switching away from a chat and back shows that chat's own thread", async (
   const buildReplyFrames = conversationStateFake({ conversations: [SEED] })
   const { page } = await launchPairedApp({ buildReplyFrames })
 
+  // WHOLE bubbles, so every `toHaveText` below reads the meta row's timestamp too (#1014). The array form
+  // takes `Array<string | RegExp>` and compares each element's ENTIRE normalized text, exactly as the
+  // string form does — so `bubbleTextExactly` drops in per element and the assertions stay exact: still
+  // one row, still that row's own message, with only the stamp admitted as a digit shape. NOTE for whoever
+  // adds the next text-bearing child to `.bubble`: this locator is BOUND TO A CONST, so a grep for the
+  // assertion and the `.bubble` selector on one line does not find these four sites. It missed them once.
   const userRows = page.locator('.bubble[data-thread-role="user"]')
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
@@ -69,7 +76,7 @@ test("switching away from a chat and back shows that chat's own thread", async (
   // the seeded conversation's own slice — AC4. ---
   await composer.fill(SENT_IN_SEED)
   await sendButton.click()
-  await expect(userRows).toHaveText([SENT_IN_SEED])
+  await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_SEED)])
 
   // --- 2. The CREATE path: the FAB mints a second conversation and the correlated conversation_created
   // drives activate + `open`. It has no retained timeline, so its thread is EMPTY and fills from the next
@@ -84,7 +91,7 @@ test("switching away from a chat and back shows that chat's own thread", async (
   // exactly one row and it is this one — the seeded thread's row has not followed the operator over. ---
   await composer.fill(SENT_IN_CREATED)
   await sendButton.click()
-  await expect(userRows).toHaveText([SENT_IN_CREATED])
+  await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_CREATED)])
 
   // --- 4. The SIDEBAR path back to the seeded channel, scoped by title so it cannot strict-violate
   // against the minted row's own row-open. THE TICKET'S CENTRAL ASSERTION: the thread the operator
@@ -95,7 +102,7 @@ test("switching away from a chat and back shows that chat's own thread", async (
     .filter({ hasText: 'Seeded channel' })
     .locator('.channel-list__row-open')
     .click()
-  await expect(userRows).toHaveText([SENT_IN_SEED])
+  await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_SEED)])
 
   // --- 5. And back the other way, so the proof is not one-way: the created discussion's own row is still
   // held too. Both threads survived the round trip — "switching costs me nothing". ---
@@ -104,5 +111,5 @@ test("switching away from a chat and back shows that chat's own thread", async (
     .filter({ hasText: UNTITLED })
     .locator('.channel-list__row-open')
     .click()
-  await expect(userRows).toHaveText([SENT_IN_CREATED])
+  await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_CREATED)])
 })

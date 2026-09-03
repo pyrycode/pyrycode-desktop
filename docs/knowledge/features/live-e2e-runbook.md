@@ -71,6 +71,17 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**Last run: 2026-09-04 — the tier grew to 11 specs and holds green.** The tenth interactive spec,
+`e2e/real-claude-question-cancel.spec.ts` (#929), landed as the refusal twin of #928's answer arm on
+the same question vertical: it drives a live claude into refusing its own `AskUserQuestion` batch
+through Cancel, then proves the gated work left no artefact via a recursive post-quiesce walk of the
+daemon's workdir, contained by an allow arm on any permission modal raised after the refusal so the
+absence cannot be the permission gate's own doing. Second consumer of the `claudeModel` and
+`requiredCapabilities` fixture options after #928 (see
+[real-claude-liveness-e2e.md](real-claude-liveness-e2e.md)). **The untracked
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor below (§ Automated coverage) needs bumping from 10 to 11**
+to match — this note is the "PR that adds a `real-*` spec must say so" the floor's own bullet asks for.
+
 **Last run: 2026-09-02 — the tier grew to 10 specs and holds green.** The ninth interactive spec,
 `e2e/real-claude-question-answer.spec.ts` (#928), landed and passed on its first live execution
 against `claude-sonnet-5` — the round trip from a real `AskUserQuestion` batch through the panel back
@@ -142,7 +153,7 @@ Why each line is what it is:
 
 - **Install and build chatter goes to stderr on purpose.** The gate reads stdout and expects Playwright's JSON report alone. Its parser skips to the first `{`, but npm output ahead of the report can still defeat it, so the chatter is routed away rather than tolerated.
 - **The gate needs the per-test JSON reporter, not `e2e:real:gate`.** The repo's own gate script prints a human list. The dispatcher counts tests that ran a body, and it cannot count what it cannot read.
-- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so.
+- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so. #929 is the latest such PR: the tier is now 11 specs and the floor shown above (10) needs bumping to match — see § Current real-claude gate state.
 - **The floor is one-sided.** It answers "did enough tests run", never "did the right ones run". The 66-executed run described in § Current real-claude gate state cleared a floor of 10 with room to spare while running 56 fake-tier specs under the real-daemon config. A count above the floor is not evidence that the intended tier ran.
 
 **This fork cannot tell an inherited failure from a new one.** On a red run the gate is meant to re-run just the failing tests against the base commit, so a failure that already exists on `main` parks for the operator instead of being blamed on the branch. That comparison never runs here: the dispatcher's filter builder rejects any test name outside a conservative character set, and every Playwright name carries spaces and a `›` separator, so the filter is always refused ([agent-dispatcher#38](https://github.com/pyrycode/agent-dispatcher/issues/38)). While any spec in the tier is red, **every** gated ticket that reaches the gate is failed and sent back for rework for a fault it did not cause, and each one needs a hand correction. That is what happened to [#928](https://github.com/pyrycode/pyrycode-desktop/issues/928) on the first live run, for the pre-existing red later filed as [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941).

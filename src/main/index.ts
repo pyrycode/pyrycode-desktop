@@ -41,6 +41,12 @@ import {
   ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
   isAttachmentRetrievalRequest
 } from '../shared/ipc/attachmentRetrieval'
+import { createAttachmentSave } from './attachmentSave'
+import {
+  ATTACHMENT_SAVE_CHANNEL,
+  ATTACHMENT_SAVE_EVENT_CHANNEL,
+  isAttachmentSaveRequest
+} from '../shared/ipc/attachmentSave'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -600,6 +606,45 @@ app.whenReady().then(() => {
   app.on('will-quit', () =>
     ipcMain.removeListener(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
   )
+
+  // The save-to-Downloads edge (#814) — the consumer of what the retrieval edge above puts on this
+  // machine. It ADDS NO Electron path call: `downloadsDir` is the one already read for the debug bundle
+  // and `attachmentDir` the one already joined for the retrieval store, so the two directories the copy
+  // is confined between are named once each in this file and never derived from anything the window
+  // sent. Its own Electron touch is the reveal — `shell.showItemInFolder`, which SELECTS the file;
+  // `shell.openPath` would open the folder without selecting it and does not satisfy AC4. Closing both
+  // in here is what keeps attachmentSave.ts Electron-free and unit-testable against a temp dir.
+  //
+  // setWindowOpenHandler's `file:` deny is deliberately UNTOUCHED, and is why this feature needs its own
+  // channel: the reveal runs in this process on a path this process computed, never on a URL the window
+  // supplied, so the window-open path stays closed to local files.
+  const saveAttachment = createAttachmentSave({
+    attachmentDir,
+    downloadsDir,
+    reveal: (path) => shell.showItemInFolder(path),
+    diagnosticLog
+  })
+
+  // The retrieval listener's posture, one field wider: this ask carries an untrusted display name as
+  // well as an untrusted identifier, so it owes the same boundary check. A malformed ask is DROPPED —
+  // no filesystem call, no folder opened, no event (AC1) — the only sound answer when there is no
+  // identifier to address a reply to. The raw name is NOT sanitised here: attachmentSave re-runs
+  // sanitizeAttachmentFilename on the value it actually builds the path from, which is the one place
+  // that transform may live.
+  //
+  // The bare `void` is safe because the driver never rejects — a property of that module, not of a
+  // `.catch()` anyone must remember. `event.sender` is closed into the reply so the answer goes back to
+  // the window that asked, behind the upload edge's isDestroyed() guard for a window closed mid-save.
+  const attachmentSaveListener = (event: Electron.IpcMainEvent, request: unknown): void => {
+    if (!isAttachmentSaveRequest(request)) return
+    const sender = event.sender
+    void saveAttachment(request).then((saveEvent) => {
+      if (sender.isDestroyed()) return
+      sender.send(ATTACHMENT_SAVE_EVENT_CHANNEL, saveEvent)
+    })
+  }
+  ipcMain.on(ATTACHMENT_SAVE_CHANNEL, attachmentSaveListener)
+  app.on('will-quit', () => ipcMain.removeListener(ATTACHMENT_SAVE_CHANNEL, attachmentSaveListener))
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

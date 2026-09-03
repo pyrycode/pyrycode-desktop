@@ -15,10 +15,13 @@ of; this ticket is the fourth. This ticket adds the entries, the trigger's label
 does — the same three things the model menu added one button to the left, `ComposerModelMenu.tsx`'s
 three-part shape (pure model function, pure view, thin store-bound container) reused verbatim.
 
-**Position.** The design puts the permission-mode button (#682) between the model menu and this one, but
-\#682 hasn't landed. The trigger mounts immediately right of the model menu with no spacer and no
-placeholder held open for it — #811's rule, reapplied a third time — and #682 will insert itself between
-the two when it lands.
+**Position.** The design puts the permission-mode button (#682) between the model menu and this one. At the
+time this ticket shipped #682 hadn't landed, so the trigger mounted immediately right of the model menu with
+no spacer and no placeholder held open for it — #811's rule, reapplied a third time.
+[#682](composer-permission-mode-menu.md) has since landed between Actions and the model menu, ahead of both
+— it does not sit between the model menu and this one, since the design's order is Actions → permission →
+model → effort. This trigger is unmoved: still immediately right of the model menu, still the row's last
+control before the context reading.
 
 ## Where this control departs from its neighbour
 
@@ -128,24 +131,31 @@ extracted; nothing about that rule is re-forked here. Three new declarations:
 - **`.composer__effort-icon { flex: 0 0 auto }`** — `.composer__actions-icon`'s single declaration,
   repeated rather than shared, for this trigger's own glyph.
 
-**This is not the row-overflow ticket.** At the app's 800px minimum the conversation pane is 400px, less
-the footer row's paddings and gaps, leaves ~308px for four items; with realistic published content the
-row occupies ~252px and keeps ~56px of slack — #682's fourth control is what takes the row to the
-boundary. The row *can* be overflowed today by a hostile daemon maxing the model label at its own 120px
-bound, but that is a condition #988's bound already creates and one this 64px cannot cause on its own; the
-fix, when it fires, belongs on `.composer__footer` as a whole-row shrink policy, not in a single control's
-rule. #988's 120px literal is not retuned here.
+**This was not the row-overflow ticket, and the prediction below has since confirmed.** At the app's 800px
+minimum the conversation pane is 400px, less the footer row's paddings and gaps, leaves ~308px for four
+items; with realistic published content the row occupies ~252px and keeps ~56px of slack —
+[#682](composer-permission-mode-menu.md)'s fourth control was flagged here as what would take the row to the
+boundary, and its own landing confirmed it: five controls plus realistic content now total ~331px against
+~288px of usable row at the 800px minimum. The fix stays what this section already named — a whole-row
+shrink policy on `.composer__footer`, not a number retuned in any single control's rule — and #682 did not
+touch `.composer__model-label`'s or this rule's 120px/64px literals either.
 
 **The third-glyph call, taken explicitly rather than deferred again.** `.composer__actions-icon`'s
 standing comment closed with "#682 landing as the third glyph is the moment to reconsider [lifting `flex:
-0 0 auto` into a shared rule]"; #682 is sequenced behind this ticket, so this control is in fact the third
+0 0 auto` into a shared rule]"; #682 was sequenced behind this ticket, so this control is in fact the third
 glyph and the note's number was stale. **The lift is declined and the note corrected instead of acted
 on.** On the merits a three-consumer identical single declaration is where a lift starts to pay, but
 performing it here would re-class two already-shipped elements, move their test assertions, and pull the
 three menus' independently-duplicated `CHEVRON_PATH` consts along with it — fan-out outside a slice whose
-subject is one menu, and squarely inside "don't refactor adjacent code while you are there." #682 is the
-fourth glyph and re-classes its own element regardless, so it can carry both lifts (the CSS rule and the
-path const) as a one-line-cost change when it lands.
+subject is one menu, and squarely inside "don't refactor adjacent code while you are there."
+
+**[#682](composer-permission-mode-menu.md) landed as the fourth glyph and declined the lift again, rather
+than carrying it as predicted here.** It re-classes its own element regardless, as this section expected,
+but the lift itself would still re-class three *shipped* elements and move their assertions — #682 already
+carried an unavoidable ten-assertion recount of its own, and declined to add a fourth footer ticket's worth
+of unrelated fan-out on top of it. Its own note records the actual finding: the lift is overdue on the
+merits, but every footer ticket that meets it arrives already at its own size budget, so it belongs to a
+standalone tidy-up rather than to whichever control happens to land next.
 
 ## Security
 

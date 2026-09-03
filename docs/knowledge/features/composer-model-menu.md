@@ -12,12 +12,14 @@ single-field write in [`changeSetting`](session-settings-send.md) (#256), and th
 rule in [Run configuration Model section](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975)
 (#560/#975/#976). This ticket adds three things: the entries, the trigger's label, and what picking one
 does — plus two one-time family costs that land on whichever footer menu goes second (this one, since
-\#682's permission-mode button is sequenced behind it): the shared `.composer__footer-button` extraction,
+\#682's permission-mode button was sequenced behind it): the shared `.composer__footer-button` extraction,
 and a correction to three sites that had rested on "exactly one `.composer-options-anchor` exists."
 
-**Position.** The design puts the permission-mode button (#682) between Actions and this one, but #682
-hasn't landed. The trigger mounts immediately right of Actions with no spacer and no placeholder held
-open for it — #811's rule, reapplied — and #682 will insert itself between the two when it lands.
+**Position.** The design puts the permission-mode button (#682) between Actions and this one. At the time
+this ticket shipped #682 hadn't landed yet, so the trigger mounted immediately right of Actions with no
+spacer and no placeholder held open for it — #811's rule, reapplied. [#682](composer-permission-mode-menu.md)
+has since landed and inserted itself between the two, as this section always said it would; this trigger is
+now the row's **third** item, not its second.
 
 ## `composerModelMenuModel`, one pure function deciding all three renderings
 
@@ -186,8 +188,11 @@ oversight.
 Renderer tests are static server renders (CLAUDE.md); `ComposerModelMenu.test.tsx` covers the view against
 `composerModelMenuModel` directly (each of the three renderings, four explicit near-misses — case fold,
 prefix, superstring, surrounding whitespace — all failing to match on purpose, and the duplicate-`value`
-case). The container is proven only at its `ConversationScreen.tsx` mount site (order: footer →
-Actions anchor → this trigger → the context reading).
+case). The container is proven only at its `ConversationScreen.tsx` mount site. The pinned mount order was
+Actions → this trigger → the context reading at the time this ticket shipped; since
+[#682](composer-permission-mode-menu.md) landed the order is Actions → permission mode → this trigger →
+effort → the context reading, and the anchor/`aria-haspopup` counts that ticket's own tests pin moved from
+one to two accordingly.
 
 Two lessons from the e2e drive (`e2e/composer-model-menu.spec.ts`), useful to any future footer control
 reading the same stores:

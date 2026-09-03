@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ComposerOptionsMenu,
   ComposerOptionsPanel,
+  COMPOSER_OPTIONS_UNAVAILABLE_NOTE,
   type ComposerOptionsPanelOption
 } from './ComposerOptionsPanel'
 
@@ -248,5 +249,57 @@ describe('ComposerOptionsMenu — the interaction container, collapsed (#840)', 
     expect(markup).not.toContain('role="menu"')
     expect(markup).not.toContain('composer-options__item')
     expect(countOf(markup, '<button')).toBe(1)
+  })
+})
+
+// #681 — the optional `unavailable` marking. The affordance's own end-to-end proof (a published list
+// greying an Actions entry) is ComposerActionsMenu.test.tsx's; what this block owns is the SHARED
+// surface's contract: the marking composes with `currentId`, and a consumer that passes nothing renders
+// byte-for-byte what it rendered before the field existed.
+describe('ComposerOptionsPanel unavailable rows (#681)', () => {
+  it('renders identically when no option carries the field — the four other consumers (AC5)', () => {
+    // The explicit `=== true` read, from the outside: `false` and absent are the same rendering, so a
+    // later `if (option.unavailable)` truthiness slip would still pass here — but an implementation that
+    // emitted aria-disabled="false" or appended an empty modifier would not.
+    const spelled = OPTIONS.map((option) => ({ ...option, unavailable: false }))
+    expect(renderPanel(spelled, 'max')).toBe(renderPanel(OPTIONS, 'max'))
+    expect(renderPanel(OPTIONS, 'max')).not.toContain('aria-disabled')
+    expect(renderPanel(OPTIONS, 'max')).not.toContain('--unavailable')
+    expect(renderPanel(OPTIONS, 'max')).not.toContain('composer-options__unavailable-note')
+  })
+
+  it('marks exactly the unavailable rows, base class kept (AC1, AC4)', () => {
+    const markup = renderPanel(
+      [OPTIONS[0], { ...OPTIONS[1], unavailable: true }, OPTIONS[2]],
+      null
+    )
+    expect(rowCount(markup)).toBe(OPTIONS.length)
+    expect(
+      countOf(markup, 'class="composer-options__item composer-options__item--unavailable"')
+    ).toBe(1)
+    expect(countOf(markup, 'aria-disabled="true"')).toBe(1)
+    expect(countOf(markup, COMPOSER_OPTIONS_UNAVAILABLE_NOTE)).toBe(1)
+    // The two available rows are still exactly what they were.
+    expect(countOf(markup, 'class="composer-options__item">')).toBe(2)
+  })
+
+  // aria-disabled, never the HTML `disabled` attribute: the container moves real DOM focus onto the
+  // focused row, and a disabled <button> is not focusable — arrow navigation would appear stuck. The row
+  // also keeps role="menuitem" and its place in the roving tabindex.
+  it('keeps an unavailable row focusable and in the menu (the ARIA disabled-item pattern)', () => {
+    const markup = renderPanel([{ ...OPTIONS[0], unavailable: true }, OPTIONS[1]], null)
+    expect(markup).not.toContain(' disabled')
+    expect(countOf(markup, 'role="menuitem"')).toBe(2)
+    expect(focusableRowLabel(markup)).toBe(OPTIONS[0].label)
+  })
+
+  // Both modifiers on one row, in a fixed order, with the base class first — a menu that offers a CHOICE
+  // (#682/#683) can in principle mark its own current value unavailable, and the class run must stay a
+  // single predictable string rather than depending on which flag was read first.
+  it('composes with the current-row marking, base first', () => {
+    const markup = renderPanel([OPTIONS[0], { ...OPTIONS[1], unavailable: true }], 'max')
+    expect(markup).toContain(
+      'class="composer-options__item composer-options__item--current composer-options__item--unavailable" aria-current="true" aria-disabled="true">Max<'
+    )
   })
 })

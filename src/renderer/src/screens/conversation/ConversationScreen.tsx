@@ -2716,7 +2716,7 @@ function Composer({
           no conversation and no file — the picker, the path and the bytes all stay in the background
           process. */}
       <div className="composer__footer">
-        <ComposerActionsMenu onCommand={sendText} />
+        <ComposerActionsMenu conversationId={activeConversationId} onCommand={sendText} />
         <ComposerPermissionModeMenu />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />

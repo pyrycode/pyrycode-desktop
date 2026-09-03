@@ -409,3 +409,35 @@ Stated as an overage rather than acted on.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — implementation
+
+**Open questions, resolved.**
+
+1. **The `:focus-visible` outline is KEPT on an unavailable row**, as the plan leaned. The row stays
+   focusable by design — that is the whole reason the ARIA disabled-item pattern was chosen over the HTML
+   `disabled` attribute — so suppressing the outline would hide where focus sits and be the actual
+   accessibility regression. Recorded in `conversation.css` beside the modifier rule.
+2. **The note reads `(unavailable in this workspace)`**, a module constant
+   (`COMPOSER_OPTIONS_UNAVAILABLE_NOTE`) exported from the panel and marked with the SEND_LABEL-style
+   load-bearing-locator warning. `e2e/composer-actions-unavailable.spec.ts` matches it, and a unit test
+   pins it as a literal so an edit that interpolated a published `name` into it would fail there.
+3. **No shipped spec is disturbed.** Verified by running every panel consumer's spec plus
+   `ConversationScreen.test.tsx` (450 tests) and `e2e/composer-actions.spec.ts` — all green, unchanged.
+   The mechanism is that all three renderings are absent when `unavailable` is, and no shipped consumer
+   passes the field.
+
+**Design departures.**
+
+- `slashCommandMenuProvesAbsence` is spelled as a **type predicate** (`entry is SlashCommandListEntry`)
+  rather than the plain `boolean` the plan's contract sketch showed. It answers true only for a non-null
+  entry, so the predicate is honest, and it is what lets `markUnavailableActions` narrow on that one call
+  instead of carrying a second null test that would be dead at runtime and read as a real branch.
+- **The e2e spec clicks the greyed row with `{ force: true }`.** Playwright's actionability check reads
+  `aria-disabled="true"` as not-enabled and refuses an ordinary click. That refusal is corroboration that
+  the marking lands where tooling looks, but it proves nothing about what the app does when clicked — and
+  `aria-disabled` is advisory, so a real pointer does reach the row and React's `onClick` does fire.
+  Forcing the click is what drives the path the gate guards; asserting the refusal instead would be a
+  vacuous test. Recorded in the spec at the call.

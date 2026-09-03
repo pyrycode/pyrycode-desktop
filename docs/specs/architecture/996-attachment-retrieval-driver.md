@@ -496,3 +496,60 @@ because there is no entry to look one up from. Both are pinned by tests. Nothing
 moves: the failure union, the correlation model, the timeout and the teardown net are unchanged, and
 `AttachmentRetrievalEmit` is a type alias for the function shape rather than a sixth exported type in
 the counted sense (it replaces the dep field it was extracted from).
+
+### 2026-09-03 — the pending entry is registered after the send, not before it (review of PR #1003)
+
+**What changed.** `requestAttachment` no longer arms before sending. It builds and sends first, and
+registers the `pendingRetrievals` entry — reassembler, consumer and idle deadline — only once the frame
+is on the wire. A build or send that throws now settles the waiting consumer immediately with a new
+member on the shared union, `send-failed`, and registers nothing. `isAttachmentRetrievalRequest` gained
+a size bound on each identifier, `MAX_RETRIEVAL_IDENTIFIER_LENGTH` (256 UTF-16 code units).
+
+**What drove it.** The verifier's MUST FIX. This client's envelope-id counter advances **only on a
+successful build**, so an entry armed before the build and left behind by a throw is keyed to an id the
+*next* outbound envelope re-mints. That entry then matches the next request's reject on `in_reply_to`,
+settles an unrelated retrieval on a frame answering something else, and `return`s — consuming a frame
+the bundle net and the modal FIFO below were owed. The retrieval's own terminal was wrong too:
+`timed-out` thirty seconds later, for a frame that never left the machine.
+
+**Why § 3's cited precedent did not license the old order.** Both in-repo maps keyed by envelope id —
+`pendingSettings` and `pendingCreateFolders` — register *after* a successful send and say why in as
+many words. `requestDebugBundle`, whose arm-before-send posture § 3 cited, arms a single slot **not
+keyed by an envelope id**, so nothing it leaves behind can be re-minted; and its own comment rests on a
+fixed-shape envelope that "cannot over-cap", which an envelope carrying two renderer-supplied strings
+did not. Neither half of that analogy transferred.
+
+**Why arming after the send is safe.** An inbound frame reaches `onDriverEvent` through socket I/O,
+which cannot run synchronously inside `driver.sendMessage`, so an answer cannot arrive between the send
+and the registration a few statements later. That is the same reasoning both envelope-id-keyed
+precedents already rest on. The alternative fix — advancing the counter at capture so the id is retired
+whatever happens — removes the desync but keeps the wrong terminal and the pointless 30 s wait.
+
+**Why `send-failed` rather than an existing member.** The upload leg's `AttachmentTransferFailure`
+already carries a member of that exact name and meaning: this client could not put the frame on the
+wire, an over-cap envelope or a driver throw, the two causes collapsed because the caught object is
+dropped unexamined. Mirroring it costs one union member and no new file, and it is honest where
+`not-connected` (no session at all), `connection-lost` (a session that went away with the ask sent) and
+`timed-out` (a stream that stopped) each would not be. `AttachmentFailReason` is still not widened.
+
+**Revised § Security review — [Trust boundaries], superseding the finding as committed.** That finding
+bounded the **number** of concurrent asks and stopped there; it never bounded the **size** of either
+identifier, and the two claims it left standing were inconsistent — § "State + concurrency model"
+asserted that a stale envelope id can never correlate an answer, while § 3 accepted that a build throw
+leaves the entry armed. An ~66 KB `attachmentId` from a compromised renderer is enough to trip it: the
+serialized envelope exceeds `MAX_PLAINTEXT_BYTES` (65519), `encodeEnvelope` throws, and the desync
+above is reachable from the untrusted side rather than only from a main-side programming error. Two
+things close it, and only the first is load-bearing:
+
+- **The ordering fix above**, which removes the desync itself rather than today's trigger for it. A
+  throw from any cause now leaves no state keyed to an unspent id.
+- **The size bound at the guard**, which keeps the whole class out of the background process — a
+  boundary's job, and `MAX_PASTE_LENGTH`'s role for the pairing channel. It is a *size* bound, not a
+  shape or canonicity one, so § 1's "no second canonicity gate" argument is untouched: a `../..`
+  identifier still passes here and is still refused by `resolveAttachmentPath`, the single gate. It is
+  also what makes `buildRequestAttachment`'s "a fixed-shape envelope carrying two canonical ids can
+  never approach the cap" true of a renderer-supplied ask rather than only of a conforming one.
+
+The rest of the § Security review stands as audited. No other finding depended on the arming order, and
+nothing here widens what crosses either boundary: `send-failed` is a client-owned literal like every
+other inhabitant of the union, and the bound is a comparison on a value the guard already read.

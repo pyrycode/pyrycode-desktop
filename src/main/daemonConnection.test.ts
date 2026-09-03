@@ -7103,6 +7103,45 @@ describe('requestAttachment (#996)', () => {
     expect(spy.terminals()).toBe(0)
   })
 
+  it('settles send-failed and registers nothing when the ask cannot be put on the wire', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const bundle = makeBundleConsumer()
+    // Over MAX_PLAINTEXT_BYTES once serialized, so buildRequestAttachment throws. The IPC guard bounds
+    // this class one layer out; requestAttachment owes its own terminal because it is reachable from
+    // any main-side caller, and a build that throws must not leave the caller waiting.
+    const oversized = 'a'.repeat(70_000)
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: oversized },
+      spy.consumer
+    )
+
+    // Synchronous and honest: the frame never left the machine, so this is neither a lost session
+    // (`connection-lost`) nor a stream that stopped (`timed-out`, 30 s later).
+    expect(spy.failed).toEqual(['send-failed'])
+    const sentTypes = drivers[0].sent.map((bytes) => decodeEnvelope(bytes).type)
+    expect(sentTypes).not.toContain('request_attachment')
+    // Nothing was armed: no deadline, and no entry under the id the dropped build did not spend.
+    expect(scheduler.pending()).toHaveLength(0)
+
+    // That unspent id is re-minted by the NEXT outbound envelope. Its reject must reach the paths
+    // below the correlation tier — a phantom entry would swallow it, settling this already-settled
+    // retrieval a second time and starving the bundle net of the frame it was owed.
+    connection.requestDebugBundle(bundle.consumer)
+    const bundleId = drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((envelope) => envelope.type === 'request_debug_bundle')[0].id
+    drivers[0].emit({
+      type: 'message',
+      plaintext: codedErrorPlaintext('attachment.not_found', bundleId)
+    })
+
+    expect(spy.terminals()).toBe(1)
+    expect(bundle.failed).toEqual(['daemon-error'])
+  })
+
   it('arms the idle deadline at send and clears it on the terminal', async () => {
     const scheduler = fakeRetrievalScheduler()
     const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   ATTACHMENT_RETRIEVAL_CHANNEL,
   ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
-  isAttachmentRetrievalRequest
+  isAttachmentRetrievalRequest,
+  MAX_RETRIEVAL_IDENTIFIER_LENGTH
 } from './attachmentRetrieval'
 import { DAEMON_EVENT_CHANNEL } from './events'
 import {
@@ -35,7 +36,7 @@ describe('isAttachmentRetrievalRequest', () => {
     expect(isAttachmentRetrievalRequest(VALID)).toBe(true)
   })
 
-  it('accepts an identifier of any shape, leaving canonicity to resolveAttachmentPath', () => {
+  it('accepts an identifier of any shape within the bound, leaving canonicity to resolveAttachmentPath', () => {
     // Shape-only by design: the id becomes a path component ONLY through resolveAttachmentPath, which
     // refuses a non-canonical one before storeAttachment writes. A second gate here would fork the check.
     expect(isAttachmentRetrievalRequest({ conversationId: 'c', attachmentId: '../../etc/passwd' })).toBe(
@@ -75,6 +76,23 @@ describe('isAttachmentRetrievalRequest', () => {
     // directory, so a zero-valued request is the specific silent failure the wire contract warns about.
     expect(isAttachmentRetrievalRequest({ ...VALID, attachmentId: '' })).toBe(false)
     expect(isAttachmentRetrievalRequest({ ...VALID, conversationId: '' })).toBe(false)
+  })
+
+  it('refuses an identifier over the size bound, on either field', () => {
+    // #1003 review: an unbounded identifier is not merely absurd input. At ~66 KB it pushes the
+    // request_attachment envelope over MAX_PLAINTEXT_BYTES, so the builder throws and the ask never
+    // reaches the wire — a whole failure class the boundary keeps out of the background process.
+    const over = 'x'.repeat(MAX_RETRIEVAL_IDENTIFIER_LENGTH + 1)
+    expect(isAttachmentRetrievalRequest({ ...VALID, attachmentId: over })).toBe(false)
+    expect(isAttachmentRetrievalRequest({ ...VALID, conversationId: over })).toBe(false)
+    expect(isAttachmentRetrievalRequest({ conversationId: over, attachmentId: over })).toBe(false)
+  })
+
+  it('accepts an identifier at exactly the bound', () => {
+    // Inclusive, like MAX_PASTE_LENGTH's: the bound is the largest accepted value, not the first
+    // refused one, and a UUID is ~7× under it either way.
+    const atLimit = 'y'.repeat(MAX_RETRIEVAL_IDENTIFIER_LENGTH)
+    expect(isAttachmentRetrievalRequest({ conversationId: atLimit, attachmentId: atLimit })).toBe(true)
   })
 
   it('accepts an ask carrying an extra key, which the fresh wire literal drops', () => {

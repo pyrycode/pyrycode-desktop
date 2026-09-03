@@ -142,6 +142,7 @@ describe('createAttachmentRetrieval', () => {
 
   it.each([
     'not-connected',
+    'send-failed',
     'not-found',
     'daemon-error',
     'timed-out',

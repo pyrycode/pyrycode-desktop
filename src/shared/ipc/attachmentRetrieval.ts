@@ -38,6 +38,25 @@ export const ATTACHMENT_RETRIEVAL_CHANNEL = 'pyry:attachment-retrieval' as const
 export const ATTACHMENT_RETRIEVAL_EVENT_CHANNEL = 'pyry:attachment-retrieval-event' as const
 
 /**
+ * Upper bound on each accepted identifier, in UTF-16 code units, enforced at the guard —
+ * MAX_PASTE_LENGTH's role for this channel (`pairing.ts`), applied to the two values an untrusted
+ * renderer supplies here.
+ *
+ * Generous by two orders of magnitude for what either field legitimately holds: the only attachment
+ * identifiers this client knows are the lowercase UUIDv4s it minted itself when uploading (36), and a
+ * conversation id is an opaque daemon-issued handle of the same order. 256 is comfortably above both
+ * while keeping the ask small.
+ *
+ * It is a SIZE bound, not a shape or canonicity one, so it leaves the argument below intact — a
+ * `../..` identifier still passes here and is still refused by `resolveAttachmentPath`, the single
+ * gate. What it buys is that the fixed-shape `request_attachment` envelope built from these two
+ * values provably stays under the wire's MAX_PLAINTEXT_BYTES (65519), which is what makes
+ * `buildRequestAttachment`'s "can never approach the cap" statement true of a renderer-supplied ask
+ * rather than only of a conforming one.
+ */
+export const MAX_RETRIEVAL_IDENTIFIER_LENGTH = 256
+
+/**
  * What the window asks for: a conversation and an attachment, AND NOTHING ELSE. No path, no directory
  * and no filename crosses in either direction — the attachment directory is computed at the
  * composition root from Electron's per-user app-data location, never from anything the window sent.
@@ -76,6 +95,13 @@ export interface AttachmentRetrievalRequest {
  * directory, so a receiver that skips its own shape check addresses the conversation directory root
  * rather than erroring. Refusing it here costs one comparison and never mints a value.
  *
+ * SO IS BEING BOUNDED (#1003 review). An unbounded identifier is not merely absurd input: at ~66 KB it
+ * pushes the `request_attachment` envelope over MAX_PLAINTEXT_BYTES, so the builder throws and the ask
+ * fails on this side having never reached the wire. The transport settles that honestly on its own
+ * (`send-failed`), but bounding the value HERE is what keeps the whole class out of the background
+ * process, which is this boundary's job — the same reason MAX_PASTE_LENGTH bounds a paste before main
+ * runs a regex over it.
+ *
  * The two field reads are `in`-guarded property accesses on a narrowed `object`, so a hostile ask
  * built with a `__proto__` key is refused on its own merits: the polluting object has no OWN
  * `attachmentId`, and reading one inherited from Object.prototype is not possible here because the
@@ -88,8 +114,10 @@ export function isAttachmentRetrievalRequest(value: unknown): value is Attachmen
   return (
     typeof conversationId === 'string' &&
     conversationId.length > 0 &&
+    conversationId.length <= MAX_RETRIEVAL_IDENTIFIER_LENGTH &&
     typeof attachmentId === 'string' &&
-    attachmentId.length > 0
+    attachmentId.length > 0 &&
+    attachmentId.length <= MAX_RETRIEVAL_IDENTIFIER_LENGTH
   )
 }
 
@@ -127,6 +155,14 @@ export type AttachmentRetrievalFailure =
   /** The ask arrived with no live session, so nothing was sent. Resolved immediately rather than left
    *  hanging (`requestDebugBundle`'s posture for a call that owns a waiting caller). */
   | 'not-connected'
+  /** There WAS a live session and this client still could not put the ask on the wire: an over-cap
+   *  envelope (WireEncodeError) or a driver throw. `AttachmentTransferFailure`'s member of the same
+   *  name and the same meaning, mirrored onto the leg that runs the other way, and the two causes
+   *  collapse to one outcome for its reason — the caught object is DROPPED, never inspected, because
+   *  its message could echo an identifier. Distinct from `not-connected` (no session at all) and from
+   *  `connection-lost` (a session that went away with the ask already sent): here the daemon never saw
+   *  the request, so nothing on the host is in flight and an immediate retry is sound. */
+  | 'send-failed'
   /** The host refused the ask: `attachment.not_found`. ONE code for every request that yields no
    *  bytes — an unknown attachment, an unknown or unnamed conversation, an identifier whose shape is
    *  invalid, one resolving outside the named conversation's directory, and a file that resolves but

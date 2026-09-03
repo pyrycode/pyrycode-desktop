@@ -482,7 +482,9 @@ export interface DaemonConnection {
    * `payload` is rebuilt as a fresh literal by this method's caller chain before it reaches the
    * builder, so no renderer-supplied key can reach the wire. Both ids are UNVALIDATED here: the
    * daemon owns the registry check and the confinement, and `resolveAttachmentPath` (via
-   * `storeAttachment`) is the sole gate before the attachment id becomes a path component.
+   * `storeAttachment`) is the sole gate before the attachment id becomes a path component. Their
+   * SIZE is bounded one layer out, at the IPC guard; a main-side caller that passes an identifier
+   * long enough to over-cap the envelope anyway gets `send-failed` rather than a hung request.
    */
   requestAttachment(
     payload: RequestAttachmentPayload,
@@ -611,8 +613,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // key, so a scan would be a worse shape than a keyed get. The pendingSettings / pendingCreateFolders
   // correlation idiom, with a reassembler and a deadline hanging off each entry.
   //
-  // Added in requestAttachment before the frame goes out, removed at the single settleRetrieval choke
-  // point, and cleared by failAttachmentRetrievals on every connection-fatal event. Single-writer —
+  // Added in requestAttachment AFTER the frame is on the wire — a build or send that throws registers
+  // nothing, because this client's envelope-id counter advances only on a successful build and an
+  // entry left under an unspent id would swallow the reject of whichever envelope re-mints it
+  // (pendingSettings' and pendingCreateFolders' stated ordering). Removed at the single settleRetrieval
+  // choke point, and cleared by failAttachmentRetrievals on every connection-fatal event. Single-writer —
   // every mutation runs to completion inside a synchronous body with no await between a read and a
   // write (the nextEnvelopeId / pendingSettings rationale).
   const pendingRetrievals = new Map<number, PendingRetrieval>()
@@ -2381,6 +2386,45 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // Capture the id BEFORE the build increments it: this is the value the daemon echoes as
     // in_reply_to on every answering chunk AND on the reject (the createWorkspaceFolder template).
     const envelopeId = nextEnvelopeId
+    try {
+      // A FRESH LITERAL with named fields, never the caller's object spread through: the two ids
+      // originate in an untrusted renderer, so a smuggled key must not reach the envelope even though
+      // the boundary guard reads only these two (createConversation's posture). Shares the one
+      // monotonic nextEnvelopeId with send / requestDebugBundle — no second counter — so ids stay
+      // unique across interleaved calls, which is what the daemon correlates replies by.
+      const bytes = buildRequestAttachment({
+        id: envelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          attachment_id: payload.attachment_id
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap envelope (WireEncodeError, reachable
+      // from a main-side caller passing an out-of-contract identifier) or a driver throw. The caught
+      // object is DROPPED — its message could echo an id — and the two causes collapse to one outcome,
+      // the upload leg's `send-failed`.
+      //
+      // SETTLING HERE, WITH NOTHING REGISTERED, is what keeps a dropped build from leaving a phantom
+      // keyed to a RECYCLED id (#1003 review). The line above advances the counter only on a successful
+      // build, so the next outbound envelope re-mints this id; an entry left armed under it would
+      // swallow that envelope's reject — settling a healthy retrieval on a frame that answers something
+      // else, and consuming a frame the bundle net and the modal FIFO below were owed. Both in-repo maps
+      // keyed by envelope id, pendingSettings and pendingCreateFolders, register after the send and say
+      // the same thing. This is also the honest terminal: the deadline's `timed-out` 30 s later would
+      // report a stream that stopped, for a frame that never left the machine.
+      consumer.fail('send-failed')
+      return
+    }
+    // THE FRAME IS ON THE WIRE: arm now, and only now. Ordering the arm after the send cannot lose a
+    // fast answer — an inbound frame reaches onDriverEvent through socket I/O, which cannot run
+    // synchronously inside driver.sendMessage — and that is the reasoning both envelope-id-keyed
+    // precedents already rely on. requestDebugBundle arms FIRST because its single slot is not keyed by
+    // an envelope id at all, so nothing it leaves behind can be re-minted; that half of its analogy
+    // does not carry here.
     const entry: PendingRetrieval = {
       // Pinned to the id THIS CLIENT ASKED FOR, never one read back off the wire — the second half
       // of the correlation, and storeAttachment's stated precondition further down the chain.
@@ -2402,31 +2446,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // from the moment the entry exists, so every clearTimer site is total with no nullable field.
       deadline: armRetrievalDeadline(envelopeId)
     }
-    // ARM BEFORE SEND: record the entry and its deadline, THEN put the frame on the wire. The reverse
-    // order would let a fast answer find nothing to route to (requestDebugBundle's discipline).
     pendingRetrievals.set(envelopeId, entry)
-    try {
-      // A FRESH LITERAL with named fields, never the caller's object spread through: the two ids
-      // originate in an untrusted renderer, so a smuggled key must not reach the envelope even though
-      // the boundary guard reads only these two (createConversation's posture). Shares the one
-      // monotonic nextEnvelopeId with send / requestDebugBundle — no second counter — so ids stay
-      // unique across interleaved calls, which is what the daemon correlates replies by.
-      const bytes = buildRequestAttachment({
-        id: envelopeId,
-        ts: now(),
-        payload: {
-          conversation_id: payload.conversation_id,
-          attachment_id: payload.attachment_id
-        }
-      })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
-      driver.sendMessage(bytes)
-    } catch {
-      // Never throw out of the module (parity #490): a fixed-shape envelope carrying two ids cannot
-      // realistically over-cap, so this is really driver.sendMessage's catch. The caught object is
-      // DROPPED — its message could echo an id. A throw after arming leaves the retrieval pending;
-      // the idle deadline settles it, and the teardown net gets there first on a dropped socket.
-    }
   }
 
   // The single fresh-connect path both start() and reconnect() funnel through.

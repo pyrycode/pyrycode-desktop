@@ -207,8 +207,10 @@ export function attachmentRejectReplyFrames(
 answers a `request_attachment` instead — widening the union would let the fake emit codes the real
 daemon never sends on the upload leg. #999's tests build their `attachment.not_found` /
 `attachment.stream_aborted` fixtures with the block's own local `encodeReject` helper, not through this
-fake. No retrieval-shaped reply builder exists either; nothing consumes the two outcomes until #995, and
-a builder with no consumer is speculative infrastructure.
+fake. No retrieval-shaped reply builder exists either; #995 built the reassembler that will eventually
+act on the two outcomes, but nothing in `daemonConnection.ts` reads `inbound.outcome` on the retrieval
+leg yet — #996 is the wiring, and a builder with no consumer is still speculative infrastructure until
+it lands.
 
 The sibling of [`attachmentStoredReplyFrames`](fake-daemon.md#attachment-upload-scaffolding-964) —
 same `buildReplyFrames` shape, opposite terminal. Answers the `attachment_chunk` at `rejectedIndex` with
@@ -305,12 +307,16 @@ unreachability as an invariant to build on.
 
 ## Edge cases and limitations
 
-- **The two retrieval-leg outcomes are dormant on this side of the decode boundary.** `outcome` has one
-  reader today, [Attachment transfer](attachment-transfer.md)'s `transferForEnvelope` (#861), and it
-  answers only the upload leg's `attachment_chunk` correlations — a `request_attachment` has no consumer
-  yet. #999 ships the two members and their classification; #995 is the consumer that acts on them,
-  including honouring `attachment-stream-aborted`'s discard-the-partial-transfer obligation, which this
-  decode boundary can state but not enforce (there is no reassembler here to discard from).
+- **The two retrieval-leg outcomes are still dormant on this side of the decode boundary.** `outcome` has
+  one reader today, [Attachment transfer](attachment-transfer.md)'s `transferForEnvelope` (#861), and it
+  answers only the upload leg's `attachment_chunk` correlations — a `request_attachment` still has no
+  reader in `daemonConnection.ts`. #999 ships the two members and their classification;
+  [Attachment reassembly and store](attachment-reassembly-and-store.md) (#995) built the reassembler
+  whose `fail('stream-aborted' | 'connection-lost')` door exists to honour
+  `attachment-stream-aborted`'s discard-the-partial-transfer obligation, but that module does not import
+  `DaemonErrorOutcome` at all — its own reason set is client-owned and narrower. #996 is the actual
+  consumer: it must translate a decoded `attachment-stream-aborted` into a call to that door, the same
+  way `transferForEnvelope` passes the upload leg's outcome straight through today.
 - **The widening reached the renderer through a type, not through anyone wiring a new arm.**
   `DaemonErrorOutcome` sits inside `AttachmentTransferFailure` (main-only) which `AttachmentUploadFailure`
   re-declares on the shared IPC side (`src/shared/ipc/attachmentUpload.ts`) — see
@@ -334,8 +340,11 @@ unreachability as an invariant to build on.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the producer half both replies answer.
 - [Request-attachment envelope](request-attachment-envelope.md) (#993) and
   [Attachment chunk retrieval decode](attachment-chunk-retrieval-decode.md) (#998) — the retrieval leg's
-  request and chunk-decode halves that made #999's two codes worth classifying; #995 (not yet built) is
-  the consumer that acts on them.
+  request and chunk-decode halves that made #999's two codes worth classifying.
+- [Attachment reassembly and store](attachment-reassembly-and-store.md) (#995) — built the reassembler
+  whose pass-through `fail()` door is where these two outcomes will land, but does not itself read
+  `DaemonErrorOutcome`; [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) is the driver
+  that will translate and call it, not yet started.
 - [Attachment upload](attachment-upload.md) — `AttachmentUploadFailure`, the shared-IPC re-declaration
   this type's widening propagates through, including the two retrieval codes it carries but cannot reach
   from a conforming daemon.

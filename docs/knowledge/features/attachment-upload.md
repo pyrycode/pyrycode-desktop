@@ -268,6 +268,10 @@ network volume leaves one promise pending and one handle open). Neither has been
   here, since this flow's direction is host path → wire, never the reverse.
 - [Pairing status signal](pairing-status-signal.md) — the value-free-argument / dedicated-channel shape
   `attachmentUpload.ts` follows.
+- [Attachment reassembly and store](attachment-reassembly-and-store.md) — the retrieval leg's magnitude
+  bound, `ATTACHMENT_MAX_RETRIEVAL_BYTES` (#995), restates this file's `ATTACHMENT_MAX_UPLOAD_BYTES`
+  figure and argument rather than importing it (a `main/ → transport/` module-graph direction issue),
+  and a test pins the two equal.
 - `docs/specs/architecture/862-attachment-upload-pick-and-report.md` — the full architecture spec,
   including the security review this doc summarizes.
 - [#863](https://github.com/pyrycode/pyrycode-desktop/issues/863) — the button and the rendered outcome;

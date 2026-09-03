@@ -2,7 +2,7 @@
 
 The **attachment-identifier → path gate**: a pure, main-process function that turns an untrusted attachment identifier into a file path confined inside a base directory, or refuses it. The renderer never passes a path — it passes an attachment identifier — and the background process is where that identifier becomes a path component. This module is that translation and, per its own doc comment, the **last owner of the check**: the daemon documents its 64-byte `attachment_id` ceiling as explicitly *not* a defence and assigns the real check to whoever turns the id into a path component (`internal/protocol/attachments.go`).
 
-Introduced in [#818](https://github.com/pyrycode/pyrycode-desktop/issues/818). Written in the [pairing-payload gate](pairing-payload-gate.md)'s register — a pure, synchronous, total, log-free untrusted-input gate with a discriminated `{ok:true}/{ok:false, reason}` result and a value-free reason — and reusing the [save-debug-bundle](save-debug-bundle.md) composition-root seam of an injected `dir` parameter. **No consumer is wired in this slice.**
+Introduced in [#818](https://github.com/pyrycode/pyrycode-desktop/issues/818). Written in the [pairing-payload gate](pairing-payload-gate.md)'s register — a pure, synchronous, total, log-free untrusted-input gate with a discriminated `{ok:true}/{ok:false, reason}` result and a value-free reason — and reusing the [save-debug-bundle](save-debug-bundle.md) composition-root seam of an injected `dir` parameter. **No consumer was wired in this slice**; its first is [`storeAttachment`](attachment-reassembly-and-store.md) (#995), consuming this gate verbatim with no second escape check.
 
 ## What it does
 
@@ -20,7 +20,7 @@ export function resolveAttachmentPath(
 
 The body is two steps: test `attachmentId` against a canonical-shape pattern, and on a pass, `resolve(baseDir, attachmentId)`. `baseDir` is **trusted** input from the composition root; `attachmentId` is **untrusted** input from the renderer (and, upstream, the wire) — the two parameters carry the same type but different trust levels, so the doc comment is what says which is which. `resolveAttachmentPath` is pure, synchronous, total and throw-free: no filesystem call, no async, no state, nothing to cancel, and no `console.*` of any kind.
 
-Two future consumers need exactly this translation and both say "refuse a bad identifier" from their own side: #814 (save an attachment into Downloads) copies the resolved file out; #691 (open in the OS image viewer, blocked-by this ticket) hands the resolved path to `shell.openPath`. An identifier that escaped containment would let either consumer touch an arbitrary file on the user's disk, and in #691's case have the OS execute or open it with whatever handler the extension implies.
+Three consumers need exactly this translation and each says "refuse a bad identifier" from their own side: [`storeAttachment`](attachment-reassembly-and-store.md) (#995, landed) writes the verified attachment at the resolved path; #814 (save an attachment into Downloads) copies the resolved file out; #691/#867 (open in the OS image viewer) hands the resolved path to `shell.openPath`. An identifier that escaped containment would let any of them touch an arbitrary file on the user's disk, and in #691/#867's case have the OS execute or open it with whatever handler the extension implies.
 
 ## Why refusal, not rewriting
 
@@ -41,7 +41,7 @@ Lowercase hex digits and ASCII hyphen-minus, 1–64 characters. **This module im
 - **No Windows reserved device name is spellable** (`con`, `prn`, `aux`, `nul`, `com1`, `lpt1` each contain a character outside the alphabet) — this falls out for free rather than needing its own rule.
 - **The empty identifier is refused by the `{1,64}` lower bound**, not cosmetically: `resolve(base, '')` is `base` itself, which would hand a consumer the attachment *directory* where it expected a file.
 
-If the daemon ever publishes an attachment-id shape outside this pattern, the fix is one regex and its test rows — but any replacement must keep the case-unambiguity property or #687's writes cross-contaminate on macOS and Windows.
+If the daemon ever publishes an attachment-id shape outside this pattern, the fix is one regex and its test rows — but any replacement must keep the case-unambiguity property or [`storeAttachment`](attachment-reassembly-and-store.md)'s writes cross-contaminate on macOS and Windows.
 
 ## Containment is structural — no filesystem resolution
 
@@ -61,6 +61,8 @@ One failure mode, one category: `{ ok: false, reason: 'not-canonical-id' }`, wit
 
 The wire file name itself is sanitised by a separate module, [`sanitizeAttachmentFilename`](attachment-filename-sanitiser.md) (#819) — rewritten rather than refused, since a display/Downloads-folder name has no addressing consequence the way an identifier does. #814 is unaffected by this module's extension-less on-disk shape, since its Downloads-folder filename comes from that sibling rather than from the on-disk name.
 
+**Closed by #995: a flat file, not a per-attachment directory.** [`storeAttachment`](attachment-reassembly-and-store.md) writes the verified bytes directly at `resolve(baseDir, attachmentId)` — a direct child of the attachment directory, no intermediate folder per identifier. This module still makes no filesystem claim about what is at the path it returns; it never looks, and the choice was #995's to make as the ticket that first wrote to that path.
+
 ## Testing
 
 `src/main/attachmentPath.test.ts`, plain vitest under the repo's `environment: 'node'` config — no temp directories, no fixtures, no cleanup, since the module never touches the filesystem. The macOS `os.tmpdir()` → `/private/var/…` symlink trap that bites a resolved-path comparison doesn't apply here (nothing is resolved against a real directory), but its sibling rule still does and is the one to reuse on any future path-arithmetic test in this repo: **never build an expectation from the function's own return value** — assert independently instead (`isAbsolute`, `dirname(...) === resolve(baseDir)`, `basename(...) === id`), or a build that returns the base directory unchanged would still pass.
@@ -78,8 +80,8 @@ Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residu
 
 ## Edge cases and limitations
 
-- **Nothing evicts these files.** Attachment-directory retention/cleanup has no ticket yet; worth revisiting once #687 is writing real bytes.
-- **The extension question is #691's, not this module's or #687's.** Naming it here so it isn't rediscovered at #691's implementation turn: the extension must come from a validated image type, never from the model-chosen name.
+- **Nothing evicts these files.** Attachment-directory retention/cleanup has no ticket yet; worth revisiting now that [`storeAttachment`](attachment-reassembly-and-store.md) is writing real bytes.
+- **The extension question is #691/#867's, not this module's or #995's.** Naming it here so it isn't rediscovered at that implementation turn: the extension must come from a validated image type, never from the model-chosen name.
 - **`baseDir` correctness is the caller's obligation.** This module cannot and does not validate it.
 
 ## Related
@@ -90,5 +92,5 @@ Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residu
 - [Secure store](secure-store.md) — hosts `fileSecretPersistence`, the base64url-encoding precedent for the *seam*, explicitly not for the *mechanism* here (see § Why refusal, not rewriting).
 - `docs/specs/architecture/818-attachment-identifier-path-resolution.md` — the full architecture spec, including the security review and the open questions this doc summarizes.
 - pyrycode `docs/specs/architecture/1781-attachment-directory-resolution.md` § "Why equality and not `withinDir`" — the daemon-side precedent this module's containment design deliberately diverges from, and why.
-- #814 (save-to-Downloads) and #691 (open-in-viewer, blocked-by this ticket) — the two intended consumers; neither is wired yet.
-- #687 — establishes the attachment directory and the on-disk write this module's contract (§ "The on-disk shape...") constrains.
+- [Attachment reassembly and store](attachment-reassembly-and-store.md) — #995, the first wired consumer: writes the verified attachment at the path this gate returns, flat and extension-less, closing the on-disk-shape open question below.
+- #814 (save-to-Downloads) and #691/#867 (open-in-viewer) — the two remaining intended consumers; neither is wired yet.

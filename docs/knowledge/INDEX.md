@@ -444,7 +444,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `switch`, mapping the attachment upload leg's six reject codes (`attachment.invalid_chunk` /
   `.integrity_failed` / `.too_large` / `.too_many_uploads` / `.storage_failed` / `message.too_long`) onto a
   new client-owned `DaemonErrorOutcome` union. Extended by #999 with the retrieval leg's two
-  (`attachment.not_found` / `.stream_aborted`, dormant until #995 consumes them), once that leg existed
+  (`attachment.not_found` / `.stream_aborted`, still dormant on this side of the decode boundary — #995
+  built the reassembler whose `fail()` door exists to receive `.stream_aborted`, but does not itself
+  import `DaemonErrorOutcome`; #996 is the driver that must translate and call it), once that leg existed
   upstream — the widening reddened `src/main/attachmentUpload.ts` and was absorbed by widening
   `AttachmentUploadFailure` by the same two rather than `Exclude`-ing them from
   `AttachmentTransferFailure`, since a hostile daemon can still cause the value. Every member is a source
@@ -550,8 +552,41 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `text/html` is exactly as dangerous to render as a declared one. Logging is stricter than upstream
   permits — none of the id, index or total are logged, where upstream's own doc allows all three.
   Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no case for
-  `'attachment-chunk'` yet — the reassembler that concatenates chunks into a file is the first
-  intended consumer, not yet started. Architect self-review PASS.
+  `'attachment-chunk'` yet — the reassembler that concatenates chunks into a file, built by #995, is
+  its first type-level consumer but is not yet wired into the switch. Architect self-review PASS.
+- [Attachment reassembly and store](features/attachment-reassembly-and-store.md) — turns the retrieval
+  leg's `attachment_chunk` stream into one whole, verified file and answers where it lives on this
+  machine (#995, split from #687): two main-process leaves, `createAttachmentReassembler` (accumulate,
+  verify) and `storeAttachment` (write), shipped **unwired** — #996 composes them and owns the
+  window-visible terminal. The reassembler is `bundleReassembler.ts`'s structural twin (settle-once,
+  injected consumer, closed reason set) and deliberately **not** its arithmetic twin: chunks are
+  index-addressed and may arrive in any order, `total_chunks` rides every chunk so there is no
+  completion frame, and completion is a count of **distinct indices** (a `Map<number, Uint8Array>`),
+  never of frames received — a zero-byte file is one chunk carrying zero bytes against a declared
+  total of 1. The first chunk's declaration gate runs the client-owned magnitude bound
+  (`ATTACHMENT_MAX_RETRIEVAL_BYTES`, 512 chunks × 45000 bytes, restated from
+  [attachment upload](features/attachment-upload.md)'s `ATTACHMENT_MAX_UPLOAD_BYTES` rather than
+  imported, to keep `main/ → transport/` from inverting, and pinned equal by test) **before** the
+  daemon-published `total_chunks == max(1, ceil(size/45000))` cross-check, because the ordering — not
+  just the presence — of the magnitude check is what keeps every later equality below
+  `Number.MAX_SAFE_INTEGER` and therefore exact; the daemon's own reason for the same ordering (an
+  `int64` overflow in the ceiling-form arithmetic) does not transfer to a JS double, but its cousin
+  (an inexact declared `size` above 2^53) does. A repeated index is refused, not absorbed. On
+  completion, assembled length and `sha256` are checked against the first chunk's declaration — as
+  integrity, not authenticity, since the same party supplies bytes and digest — before anything is
+  handed to the consumer, which is sized only from bytes that actually arrived, never from the
+  declaration. `storeAttachment` resolves the path through
+  [attachment path resolution](features/attachment-path-resolution.md)'s gate with **no second escape
+  check**, closing that module's on-disk-shape open question as a **flat, extension-less file**
+  (not a per-attachment directory), and writes via `fileSecretPersistence`'s temp-then-rename recipe —
+  deliberately **not** `saveDebugBundle`'s exclusive-create rule, since a content-addressed re-fetch
+  must replace the same file rather than accumulate suffixed copies. Never throws; both branches (path
+  refusal, write failure) collapse to one `store-failed` reason. Neither module logs — both hold or
+  write a user's decrypted file bytes. A lesson from implementation: assembling with `Buffer.concat`
+  through a `Uint8Array`-typed signature is a subtype leak only `toEqual` catches (a `Buffer` carries a
+  `type: "Buffer"` marker); `new Uint8Array(n)` + `.set()` avoids it and matches the Go oracle's
+  `make([]byte, 0, n)` — `bundleReassembler` has the same latent shape today, unbitten. Architect
+  self-review PASS.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

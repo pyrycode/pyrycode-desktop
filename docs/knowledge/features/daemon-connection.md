@@ -54,6 +54,7 @@ export interface DaemonConnection {
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
   uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, not send's silent no-op
+  requestAttachment(payload: RequestAttachmentPayload, consumer: AttachmentRetrievalConsumer): void  // #996: encrypt a request_attachment onto the live session and route the answering chunk stream / reject to consumer; consumer-failing twin, void not Promise (the consumer, not the return, carries the terminal)
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -76,6 +77,19 @@ the **first `async` method** on this interface and never throws or rejects out o
 restated for a promise-returning method). See [Attachment transfer](attachment-transfer.md) for the full
 design, including why the envelope-id-only correlation the two existing patterns suggest would never
 resolve.
+
+**`requestAttachment(payload, consumer)` was added in [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996)**
+— the retrieval leg's consumer-failing twin, `void` rather than `Promise`-returning like
+`uploadAttachment` because the terminal reaches the caller through `consumer.fail`/`consumer.complete`,
+not a resolved value. Builds and **sends the frame before** registering the correlation entry
+(`pendingRetrievals: Map<number, PendingRetrieval>`, keyed by the sent envelope id) — the opposite
+order from every other arm-before-send precedent in this file, fixed post-review; see
+[Attachment retrieval](attachment-retrieval.md) § Revisions for why this map specifically needs it.
+Every answering chunk **and** the reject correlate on that one envelope id (unlike the upload leg's two
+different keys), plus a per-retrieval idle deadline this ticket introduces as the first timer this
+module owns. See [Attachment retrieval](attachment-retrieval.md) and
+[Daemon connection — correlation](daemon-connection-correlation.md) § Attachment-retrieval correlation
+for the full design.
 
 **`requestSnapshot(payload)` was added in [#180](../codebase/180.md) and removed in
 [#620](../codebase/620.md).** It was the outbound half of an on-demand fetch of the session's current
@@ -243,6 +257,7 @@ never crosses to the renderer.
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
 - [Attachment transfer](attachment-transfer.md) / [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) — the `uploadAttachment(input)` method added to this factory, the `activeTransfers` Set + `failAttachmentTransfers()` teardown net + the two new inbound correlation arms it added here, and the `AttachmentTransfer` state machine it drives.
+- [Attachment retrieval](attachment-retrieval.md) / [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) — the `requestAttachment(payload, consumer)` method added to this factory, the `pendingRetrievals` Map + `failAttachmentRetrievals()` teardown net + the idle-deadline timer + the two new inbound correlation arms (`attachment-chunk`, the retrieval leg of `daemon-error`) it added here, composing #995's reassembler.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin) and the payload-carrying `buildRequestSnapshot` builder it drove, both removed by [#620](../codebase/620.md); the `case 'message'` consumer's content-minimisation emit removed by [#621](../codebase/621.md); the `snapshot` inbound kind and its decode removed by [#622](../codebase/622.md) — no piece of this feature survives on this factory today.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `requestConversations()` method added to this factory (another `send` twin, but bare like `requestDebugBundle`'s builder), the `buildListConversations` builder it drives, and the `conversations` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings(conversationId?)` method added to this factory, the conversation-keying correction that gave the signature a real parameter, and [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946), which made the sole caller actually pass one.

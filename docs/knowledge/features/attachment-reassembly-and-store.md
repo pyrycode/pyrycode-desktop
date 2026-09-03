@@ -6,12 +6,12 @@ Downloads), #866 (deliver bytes to the window) and #867 (open in the OS viewer) 
 Two main-process modules, both leaves: [`createAttachmentReassembler`](#1-the-accumulator---srcmaintransportattachmentreassemblerts)
 (accumulate, verify) and [`storeAttachment`](#2-the-write---srcmainattachmentstorets) (write).
 
-Introduced in [#995](https://github.com/pyrycode/pyrycode-desktop/issues/995), split from #687. Ships
-**unwired**: no `case 'attachment-chunk':` exists in `daemonConnection.ts` yet, so nothing calls either
-module from a live session. [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) is the
-driver — it routes frames by `inReplyTo`, composes the two entry points here, translates
+Introduced in [#995](https://github.com/pyrycode/pyrycode-desktop/issues/995), split from #687. Shipped
+unwired at first; [Attachment retrieval](attachment-retrieval.md) (#996) is now the driver — it routes
+frames by `inReplyTo`, composes the two entry points here, translates
 [`DaemonErrorOutcome`](daemon-error-outcome.md)'s `attachment-stream-aborted` into this module's own
-`stream-aborted`, and owns the terminal the window sees.
+`stream-aborted`, and owns the terminal the window sees. Still unwired on the *renderer* side — #814/
+\#866/#867 are the eventual consumers of that terminal.
 
 ## What it does
 
@@ -163,7 +163,7 @@ a path segment — nothing about an attachment's type may be inferred from its o
 the consequences of that for opening a file in the OS; #814's Downloads copy takes its name from the
 wire through [`sanitizeAttachmentFilename`](attachment-filename-sanitiser.md), never from this name.
 
-## Composition (stated for #996, which owns it)
+## Composition (owned by [#996](attachment-retrieval.md))
 
 `reassembler.complete(bytes)` fires **synchronously**; `storeAttachment` is the asynchronous step
 after it. The window-visible terminal must not fire before the file exists. Two obligations this
@@ -266,8 +266,10 @@ Architect self-review verdict: **PASS**. Full findings in `docs/specs/architectu
   completion length check. Deliberately not defended with a running-total early-exit — an unobserved
   failure mode at the same magnitude as the accepted one.
 - **No per-transfer deadline in this module.** A relay that stalls a stream mid-transfer pins one
-  reassembler's buffer indefinitely; released only by the `fail()` door, which #996 must call on
-  teardown. The deterministic backstop is `relayConnection`'s wire-pong timeout, one layer down.
+  reassembler's buffer indefinitely; released only by the `fail()` door, which
+  [#996](attachment-retrieval.md) calls on teardown via `failAttachmentRetrievals()`, and on an idle
+  timeout via its own new deadline timer. The deterministic backstop remains `relayConnection`'s
+  wire-pong timeout, one layer down.
 - **A process kill between `writeFile(tmp)` and `rename` leaves an orphan `.tmp`.** Not a partial
   *attachment* — its name is not a canonical identifier, so `resolveAttachmentPath` can never hand it to
   a consumer — but it is litter. Retention/cleanup has no ticket and is not this slice's to invent.
@@ -299,5 +301,6 @@ Architect self-review verdict: **PASS**. Full findings in `docs/specs/architectu
   precedent both it and this module trace back to `bundleReassembler`.
 - `docs/specs/architecture/995-attachment-reassembly-and-store.md` — the full architecture spec,
   including the security review this doc summarizes.
-- [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) — the driver that wires both modules
-  into a live session; not started.
+- [Attachment retrieval](attachment-retrieval.md) — [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996),
+  the driver that wires both modules into a live session; landed. Unwired on the renderer side —
+  #814/#866/#867 are the eventual consumers.

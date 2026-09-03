@@ -152,3 +152,55 @@ the natural key is the transfer object itself, queried by a linear scan over a h
 `security-sensitive`, architect self-review **PASS**. Emits **no** `DaemonEvent` on either arm — the
 outcome goes back to `uploadAttachment`'s caller, and surfacing it to the window is
 [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s slice.
+
+# Attachment-retrieval correlation ([#996](https://github.com/pyrycode/pyrycode-desktop/issues/996))
+
+The mirror image of the upload correlation above, and it matches the OPPOSITE way round for a
+structural reason: every answer to one `request_attachment` ask — every chunk **and** the reject —
+names the same envelope id, so a single `Map<number, PendingRetrieval>` keyed by that id, the
+`pendingSettings`/`pendingCreateFolders` shape, is enough on its own. (The upload leg needs its
+`Set` + two-key scan because its *success* reply names whichever chunk closed the transfer, which the
+sender cannot predict.) See [Attachment retrieval](attachment-retrieval.md) for the full design.
+
+- **Set — after the send, not before it.** `requestAttachment` builds and sends the frame first, and
+  registers `pendingRetrievals` only once it is on the wire — the opposite order from every arm-before-
+  send precedent in this file, including this leg's own upload sibling. The reason is specific to this
+  map: the envelope-id counter here advances only on a successful build, so an entry armed before a
+  throw is left keyed to an id the *next* outbound envelope re-mints, which would swallow that
+  envelope's reject. Fixed after a security-review MUST FIX during implementation (see
+  [Attachment retrieval](attachment-retrieval.md) § Revisions); a build/send throw now settles the
+  waiting consumer immediately as `'send-failed'` and registers nothing.
+- **Chunk match — `in_reply_to`, plus a non-redundant payload check one layer down.** `case
+  'attachment-chunk':` looks the frame up by `inbound.inReplyTo`; a miss is dropped (no event, no log,
+  no throw). The reassembler independently refuses a chunk whose payload `attachment_id` names a
+  different transfer — the failure only the payload id catches is the host answering the right ask
+  with the wrong bytes. Each accepted chunk re-arms the idle deadline (see below).
+- **Reject match — the sixth member of the `daemon-error` precedence tier**, checked in the existing
+  `if (inReplyTo !== undefined)` block alongside `pendingSettings`/`pendingCreateFolders`/
+  `transferForEnvelope`. `attachment.stream_aborted` routes **through the reassembler's two-member
+  pass-through door** (`AttachmentFailReason`'s `'stream-aborted'`) rather than settling directly,
+  because that door is where #995's discard-the-partial obligation lives. `attachment.not_found`
+  settles `'not-found'` directly; any other code settles `'daemon-error'` directly — neither goes
+  through the reassembler, since a reject yields no bytes and there is nothing to discard.
+  `AttachmentFailReason` is **not widened** for either.
+- **A per-retrieval idle deadline, armed at send and reset on every accepted chunk** — genuinely new
+  machinery in this module: no other correlation store here has ever needed a timer, because every
+  other one either has no completion frame it must detect the absence of, or is backstopped by
+  `failAttachmentTransfers`'s connection-level net alone. 30 s, restating `relayConnection`'s
+  `WIRE_PONG_TIMEOUT_MS` figure. Injected via `DaemonConnectionDeps.timing`, `createRelaySupervisor`'s
+  seam verbatim.
+- **Remove — the single `settleRetrieval` choke point.** Clears the timer, deletes the map entry, calls
+  the consumer — every settle path (chunk completion, either reject route, the idle deadline, the
+  teardown net) funnels through it, which is what makes "exactly one terminal" a property of there
+  being one exit rather than a guard at each site.
+- **Reset — `failAttachmentRetrievals()`**, the set-shaped teardown net (`failAttachmentTransfers`'s
+  twin, not `failBundleStream`'s single-slot one): snapshot and clear the map, clear every timer, fail
+  each consumer `'connection-lost'`. Called at the same four sites as its siblings — `relay-link-down`,
+  `terminal`, connection-level `error`, `dial()` — so a stale envelope id can never correlate on a
+  reconnected session.
+
+`security-sensitive`, architect self-review **PASS** (one MUST FIX resolved before the initial commit —
+a concurrency cap one layer up, in the orchestrator, not this correlation tier — and one resolved in a
+post-review follow-up fix, the set-after-send ordering above). Emits **no** `DaemonEvent` — the outcome
+goes back to `requestAttachment`'s consumer, and surfacing it to the window is
+[#996](https://github.com/pyrycode/pyrycode-desktop/issues/996)'s own orchestrator, one layer up.

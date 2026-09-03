@@ -2,9 +2,11 @@
 
 The **outbound half of the retrieval leg**: one `EnvelopeType` member, `request_attachment`, its
 two-field `RequestAttachmentPayload`, and a pure builder, `buildRequestAttachment`, that turns one
-request into envelope bytes. Nothing sends it, dispatches it, or answers it yet — the driver is a
-later slice, exactly as [attachment_chunk's builder](attachment-chunk-envelope.md) landed in #860
-one slice ahead of #861's sender.
+request into envelope bytes — exactly as [attachment_chunk's builder](attachment-chunk-envelope.md)
+landed in #860 one slice ahead of #861's sender. [Attachment retrieval](attachment-retrieval.md) (#996)
+is now the driver: `daemonConnection.requestAttachment` calls this builder, retaining the envelope id
+it sent under (the `id` docblock's stated contract) as the correlation key for both the chunk stream
+and the reject.
 
 Introduced in [#993](https://github.com/pyrycode/pyrycode-desktop/issues/993), split from #687. SSOT
 is `pyrycode/pyrycode` `internal/protocol/attachments.go` (`RequestAttachmentPayload`) and
@@ -16,8 +18,8 @@ answering `attachment_chunk` frames is
 and `attachment.stream_aborted` rejects are classified by
 [#999](https://github.com/pyrycode/pyrycode-desktop/issues/999) — see
 [Daemon error outcome](daemon-error-outcome.md) — and [#995](attachment-reassembly-and-store.md) built
-the reassembler that will act on them, though no driver in `daemonConnection.ts` reads either outcome
-on this leg yet (#996).
+the reassembler that acts on them, driven since #996 landed — see
+[Attachment retrieval](attachment-retrieval.md).
 
 ## What it does
 

@@ -7,7 +7,7 @@ a byte-trimmed filename and a derived `mime_type`, and driven through
 id. Exactly one terminal — `completed`, `refused` with the client's own size bound, or `failed` with
 the driver's outcome — is pushed back to the window on a dedicated channel pair. A cancelled picker is
 a total no-op: nothing read, nothing sent, nothing emitted. **Nothing renders here** — this slice ends
-at the bridge; the button and the outcome's appearance are [#863](https://github.com/pyrycode/pyrycode-desktop/issues/863).
+at the bridge; the button and the outcome's appearance are [Composer attach](composer-attach.md) (#863).
 
 Introduced in [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), split from #685.
 
@@ -167,8 +167,8 @@ listener; `app.on('will-quit', ...)` removes the exact listener, symmetric with 
 
 Two members on the existing `api` literal: `requestAttachmentUpload(): void` (fire-and-forget `send`, no
 argument) and `onAttachmentUploadEvent(listener): () => void` (the `onDaemonEvent` shape — strips the
-raw `IpcRendererEvent`, returns an unsubscribe handle that removes the exact handler). Neither is called
-yet; wiring the button and rendering the outcome is #863.
+raw `IpcRendererEvent`, returns an unsubscribe handle that removes the exact handler). Both are now
+called from [Composer attach](composer-attach.md) (#863), which wires the button and renders the outcome.
 
 ## Data flow
 
@@ -274,8 +274,7 @@ network volume leaves one promise pending and one handle open). Neither has been
   and a test pins the two equal.
 - `docs/specs/architecture/862-attachment-upload-pick-and-report.md` — the full architecture spec,
   including the security review this doc summarizes.
-- [#863](https://github.com/pyrycode/pyrycode-desktop/issues/863) — the button and the rendered outcome;
-  not started.
+- [Composer attach](composer-attach.md) (#863) — the button and the rendered outcome. Landed.
 - [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864) — in-flight progress on the same
   channel, before the terminal; not started.
 - [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) / [#891](https://github.com/pyrycode/pyrycode-desktop/issues/891) (paste) —

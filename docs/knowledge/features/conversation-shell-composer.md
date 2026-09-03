@@ -468,37 +468,43 @@ child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `M
 be confused with [Composer status row](#composer-status-row-796), which sits *above* the message box.
 The desktop layout puts six affordances in this row — Actions (#680), permission mode (#682), model and
 effort (#683, split into a model half and an effort half by #683's own children), this ticket's
-context-usage reading, and attach (#685) — and at the time #811 shipped, five of them were blocked on
+context-usage reading, and attach (#685, split into [#862](attachment-upload.md)'s headless flow and
+[#863](composer-attach.md)'s button) — and at the time #811 shipped, five of them were blocked on
 daemon work that doesn't exist yet. #811 built the row itself and landed the one occupant that wasn't
 blocked; **no placeholder element and no disabled control for the rest**. **#680 was the first of the
 blocked five to land** — it needed no daemon work at all, only the already-shipped
 [options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
 — followed by [#988's model menu](composer-model-menu.md), [#989's effort menu](composer-effort-menu.md)
-once #974 landed the daemon's published list, and then
+once #974 landed the daemon's published list, then
 [#682's permission-mode menu](composer-permission-mode-menu.md) once #1020/#1021 landed the mode's two wire
-halves. Five of the row's six slots are occupied today; only #685 (attach) still stays empty:
+halves, and finally [#863's attach button](composer-attach.md) once #862 landed the picker/upload flow it
+wires. All six of the row's slots are occupied:
 
 ```
 Composer
 ├── .composer__row                  (unchanged — textarea + ComposerSendButton)
-└── .composer__footer               (second child, #811; was the third until #968 retired __hint above)
-    ├── ComposerActionsMenu         leading item — opens the shared options panel with sendText (#680)
-    ├── ComposerPermissionModeMenu  second item — the session's permission mode, from the same panel (#682)
-    ├── ComposerModelMenu           third item — the session's model, from the same shared panel (#988)
-    ├── ComposerEffortMenu          fourth item — the session's effort, from the same shared panel (#989)
-    └── ContextUsageControl         null until a real snapshot has loaded, then <ContextUsageReading/>
+├── .composer__footer               (second child, #811; was the third until #968 retired __hint above)
+│   ├── ComposerActionsMenu         leading item — opens the shared options panel with sendText (#680)
+│   ├── ComposerPermissionModeMenu  second item — the session's permission mode, from the same panel (#682)
+│   ├── ComposerModelMenu           third item — the session's model, from the same shared panel (#988)
+│   ├── ComposerEffortMenu          fourth item — the session's effort, from the same shared panel (#989)
+│   ├── ContextUsageControl         null until a real snapshot has loaded, then <ContextUsageReading/>
+│   └── ComposerAttachButton        last item, margin-left: auto — renders unconditionally (#863)
+└── ComposerAttachOutcome           composer column's own last child, NOT inside .composer__footer (#863)
 ```
 
-The row now matches Figma's own order (Actions · mode · model · effort · reading). See
+The row now matches Figma's own order (Actions · mode · model · effort · reading · attach). See
 [Composer permission-mode menu](composer-permission-mode-menu.md) for the one structural way it differs
-from its two neighbours — its entries are a client-owned constant rather than a daemon-published list, so
+from its two menu neighbours — its entries are a client-owned constant rather than a daemon-published list, so
 it has no inert arm and is operable the instant a mode is known, which is what moved the row's
 anchor/`aria-haspopup` counts from one to two; see [Composer model menu](composer-model-menu.md) for its
 three renderings, the CSS extraction it triggered on `.composer__actions` (the row's second footer button
 at the time), and the `.composer-options-anchor` uniqueness correction it required; see
 [Composer effort menu](composer-effort-menu.md) for its own three renderings, its own label-width bound,
 and the fourth-glyph CSS lift both it and #682 declined in `.composer__actions-icon`'s favour of a
-standalone tidy-up.
+standalone tidy-up; see [Composer attach](composer-attach.md) for the one control that renders
+unconditionally and needs no daemon-published list at all, and for why its outcome line lives beneath the
+row rather than inside it.
 
 Through [#968](../codebase/968.md), `.composer`'s first child was `.composer__hint` (#31's not-connected
 caption); it is retired, and `.composer__row` is now `.composer`'s first child.

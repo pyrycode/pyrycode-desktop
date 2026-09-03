@@ -587,6 +587,27 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `type: "Buffer"` marker); `new Uint8Array(n)` + `.set()` avoids it and matches the Go oracle's
   `make([]byte, 0, n)` — `bundleReassembler` has the same latent shape today, unbitten. Architect
   self-review PASS.
+- [Attachment retrieval](features/attachment-retrieval.md) — the driver that joins the retrieval leg
+  together (#996, split from #687): the window asks by conversation + attachment id over a new
+  two-channel IPC pair (`src/shared/ipc/attachmentRetrieval.ts`, a sibling of `attachmentUpload.ts` and
+  deliberately not a `DaemonEvent` member), `daemonConnection.requestAttachment` builds and sends
+  `request_attachment` and only *then* registers a `pendingRetrievals` correlation entry keyed by the
+  sent envelope id (arm-after-send, the opposite order from every other correlation map in that file —
+  fixed post-review after an arm-before-send draft left a phantom entry on a build/send throw that could
+  swallow the next envelope's reply), and a new `src/main/attachmentRetrieval.ts` orchestrator
+  (`debugBundleDownload`'s shape, not single-in-flight, no `path` on its terminal) composes #995's
+  reassembler with the store and reports one terminal per ask, capped at
+  `ATTACHMENT_MAX_CONCURRENT_RETRIEVALS = 4` concurrent retrievals with same-id coalescing. Every
+  answering chunk **and** the reject correlate on one envelope id (the retrieval leg's own shape,
+  the mirror image of [attachment transfer](features/attachment-transfer.md)'s two-key correlation);
+  `attachment.stream_aborted` routes through the reassembler's discard-the-partial door,
+  `attachment.not_found` and every other code settle directly onto `not-found`/`daemon-error` without
+  widening `AttachmentFailReason`. A new 30 s idle deadline (restating `relayConnection`'s
+  `WIRE_PONG_TIMEOUT_MS`) is the first per-request timer this module owns, injected through the
+  `createRelaySupervisor` `timing` seam. `emit` is a per-ask argument rather than a construction
+  dependency — a first design draft that closed it in at construction quietly disabled both the
+  concurrency cap and the coalescing, since it forced a driver rebuilt per ask. Ships unwired on the
+  renderer side; #814/#866/#867 are the consumers. Architect self-review PASS.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   createDaemonConnection,
+  type AttachmentRetrievalConsumer,
   type DaemonConnection,
   type DaemonConnectionDeps
 } from './daemonConnection'
+import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
 import type { DaemonEvent } from '../shared/ipc/events'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
@@ -185,6 +188,7 @@ function build(
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
     mintToken?: () => string
+    timing?: DaemonConnectionDeps['timing']
   } = {}
 ): {
   connection: DaemonConnection
@@ -202,6 +206,9 @@ function build(
     now: () => FIXED_TS,
     createDriver: factory.createDriver,
     diagnosticLog: overrides.diagnosticLog,
+    // The retrieval idle-deadline seam (#996). Left undefined by default so every pre-existing test
+    // keeps the real setTimeout; the retrieval block injects a fake scheduler.
+    timing: overrides.timing,
     // Deterministic answer_token mint (#236) — a fixed default so the sent modal_answer frame is
     // pinnable; the uniqueness test injects a counter instead.
     mintToken: overrides.mintToken ?? ((): string => 'test-token')
@@ -6896,6 +6903,555 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
       expect(line).not.toContain('vnd.ms-excel')
       expect(line).not.toContain('att-secret-9f2b')
       expect(line).not.toContain(Buffer.from(FILE.subarray(0, 24)).toString('base64'))
+    }
+  })
+})
+
+// ============================================================================================
+// #996 — the RETRIEVAL leg: request_attachment, correlation by Envelope.in_reply_to, the idle
+// deadline, and the teardown net. The mirror image of the upload block above, and the arm that
+// finally drives #995's reassembler and #998's decoded chunks from a live session.
+// ============================================================================================
+
+/** A fake scheduler for the retrieval idle deadline — relaySupervisor.test.ts's fakeScheduler,
+ *  restated for the seam daemonConnection now accepts. */
+interface FakeRetrievalTimer {
+  fn: () => void
+  ms: number
+  cancelled: boolean
+  fired: boolean
+}
+
+function fakeRetrievalScheduler(): {
+  timing: NonNullable<DaemonConnectionDeps['timing']>
+  pending: () => FakeRetrievalTimer[]
+  fireNext: () => void
+  fireAll: () => void
+  timers: FakeRetrievalTimer[]
+} {
+  const timers: FakeRetrievalTimer[] = []
+  return {
+    timers,
+    timing: {
+      setTimer(fn: () => void, ms: number) {
+        const timer: FakeRetrievalTimer = { fn, ms, cancelled: false, fired: false }
+        timers.push(timer)
+        return timer as unknown as ReturnType<typeof setTimeout>
+      },
+      clearTimer(handle) {
+        ;(handle as unknown as FakeRetrievalTimer).cancelled = true
+      }
+    },
+    pending() {
+      return timers.filter((t) => !t.cancelled && !t.fired)
+    },
+    fireNext() {
+      const next = timers.find((t) => !t.cancelled && !t.fired)
+      if (!next) throw new Error('no pending retrieval timer to fire')
+      next.fired = true
+      next.fn()
+    },
+    fireAll() {
+      for (const t of timers) {
+        if (!t.cancelled && !t.fired) {
+          t.fired = true
+          t.fn()
+        }
+      }
+    }
+  }
+}
+
+/** Reach the connected window with an injected retrieval scheduler. `build`'s `reachConnected`
+ *  twin — the retrieval tests need the timer seam that one does not thread. */
+async function reachConnectedWithTimers(
+  timing: NonNullable<DaemonConnectionDeps['timing']>
+): Promise<ReturnType<typeof build>> {
+  const ctx = build({ timing })
+  ctx.connection.start()
+  await tick()
+  ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  return ctx
+}
+
+/** A spy AttachmentRetrievalConsumer recording the single terminal (complete XOR fail). */
+function makeRetrievalConsumer(): {
+  consumer: AttachmentRetrievalConsumer
+  completed: Uint8Array[]
+  failed: AttachmentRetrievalFailure[]
+  terminals: () => number
+} {
+  const completed: Uint8Array[] = []
+  const failed: AttachmentRetrievalFailure[] = []
+  return {
+    completed,
+    failed,
+    terminals: () => completed.length + failed.length,
+    consumer: {
+      complete: (bytes) => completed.push(bytes),
+      fail: (reason) => failed.push(reason)
+    }
+  }
+}
+
+const RETRIEVED_CONVERSATION = 'b19c6a4e-2f70-4d51-9a3c-8e2d5f01c7ab'
+const RETRIEVED_ID = 'd41d8cd9-8f00-4204-a980-0998ecf8427e'
+
+/** One retrieval-leg `attachment_chunk` plaintext. `inReplyTo` rides the ENVELOPE — the only
+ *  handle a client can correlate a retrieval on, since the payload carries no request id. */
+function retrievalChunkPlaintext(
+  inReplyTo: number,
+  chunk: {
+    attachment_id: string
+    index: number
+    total_chunks: number
+    size: number
+    sha256: string
+    data: Uint8Array
+    filename?: string
+    mime_type?: string
+  }
+): Uint8Array {
+  return encodeEnvelope({
+    id: 9001,
+    type: 'attachment_chunk',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: {
+      attachment_id: chunk.attachment_id,
+      index: chunk.index,
+      total_chunks: chunk.total_chunks,
+      filename: chunk.filename ?? 'notes.txt',
+      mime_type: chunk.mime_type ?? 'text/plain',
+      size: chunk.size,
+      sha256: chunk.sha256,
+      data: base64StdEncode(chunk.data)
+    }
+  })
+}
+
+/** A daemon `error` reply carrying a specific code, correlated by envelope id. */
+function codedErrorPlaintext(code: string, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 9002,
+    type: 'error',
+    ts: FIXED_TS,
+    payload: { code, message: 'daemon prose that must never surface', retryable: false },
+    ...(inReplyTo !== undefined ? { in_reply_to: inReplyTo } : {})
+  })
+}
+
+/** The whole-file digest the reassembler verifies against, lowercase hex over the WHOLE file. */
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+/** A one-chunk transfer's frame for `bytes`, correlated to `inReplyTo`. */
+function wholeFileChunk(inReplyTo: number, attachmentId: string, bytes: Uint8Array): Uint8Array {
+  return retrievalChunkPlaintext(inReplyTo, {
+    attachment_id: attachmentId,
+    index: 0,
+    total_chunks: 1,
+    size: bytes.length,
+    sha256: sha256Hex(bytes),
+    data: bytes
+  })
+}
+
+/** The envelope id of the single `request_attachment` a driver has been handed. */
+function requestAttachmentEnvelopeId(driver: FakeDriver, nth = 0): number {
+  const frames = driver.sent
+    .map((bytes) => decodeEnvelope(bytes))
+    .filter((envelope) => envelope.type === 'request_attachment')
+  return frames[nth].id
+}
+
+describe('requestAttachment (#996)', () => {
+  it('fails the consumer not-connected before start, sending nothing', () => {
+    const { connection, drivers } = build()
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+
+    // The requestDebugBundle posture: a call that owns a waiting caller must never be a silent
+    // no-op. Synchronous, so a caller cannot observe a pending state that never settles.
+    expect(spy.failed).toEqual(['not-connected'])
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends a request_attachment carrying exactly the two ids', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+
+    const frames = drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const request = frames.find((envelope) => envelope.type === 'request_attachment')
+    expect(request).toBeDefined()
+    // Two fields and no third: the payload carries no request id, correlation rides the envelope.
+    expect(request?.payload).toEqual({
+      conversation_id: RETRIEVED_CONVERSATION,
+      attachment_id: RETRIEVED_ID
+    })
+    expect(spy.terminals()).toBe(0)
+  })
+
+  it('settles send-failed and registers nothing when the ask cannot be put on the wire', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const bundle = makeBundleConsumer()
+    // Over MAX_PLAINTEXT_BYTES once serialized, so buildRequestAttachment throws. The IPC guard bounds
+    // this class one layer out; requestAttachment owes its own terminal because it is reachable from
+    // any main-side caller, and a build that throws must not leave the caller waiting.
+    const oversized = 'a'.repeat(70_000)
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: oversized },
+      spy.consumer
+    )
+
+    // Synchronous and honest: the frame never left the machine, so this is neither a lost session
+    // (`connection-lost`) nor a stream that stopped (`timed-out`, 30 s later).
+    expect(spy.failed).toEqual(['send-failed'])
+    const sentTypes = drivers[0].sent.map((bytes) => decodeEnvelope(bytes).type)
+    expect(sentTypes).not.toContain('request_attachment')
+    // Nothing was armed: no deadline, and no entry under the id the dropped build did not spend.
+    expect(scheduler.pending()).toHaveLength(0)
+
+    // That unspent id is re-minted by the NEXT outbound envelope. Its reject must reach the paths
+    // below the correlation tier — a phantom entry would swallow it, settling this already-settled
+    // retrieval a second time and starving the bundle net of the frame it was owed.
+    connection.requestDebugBundle(bundle.consumer)
+    const bundleId = drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((envelope) => envelope.type === 'request_debug_bundle')[0].id
+    drivers[0].emit({
+      type: 'message',
+      plaintext: codedErrorPlaintext('attachment.not_found', bundleId)
+    })
+
+    expect(spy.terminals()).toBe(1)
+    expect(bundle.failed).toEqual(['daemon-error'])
+  })
+
+  it('arms the idle deadline at send and clears it on the terminal', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const file = new Uint8Array([1, 2, 3, 4, 5])
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    expect(scheduler.pending()).toHaveLength(1)
+    expect(scheduler.pending()[0].ms).toBe(30_000)
+
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({ type: 'message', plaintext: wholeFileChunk(id, RETRIEVED_ID, file) })
+
+    expect(spy.completed).toHaveLength(1)
+    expect(Array.from(spy.completed[0])).toEqual([1, 2, 3, 4, 5])
+    // Cleared at the settle choke point, so a later fire cannot produce a second terminal.
+    expect(scheduler.pending()).toHaveLength(0)
+    scheduler.fireAll()
+    expect(spy.terminals()).toBe(1)
+  })
+
+  it('routes each retrieval by in_reply_to and never cross-feeds two live transfers', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const first = makeRetrievalConsumer()
+    const second = makeRetrievalConsumer()
+    const otherId = '11112222-3333-4444-8555-666677778888'
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      first.consumer
+    )
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: otherId },
+      second.consumer
+    )
+    const firstEnvelope = requestAttachmentEnvelopeId(drivers[0], 0)
+    const secondEnvelope = requestAttachmentEnvelopeId(drivers[0], 1)
+    expect(firstEnvelope).not.toBe(secondEnvelope)
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: wholeFileChunk(secondEnvelope, otherId, new Uint8Array([9, 9]))
+    })
+    // The second answered; the first is untouched and still waiting.
+    expect(second.completed).toHaveLength(1)
+    expect(Array.from(second.completed[0])).toEqual([9, 9])
+    expect(first.terminals()).toBe(0)
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: wholeFileChunk(firstEnvelope, RETRIEVED_ID, new Uint8Array([7]))
+    })
+    expect(Array.from(first.completed[0])).toEqual([7])
+  })
+
+  it('refuses a chunk answering this request while naming another transfer', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    // The right ask, the wrong bytes — the failure only the payload id catches.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: wholeFileChunk(id, 'aaaabbbb-cccc-4ddd-8eee-ffff00001111', new Uint8Array([1]))
+    })
+
+    expect(spy.failed).toEqual(['stream-contradiction'])
+  })
+
+  it('drops a chunk whose in_reply_to matches no live retrieval', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    drivers[0].emit({
+      type: 'message',
+      plaintext: wholeFileChunk(4242, RETRIEVED_ID, new Uint8Array([1]))
+    })
+
+    expect(spy.terminals()).toBe(0)
+  })
+
+  it('fails the waiting retrieval not-found on the published reject code', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers, sink } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({ type: 'message', plaintext: codedErrorPlaintext('attachment.not_found', id) })
+
+    expect(spy.failed).toEqual(['not-found'])
+    // The reject consumes the frame entirely — no daemon-event rides out of the correlated arm.
+    expect(emitted(sink).some((event) => event.type === 'failed')).toBe(false)
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('fails stream-aborted through the reassembler, discarding everything accumulated', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    // Two chunks: 45000 raw bytes is the mandated stride, so 45001 declares total_chunks 2.
+    const whole = new Uint8Array(45_001).fill(3)
+    const digest = sha256Hex(whole)
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({
+      type: 'message',
+      plaintext: retrievalChunkPlaintext(id, {
+        attachment_id: RETRIEVED_ID,
+        index: 0,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: digest,
+        data: whole.subarray(0, 45_000)
+      })
+    })
+    expect(spy.terminals()).toBe(0)
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: codedErrorPlaintext('attachment.stream_aborted', id)
+    })
+    expect(spy.failed).toEqual(['stream-aborted'])
+
+    // The partial bytes are gone, not held for a completing chunk: the closing chunk arriving after
+    // the abort produces NOTHING, where an undiscarded accumulator would complete the file.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: retrievalChunkPlaintext(id, {
+        attachment_id: RETRIEVED_ID,
+        index: 1,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: digest,
+        data: whole.subarray(45_000)
+      })
+    })
+    expect(spy.completed).toHaveLength(0)
+    expect(spy.terminals()).toBe(1)
+  })
+
+  it('fails daemon-error on a code that does not conformingly answer this verb', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({ type: 'message', plaintext: codedErrorPlaintext('attachment.too_large', id) })
+
+    // Reported honestly rather than coerced into a not-found that did not happen.
+    expect(spy.failed).toEqual(['daemon-error'])
+  })
+
+  it('leaves an uncorrelated error on its existing path, failing no retrieval', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers, sink } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const bundle = makeBundleConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    connection.requestDebugBundle(bundle.consumer)
+    // No in_reply_to at all: it correlates to nothing and must fall through to the bundle net.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(spy.terminals()).toBe(0)
+    expect(bundle.failed).toEqual(['daemon-error'])
+    expect(emitted(sink)).toBeDefined()
+  })
+
+  it('fires timed-out when the stream stops with no terminal frame', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+    const whole = new Uint8Array(45_001).fill(4)
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(drivers[0])
+    drivers[0].emit({
+      type: 'message',
+      plaintext: retrievalChunkPlaintext(id, {
+        attachment_id: RETRIEVED_ID,
+        index: 0,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: sha256Hex(whole),
+        data: whole.subarray(0, 45_000)
+      })
+    })
+    // The chunk RESET the deadline rather than leaving the original armed: a long legitimate
+    // transfer must not be killed for taking long, only for going silent.
+    expect(scheduler.pending()).toHaveLength(1)
+    expect(scheduler.timers.filter((t) => t.cancelled)).toHaveLength(1)
+
+    scheduler.fireNext()
+    expect(spy.failed).toEqual(['timed-out'])
+
+    // The entry is gone, so a late chunk answering it settles nothing a second time.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: retrievalChunkPlaintext(id, {
+        attachment_id: RETRIEVED_ID,
+        index: 1,
+        total_chunks: 2,
+        size: whole.length,
+        sha256: sha256Hex(whole),
+        data: whole.subarray(45_000)
+      })
+    })
+    expect(spy.terminals()).toBe(1)
+  })
+
+  it.each([
+    ['terminal', { type: 'terminal', code: 1006, reason: 'abnormal' }],
+    ['error', { type: 'error', reason: 'handshake-failed' }],
+    ['relay-link-down', { type: 'relay-link-down', code: 1006 }]
+  ] as const)('fails every retrieval in flight connection-lost on %s', async (_name, event) => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection, drivers } = await reachConnectedWithTimers(scheduler.timing)
+    const first = makeRetrievalConsumer()
+    const second = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      first.consumer
+    )
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: '22223333-4444-4555-8666-777788889999' },
+      second.consumer
+    )
+
+    drivers[0].emit(event as RelaySessionEvent)
+
+    expect(first.failed).toEqual(['connection-lost'])
+    expect(second.failed).toEqual(['connection-lost'])
+    // Every deadline is cleared with the map, so nothing can fire into an abandoned retrieval.
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('fails retrievals in flight when a re-dial abandons the session', async () => {
+    const scheduler = fakeRetrievalScheduler()
+    const { connection } = await reachConnectedWithTimers(scheduler.timing)
+    const spy = makeRetrievalConsumer()
+
+    connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    // dial() resets nextEnvelopeId to 2, so the retrieval must be failed BEFORE ids recycle or a
+    // stale envelope id could correlate an answer on the reconnected session.
+    connection.reconnect()
+
+    expect(spy.failed).toEqual(['connection-lost'])
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('logs nothing that carries an identifier, a byte count or a digest', async () => {
+    const captured = captureLog()
+    const scheduler = fakeRetrievalScheduler()
+    const ctx = build({ diagnosticLog: captured.log, timing: scheduler.timing })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const spy = makeRetrievalConsumer()
+
+    ctx.connection.requestAttachment(
+      { conversation_id: RETRIEVED_CONVERSATION, attachment_id: RETRIEVED_ID },
+      spy.consumer
+    )
+    const id = requestAttachmentEnvelopeId(ctx.drivers[0])
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: wholeFileChunk(id, RETRIEVED_ID, new Uint8Array([8, 8, 8]))
+    })
+
+    for (const record of captured.records) {
+      const line = JSON.stringify(record)
+      expect(line).not.toContain(RETRIEVED_ID)
+      expect(line).not.toContain(RETRIEVED_CONVERSATION)
+      expect(line).not.toContain(sha256Hex(new Uint8Array([8, 8, 8])))
     }
   })
 })

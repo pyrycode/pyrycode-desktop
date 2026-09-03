@@ -154,12 +154,10 @@ claims the arm is a later ticket.
 
 ## Edge cases and limitations
 
-- **No consumer wired into a live session.** `daemonConnection.ts` still has no `case
-  'attachment-chunk':`, so a well-formed frame is decoded and then simply unmatched — the same
-  dormancy `attachment_stored`/`slash_command_list`/`model_list` shipped through before their
-  consumers landed. [`RetrievedAttachmentChunk`](attachment-reassembly-and-store.md) does have its
-  first type-level consumer now — the reassembler built in #995 takes exactly this type as `chunk()`'s
-  parameter — but nothing in `daemonConnection.ts` calls it yet; #996 is the wiring.
+- **Wired into a live session as of [#996](attachment-retrieval.md).** `daemonConnection.ts`'s `case
+  'attachment-chunk':` routes a decoded frame by `inReplyTo` to the pending retrieval that asked, then
+  feeds it to [the reassembler](attachment-reassembly-and-store.md)'s `chunk()`. Ships still unwired on
+  the *renderer* side — #814/#866/#867 are the eventual consumers of the terminal this produces.
 - **Reordering is not an error at this boundary.** The arm is stateless and per-frame; chunks are
   index-addressed by contract, so out-of-order arrival is ordinary traffic. Drop and stall are the
   reassembler's timeout to own, not this arm's.
@@ -253,8 +251,9 @@ than new code, all owned by the not-yet-built reassembler rather than this decod
 - [Attachment reassembly and store](attachment-reassembly-and-store.md) — this decode's first
   consumer (#995): `RetrievedAttachmentChunk` is the exact input to `createAttachmentReassembler`'s
   `chunk()`, and the per-frame checks this arm already enforces are deliberately not re-run there.
-  Ships unwired; [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) is the driver that
-  claims the `'attachment-chunk'` arm in `daemonConnection.ts`.
+- [Attachment retrieval](attachment-retrieval.md) — [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996),
+  the driver that claims the `'attachment-chunk'` arm in `daemonConnection.ts` and routes it by
+  `inReplyTo` to the pending retrieval that asked.
 - [Inbound message decode](inbound-message-decode.md) / [internals](inbound-message-decode-internals.md) /
   [extension history](inbound-message-decode-history.md) — the boundary this arm extends: the
   twenty-fifth additive kind, reusing `requireNonEmptyString` (#964) and `base64StdDecode` (wire codec)

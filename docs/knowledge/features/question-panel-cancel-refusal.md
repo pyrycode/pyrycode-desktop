@@ -75,9 +75,10 @@ view's spec asserts Cancel's rendered markup is byte-identical to what #906 ship
 no attribute.
 
 **`QuestionPanelSlot` wires `onCancel` inside the click closure**, dereferencing `window.pyry.sendCommand`
-only at interaction time — never during render, the `QueuedBacklogControl`/`Composer.handleSubmit`
-discipline — beside `questionPicksStore`'s and `questionBatchStore`'s `dispatch`, both read off their
-singletons the same way the existing picks read already does:
+only at interaction time — never during render, the queued backlog's own drop-closure
+(`ConversationScreen`'s `onDrop` bind, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009))
+/ `Composer.handleSubmit` discipline — beside `questionPicksStore`'s and `questionBatchStore`'s `dispatch`,
+both read off their singletons the same way the existing picks read already does:
 
 ```ts
 onCancel={() =>

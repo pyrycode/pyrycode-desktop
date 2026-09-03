@@ -265,8 +265,9 @@ never down) while the relay leg reads up/"Reachable" — both legs are honest ab
 decorative — colour is redundant with the label) plus a `.conn-leg__label` span, mounted inside
 `StatusRow`'s `.status-row__summary` span by a store-bound container, `ConnectionStatusIndicatorControl`
 (`useRelayLinkStore(selectRelayLinkStatus)` + `useSessionStore(selectStatus)`, the
-`QueuedBacklogControl` two-independent-store precedent — re-anchored here by [#618](../codebase/618.md)
-after the original, `ScreenSnapshotControl`, was removed). Initial state was one Unknown dot and one
+two-independent-store precedent `QueuedBacklogControl` used to set before
+[#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) retired it — re-anchored here by
+[#618](../codebase/618.md) after the original, `ScreenSnapshotControl`, was removed). Initial state was one Unknown dot and one
 Offline dot — the relay leg's `null` sentinel reads `unknown`/`Relay Unknown` since
 [#719](../codebase/719.md) (previously collapsed into a second `down`/`Relay Offline`, #330's original
 choice), while the daemon leg's `disconnected` still reads `down`/`Pyrycode Offline`; that initial-state

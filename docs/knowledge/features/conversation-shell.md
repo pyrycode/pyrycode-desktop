@@ -139,20 +139,46 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   now needed again. The criterion moved onto the [queued
   backlog](conversation-shell-conversation-and-modals.md#queued-backlog--drop-affordance-294-drop-since-296)
   (`.conversation__queued`), a region of dimmed rows large enough to shrink the viewport by tens of pixels
-  (116px measured with a two-item backlog) — deliberately not #963's 8px row-growth, which needs a
-  terminal connection error the spec has no reason to stage. **This repoint needed a two-step shape, not a
-  one-for-one swap**, and the failure that forced it is informative: `useThreadScrollPin`'s re-assert is a
-  dep-free layout effect that runs on **screen** renders, and `QueuedBacklogControl` holds its own
-  queue-store subscription, so a `queue_state` push re-renders that control alone and the pin never runs —
-  the thread rests 116px off the bottom with no re-pin. The criterion is now shrink (a `queue_state` push),
-  then a *following* screen render (the stall push, now landing on the row's shared label) that must still
-  re-pin; the old one-step version conflated the two because the stall block used to arrive through the
-  timeline store, so its shrink and its re-render landed in the same tick and could never distinguish "the
-  flag survived" from "this render re-asserted". That gap — a queued-backlog mount can leave a pinned
-  thread short of the bottom until the next unrelated render — is a **pre-existing bug**, filed as
-  [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) rather than fixed in #967 (out of that
-  ticket's scope: the fix is a production change to `useThreadScrollPin`, a file #967 does not otherwise
-  touch). The spec asserts only the two-step claim and comments the gap rather than asserting over it.
+  (116px measured with a two-item backlog at the time) — deliberately not #963's 8px row-growth, which
+  needs a terminal connection error the spec has no reason to stage. **The repoint exposed a real gap**:
+  `useThreadScrollPin`'s re-assert is a dep-free layout effect that runs on **screen** renders, and
+  `QueuedBacklogControl` (the region's container at the time) held its own queue-store subscription, so a
+  `queue_state` push re-rendered that control alone and the pin never ran — the thread rested short of the
+  bottom (116px with #967's setup) until some unrelated render re-pinned it. #967 filed that gap as
+  [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) rather than fix it (out of scope for a
+  ticket that does not otherwise touch `useThreadScrollPin`) and pointed the criterion at the two-step
+  shape the gap forced: shrink (a `queue_state` push), then a *following* screen render (the stall push)
+  that must still re-pin, with the immediate case commented rather than asserted.
+
+  **[#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) closed the gap.**
+  `ConversationScreen` now reads the open conversation's backlog itself — a `useMemo`-stable
+  `selectBacklogFor(openConversationId ?? '')` selector, the same idiom `selectOpenTimelineFor` uses one
+  read above — and mounts the pure `QueuedBacklog` view directly; `QueuedBacklogControl` is retired.
+  Because the read lives on the screen, a `queue_state` that mounts *or grows* the region is now a screen
+  render like any other, so the existing dep-free effect covers it under the rule it already claimed to.
+  Mount and re-pin land in the same commit — `setBacklog` changes the selector's array reference, React
+  re-renders the screen, the DOM grows `.conversation__queued`, and the layout effect runs before paint —
+  so `thread-scroll-pin.spec.ts` asserts pinned immediately after the queued rows appear, with no polling
+  and no following render required. A second push that grows an already-mounted backlog (`n → n+1` rows)
+  is asserted the same way, closing the case a fix keyed on "the backlog is non-empty" would miss: that
+  boolean does not change while the region shrinks the viewport again. The scrolled-away case is
+  unaffected — both pushes leave `scrollTop` exactly where the operator left it, since the tracked flag,
+  not the geometry, still governs whether anything scrolls. The measured gap was **132px** at fix time (not
+  #967's 116px — the quantity is the mounted region's height, and #969 had redrawn the message bubble in
+  between; the order of magnitude, and the criterion's point, is unchanged).
+
+  This is also why the two leaves the docblock now names as deliberately un-hoisted —
+  `ComposerErrorSlotControl`'s own `sessionStore` read and `ComposerSlot`'s own question-batch read — stay
+  un-hoisted rather than getting the same treatment: both arguments are about traffic the screen has no use
+  for (a connection-status flap, a keystroke in the question panel), where the backlog read is the opposite
+  on frequency, relevance and cost (`selectBacklogFor` returns the same reference, or the shared
+  `EMPTY_BACKLOG`, for every conversation but the open one, so `Object.is` short-circuits and nothing
+  re-renders for a snapshot elsewhere). Their own shrink — `ComposerErrorSlotControl`'s ~8px button growth,
+  `ComposerSlot`'s question panel — is still a known, uncovered latency gap: the flag stays correct through
+  it (no scroll event fires), so the next screen render still re-pins, same as the queued backlog did before
+  #1009. Closing either means the same choice this ticket faced: hoist the read, or a `ResizeObserver` over
+  the whole region, covering every occupant at once. Deliberately not built here — out of scope, per the
+  ticket.
 
   `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
   e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
@@ -194,7 +220,7 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
-- [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
+- [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `ConversationScreen` reads via `selectBacklogFor(openConversationId ?? '')` (#293, consumed in #294, rekeyed off the active conversation id by #448, hoisted out of the retired `QueuedBacklogControl` and into the screen itself by [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) so the region's mount and growth re-pin the thread), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582 and `latestUpdate` in #583, see [Background-task panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) above)

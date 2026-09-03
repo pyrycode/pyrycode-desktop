@@ -8,15 +8,17 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 The desktop layout's own fixed-height status area directly above the message box (Figma `111:3525`,
 780×24), replacing the loose region the working indicator used to float in. `ComposerStatusArea({
-isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after
-`QueuedBacklogControl` and immediately before `Composer` (through #962 it followed `StatusRow`/
-`BackgroundTaskTrigger`, both since retired — see [Run-configuration row and background-task trigger
+isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after the
+queued backlog (`<QueuedBacklog/>`, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009)
+mounted straight from `ConversationScreen` rather than through the retired `QueuedBacklogControl`) and
+immediately before `Composer` (through #962 it followed `StatusRow`/`BackgroundTaskTrigger`, both since
+retired — see [Run-configuration row and background-task trigger
 retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962);
 that region is now empty above this row):
 
 ```
 .conversation
-├── QueuedBacklogControl
+├── QueuedBacklog
 ├── ComposerStatusArea         .composer-status
 │   ├── .composer-status__activity
 │   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)

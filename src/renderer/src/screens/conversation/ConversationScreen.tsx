@@ -47,7 +47,8 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY
+  COMPOSER_ERROR_CHIP_PREFIX_COPY,
+  COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
@@ -318,8 +319,14 @@ export function ConversationScreen({
           #797: the row's right-hand slot, reserved empty by #796, now carries the connection-error chip.
           It arrives as its own store-bound control rather than a status read hoisted into this screen —
           ConversationScreen does not subscribe to sessionStore, and a read here would re-render the whole
-          screen, timeline included, on every connection-status change. */}
-      <ComposerStatusArea isRunning={isTurnRunning(phase)} trailing={<ComposerErrorChipControl />}>
+          screen, timeline included, on every connection-status change.
+          #963: that slot now holds EITHER the chip or an actionable button, so the control filling it owns
+          the choice and takes `onUnpaired` down with it — the re-pair flow moved into the slot and #167's
+          separate block beneath the composer is gone. */}
+      <ComposerStatusArea
+        isRunning={isTurnRunning(phase)}
+        trailing={<ComposerErrorSlotControl onUnpaired={onUnpaired} />}
+      >
         <ThinkingIndicator
           state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
           toolName={openToolName(items)}
@@ -341,7 +348,6 @@ export function ConversationScreen({
         phase={phase}
         onMessageSent={followBottom}
       />
-      <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
@@ -1442,8 +1448,14 @@ export function ThinkingIndicator({
 // `children`, not a `label: string` prop — the StatusSheet({ onClose, children }) precedent. It keeps the
 // row independent of where its text comes from, which is exactly what #797 needs when it appends the
 // error chip to the row's other side. That right-hand slot is EMPTY here and gets no placeholder element:
-// the `height` declaration is what reserves the row, and the Figma error frame is itself 24 tall, so a
-// second flex child grows nothing. A spacer would be a defence for a failure nobody has observed.
+// the row's own height reserves it, and a spacer would be a defence for a failure nobody has observed.
+//
+// THE ROW IS SIZED BY ITS OCCUPANT SINCE #963, and the "a second flex child grows nothing" this comment
+// used to state is no longer true. The slot's two occupants are different heights — the chip is 24, the
+// actionable button is 32 — so `.composer-status` declares a `min-height` rather than a `height` and the
+// button is what makes the row 32 when it is there. The row also end-aligns, so the status group stays
+// flush with the bottom edge and the label does not move across that transition; see .composer-status's
+// own comment for both halves and for why the group had to gain a height of its own.
 //
 // #797 FILLS that slot, through `trailing` — an added optional prop, so no existing call site or test
 // moved. `trailing`, not `error`: the row stays a layout primitive that knows a slot's POSITION and
@@ -2675,51 +2687,6 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
   )
 }
 
-// #167: the proactive re-pair affordance's pure view. Returns null unless shouldOfferRepair(status),
-// i.e. only in a terminal, non-retryable error — where it extends the composer's inline error hint
-// with an escape hatch back to pairing. Visibility is a `status` PROP (not a store read) so the
-// present/absent matrix is proven by directly server-rendering this view — the container's populated
-// branch is unreachable under server render (zustand v5 reads getInitialState() = disconnected). A bare
-// text button whose accessible name is its visible `Re-pair` text, reusing the .conversation__unpair
-// de-emphasized treatment (#166's Unpair); the wrapper only positions it beneath the composer hint.
-export function RepairPrompt({
-  status,
-  onRepair
-}: {
-  status: ConnectionStatus
-  onRepair: () => void
-}): JSX.Element | null {
-  if (!shouldOfferRepair(status)) return null
-  return (
-    <div className="composer__repair">
-      <button type="button" className="conversation__unpair" onClick={onRepair}>
-        Re-pair
-      </button>
-    </div>
-  )
-}
-
-// The store-bound container for the re-pair affordance (#167). Selects `status` independently of
-// ConversationScreen (which selects only messages), so a status change re-renders Composer and this
-// control — never the thread. Re-pair reuses the SAME clear-and-return-to-pairing flow as the manual
-// unpair (runUnpair): no second clear path, no new IPC. Unlike UnpairControl it has no confirm or busy
-// phase — it only appears in an already-terminal error, so a confirm step is pure friction, and it
-// self-hides on both outcomes (ok → store resets to disconnected + route unmounts the screen; error →
-// store lands on code 'unpair', which the predicate excludes). So handleRepair fires runUnpair as a
-// bare `void`: runUnpair never rejects (it catches internally), so the floating promise is safe and
-// needs no `.then`. window.pyry is dereferenced only inside handleRepair (interaction time), never
-// during render, so the container smoke-render never touches the bridge.
-function RepairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element | null {
-  const status = useSessionStore(selectStatus)
-  const dispatch = useSessionStore((s) => s.dispatch)
-
-  const handleRepair = (): void => {
-    void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })
-  }
-
-  return <RepairPrompt status={status} onRepair={handleRepair} />
-}
-
 // #279: the prominent, disconnected-only connection banner's pure view — the third read of the
 // ConnectionStatus slice (beside the composer gate and the re-pair prompt), and the surface
 // composerSend's docstring already reserves ("the connection banner's surface"). Returns null unless
@@ -2727,7 +2694,8 @@ function RepairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element
 // nothing derived from `status` — so no daemon-supplied string (ConnectionError.message) can reach it
 // (AC3, a structural guarantee, not a convention — the EMPTY_THREAD_COPY / ThinkingIndicator idiom).
 // Visibility is a `status` PROP (not a store read) so the present/absent matrix is proven by directly
-// server-rendering this view (the RepairPrompt discipline). role="status" makes it a polite live region
+// server-rendering this view (the ComposerErrorSlot discipline, RepairPrompt's before #963 retired it).
+// role="status" makes it a polite live region
 // (the .composer__hint treatment): the band persists visually, so a polite announcement suffices and
 // avoids an assertive double-announce with the composer hint. The band is deliberately MORE prominent
 // copy than the composer's terse gate (AC5), and both remain visible while disconnected.
@@ -2742,10 +2710,10 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 
 // The store-bound container for the connection banner (#279). Selects only `status` (selectStatus) so
 // it re-renders exactly on a connection-status change and never on a timeline delta (AC4 reactivity —
-// the same narrow-slice seam the composer gate and RepairControl already use; no new store wiring, no
-// window.pyry dereference, no effects — a pure read). Unlike RepairControl, whose visible branch needs
-// `error`, the banner's disconnected branch is a VISIBLE state, so the initial (disconnected) store is
-// enough to server-render the container's shown path.
+// the same narrow-slice seam the composer gate and ComposerErrorSlotControl already use; no new store
+// wiring, no window.pyry dereference, no effects — a pure read). Unlike that control, whose visible
+// branches both need `error`, the banner's disconnected branch is a VISIBLE state, so the initial
+// (disconnected) store is enough to server-render the container's shown path.
 function ConnectionBannerControl(): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   return <ConnectionBanner status={status} />
@@ -2786,17 +2754,83 @@ export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX
   )
 }
 
-// The store-bound container for the error chip (#797) — the ConnectionBannerControl shape. Selects only
-// `status` (selectStatus) so it re-renders exactly on a connection-status change and never on a timeline
-// delta. A container rather than a `status` prop threaded down from ConversationScreen: that screen does
-// not subscribe to sessionStore at all today, and adding a read there would re-render the whole screen —
-// timeline included — on every connection-status change. No new store wiring, no window.pyry dereference,
-// no effects. Its showing branch is NOT reachable in a server render — zustand v5's useStore reads
-// getInitialState() there, which is `disconnected`, so a setState cannot stage it (RepairControl's
-// situation, not the banner's) — and the container test stages that initial snapshot to reach it.
-function ComposerErrorChipControl(): JSX.Element | null {
-  const status = useSessionStore(selectStatus)
+// #963: the status row's right-hand slot, resolved. An error the operator can ACT on becomes a button in
+// the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
+// `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
+//
+// The three arms are asked in this order and the order IS the contract. shouldOfferRepair is a strict
+// SUBSET of `status.type === 'error'` (it adds `!retryable` and `code !== 'unpair'`), so the narrower gate
+// must be asked first or the chip would swallow every actionable case. Everything else delegates to
+// ComposerErrorChip unchanged, which is why #797's whole view, its treatment and its tests survive this
+// swap untouched: a retryable daemon error still gets the plain chip (#167's AC4) and so does the
+// self-inflicted unpair failure (#167's AC5).
+//
+// A `status` PROP, not a store read, for RepairPrompt's and ComposerErrorChip's reason: the populated
+// branches are unreachable under server render (zustand v5 reads getInitialState() = disconnected), so
+// the three-way matrix is only assertable in a static render if the status is injected. `onRepair` is a
+// prop for the same reason plus one more — it keeps the window.pyry dereference out of this view's render
+// path entirely.
+//
+// THE ERROR ARM IS READ FOR A DECISION AND NEVER FOR MARKUP. ComposerErrorChip could state the stronger
+// "never destructures status.error"; this view cannot, because shouldOfferRepair reads `.retryable` and
+// `.code`. Both reads are confined to that predicate's boolean, no local here binds `status.error`, and
+// the button's text is COMPOSER_REPAIR_BUTTON_COPY and nothing else — so no ConnectionError field has a
+// path to the DOM, an attribute, a title or a log (AC4). The test pins it with sentinel values on this
+// very arm rather than trusting the argument. Do not "simplify" by lifting the destructure up here.
+//
+// No visually-hidden `Error: ` prefix, unlike the chip. That prefix exists because "Host connection
+// down!" does not say it is an error; this label leads with "Pairing error", so the accessible name — the
+// visible text, there being no aria-label — already carries it. No live region either: the #279 banner is
+// showing on this same arm and announces the disconnect politely once.
+//
+// No separate ComposerRepairButton component. Its only job would be to be rendered unconditionally by its
+// single caller — a name and a test surface for no decision.
+export function ComposerErrorSlot({
+  status,
+  onRepair
+}: {
+  status: ConnectionStatus
+  onRepair: () => void
+}): JSX.Element | null {
+  if (shouldOfferRepair(status)) {
+    return (
+      <button type="button" className="button-small button-small--error" onClick={onRepair}>
+        {COMPOSER_REPAIR_BUTTON_COPY}
+      </button>
+    )
+  }
   return <ComposerErrorChip status={status} />
+}
+
+// The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
+// RepairControl into one — they read the same slice for the same fact and now fill the same hole.
+// Selects `status` (selectStatus) and `dispatch`, exactly the two RepairControl already read, so the
+// re-render footprint narrows rather than grows: a status change re-renders this control and the
+// composer, never the thread. A container rather than a `status` prop threaded down from
+// ConversationScreen — that screen does not subscribe to sessionStore at all, and a read there would
+// re-render the whole screen, timeline included, on every connection-status change.
+//
+// handleRepair is RepairControl's body verbatim: the SAME clear-and-return-to-pairing flow as the manual
+// unpair (runUnpair), no second clear path and no new IPC. No confirm phase and no busy guard, for #167's
+// recorded reasons — the button only ever appears in an already-terminal error, so a confirm step is pure
+// friction, and it self-hides on both outcomes (ok → route unmounts the screen; error → the store lands
+// on code 'unpair', which the predicate excludes). runUnpair catches internally and never rejects, so the
+// floating promise is fired as a bare `void` and needs no `.then`. window.pyry is dereferenced only
+// inside the handler (interaction time), never during render, so a container smoke-render never touches
+// the bridge.
+//
+// Neither populated branch is reachable in a server render — zustand v5's useStore reads
+// getInitialState() there, which is `disconnected` — so both container tests stage that initial snapshot
+// with a getInitialState spy rather than a setState, which cannot reach a non-initial arm at all.
+function ComposerErrorSlotControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element | null {
+  const status = useSessionStore(selectStatus)
+  const dispatch = useSessionStore((s) => s.dispatch)
+
+  const handleRepair = (): void => {
+    void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })
+  }
+
+  return <ComposerErrorSlot status={status} onRepair={handleRepair} />
 }
 
 // #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
@@ -3053,8 +3087,9 @@ export function ThreadOverflowMenuView({
 }
 
 // #276: the store-free interaction container for the overflow menu — the thin shell around the pure view
-// (the RepairControl / ConnectionBannerControl split, minus the store read: this control subscribes to
-// nothing). Menu open/closed is screen-local useState, never the session store (ADR 0006, the `sheetOpen`
+// (the ComposerErrorSlotControl / ConnectionBannerControl split, minus the store read: this control
+// subscribes to nothing). Menu open/closed is screen-local useState, never the session store (ADR 0006,
+// the `sheetOpen`
 // precedent), so it resets to closed on remount for free (AC5). In-file and not exported, like Composer.
 //
 // close/select both return focus to the trigger (AC3). Dismiss-on-Escape and dismiss-on-outside-click

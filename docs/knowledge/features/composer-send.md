@@ -114,8 +114,15 @@ In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
 A second pure predicate beside `composerAvailability`, over the same `ConnectionStatus`: whether the
-conversation screen should proactively surface a `Re-pair` escape hatch (see
-[Conversation shell → Re-pair control](conversation-shell-chrome.md#re-pair-control-167)).
+conversation screen should proactively surface a re-pair escape hatch. Through #167 that was a bare
+`Re-pair` text button beneath the composer; since
+[#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) it is the filled button that takes the
+composer status row's error slot in place of [the chip](conversation-shell-composer.md#composer-error-chip-797)
+— see [Conversation shell — composer § Actionable-error
+button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
+the current surface and [Conversation shell — chrome § Re-pair
+control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
+for the retired one. This predicate itself is unchanged by that move, reused byte-for-byte.
 
 ```ts
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
@@ -212,6 +219,32 @@ These two live here, beside `CONNECTION_BANNER_COPY`, rather than as module-leve
 speaks about `ConnectionStatus` lives in this one module, which is what makes the lexical-distinctness
 comparison between all four reviewable in one place.
 
+### 9. Actionable-error button copy — `COMPOSER_REPAIR_BUTTON_COPY` ([#963](https://github.com/pyrycode/pyrycode-desktop/issues/963))
+
+The fifth string in the lexical-distinctness family `COMPOSER_ERROR_CHIP_COPY`'s docstring argues for
+(the three `composerAvailability` hints, `CONNECTION_BANNER_COPY`, and now this one) — the label of the
+button that takes the chip's slot whenever `shouldOfferRepair` (§5) is true:
+
+```ts
+export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
+```
+
+The design's pattern is "Type of error - Action", and both halves are load-bearing: the type is what
+lets this occupant drop the chip's visually-hidden `Error: ` prefix (the label already says it's an
+error), and the action is what makes the control read as a button rather than a status. It leads with
+"Pairing", sharing no leading word with `Host connection down!` / `Cannot reach pyrybox…` / `Connecting…`
+/ `Not connected` / `Connection error`. Apostrophe-free, ASCII hyphen-minus separator, same reason as its
+siblings (`renderToStaticMarkup` escapes `'` → `&#x27;`).
+
+**Unlike every string above it, this one is also the accessible name** — the button carries no
+`aria-label`, so the visible text is the whole of what a screen reader announces. And unlike the chip's
+copy, its zero-daemon-substring guarantee needs a sharper statement: `ComposerErrorChip` narrows on
+`status.type` alone and never touches the error arm, while this button's gate (`shouldOfferRepair`)
+*reads* `status.error.retryable` and `.code`. Those reads are confined to that predicate's boolean and
+reach no markup — see [Conversation shell — composer § Actionable-error
+button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
+the structural argument and the sentinel test that pins it.
+
 ## Data flow
 
 ```
@@ -247,7 +280,8 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) · [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
-- [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
+- [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the original `Re-pair` affordance it gated (retired as a separate surface by #963, see below).
+- [Conversation shell § Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) / #963 — `shouldOfferRepair`'s current surface: a button in the composer status row's error slot, using `COMPOSER_REPAIR_BUTTON_COPY` (§9 above), replacing #167's block beneath the composer.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell-chrome.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
 - [Conversation shell § Composer error chip](conversation-shell-composer.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.

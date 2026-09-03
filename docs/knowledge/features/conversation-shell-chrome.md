@@ -19,13 +19,12 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── (ApiRetryIndicator / CompactingIndicator / StallIndicator — the three problem-state bubbles right after Timeline; unaffected by #796, see below)
 ├── (the region between the thread and the composer is EMPTY since #962 — the run-config row (#177) and the background-task trigger (#581) that used to mount here are retired; both overlays still open, now from the overflow menu above)
-├── ComposerStatusArea         .composer-status     (fixed-height row above the composer; NEVER null, #796)
+├── ComposerStatusArea         .composer-status     (content-sized row above the composer; NEVER null, #796; min-height not height since #963)
 │   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
-│   └── ComposerErrorChipControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797)
+│   └── ComposerErrorSlotControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797; button vs chip since #963, see the composer doc)
 ├── Composer                  .composer            (pinned)
 │   ├── ComposerActionsMenu     .composer__footer    (leading item, opens the shared options panel — #680)
 │   └── ContextUsageControl     .composer__footer    (second child, below `.composer__row`; the other three desktop-layout slots (#682/#683/#685) stay empty, #811)
-├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
 ├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
 ├── WorkspacePickerSheet (if open) .status-sheet-overlay (absolute overlay, #383)
@@ -33,7 +32,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
 
-`MessageBubble`, `Composer`, `UnpairControl`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, and `UnpairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ## Data shape (coarse path — retired residue since #179)
 
@@ -108,16 +107,24 @@ bridge. Styled with existing tokens only — no new `--color-error` (desktop has
 [#166 codebase notes](../codebase/166.md) for the full design and the [App shell](app-shell.md)
 for the route-flip half.
 
-## Re-pair control (#167)
+## Re-pair control (#167, folded into the composer status row's error slot by #963)
 
-The **proactive** twin of the unpair control above: instead of requiring the user to notice the
-header's manual `Unpair`, the screen surfaces a `Re-pair` button beneath the composer the moment
-the stored pairing can no longer be used — a terminal transport/handshake failure or a
-non-retryable daemon rejection. Closes the live incident (2026-07-07, #120) where a dead
-connection left the user staring at a disabled composer with no recovery.
+**Retired as a separate surface by #963 — kept here as history.** Through #167 this was the
+**proactive** twin of the unpair control above: a bare `Re-pair` text button in its own
+`.composer__repair` block beneath the composer, surfaced the moment the stored pairing could no
+longer be used — a terminal transport/handshake failure or a non-retryable daemon rejection.
+Closed the live incident (2026-07-07, #120) where a dead connection left the user staring at a
+disabled composer with no recovery. #963 replaced it with a filled button in the composer status
+row's own right-hand slot — the surface [#797's error chip](conversation-shell-composer.md#composer-error-chip-797)
+already occupies — on Juhana's 2026-09-02 ruling that an error the operator can act on becomes a
+button in that slot rather than a second surface below the composer. `RepairPrompt` and
+`RepairControl` (both formerly exported/module-private from this file) no longer exist;
+`.composer__repair` no longer exists in the stylesheet. See [Conversation shell — composer §
+Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+for the current shape — `ComposerErrorSlot`/`ComposerErrorSlotControl`, beside `ComposerErrorChip`.
 
-Gating is a single pure predicate, `shouldOfferRepair(status: ConnectionStatus): boolean` in
-`composerSend.ts` beside `composerAvailability` (see [Composer send](composer-send.md)):
+The gating predicate is unchanged, reused byte-for-byte, and still lives in `composerSend.ts`
+beside `composerAvailability` (see [Composer send](composer-send.md)):
 
 ```ts
 status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
@@ -131,27 +138,13 @@ without it, a failed re-pair would immediately re-satisfy the predicate and re-o
 loop. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
 re-dials), so it never reaches this predicate either.
 
-The affordance is split along the file's pure-view/store-bound-container seam:
-
-- **`RepairPrompt({ status, onRepair })`** — exported pure view; returns `null` unless
-  `shouldOfferRepair(status)`, else a single `Re-pair` text button reusing the
-  `.conversation__unpair` de-emphasized treatment. `status` is a **prop**, not a store read, because
-  the populated true-branch isn't reachable under `renderToStaticMarkup` (zustand v5's
-  server-snapshot gotcha — see [#69 codebase notes](../codebase/69.md)); tests server-render this
-  view directly with an arbitrary status to prove the true/false matrix.
-- **`RepairControl({ onUnpaired })`** — in-file container, mounted right after `<Composer />`.
-  Selects `status`/`dispatch` from the [session store](session-store.md) independently of
-  `ConversationScreen` (which selects only `messages`), so a status change re-renders `Composer` and
-  this control only, never the thread. `handleRepair` fires the **same** `runUnpair` wiring
-  `UnpairControl` uses (`window.pyry.unpair` → `dispatch({ reset })` → `onUnpaired`) — no second
-  clear path.
-
-Unlike `UnpairControl`, there is **no confirm phase and no busy guard** — the button only ever
-appears in an already-terminal error, so a confirm step is pure friction, and the affordance
-self-hides on both outcomes (`ok` → store resets to `disconnected`, route unmounts the screen;
-`error` → store lands on `code: 'unpair'`, which the predicate excludes). `runUnpair` never
-rejects, so `handleRepair` fires it as a bare `void` with no `.then`. See
-[#167 codebase notes](../codebase/167.md) for the full design, patterns, and code-review NITs.
+The **no confirm phase, no busy guard** posture and the exact `runUnpair` wiring
+(`window.pyry.unpair` → `dispatch({ reset })` → `onUnpaired`, fired as a bare `void` since
+`runUnpair` never rejects) both carried over to `ComposerErrorSlotControl` unchanged — the button
+only ever appears in an already-terminal error, so a confirm step is pure friction, and the
+affordance self-hides on both outcomes (`ok` → route unmounts the screen; `error` → store lands on
+`code: 'unpair'`, which the predicate excludes). See [#167 codebase notes](../codebase/167.md) for
+the full original design, patterns, and code-review record.
 
 ## Connection banner (#279)
 
@@ -165,7 +158,8 @@ Split from #148 alongside #276/#277/#278; no Figma frame exists (the mobile file
 connected thread), so the copy and accent are design-doc-sourced defaults, mirroring
 [#277](../codebase/277.md)'s "no Figma frame" justification shape.
 
-Mirrors the [Re-pair control](#re-pair-control-167) split exactly:
+Mirrored the [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
+split exactly, before that control was retired as a separate surface by #963:
 
 - **`shouldShowBanner(status: ConnectionStatus): boolean`** — in `composerSend.ts`, beside
   `composerAvailability`/`shouldOfferRepair`: `status.type !== 'connected'`. True for

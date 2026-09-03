@@ -21,7 +21,7 @@ that region is now empty above this row):
 │   ├── .composer-status__activity
 │   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
 │   │   └── {children}          → <ThinkingIndicator/>
-│   └── {trailing}              → <ComposerErrorChipControl/>       (row's own slot, #797, see below)
+│   └── {trailing}              → <ComposerErrorSlotControl/>       (row's own slot: button or chip, #797/#963, see below)
 └── Composer
 ```
 
@@ -46,7 +46,11 @@ the row gained a second, sibling slot of its own, `trailing`, in
 below. Through #796 that right-hand slot was empty and got **no placeholder element**, relying on the
 row's own `height: 24px` to reserve the space (the Figma error frame is itself 24 tall, so a second flex
 child was never going to grow it); #797 kept that posture when filling it — `trailing` still renders bare,
-with no wrapper div, so the three non-error arms emit nothing there today either.
+with no wrapper div, so the three non-error arms emit nothing there today either. **Since
+[#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) the row is sized *by* its occupant rather
+than reserved ahead of it** — `.composer-status` declares `min-height: 24px`, not `height` — because the
+slot gained a second, taller occupant; see [Actionable-error button](#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+below.
 
 **The turning state is a CSS class, never a resolved style.** `.composer-status__icon--spinning` drives a
 `composer-status-spin` keyframe (`1.6s linear infinite`, a client-owned constant — the Figma node is a
@@ -122,10 +126,14 @@ shown in the `error` connection arm and in no other — the **fourth** read of `
 
 `ComposerErrorChip({ status })` is the pure, exported view (the `ConnectionBanner` pattern):
 `status.type !== 'error'` → `null`; otherwise one `<div className="composer-status__error">` holding a
-hidden `<span className="composer-status__error-prefix">Error: </span>` ahead of the visible copy.
-`ComposerErrorChipControl` is the module-private, store-bound container — `useSessionStore(selectStatus)`,
-the same narrow slice `ConnectionBannerControl` already reads — mounted as `ComposerStatusArea`'s
-`trailing` prop.
+hidden `<span className="composer-status__error-prefix">Error: </span>` ahead of the visible copy. Still
+exactly this, unchanged by #963 below — only its container and its neighbours in the slot changed.
+
+Through #963, `ComposerErrorChipControl` was the module-private, store-bound container —
+`useSessionStore(selectStatus)`, the same narrow slice `ConnectionBannerControl` already reads — mounted
+as `ComposerStatusArea`'s `trailing` prop directly. #963 collapsed it into `ComposerErrorSlotControl`,
+which now owns that mount site and calls `ComposerErrorChip` only on its delegate arm — see [Actionable-error
+button](#actionable-error-button-and-the-row-that-grows-to-fit-it-963) below.
 
 **It never destructures `status.error`.** The whole of AC2 is that structural fact, restated one component
 over from `CONNECTION_BANNER_COPY`'s own guarantee: neither `message` nor `code` has a rendering path to
@@ -171,7 +179,7 @@ store) would make the `error` arm reachable through the mounted `ConversationScr
 for `ConnectionBannerControl`. It doesn't: zustand v5's `useStore` reads `getInitialState()` under
 `renderToStaticMarkup`, never `getState()`, so a `setState` in `beforeEach` never surfaces there —
 `ComposerErrorChipControl` turned out to share `RepairControl`'s situation (see [Re-pair
-control](conversation-shell-chrome.md#re-pair-control-167) above and [#69 codebase notes](../codebase/69.md)), not the banner's. The
+control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) above and [#69 codebase notes](../codebase/69.md)), not the banner's. The
 shipped test spies `sessionStore.getInitialState` directly, mocks its return once, and restores it in a
 `finally`. Worth remembering for the next container test whose visible branch is not the store's initial
 `disconnected` snapshot — check which read path the mount actually uses before trusting a `beforeEach`
@@ -180,6 +188,134 @@ shipped test spies `sessionStore.getInitialState` directly, mocks its return onc
 Code review PASS (architect self-review) — see the ticket's own security review for the trust-boundary and
 attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
 `status.error`" structural guarantee above.
+
+## Actionable-error button, and the row that grows to fit it (#963)
+
+**An error the operator can act on becomes a button in the chip's own slot** (Juhana's ruling, 2026-09-02),
+reading `Pairing error - Re-pair`, exactly when `shouldOfferRepair` is true. This retires
+[#167's separate `RepairPrompt`/`RepairControl`/`.composer__repair` block](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
+that used to sit beneath the composer — one escape hatch, in the slot the operator is already looking at,
+rather than two surfaces for the same terminal state.
+
+**`ComposerErrorSlot({ status, onRepair })`** is the pure, exported three-way view that now fills the
+row's `trailing` slot: `shouldOfferRepair(status)` → the button; otherwise it **delegates** to
+`ComposerErrorChip({ status })` unchanged, which returns the chip on the `error` arm and `null` on the
+other three. Delegating rather than inlining the chip's markup is what keeps #797's whole describe block
+and both container assertions true, unedited by this ticket. Ordering is the whole of "one occupant per
+slot": `shouldOfferRepair` is a **strict subset** of `status.type === 'error'` (it adds `!retryable` and
+`code !== 'unpair'`), so the narrower gate has to be asked first, or the chip would swallow every
+actionable case. A retryable daemon error (`server.binary_offline`, `rate_limited`) still gets the plain
+chip — #167's AC4 — and so does the self-inflicted `code: 'unpair'` failure — #167's AC5 — both preserved
+by construction rather than by a new check. `status` and `onRepair` are both **props, not a store read**,
+for `RepairPrompt`'s and `ComposerErrorChip`'s reason: the populated branches are unreachable under
+`renderToStaticMarkup`, so the matrix is only assertable with an injected status.
+
+**The error arm is read for a decision, never for markup.** `ComposerErrorChip` can state the stronger
+"never destructures `status.error`"; this view cannot, because `shouldOfferRepair` reads
+`.retryable`/`.code`. Both reads are confined to that predicate's boolean — no local in `ComposerErrorSlot`
+binds `status.error`, and the button's text is `COMPOSER_REPAIR_BUTTON_COPY` and nothing else. A test on
+the button arm with sentinel `code`/`message` values asserts neither reaches the markup, which is what
+makes the guarantee falsifiable rather than a comment. No visually-hidden `Error: ` prefix on the button,
+unlike the chip — the label already leads with "Pairing error", so the accessible name (the visible text;
+no `aria-label`) says it is an error without one.
+
+No fourth component for the button markup itself (`ComposerRepairButton` was considered and dropped): six
+lines of markup with no branch of its own would add a name and a test surface without adding a decision.
+
+**`ComposerErrorSlotControl({ onUnpaired })`** is the store-bound container, collapsing #797's
+`ComposerErrorChipControl` and #167's `RepairControl` into one — they read the same `selectStatus` slice
+for the same fact and now fill the same hole, so the re-render footprint narrows rather than grows.
+`handleRepair` is `RepairControl`'s body verbatim: `void runUnpair({ unpair: window.pyry.unpair, dispatch,
+onUnpaired: () => onUnpaired?.() })`, fired as a bare `void` since `runUnpair` never rejects. No confirm
+phase and no busy guard, for #167's recorded reasons — the button only ever appears in an already-terminal
+error, and it self-hides on both outcomes (`ok` → route unmounts the screen; `error` → the store lands on
+`code: 'unpair'`, which the predicate excludes). `window.pyry` is dereferenced only inside the handler,
+never during render.
+
+**`COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'`** joins `composerSend.ts` beside
+`COMPOSER_ERROR_CHIP_COPY` — see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).
+
+### The row grows to fit the button, and only then
+
+`.composer-status` changed two declarations: `height: 24px` → `min-height: 24px` (the 32px button then
+sets the row's height when present, and nothing else does — no `--tall` modifier, since the button being
+in the slot *is* the state), and `align-items: center` → `align-items: flex-end`, the Figma frame's own
+`items-end`. The alignment change alone would have dropped the status label 4px at the taller height, so
+`.composer-status__activity` gained `min-height: 24px` of its own (the Figma status group's own height,
+`112:3530`) — through #796 the group had no height and `align-items: center` produced its 24px box for
+free; under `flex-end` that equivalence breaks unless the group states its own floor. With it, the 16px
+line centres in a 24px box whose bottom edge is the row's, at both 24 and 32, which is the whole of "the
+label does not move" (AC3).
+
+**Chip and button share a base class, extracted on its second consumer.** `.button-small` — reset, M3
+body/small-emphasized type, `border-radius: var(--radius-xs)`, `white-space: nowrap`, `flex: 0 0 auto` —
+is the same nine declarations the question panel's `.question-panel__cancel`/`__previous`/`__continue`
+already shared as one three-selector rule; see
+[Question panel § Step controls](conversation-shell-question-panel.md#step-controls-916) for that side of
+the extraction. `.button-small--error` is the design's `Type=Error` fill: `background:
+var(--color-on-error)`, `color: var(--color-error)`, hover swaps the fill to
+`var(--color-error-container)` (already a token, from #797's chip). Padding stays out of the base class —
+the panel's outlined pair needs 7px against the filled pair's 8px to compensate for a 1px border under
+this repo's absent box-sizing reset, so sharing padding would silently break that compensation. No
+`outline: none` anywhere in either rule: AC3 requires a visible focus ring and the Figma component set
+draws no focus state of its own, so the UA ring is the treatment.
+
+**New token: `--color-on-error: #690005`**, `tokens.css` beside `--color-error`/`--color-error-container`,
+read from the Figma **variable** bound to node `354:7088`, never the generated export's `white` fallback
+— the light scheme, and a starker instance of the trap `--color-error-container`'s own comment already
+warns about (a white button where the design draws near-black red).
+
+**Re-measured rather than assumed, twice.** The truncation chain #797 measured with the chip up (`flex: 1
+1 auto; min-width: 0` on the activity group, `flex: 0 0 auto` on the trailing occupant) was re-measured
+with the wider button up, the same way: a 3000-char daemon tool name, headless Chromium, the 800px minimum
+window width. The row stays 640×32; the button is unshrunk at **167.88px** (not the ~157px the Figma frame
+suggested — the standing Roboto→system-ui substitution, the same drift #797's chip measured at 155
+against its own 148px node); the activity group absorbs the whole squeeze at 448.13px and the label inside
+it at 426.13px; neither `.conversation` nor `document.body` overflows. Separately, the ticket's own
+premise that "the message box moves 8px on this transition" turned out wrong in both size and cause:
+measured in `e2e/unpair-repair.spec.ts`, the box moves 20px **upward**, and none of it is the row's own
+8px — the same status change also mounts [the connection banner](conversation-shell-chrome.md#connection-banner-279)
+above the thread and the composer's own `Connection error` hint, and the row's 8px alone is absorbed by
+`.conversation__thread`'s `flex: 1 1 auto; min-height: 0`. No e2e assertion pins the box's absolute
+position for exactly that reason — it would be pinning the banner's and the hint's geometry under a name
+that claims to be about this row; the row's own two facts (height, and the status group's offset from the
+row's bottom edge) are what `e2e/unpair-repair.spec.ts` asserts instead, both relative to the row.
+
+**Testing.** `ConversationScreen.test.tsx` replaces the `RepairPrompt` describe with a `ComposerErrorSlot`
+describe covering all three arms in both directions (occupant present *and* the other occupant's markup
+absent) plus the sentinel/no-attribute cases above; the `ComposerErrorChip` describe and its `disconnected`
+container assertion are untouched. **One #797 container assertion did not survive as originally planned**
+— the ticket expected both chip container assertions to stay true unedited, but the error-arm one staged
+`code: 'transport', retryable: false`, which is exactly the status `shouldOfferRepair` now admits, so the
+slot correctly filled with the button and the test went red rather than vacuous. Repointed onto a
+retryable daemon error (`server.binary_offline`), an arm the chip still owns (#167's AC4), which keeps the
+test's actual claim (`trailing` reaches the row with the chip in it) intact. A sibling container test
+proves the button's own arm the same way, spying `sessionStore.getInitialState` (not a `beforeEach`
+`setState`, per the [standing zustand v5 lesson](#composer-error-chip-797) above), and additionally proves
+`.composer__repair` is absent in the exact state that used to render it.
+
+**A fifth production file: `QuestionPanel.tsx`.** The shared `.button-small` base class means the question
+panel's three buttons' `className` attributes changed too (`button-small` prepended, not replacing their
+own class), so `QuestionPanel.test.tsx`'s exact-string markup assertion on the Cancel button moved with
+it — see [Question panel § Step controls](conversation-shell-question-panel.md#step-controls-916).
+
+**e2e (`e2e/unpair-repair.spec.ts`) drives the geometry and the click**, none of which a static render can
+reach: the row's height (24 → 32), the status group's offset from the row's bottom edge (unchanged across
+that transition), the focus ring (Chromium only paints it after keyboard-driven focus, so the spec presses
+a key before calling `.focus()`), and the click landing on the pairing screen through the same `runUnpair`
+flow. The button's locator moved from `getByRole('button', { name: 'Re-pair', exact: true })` to
+`COMPOSER_REPAIR_BUTTON_COPY`, imported rather than retyped so a copy change cannot leave the spec passing
+against a string nothing renders; the spec's header comment, which used to describe **four**
+`.conversation__unpair` buttons (Unpair/Cancel/Confirm/Re-pair), now describes three — the button does not
+wear that class.
+
+Security review PASS (builder self-review). One SHOULD FIX carried as a structural requirement rather
+than left as prose: the trust-boundary note above ("read for a decision, never for markup") is enforced by
+the sentinel test, not by convention alone. One accepted risk named, not fixed: the destructive clear
+still has no confirmation step, and this ticket makes the control markedly more prominent (a 157×32 filled
+button replacing a bare de-emphasised text button) — accepted because the consequence is bounded and
+recoverable (re-pair by scanning a QR) and a confirm step on an already-terminal state is pure friction,
+per #167's original rationale.
 
 ## Message box (#951)
 
@@ -302,7 +438,9 @@ made the figures live). Unlike the error chip, there is no daemon-supplied *stri
 the only interpolated value is an integer in `[0, 100]`, so none of #796/#797's escaping/attribute-sink
 questions apply here.
 
-**`ContextUsageControl()`** — module-private container, the `ComposerErrorChipControl` shape: one
+**`ContextUsageControl()`** — module-private container, the single-selector-read shape #797's
+`ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963, above):
+one
 `useRunConfigStore(selectSnapshot)` read (not two narrow field selectors — both figures must come from
 the same store tick, or a tear could show a percentage of two unrelated snapshots), coalescing
 `snapshot?.usedTokens ?? 0` / `snapshot?.windowTokens ?? 0` — [`RunConfigSections`'s own

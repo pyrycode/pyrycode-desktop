@@ -430,7 +430,7 @@ export function QuestionPanelView({
               attribute here (the panel's standing rule for `questionBatchId`, a one-time nonce this file
               still never reads at all). The view's spec asserts this button's markup is byte-identical to
               what #906 shipped, which is what makes "the handler leaks nothing" structural. */}
-          <button type="button" className="question-panel__cancel" onClick={onCancel}>
+          <button type="button" className="button-small question-panel__cancel" onClick={onCancel}>
             {QUESTION_CANCEL_COPY}
           </button>
           {/* ABSENT ON THE FIRST QUESTION, NEVER `disabled` — the header tabs' call one row up, for the
@@ -443,7 +443,7 @@ export function QuestionPanelView({
           {canStepBack ? (
             <button
               type="button"
-              className="question-panel__previous"
+              className="button-small question-panel__previous"
               onClick={() => onQuestionSelected(activeIndex - 1)}
             >
               {QUESTION_PREVIOUS_COPY}
@@ -466,7 +466,7 @@ export function QuestionPanelView({
               incomplete result that produced `canAnswer === false`, so the two cannot disagree. */}
           <button
             type="button"
-            className="question-panel__continue"
+            className="button-small question-panel__continue"
             disabled={isLastQuestion && !canAnswer}
             onClick={isLastQuestion ? onAnswer : () => onQuestionSelected(activeIndex + 1)}
           >

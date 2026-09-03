@@ -24,16 +24,39 @@ the operator's other pre-ship gates.
 
 `e2e/real-daemon-rename.spec.ts` (#439) is the tier's liveness proof: pair against a claude-less spawned
 daemon, wait for the seeded conversation's Rename pencil to render, rename it through the product UI, and
-assert the new title lands in the channel list (old title gone). Three sibling action specs reused the
-same harness and shipped: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete),
+assert the new title lands in the channel list (old title gone). Sibling action specs reused the same
+harness and shipped: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete),
 [#441](../codebase/441.md) (workspace — recent-workspaces + create-folder), [#443](../codebase/443.md)
-(save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly). A fourth
-candidate, #442 (dequeue + set-session-settings), was **demoted to Inbox without shipping**: both verbs
-proved DOM-invisible on this tier (dequeue needs a sustained turn this claude-less mode can't run;
-set-session-settings' confirmation never touches the DOM, optimistic-first) — an empty observable subset,
-not a partial one, so it never earned a spec. #442 is the tier's cleanest negative case, and #443 the
-cleanest positive one: **a verb is provable here only if its daemon reply gates a visible DOM transition
-with no optimistic pre-render.**
+(save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly), and
+`e2e/real-daemon-session-settings.spec.ts` (#481 — see below). A fifth verb, dequeue, stayed **demoted to
+Inbox without shipping**: it needs a sustained turn this claude-less mode can't run, so it stays an empty
+observable subset on this tier.
+
+**set-session-settings was demoted once, under its original ticket #442, then revisited and shipped
+under #481.** #442's verdict — "the confirmation never touches the DOM, optimistic-first" — is half true
+and was read as the whole truth: `aria-checked` (and, at the time, the model row's current-mark) does
+flip optimistically, before any daemon byte. But #558 later put `aria-busy` on the control element
+itself, deleted only by a correlated reply, so the reply *does* gate a DOM transition — the **settling**,
+not the value. #481 built the spec on that distinction: a write is asserted as a three-step sequence
+(value flips optimistically → `aria-busy` clears, reply-gated → value re-read, still holding), so a
+reject or a reconnect — both of which clear `aria-busy` without committing the value — fail on the third
+step rather than passing on the overlay. This sharpens the tier's provability rule from #443's simpler
+form: **a verb is provable here if its daemon reply gates some DOM transition — a busy/pending flag
+settling counts, even when the displayed value itself renders optimistically — but the value must then
+be re-read after the settle**, since settling alone doesn't distinguish a confirm from a reject. #443
+remains the cleanest case of the rule's simpler form: the daemon's reply gates the value directly, with
+no optimistic overlay in front of it at all.
+
+`e2e/real-daemon-session-settings.spec.ts` shipped keyed on the Model rows, which then rendered from a
+client-side catalog and so needed no daemon frame. #975 deleted that catalog and #976 followed it: since
+then the Model rows and the Effort segments are both built from the daemon's published `model_list`
+frame, which a claude-less spec never receives (the daemon only emits it from claude's own model
+announcement) — so both controls became permanently unreachable on this tier, and the spec went red on
+`main` the moment #975 merged, failing at the first sheet read and parking the whole
+`e2e:real:gate` floor (issue #987). #987 re-keyed the round-trip onto `YoloSection`'s switch, the one
+run-config control that takes no published rows — same write handler, same reply correlation, so
+`set_session_settings` itself stays covered against the real wire, at the accepted cost of dropping
+real-wire coverage of the model-specific `validModel` leg (still covered at the daemon's own unit tier).
 
 [#440](../codebase/440.md) ran green against a live `pyry dev` build and confirmed all four registry
 handlers this tier depends on (`create_conversation`, `archive_conversation`, `unarchive_conversation`,
@@ -203,9 +226,18 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
   sibling spec, the second to ship and the first to use `seedPromoted:false`; ran green end-to-end on a
   live daemon, no #949-class gap.
 - [#443 codebase notes](../codebase/443.md) — the save-as-channel promote sibling, the tier's marquee
-  case; pins pyrycode/pyrycode#949 directly and states the tier's provability rule (visible DOM
-  transition, no optimistic pre-render) in its cleanest positive form. No `docs/knowledge/codebase/442.md`
-  exists — #442 was demoted without shipping, the rule's negative counterpart.
+  case; pins pyrycode/pyrycode#949 directly and states the rule's simpler form: a daemon reply gating the
+  value directly, no optimistic overlay. No `docs/knowledge/codebase/442.md` or `441.md`-style note exists
+  for #481 or #987 — the frozen per-ticket archive stops at 2026-08-26, before both landed.
+- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the outbound write half
+  `real-daemon-session-settings.spec.ts` proves against a real daemon: `setSessionSettings`, the
+  confirmed/rejected correlation, and the presence contract.
+- [Run configuration write store](run-settings-write-store.md) / [#256](../codebase/256.md) — the pending
+  overlay, `aria-busy` source, and the `settingsConfirmed`/`settingsRejected`/`reconnected` arms the
+  spec's three-step write sequence is built on.
+- [Run configuration store](run-config-store.md), [Model list wire types](model-list-wire-types.md) —
+  the `model_list` frame #975 moved the Model rows onto, and the reason
+  `real-daemon-session-settings.spec.ts` can no longer exercise them claude-less.
 - [Conversation promote](conversation-promote.md) / [#273 codebase notes](../codebase/273.md) — the
   `promote_conversation` transport slice #443 exercises end-to-end against a real daemon for the first
   time.

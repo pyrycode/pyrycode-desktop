@@ -44,6 +44,18 @@ import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
+import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
+import { buildRequestAttachment } from './transport/requestAttachmentEnvelope'
+import {
+  createAttachmentReassembler,
+  type AttachmentReassembler
+} from './transport/attachmentReassembler'
+import type { AttachmentChunkPlanInput } from './transport/attachmentChunkPlan'
+import {
+  createAttachmentTransfer,
+  type AttachmentTransfer,
+  type AttachmentTransferResult
+} from './transport/attachmentTransfer'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import {
   buildQuestionAnswer,
@@ -57,6 +69,7 @@ import {
 } from './transport/bundleReassembler'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
+import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
@@ -73,12 +86,14 @@ import {
   type DeleteConversationPayload,
   type RenameConversationPayload,
   type ChangeWorkspacePayload,
+  type RequestAttachmentPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload,
   type DequeueMessagePayload,
   type QuestionAnswerPayload,
-  type QuestionRefusedPayload
+  type QuestionRefusedPayload,
+  type AttachmentChunkPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -92,6 +107,22 @@ const SERVER_KEY_LENGTH = 32
  * ordinary socket drop → 'offline'. Defined locally: this is its only consumer.
  */
 const RELAY_NO_DAEMON_CLOSE_CODE = 4404
+
+/**
+ * How long one retrieval may go SILENT before this client gives up on it (#996). An IDLE deadline,
+ * not a total-duration one: it is armed when the `request_attachment` goes out and re-armed on every
+ * accepted chunk, so a large legitimate transfer is never killed for taking long — only for stopping.
+ *
+ * IT IS THE ONLY THING THAT DETECTS THE THIRD FAILURE MODE. A retrieval can end three ways and only
+ * two of them are frames: `attachment.not_found`, `attachment.stream_aborted`, and a stream that
+ * simply stops because the session died. The protocol offers nothing for the third and says so.
+ *
+ * 30 s restates relayConnection's WIRE_PONG_TIMEOUT_MS deliberately: that wire-pong deadline is the
+ * deterministic backstop one layer down, so a client-side deadline meaningfully shorter would fire
+ * first on a merely slow relay and one meaningfully longer would add nothing the socket does not
+ * already catch. A stream silent for 30 s is dead either way.
+ */
+const RETRIEVAL_IDLE_TIMEOUT_MS = 30_000
 
 /**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
@@ -127,6 +158,50 @@ export interface DaemonConnectionDeps {
    * daemon-leg call sites (this module) are #128 and the relay-leg threading is #127. Unused in #126.
    */
   diagnosticLog?: DiagnosticLog
+  /**
+   * The retrieval idle-deadline seam (#996) — createRelaySupervisor's `timing` parameter, restated
+   * for the one timer this module owns. Test-only in practice: every field defaults to the real
+   * behaviour, so production never passes it. Injected rather than driven with fake timers because
+   * this repo has no fake-timer precedent in src/main and the supervisor already established the
+   * pattern one layer down.
+   */
+  timing?: {
+    retrievalIdleTimeoutMs?: number
+    setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
+    clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
+  }
+}
+
+/**
+ * The injected sink for one RETRIEVAL (#996) — `BundleConsumer`'s twin for the leg that fetches an
+ * attachment back. Exactly one of `complete` / `fail` is called, exactly once, per
+ * `requestAttachment` call; there is no `progress` member, because this leg has no completion frame
+ * and a count of chunks tells a consumer nothing it can act on.
+ *
+ * `fail` takes the IPC-layer `AttachmentRetrievalFailure` rather than a transport-local union, and
+ * that is the whole correspondence mechanism: `requestAttachment` forwards an `AttachmentFailReason`
+ * straight into it, so a reason added to the reassembler's closed set upstream reddens that call
+ * instead of silently becoming unrepresentable at the bridge. Same check as the upload leg's
+ * `reason: result.outcome`, running the other way and with no re-declared mirror to keep in step.
+ */
+export interface AttachmentRetrievalConsumer {
+  /** The one success terminal: the whole file, verified against its declared length and digest. */
+  complete(bytes: Uint8Array): void
+  /** The one failure terminal: a client-owned literal, never a wire value. */
+  fail(reason: AttachmentRetrievalFailure): void
+}
+
+/**
+ * One retrieval this connection is waiting on. Module-internal — the map's value type, never
+ * exported: a caller holds its consumer and needs nothing else.
+ */
+interface PendingRetrieval {
+  /** #995's accumulator for this transfer, pinned to the id THIS CLIENT asked for. */
+  reassembler: AttachmentReassembler
+  /** The caller's sink, settled exactly once by `settleRetrieval`. */
+  consumer: AttachmentRetrievalConsumer
+  /** The live idle deadline, replaced on every accepted chunk and cleared at every settle site. */
+  deadline: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -368,6 +443,53 @@ export interface DaemonConnection {
    * command never hangs. NEVER throws out of the module (parity #490).
    */
   requestDebugBundle(consumer: BundleConsumer): void
+  /**
+   * Upload one file to the daemon as an ordered run of `attachment_chunk` envelopes, and resolve when
+   * the transfer reaches its single terminal (#861). The `requestDebugBundle` posture, not `send`'s
+   * silent no-op: the caller awaits an answer, so a request made while disconnected resolves
+   * `not-connected` rather than hanging. NEVER throws and NEVER REJECTS — every failure, local or
+   * remote, is a value on the resolved result, so a caller that forgets a `catch` cannot produce an
+   * unhandled main-process rejection.
+   *
+   * TWO CORRELATION KEYS, and they are not interchangeable. The success reply is matched on the
+   * payload's `attachment_id`; the rejects are matched on `Envelope.in_reply_to` against the chunk
+   * envelopes this transfer sent. A driver keyed on the envelope id alone would never resolve — see
+   * createAttachmentTransfer's header for why.
+   *
+   * `attachment_id` is CALLER-MINTED and must be unique across concurrently live transfers: two
+   * transfers sharing one id would let a single success reply resolve whichever the scan reaches
+   * first. The id is not a capability (not secret, not unguessable), so uniqueness is the whole
+   * requirement. #862 owns minting it, picking the file, and bounding its size — this method applies
+   * no size bound of its own and holds the whole file plus its base64 for the round trip.
+   *
+   * A transfer that resolves failed is resolved: it is not retried here, and nothing is emitted to
+   * the window (this method ships no daemon event; surfacing the outcome is #862's).
+   */
+  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>
+  /**
+   * Ask the host for one stored attachment and stream the answer into a reassembler, settling
+   * `consumer` with the whole verified file or one static reason (#996). The `requestDebugBundle`
+   * posture — a call that owns a waiting consumer, so a disconnected request FAILS rather than
+   * silently sending nothing. Never throws; exactly one terminal per call.
+   *
+   * CORRELATION RIDES THE ENVELOPE, and the two answers correlate differently. The answering
+   * `attachment_chunk` frames carry the transfer's own `attachment_id` AND the `in_reply_to` naming
+   * this request; the reject carries only `in_reply_to`, because it is a plain `error` envelope with
+   * no attachment id in it at all. Routing on the attachment id alone therefore could not deliver a
+   * rejection to the request waiting for one, which is why the pending map is keyed by envelope id.
+   * That numeric id stays main-internal and never rides an event to the window.
+   *
+   * `payload` is rebuilt as a fresh literal by this method's caller chain before it reaches the
+   * builder, so no renderer-supplied key can reach the wire. Both ids are UNVALIDATED here: the
+   * daemon owns the registry check and the confinement, and `resolveAttachmentPath` (via
+   * `storeAttachment`) is the sole gate before the attachment id becomes a path component. Their
+   * SIZE is bounded one layer out, at the IPC guard; a main-side caller that passes an identifier
+   * long enough to over-cap the envelope anyway gets `send-failed` rather than a hung request.
+   */
+  requestAttachment(
+    payload: RequestAttachmentPayload,
+    consumer: AttachmentRetrievalConsumer
+  ): void
 }
 
 /**
@@ -419,6 +541,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // now / createDriver — the renderer never mints (the token needs randomness, stays out of the web
   // layer). It is an anti-replay idempotency key, not a credential; uniqueness + stability suffice.
   const mintToken = deps.mintToken ?? ((): string => randomUUID())
+  // The retrieval idle-deadline seam (#996), defaulted to the real timer here so production passes
+  // nothing — createRelaySupervisor's `timing.setTimer ?? setTimeout` idiom verbatim.
+  const timing = deps.timing ?? {}
+  const retrievalIdleTimeoutMs = timing.retrievalIdleTimeoutMs ?? RETRIEVAL_IDLE_TIMEOUT_MS
+  const setTimer = timing.setTimer ?? ((fn, ms): ReturnType<typeof setTimeout> => setTimeout(fn, ms))
+  const clearTimer = timing.clearTimer ?? ((handle): void => clearTimeout(handle))
 
   // Three locals, no store: the renderer's sessionStore (#2) is the single source of session
   // state; this module only emits into it. `stopped` doubles as the "stopping" flag that
@@ -469,6 +597,30 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // inside a synchronous createWorkspaceFolder / onDriverEvent body, no await between a read and a write
   // (the nextEnvelopeId / outstandingAnswers / pendingSettings single-writer rationale).
   const pendingCreateFolders = new Set<number>()
+  // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
+  // files can be attached in one session, and a lone slot would have to abandon the first to admit the
+  // second. Membership plus a scan is the whole query — the success reply is looked up by
+  // `attachmentId`, the rejects by `sentEnvelope` — over a handful of entries at most. Added in
+  // uploadAttachment before the first chunk goes out, removed when the transfer settles, and cleared
+  // by failAttachmentTransfers on every connection-fatal event. Single-writer — every mutation runs to
+  // completion inside a synchronous body (the nextEnvelopeId / pendingSettings rationale).
+  const activeTransfers = new Set<AttachmentTransfer>()
+  // Retrievals currently waiting on the host (#996), keyed by the envelope id of the
+  // `request_attachment` this client sent — the ONLY handle both answers publish, since the reject
+  // is a plain `error` envelope with no attachment id in it. A MAP, not the bundle's single slot and
+  // not the upload leg's Set: two attachments can be fetched at once (so a lone slot would abandon
+  // the first to admit the second), and unlike a transfer a retrieval is looked up by exactly one
+  // key, so a scan would be a worse shape than a keyed get. The pendingSettings / pendingCreateFolders
+  // correlation idiom, with a reassembler and a deadline hanging off each entry.
+  //
+  // Added in requestAttachment AFTER the frame is on the wire — a build or send that throws registers
+  // nothing, because this client's envelope-id counter advances only on a successful build and an
+  // entry left under an unspent id would swallow the reject of whichever envelope re-mints it
+  // (pendingSettings' and pendingCreateFolders' stated ordering). Removed at the single settleRetrieval
+  // choke point, and cleared by failAttachmentRetrievals on every connection-fatal event. Single-writer —
+  // every mutation runs to completion inside a synchronous body with no await between a read and a
+  // write (the nextEnvelopeId / pendingSettings rationale).
+  const pendingRetrievals = new Map<number, PendingRetrieval>()
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -500,6 +652,92 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const abandoned = reassembler
     reassembler = null
     abandoned?.fail('connection-lost')
+  }
+
+  // The connection-teardown net for in-flight attachment transfers (#861) — failBundleStream's twin,
+  // called from the same four sites for the same reason: a teardown re-dials into a FRESH Noise
+  // session with no resume, so the daemon-side transfer dies and no answer to the chunks already sent
+  // will ever arrive. With no per-transfer deadline (deliberate — see createAttachmentTransfer's
+  // header), an unfailed caller would await forever.
+  //
+  // Release-then-fail, like failBundleStream: snapshot and clear the set BEFORE failing, so no
+  // transfer's settle can mutate the set mid-iteration and the module holds no reference to a transfer
+  // it has already abandoned. Idempotent and total — an empty set is a no-op, and a settled transfer's
+  // own `settled` flag absorbs a second fail.
+  //
+  // This is also what makes dial()'s reset of nextEnvelopeId to 2 safe: every live transfer is failed
+  // before ids recycle, so a stale envelope id can never correlate a reject on the reconnected
+  // session (the pendingSettings.clear() rationale, applied to the transfer set).
+  function failAttachmentTransfers(): void {
+    const abandoned = [...activeTransfers]
+    activeTransfers.clear()
+    for (const transfer of abandoned) transfer.fail('connection-lost')
+  }
+
+  // The connection-teardown net for in-flight retrievals (#996) — failAttachmentTransfers' twin, and
+  // deliberately the SET-shaped one rather than failBundleStream's single-slot release: a teardown
+  // re-dials into a fresh Noise session with no resume, so every daemon-side retrieval dies at once
+  // and each waiting consumer must be told. With no answer ever coming and the idle deadline the only
+  // other backstop, an unfailed consumer would sit for 30 s and then report the wrong reason.
+  //
+  // Release-then-fail, like both twins: snapshot and clear the map BEFORE settling, so no consumer's
+  // fail can mutate the map mid-iteration and the module holds no reference to a retrieval it has
+  // already abandoned. Clearing the map also drops each reassembler's accumulated chunk bytes.
+  // Idempotent and total — an empty map is a no-op.
+  //
+  // This is what makes dial()'s reset of nextEnvelopeId to 2 safe for this map: every live retrieval
+  // is failed before ids recycle, so a stale envelope id can never correlate an answer on the
+  // reconnected session (the pendingSettings.clear() rationale, applied to the retrieval map).
+  function failAttachmentRetrievals(): void {
+    const abandoned = [...pendingRetrievals.values()]
+    pendingRetrievals.clear()
+    for (const retrieval of abandoned) {
+      clearTimer(retrieval.deadline)
+      retrieval.consumer.fail('connection-lost')
+    }
+  }
+
+  /**
+   * The ONE exit from a pending retrieval: clear its deadline, drop its entry, settle its consumer.
+   * Routing every terminal through here is what makes "exactly one terminal" a property of there
+   * being a single exit rather than of a guard at each site — the entry is gone, so a later frame,
+   * a later reject and a late deadline all find nothing and are inert.
+   *
+   * Dropping the entry is also the byte release: the reassembler and everything it accumulated
+   * become unreachable here, which is failBundleStream's stated hygiene rather than terminal
+   * correctness (the reassembler's own `settled` flag already owns that where it settles itself).
+   */
+  function settleRetrieval(
+    envelopeId: number,
+    entry: PendingRetrieval,
+    reason: AttachmentRetrievalFailure
+  ): void {
+    clearTimer(entry.deadline)
+    pendingRetrievals.delete(envelopeId)
+    entry.consumer.fail(reason)
+  }
+
+  /**
+   * A fresh idle deadline for the retrieval under `envelopeId` — armed at send and re-armed on every
+   * accepted chunk, so it measures SILENCE rather than total transfer time.
+   *
+   * It re-reads the map at fire time rather than closing over the entry, which is what makes a late
+   * fire against an already-settled retrieval a no-op even if a clearTimer were ever missed.
+   */
+  function armRetrievalDeadline(envelopeId: number): ReturnType<typeof setTimeout> {
+    return setTimer(() => {
+      const live = pendingRetrievals.get(envelopeId)
+      if (live === undefined) return
+      settleRetrieval(envelopeId, live, 'timed-out')
+    }, retrievalIdleTimeoutMs)
+  }
+
+  /** The reject correlation key: which live transfer, if any, minted this envelope id. */
+  function transferForEnvelope(envelopeId: number): AttachmentTransfer | undefined {
+    for (const transfer of activeTransfers) {
+      if (transfer.sentEnvelope(envelopeId)) return transfer
+    }
+    return undefined
   }
 
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
@@ -584,6 +822,59 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (pendingCreateFolders.has(inReplyTo)) {
                 pendingCreateFolders.delete(inReplyTo)
                 emitDaemonEvent(sink, { type: 'workspaceFolderRejected' })
+                return
+              }
+              // Attachment-upload rejection correlation (#861), the third member of the same
+              // unique-per-request-envelope-id tier. A reject answers ONE chunk, and every chunk id a
+              // live transfer minted is known here, so a match is unambiguously the reply to that
+              // transfer's chunk — which is why it consumes the frame ENTIRELY, skipping both the
+              // reassembler.fail and the modal-FIFO shift below exactly as its two siblings do.
+              // Order among the three is immaterial: an envelope id is minted once, so at most one of
+              // them can hold it.
+              //
+              // The outcome carried is the CLIENT-OWNED value #965 already mapped off the daemon's
+              // `code` string at the decode boundary. Nothing re-parses that string here — per
+              // CLAUDE.md it must never become a lookup path — and no daemon text reaches the caller.
+              // This settles the transfer; it emits NO DaemonEvent, because the outcome goes back to
+              // uploadAttachment's caller and surfacing it to the window is #862's slice.
+              const rejected = transferForEnvelope(inReplyTo)
+              if (rejected !== undefined) {
+                rejected.fail(inbound.outcome)
+                return
+              }
+              // Attachment-RETRIEVAL rejection correlation (#996), the fourth member of the same
+              // unique-per-request-envelope-id tier, and the ONLY correlation this reject can have:
+              // it is a plain `error` envelope carrying no attachment id at all, so a design routing
+              // on the payload id could not deliver it to the request waiting for one. A match
+              // consumes the frame entirely, exactly as its three siblings do. Order among the four
+              // is immaterial — an envelope id is minted once, so at most one can hold it.
+              //
+              // The abort takes the LONG way round on purpose. `attachment.stream_aborted` is routed
+              // through the reassembler's two-member door rather than settled directly, because that
+              // door is where the discard-the-partial obligation lives (#995 reserved the member for
+              // this translation); everything accumulated goes with it, and the client never presents
+              // partial bytes as the file. Retry is allowed after a backoff and is NOT built here —
+              // a re-request re-runs the same resolution work on the host, and no automatic retry is
+              // asked for.
+              //
+              // Every other code settles DIRECTLY, with nothing to discard: a reject yields no bytes.
+              // `attachment.not_found` gets its own static reason; anything else is reported as the
+              // catch-all rather than coerced into a not-found that did not happen. Nothing re-parses
+              // the daemon's `code` string here — #965 mapped it at the decode boundary, and per
+              // CLAUDE.md it must never become a lookup path. No daemon text reaches the consumer.
+              const retrieval = pendingRetrievals.get(inReplyTo)
+              if (retrieval !== undefined) {
+                if (inbound.outcome === 'attachment-stream-aborted') {
+                  // Settles through the reassembler's consumer, which routes back into
+                  // settleRetrieval — one exit, not two.
+                  retrieval.reassembler.fail('stream-aborted')
+                  return
+                }
+                settleRetrieval(
+                  inReplyTo,
+                  retrieval,
+                  inbound.outcome === 'attachment-not-found' ? 'not-found' : 'daemon-error'
+                )
                 return
               }
             }
@@ -1282,6 +1573,59 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               droppedModels: inbound.modelList.dropped_models
             })
             return
+          case 'attachment-stored': {
+            // The upload leg's one POSITIVE terminal (#861), and the ONLY inbound arm here that
+            // correlates on a PAYLOAD field rather than on Envelope.in_reply_to. The reply's
+            // in_reply_to names the chunk WHOSE ARRIVAL COMPLETED the transfer, not the last one sent,
+            // and chunks are index-addressed and may be reassembled in any order — so the envelope id
+            // is unpredictable to the sender and #964 deliberately does not surface it. The
+            // `attachment_id` is the only handle that works, and it is a value THIS CLIENT chose.
+            //
+            // The decoded id is a COMPARAND and nothing else: matched against ids this process minted,
+            // then dropped. It never becomes a lookup path, a filename or a cache key (CLAUDE.md), and
+            // it never reaches a log. `''` cannot reach here — #964's requireNonEmptyString fails the
+            // frame closed — so a truncated or hostile payload cannot match a transfer by decoding to
+            // Go's zero value.
+            //
+            // AT MOST ONE transfer settles per reply: the loop returns on the first match, so even a
+            // caller that violated the id-uniqueness contract cannot have one reply resolve two
+            // transfers. No match — a stale reply, or a daemon naming a transfer this client never
+            // started — is DROPPED: no event, no log, no throw.
+            //
+            // Emits NOTHING. The outcome goes back to uploadAttachment's caller; surfacing it to the
+            // window is #862's slice, and this ticket ships no daemon event at all.
+            for (const transfer of activeTransfers) {
+              if (transfer.attachmentId === inbound.attachmentStored.attachment_id) {
+                transfer.stored()
+                return
+              }
+            }
+            return
+          }
+          case 'attachment-chunk': {
+            // The retrieval leg's byte stream (#996). Routed by Envelope.in_reply_to — the request
+            // this frame answers — where its upload-leg neighbour above routes on a payload field.
+            // The asymmetry is the daemon's: an `attachment_stored` names whichever chunk closed the
+            // set, which no sender can predict, while a retrieval chunk names the ask, which the
+            // sender chose. #998 makes `inReplyTo` REQUIRED on this kind for exactly that reason.
+            //
+            // The payload `attachment_id` is checked too, one layer down: the reassembler refuses a
+            // chunk naming a different transfer. The two are NOT redundant — the failure only the
+            // payload id catches is the host answering the right ask with the wrong bytes.
+            //
+            // A frame matching no live retrieval is DROPPED: no event, no log, no throw. That covers
+            // a stale answer, a frame arriving after its retrieval already settled, and a daemon
+            // naming a request this client never sent.
+            const retrieval = pendingRetrievals.get(inbound.inReplyTo)
+            if (retrieval === undefined) return
+            // Re-arm BEFORE feeding the chunk in: `chunk()` may settle synchronously (the completing
+            // index, or a refusal), and settleRetrieval clears whatever deadline is current. Arming
+            // afterwards would leave a fresh timer running against a retrieval that no longer exists.
+            clearTimer(retrieval.deadline)
+            retrieval.deadline = armRetrievalDeadline(inbound.inReplyTo)
+            retrieval.reassembler.chunk(inbound.attachmentChunk)
+            return
+          }
         }
         return
       }
@@ -1297,6 +1641,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // arm's order. Above the classification below, so the emitted bundle failure is identical
         // for every close code and discloses nothing about it.
         failBundleStream()
+        failAttachmentTransfers()
+        failAttachmentRetrievals()
         // The relay socket dropped with a retryable close (#328). This is the single classification
         // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
         // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
@@ -1311,6 +1657,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
         failBundleStream()
+        failAttachmentTransfers()
+        failAttachmentRetrievals()
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -1320,6 +1668,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'error':
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
+        failAttachmentTransfers()
+        failAttachmentRetrievals()
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -1956,6 +2306,149 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  /**
+   * Put one chunk on the wire and return the envelope id it went out under (#861) — the send seam
+   * createAttachmentTransfer drives, and the reason the id is RETURNED rather than minted inside the
+   * transfer: it comes from this module's single monotonic counter, and transport/ must not reach into
+   * it. Capture the id BEFORE the build increments it, so the returned value is the one the daemon
+   * echoes as in_reply_to on a rejecting error (the createWorkspaceFolder template).
+   *
+   * THROWS, unlike every other send here, and that is the contract: the loop turns a throw into a
+   * `send-failed` terminal so the caller learns the transfer stopped. A silent drop would leave it
+   * awaiting an answer to a chunk that never left. The three throwing causes are a null driver, an
+   * over-cap envelope (WireEncodeError), and a driver refusal; the loop classifies without inspecting,
+   * so no caught message can echo the file's base64.
+   *
+   * A null driver here means a teardown already ran, and every teardown path fails its transfers
+   * first, so the `send-failed` this produces loses to the `connection-lost` already delivered. The
+   * throw is the belt to that suspenders — it cannot reach the wire either way.
+   */
+  function sendAttachmentChunk(payload: AttachmentChunkPayload): number {
+    const live = driver
+    if (live === null) throw new Error('not connected')
+    const envelopeId = nextEnvelopeId
+    // The payload is passed through without a fresh literal, unlike the renderer-supplied command
+    // payloads: it is not renderer-supplied at all — planAttachmentChunks built it here in the main
+    // process as a closed nine-field object, so there is no smuggled field for a copy to strip.
+    const bytes = buildAttachmentChunk({ id: envelopeId, ts: now(), payload })
+    nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+    live.sendMessage(bytes)
+    return envelopeId
+  }
+
+  async function uploadAttachment(
+    input: AttachmentChunkPlanInput
+  ): Promise<AttachmentTransferResult> {
+    // Not connected (before start(), mid-bootstrap, bootstrap-failed): resolve terminally so #862's
+    // command never hangs. requestDebugBundle's posture — send's silent no-op is wrong for a call that
+    // owns an awaiting caller.
+    if (driver === null) return { ok: false, outcome: 'not-connected' }
+    let transfer: AttachmentTransfer
+    try {
+      transfer = createAttachmentTransfer(input, {
+        sendChunk: sendAttachmentChunk,
+        diagnosticLog: deps.diagnosticLog
+      })
+    } catch {
+      // planAttachmentChunks is total, so this is a backstop rather than a live branch — but this is
+      // the first async method on the interface, and a synchronous throw escaping it would surface as
+      // an UNHANDLED main-process rejection in a caller that forgot a catch. Every path returns a
+      // value instead (parity #490, restated for a promise-returning method). The caught object is
+      // DROPPED — it could echo the file's bytes.
+      return { ok: false, outcome: 'send-failed' }
+    }
+    // ARM BEFORE DRIVE: record the transfer where both inbound correlations can find it, THEN start
+    // the send. The reverse order would put chunk 0 on the wire before the slot was armed, and a fast
+    // reply would find nothing to resolve (requestDebugBundle's arm-before-send discipline).
+    activeTransfers.add(transfer)
+    try {
+      transfer.start()
+      return await transfer.result
+    } finally {
+      // Always runs: transfer.result never rejects. Removing on settle is what keeps a later reply
+      // naming a finished transfer's id from resolving anything, and bounds the scan to live work.
+      activeTransfers.delete(transfer)
+    }
+  }
+
+  function requestAttachment(
+    payload: RequestAttachmentPayload,
+    consumer: AttachmentRetrievalConsumer
+  ): void {
+    // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
+    // so #996's orchestrator never hangs. requestDebugBundle's posture — send's silent no-op is
+    // wrong for a call that owns a waiting consumer. There is nothing accumulated to discard, so this
+    // does NOT go through the reassembler, which is why AttachmentFailReason has no member for it.
+    if (driver === null) {
+      consumer.fail('not-connected')
+      return
+    }
+    // Capture the id BEFORE the build increments it: this is the value the daemon echoes as
+    // in_reply_to on every answering chunk AND on the reject (the createWorkspaceFolder template).
+    const envelopeId = nextEnvelopeId
+    try {
+      // A FRESH LITERAL with named fields, never the caller's object spread through: the two ids
+      // originate in an untrusted renderer, so a smuggled key must not reach the envelope even though
+      // the boundary guard reads only these two (createConversation's posture). Shares the one
+      // monotonic nextEnvelopeId with send / requestDebugBundle — no second counter — so ids stay
+      // unique across interleaved calls, which is what the daemon correlates replies by.
+      const bytes = buildRequestAttachment({
+        id: envelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          attachment_id: payload.attachment_id
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap envelope (WireEncodeError, reachable
+      // from a main-side caller passing an out-of-contract identifier) or a driver throw. The caught
+      // object is DROPPED — its message could echo an id — and the two causes collapse to one outcome,
+      // the upload leg's `send-failed`.
+      //
+      // SETTLING HERE, WITH NOTHING REGISTERED, is what keeps a dropped build from leaving a phantom
+      // keyed to a RECYCLED id (#1003 review). The line above advances the counter only on a successful
+      // build, so the next outbound envelope re-mints this id; an entry left armed under it would
+      // swallow that envelope's reject — settling a healthy retrieval on a frame that answers something
+      // else, and consuming a frame the bundle net and the modal FIFO below were owed. Both in-repo maps
+      // keyed by envelope id, pendingSettings and pendingCreateFolders, register after the send and say
+      // the same thing. This is also the honest terminal: the deadline's `timed-out` 30 s later would
+      // report a stream that stopped, for a frame that never left the machine.
+      consumer.fail('send-failed')
+      return
+    }
+    // THE FRAME IS ON THE WIRE: arm now, and only now. Ordering the arm after the send cannot lose a
+    // fast answer — an inbound frame reaches onDriverEvent through socket I/O, which cannot run
+    // synchronously inside driver.sendMessage — and that is the reasoning both envelope-id-keyed
+    // precedents already rely on. requestDebugBundle arms FIRST because its single slot is not keyed by
+    // an envelope id at all, so nothing it leaves behind can be re-minted; that half of its analogy
+    // does not carry here.
+    const entry: PendingRetrieval = {
+      // Pinned to the id THIS CLIENT ASKED FOR, never one read back off the wire — the second half
+      // of the correlation, and storeAttachment's stated precondition further down the chain.
+      reassembler: createAttachmentReassembler(payload.attachment_id, {
+        complete: (bytes) => {
+          clearTimer(entry.deadline)
+          pendingRetrievals.delete(envelopeId)
+          consumer.complete(bytes)
+        },
+        // Forwarded through settleRetrieval rather than handed over as a bare method reference, and
+        // that is load-bearing: `reason` is contextually an AttachmentFailReason here, so this call
+        // is the COMPILE-FORCED check that AttachmentRetrievalFailure still covers the reassembler's
+        // closed set (a bare `fail: consumer.fail` would not check it — AttachmentConsumer.fail is
+        // declared method-style, and TypeScript checks method parameters bivariantly).
+        fail: (reason) => settleRetrieval(envelopeId, entry, reason)
+      }),
+      consumer,
+      // Armed here rather than assigned a placeholder and replaced: the deadline is a real handle
+      // from the moment the entry exists, so every clearTimer site is total with no nullable field.
+      deadline: armRetrievalDeadline(envelopeId)
+    }
+    pendingRetrievals.set(envelopeId, entry)
+  }
+
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
     const gen = ++generation
@@ -1985,8 +2478,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
-    // out of onDriverEvent, so #116's net would never fire and the consumer would never settle.
+    // out of onDriverEvent, so #116's net would never fire and the consumer would never settle. The
+    // same argument covers the transfer set and the retrieval map beside it.
     failBundleStream()
+    failAttachmentTransfers()
+    failAttachmentRetrievals()
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.
@@ -2038,6 +2534,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     cancelModal,
     answerQuestions,
     refuseQuestions,
-    requestDebugBundle
+    requestDebugBundle,
+    uploadAttachment,
+    requestAttachment
   }
 }

@@ -2,7 +2,7 @@
 
 The **attachment-file-name → path-component rewrite**: a pure, main-process function that reduces an untrusted, model-chosen attachment file name to exactly one safe path component. Unlike its sibling, it never refuses — every input has a safe answer.
 
-Introduced in [#819](https://github.com/pyrycode/pyrycode-desktop/issues/819). **No consumer is wired in this slice.**
+Introduced in [#819](https://github.com/pyrycode/pyrycode-desktop/issues/819). **No consumer was wired in this slice**; its first is [attachment save](attachment-save.md) (#814), which re-runs it main-side on the value it actually builds the path from.
 
 ## What it does
 
@@ -29,7 +29,7 @@ The design descends directly from the daemon's own `internal/attachments.Sanitiz
 
 ## The one sanctioned crossing of the never-a-filename rule
 
-`CLAUDE.md` and the field comments on `src/shared/ipc/events.ts`'s daemon-text fields both say daemon-supplied text is never "a filename, a cache key, or a lookup path." `sanitizeAttachmentFilename` is **the one sanctioned crossing** of that rule, and the exemption is bought by the transform: a caller that builds a save path out of the *raw* wire `filename` field instead has bypassed the gate rather than used it. The function returns a plain `string`, indistinguishable from the raw field it was derived from — nothing structural stops that bypass, so **this call must be the only place a save path reads the wire's file name**. A future consumer (#814) should key its save on the attachment identifier (`resolveAttachmentPath`, #818) and carry the filename from main's own copy of the wire frame, not from a value that crossed the `contextBridge`.
+`CLAUDE.md` and the field comments on `src/shared/ipc/events.ts`'s daemon-text fields both say daemon-supplied text is never "a filename, a cache key, or a lookup path." `sanitizeAttachmentFilename` is **the one sanctioned crossing** of that rule, and the exemption is bought by the transform: a caller that builds a save path out of the *raw* wire `filename` field instead has bypassed the gate rather than used it. The function returns a plain `string`, indistinguishable from the raw field it was derived from — nothing structural stops that bypass, so **this call must be the only place a save path reads the wire's file name**. [Attachment save](attachment-save.md) (#814) is that one call: it keys the save on the attachment identifier (`resolveAttachmentPath`, #818) and re-runs this function, main-side, on the display name that crossed the `contextBridge`, rather than trusting the renderer's own sanitisation of a value it never had a gate for.
 
 Sanitising removes the log-injection half of the daemon-text hazard (the result carries no newline, no control character), but not the privacy half — a file name is often private in itself, so the never-reaches-a-log rule binds this function's **output** exactly as hard as its input. "Sanitised" does not mean "safe to log."
 
@@ -46,9 +46,9 @@ Both are silent, and one reopens traversal completely:
 
 ## Non-goals (deliberate)
 
-- **No length bound.** The daemon's version truncates to 255 bytes because its wire bound has no validator; here nothing has been observed to need one, no attachment name can reach this app until #687 lands, and the binding constraint is whole-path `PATH_MAX`, which only the eventual write (#814) knows the directory for. An over-long name is expected to surface as `ENAMETOOLONG` from that write. If a later ticket adds a bound anyway, it must run **after** the leading-dot and reserved-name steps — prefixing a character to an already-truncated result can push it back over the bound.
-- **No existence check, no collision suffix, no uniqueness.** The result is deliberately non-unique (case folding on APFS, `a/b` vs `a_b` colliding, every unusable name sharing one fallback). The no-overwrite guarantee belongs to the write, not here — [save-debug-bundle](save-debug-bundle.md)'s exclusive-create (`flag: 'wx'`, retry on `EEXIST`) is #814's precedent.
-- **No path construction, no directory layout, no IPC channel.** The function returns a component; joining it behind a directory and wiring a consumer is #814's.
+- **No length bound.** The daemon's version truncates to 255 bytes because its wire bound has no validator; here nothing had been observed to need one, and the binding constraint is whole-path `PATH_MAX`, which only the write ([attachment save](attachment-save.md), #814) knows the directory for. Confirmed as shipped: an over-long name surfaces as `ENAMETOOLONG` from that write, folded into its ordinary `'save-failed'` outcome rather than treated as new behaviour. If a later ticket adds a bound anyway, it must run **after** the leading-dot and reserved-name steps — prefixing a character to an already-truncated result can push it back over the bound.
+- **No existence check, no collision suffix, no uniqueness.** The result is deliberately non-unique (case folding on APFS, `a/b` vs `a_b` colliding, every unusable name sharing one fallback). The no-overwrite guarantee belongs to the write, not here — [save-debug-bundle](save-debug-bundle.md)'s exclusive-create (`flag: 'wx'`, retry on `EEXIST`) is the precedent [attachment save](attachment-save.md) restated with `COPYFILE_EXCL`.
+- **No path construction, no directory layout, no IPC channel.** The function returns a component; joining it behind a directory and wiring a consumer is [attachment save](attachment-save.md)'s.
 
 ## Testing
 
@@ -58,14 +58,14 @@ Notable rows: `'../etc/passwd'` → `'_.._etc_passwd'` (both separators, then th
 
 ## Security posture
 
-Architect self-review verdict: **PASS**. No filesystem, no IPC, no `BrowserWindow` surface — the module ships unreferenced. Two hand-offs recorded for #814: sanitise must happen in main on the value main actually uses to build the path (never trust a component that crossed the bridge without re-running this function on it), and the write must use `saveDebugBundle`'s exclusive-create loop rather than a plain `writeFile`, since the result is not unique. A leading `-` surviving the allowlist (`-rf` → `-rf`) is named and declined as out of scope: no current or planned path passes this component as an argv element.
+Architect self-review verdict: **PASS**. No filesystem, no IPC, no `BrowserWindow` surface — the module shipped unreferenced. Two hand-offs were recorded for #814 and both landed as specified in [attachment save](attachment-save.md): sanitise happens in main on the value main actually uses to build the path (never trusting a component that crossed the bridge without re-running this function on it), and the write uses `saveDebugBundle`'s exclusive-create loop (`COPYFILE_EXCL`) rather than a plain `writeFile`, since the result is not unique. A leading `-` surviving the allowlist (`-rf` → `-rf`) is named and declined as out of scope: no current or planned path passes this component as an argv element.
 
 ## Related
 
 - [Attachment path resolution](attachment-path-resolution.md) — the sibling, refusal half of the pair (#818): an attachment identifier is checked and refused rather than rewritten.
-- [Save debug bundle](save-debug-bundle.md) — the exclusive-create (`flag: 'wx'`) precedent that #814 must reuse for the no-overwrite guarantee this module deliberately does not provide.
+- [Save debug bundle](save-debug-bundle.md) — the exclusive-create (`flag: 'wx'`) precedent that [attachment save](attachment-save.md) reused for the no-overwrite guarantee this module deliberately does not provide.
 - [Pairing-payload gate](pairing-payload-gate.md) — the untrusted-input-gate register this module's header draws tone from, though this module's result is a plain string rather than a discriminated `{ok}` union, since it never refuses.
 - `docs/specs/architecture/819-attachment-filename-sanitiser.md` — the full architecture spec, including the security review this doc summarizes.
 - pyrycode `docs/specs/architecture/1772-attachment-filename-sanitiser.md` — the daemon-side original this design descends from.
-- #814 (save-to-Downloads, not yet started) — the intended consumer.
+- [Attachment save](attachment-save.md) — #814, the landed consumer: re-runs this function main-side and joins the result behind Downloads.
 - #687 — establishes the attachment directory and is what makes an attachment name reach this app at all.

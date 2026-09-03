@@ -218,6 +218,23 @@ export type EnvelopeType =
   // section's SHAPE prose, not its STATUS prose, which still says nothing emits this and went stale
   // hours after it was written. Declared by pyrycode#1895, emitted by #1897, observed by #1898.
   | 'attachment_stored'
+  // The retrieval leg's ASK (#993) — the frame a client sends to fetch a stored attachment back.
+  // ONE DIRECTION ONLY, client → daemon, and that is the whole difference from the frame it is
+  // answered with: `attachment_chunk` rides both legs and so has to make a consumer decide trust
+  // from where the frame arrived, while here there is nothing to decide — every field is an
+  // unverified claim on the receiving side, always.
+  // IT NAMES A CONVERSATION AND AN ATTACHMENT, AND NOTHING ELSE. There is NO request-id key,
+  // because correlation rides the ENVELOPE: the answering chunks and the reject both name this
+  // frame through `in_reply_to`, and the daemon's committed retrieval-chunk fixture rides
+  // `in_reply_to: 91` against request_attachment.json's `id: 91`. Inventing one here would leave a
+  // landed upstream fixture describing a different scheme. It DOES carry a conversation_id where
+  // `attachment_chunk` deliberately carries none, and that asymmetry is deliberate on both sides —
+  // see RequestAttachmentPayload, which also records why naming one is not authorization.
+  // Nothing in this repo sends, dispatches or answers it yet; the driver is a later slice, exactly
+  // as `attachment_chunk`'s builder landed in #860 ahead of #861. SSOT pyrycode
+  // internal/protocol/attachments.go RequestAttachmentPayload / codes.go TypeRequestAttachment,
+  // docs/protocol-mobile.md § Attachments. Declared by pyrycode#2052, answered by #2054.
+  | 'request_attachment'
   | 'ack'
   | 'error'
 
@@ -2034,11 +2051,17 @@ export interface AttachmentChunkPayload {
   index: number
   /** How many chunks the attachment splits into, >= 1, identical on every chunk. */
   total_chunks: number
-  /** The client's own name for the file: a display string and a sanitiser input, NEVER a path;
+  /** INBOUND, the client's own name for the file. OUTBOUND, the SANITISED single path component the
+   *  daemon stored the bytes under — `Intake.Receive` keeps only the bytes, so the client's own string
+   *  is never echoed back. Either way a display string and a sanitiser input, NEVER a path;
    *  <= ATTACHMENT_FILENAME_MAX_BYTES. Often private in itself — never log it. */
   filename: string
-  /** The client's DECLARED media type — a hint, not a verified property of the bytes;
-   *  <= ATTACHMENT_MIME_TYPE_MAX_BYTES. */
+  /** INBOUND, the client's DECLARED media type. OUTBOUND, one the daemon SNIFFS FROM THE STORED BYTES
+   *  — the declared type is discarded outright at admission, so there is nothing to echo, and a file
+   *  whose name and declared type disagree with its content is described by its content. Either way a
+   *  hint, not a verified property of the bytes: a SNIFFED `text/html` is exactly as dangerous to
+   *  render as a declared one, because both are computed from bytes an attacker chose. Never dispatch
+   *  on it in a way that grants the content privileges; <= ATTACHMENT_MIME_TYPE_MAX_BYTES. */
   mime_type: string
   /** Declared byte length of the WHOLE file — not of this chunk. */
   size: number
@@ -2110,12 +2133,113 @@ export interface AttachmentStoredPayload {
   attachment_id: string
 }
 
+/**
+ * The retrieval leg's REQUEST (client → daemon, #993). Mirrors the daemon's RequestAttachmentPayload
+ * field-for-field (SSOT pyrycode internal/protocol/attachments.go, published by pyrycode#2052 and
+ * answered by #2054; docs/protocol-mobile.md § Attachments); no `omitempty` and no MarshalJSON there,
+ * so both keys are always present in the one direction this frame travels. Do not drift it without a
+ * matching daemon change. See ADR 0002.
+ *
+ * TWO FIELDS, AND NO THIRD. It names a conversation and an attachment. There is NO request-id key of
+ * any spelling, because CORRELATION RIDES THE ENVELOPE: the answering `attachment_chunk` frames and
+ * the `attachment.not_found` reject both name this request through `Envelope.in_reply_to`, which is
+ * already declared and already surfaced by the decoder. The daemon's committed retrieval-chunk
+ * fixture rides `in_reply_to: 91` against request_attachment.json's `id: 91`, so a request-id key
+ * added here would put this client at odds with a scheme upstream has golden fixtures for.
+ *
+ * WHY THERE IS A `conversation_id` HERE when AttachmentChunkPayload deliberately has none: an upload
+ * lands in the conversation the authenticated session is already on, so naming one THERE would only
+ * let a client steer bytes into another conversation's directory; a RETRIEVAL has to be able to say
+ * which conversation's file it wants. The asymmetry is deliberate on the daemon's side — do not
+ * "harmonise" the two frames in either direction.
+ *
+ * NAMING A CONVERSATION IS NOT AUTHORIZATION, and this is the security property the whole frame
+ * rests on. Authorization on this wire is PAIRING, enforced structurally at the Noise IK handshake;
+ * there is no per-verb gate on this frame and none is invented here. What bounds a paired but
+ * hostile client is that the daemon validates the id against its own registry BEFORE IT BECOMES A
+ * PATH COMPONENT and confines resolution to that conversation's directory — CONFINEMENT, never the
+ * secrecy or the shape of an id. A reader who takes this field for a free-form selector has been
+ * handed exactly the capability the rest of the attachment contract spends pages denying, and the
+ * canonical shape below must not be read as a claim of unguessability.
+ *
+ * BOTH IDS OBEY THE SAME CANONICAL SHAPE, the lowercase UUIDv4 upstream publishes under
+ * § The `attachment_id` shape: 36 bytes exactly; `-` at offsets 8, 13, 18 and 23; `4` at offset 14;
+ * one of `8` `9` `a` `b` at offset 19; lowercase hex everywhere else. LOWERCASE IS LOAD-BEARING
+ * RATHER THAN COSMETIC: the id becomes a directory name on the host, and the lowercase-only alphabet
+ * is what keeps the id-to-directory mapping injective on a case-insensitive filesystem (APFS by
+ * default), so uppercase ids would give two attachments one directory on macOS. Containment follows
+ * from that shape and NEVER from a length ceiling, which is also why this type adds no `Max*`
+ * constant of its own: ATTACHMENT_ID_MAX_BYTES exists for `attachment_chunk`'s envelope arithmetic,
+ * a ceiling there has been read as the shape once already, and a second one here would enforce
+ * nothing while inviting the same mistake.
+ *
+ * DOCUMENTED, NOT VALIDATED — nothing in this repo checks either id against that shape. This wire
+ * layer declares shapes and validates none, the posture both sibling payload types already ship
+ * with; enforcement is the daemon's, which owns the reject path and the merged
+ * `attachment.not_found` code whose message is static and never echoes the requested id or the
+ * resolved path, since two distinguishable answers would make this verb a path-existence oracle.
+ *
+ * THE ZERO VALUE IS THE HAZARD TO KNOW ABOUT. Two empty strings are not a valid request under any
+ * published shape, and the failure they cause on the far side is silent rather than loud: joining
+ * the empty string onto a directory yields that directory, so a receiver that skips the shape check
+ * addresses the conversation directory root instead of erroring. This side cannot enforce the
+ * daemon's check, but it declines to ORIGINATE the value — both fields are required here and
+ * `buildRequestAttachment` mints no default, unlike the `?? ''` normalisation
+ * `buildRequestSessionSettings` needs for its optional chain.
+ *
+ * SENDING THIS FRAME IS NOT A CAPABILITY and it carries no content-bearing bytes — no filename, no
+ * digest, no file data — so AttachmentChunkPayload's never-log argument, which rests on `filename`
+ * being frequently private in itself and `data` being the file, does NOT transfer here and is not
+ * transcribed. The rule that does apply is narrower and rests on this frame's own ground: upstream
+ * permits logging these ids only AFTER their shape has been validated, because raw they are the
+ * log-injection shape § Attachments already forbids for `filename` — and since nothing on this side
+ * validates, nothing on this side may log them. AttachmentChunkPayload's allocation warning does not
+ * transfer either: there is no count and no length field here for "never allocate from a claim" to
+ * bite on, an absence that is a property of the shape rather than an omission.
+ */
+export interface RequestAttachmentPayload {
+  /** The conversation whose attachment is wanted. A LOOKUP KEY the daemon validates against its own
+   *  registry before it resolves anything, and NOT authorization; the empty string names nothing. */
+  conversation_id: string
+  /** The attachment wanted within that conversation: the client's own id, the one it repeated on
+   *  every chunk of the upload. NOT a capability — not secret, not unguessable, and never resolved
+   *  into a filesystem path on this side. */
+  attachment_id: string
+}
+
 export interface BackfillSincePayload {
   since_ts: string
   conversation_id: string
   max_messages: number
 }
 
+/**
+ * A terminal refusal, correlated to the request it answers by `Envelope.in_reply_to`.
+ *
+ * MODELLED SINCE #116, READ SINCE #965 — and only ONE of its four fields is read, `code`, by
+ * `narrowDaemonErrorOutcome` in the main-process decoder. What the other three do is stated here so a
+ * later reader does not mistake "modelled" for "available".
+ *
+ * The argument is on CONTRACT ground, not on a measurement. Neighbouring payload interfaces in this
+ * file carry long security sections that reason from measurements taken on their own frames — a byte
+ * observed in a real value, a survey of who authors a string. None of those transfer to this type, and
+ * transcribing one would ship a claim nothing here has established.
+ *
+ * - **`code` is untrusted daemon-supplied text**, so per CLAUDE.md it may never become a lookup path, a
+ *   filename or a cache key. The decoder therefore COMPARES it against client-owned literals and drops
+ *   it, converting it to a client-owned outcome at that boundary; the raw string goes no further and is
+ *   never logged. An unrecognised code lands on a distinct catch-all rather than passing through.
+ * - **`message` is not surfaced at any code.** The daemon promises specific messages are static — the
+ *   attachment `storage_failed` message names no path and no filesystem error — but that is the
+ *   daemon's promise about its own behaviour, not a property a client can rely on for a value an
+ *   untrusted peer chooses.
+ * - **`retryable` is not read.** It is a per-code constant in the daemon's own reject table, so it
+ *   carries nothing a client-owned outcome does not already encode, and it is a value an untrusted
+ *   daemon picks. Retryability is derived from the outcome, never taken from the wire.
+ * - **`retry_after_s` is absent on the attachment upload leg entirely.** That leg's emitter marshals a
+ *   closed `{Code, Message, Retryable}` literal and the field is `*int,omitempty`, so no reject carries
+ *   it. A client cannot learn a backoff duration from the wire there; the delay is client-owned policy.
+ */
 export interface ErrorPayload {
   code: string
   message: string

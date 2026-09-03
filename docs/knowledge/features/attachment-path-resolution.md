@@ -2,7 +2,7 @@
 
 The **attachment-identifier → path gate**: a pure, main-process function that turns an untrusted attachment identifier into a file path confined inside a base directory, or refuses it. The renderer never passes a path — it passes an attachment identifier — and the background process is where that identifier becomes a path component. This module is that translation and, per its own doc comment, the **last owner of the check**: the daemon documents its 64-byte `attachment_id` ceiling as explicitly *not* a defence and assigns the real check to whoever turns the id into a path component (`internal/protocol/attachments.go`).
 
-Introduced in [#818](https://github.com/pyrycode/pyrycode-desktop/issues/818). Written in the [pairing-payload gate](pairing-payload-gate.md)'s register — a pure, synchronous, total, log-free untrusted-input gate with a discriminated `{ok:true}/{ok:false, reason}` result and a value-free reason — and reusing the [save-debug-bundle](save-debug-bundle.md) composition-root seam of an injected `dir` parameter. **No consumer is wired in this slice.**
+Introduced in [#818](https://github.com/pyrycode/pyrycode-desktop/issues/818). Written in the [pairing-payload gate](pairing-payload-gate.md)'s register — a pure, synchronous, total, log-free untrusted-input gate with a discriminated `{ok:true}/{ok:false, reason}` result and a value-free reason — and reusing the [save-debug-bundle](save-debug-bundle.md) composition-root seam of an injected `dir` parameter. **No consumer was wired in this slice**; its first is [`storeAttachment`](attachment-reassembly-and-store.md) (#995), consuming this gate verbatim with no second escape check.
 
 ## What it does
 
@@ -20,11 +20,11 @@ export function resolveAttachmentPath(
 
 The body is two steps: test `attachmentId` against a canonical-shape pattern, and on a pass, `resolve(baseDir, attachmentId)`. `baseDir` is **trusted** input from the composition root; `attachmentId` is **untrusted** input from the renderer (and, upstream, the wire) — the two parameters carry the same type but different trust levels, so the doc comment is what says which is which. `resolveAttachmentPath` is pure, synchronous, total and throw-free: no filesystem call, no async, no state, nothing to cancel, and no `console.*` of any kind.
 
-Two future consumers need exactly this translation and both say "refuse a bad identifier" from their own side: #814 (save an attachment into Downloads) copies the resolved file out; #691 (open in the OS image viewer, blocked-by this ticket) hands the resolved path to `shell.openPath`. An identifier that escaped containment would let either consumer touch an arbitrary file on the user's disk, and in #691's case have the OS execute or open it with whatever handler the extension implies.
+Four consumers need exactly this translation and each says "refuse a bad identifier" from their own side: [`storeAttachment`](attachment-reassembly-and-store.md) (#995, landed) writes the verified attachment at the resolved path; [attachment save](attachment-save.md) (#814, landed) copies the resolved file out to Downloads; [attachment bytes](attachment-bytes.md) (#866, landed) reads the resolved file and delivers its bytes to the window; #691/#867 (open in the OS image viewer) hands the resolved path to `shell.openPath`. An identifier that escaped containment would let any of them touch an arbitrary file on the user's disk, and in #691/#867's case have the OS execute or open it with whatever handler the extension implies.
 
 ## Why refusal, not rewriting
 
-The precedent for the *seam* is [`fileSecretPersistence`](secure-store.md), which closes traversal on an untrusted name by base64url-encoding it into an inert token — the right shape when the same module also owns the write. This module owns no write: rewriting would fix an on-disk name that #687 (the ticket that will actually write attachment files) has no design yet for. Both consumers ask for a refusal in their own acceptance criteria (#814 AC1, #691 AC7), and the daemon reached the same place independently on its own side.
+The precedent for the *seam* is [`fileSecretPersistence`](secure-store.md), which closes traversal on an untrusted name by base64url-encoding it into an inert token — the right shape when the same module also owns the write. This module owns no write: rewriting would fix an on-disk name that #687 (the ticket that will actually write attachment files) has no design yet for. Both consumers ask for a refusal in their own acceptance criteria ([attachment save](attachment-save.md) AC1, #691 AC7), and the daemon reached the same place independently on its own side.
 
 ## The canonical shape
 
@@ -41,7 +41,7 @@ Lowercase hex digits and ASCII hyphen-minus, 1–64 characters. **This module im
 - **No Windows reserved device name is spellable** (`con`, `prn`, `aux`, `nul`, `com1`, `lpt1` each contain a character outside the alphabet) — this falls out for free rather than needing its own rule.
 - **The empty identifier is refused by the `{1,64}` lower bound**, not cosmetically: `resolve(base, '')` is `base` itself, which would hand a consumer the attachment *directory* where it expected a file.
 
-If the daemon ever publishes an attachment-id shape outside this pattern, the fix is one regex and its test rows — but any replacement must keep the case-unambiguity property or #687's writes cross-contaminate on macOS and Windows.
+If the daemon ever publishes an attachment-id shape outside this pattern, the fix is one regex and its test rows — but any replacement must keep the case-unambiguity property or [`storeAttachment`](attachment-reassembly-and-store.md)'s writes cross-contaminate on macOS and Windows.
 
 ## Containment is structural — no filesystem resolution
 
@@ -57,9 +57,11 @@ One failure mode, one category: `{ ok: false, reason: 'not-canonical-id' }`, wit
 
 ## The on-disk shape this commits future work to
 
-`resolve(baseDir, attachmentId)` is a direct child of `baseDir` named by the identifier verbatim, **with no extension**. That is deliberate: an extension would be model-chosen (the assistant names the file it produced), and a model-chosen extension sitting in the store is exactly what makes `shell.openPath` dangerous — a `.command`, `.desktop`, `.app` or `.scpt` opens by *executing*. Keeping the on-disk name extension-less pushes the "what does the OS see" decision to #691, the only layer positioned to validate an image type before deciding. #814 is unaffected, since its Downloads-folder filename comes from the wire (sanitised elsewhere) rather than from the on-disk name. Whether #687 stores the attachment as a flat file at this path or as a per-attachment directory is #687's to choose either way — this module makes no filesystem claim about what is at the path it returns; it never looks.
+`resolve(baseDir, attachmentId)` is a direct child of `baseDir` named by the identifier verbatim, **with no extension**. That is deliberate: an extension would be model-chosen (the assistant names the file it produced), and a model-chosen extension sitting in the store is exactly what makes `shell.openPath` dangerous — a `.command`, `.desktop`, `.app` or `.scpt` opens by *executing*. Keeping the on-disk name extension-less pushes the "what does the OS see" decision to #691, the only layer positioned to validate an image type before deciding. [Attachment save](attachment-save.md) (#814, landed) is unaffected, since its Downloads-folder filename comes from the wire (sanitised elsewhere) rather than from the on-disk name. Whether #687 stores the attachment as a flat file at this path or as a per-attachment directory is #687's to choose either way — this module makes no filesystem claim about what is at the path it returns; it never looks.
 
-The wire file name itself is sanitised by a separate module, [`sanitizeAttachmentFilename`](attachment-filename-sanitiser.md) (#819) — rewritten rather than refused, since a display/Downloads-folder name has no addressing consequence the way an identifier does. #814 is unaffected by this module's extension-less on-disk shape, since its Downloads-folder filename comes from that sibling rather than from the on-disk name.
+The wire file name itself is sanitised by a separate module, [`sanitizeAttachmentFilename`](attachment-filename-sanitiser.md) (#819) — rewritten rather than refused, since a display/Downloads-folder name has no addressing consequence the way an identifier does. [Attachment save](attachment-save.md) is unaffected by this module's extension-less on-disk shape, since its Downloads-folder filename comes from that sibling rather than from the on-disk name.
+
+**Closed by #995: a flat file, not a per-attachment directory.** [`storeAttachment`](attachment-reassembly-and-store.md) writes the verified bytes directly at `resolve(baseDir, attachmentId)` — a direct child of the attachment directory, no intermediate folder per identifier. This module still makes no filesystem claim about what is at the path it returns; it never looks, and the choice was #995's to make as the ticket that first wrote to that path.
 
 ## Testing
 
@@ -74,12 +76,12 @@ Coverage shape, reusable for any future identifier-shape gate in this codebase:
 
 ## Security posture
 
-Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residual: a symlink planted *inside* the app's own attachment directory is not defended against (see § Containment is structural above) — bounded by the capability required (write access to `userData`, which already permits worse) and the single-principal nature of the directory, revisited only if that scope changes. Two further **SHOULD FIX**s land on the future consumers rather than here: each composition root must pass an absolute, `app.getPath('userData')`-derived `baseDir`, computed at the composition root and never from renderer input. No IPC channel, no `contextBridge` API and no `BrowserWindow` are added in this slice — `src/main/index.ts`'s `setWindowOpenHandler` `file:` block is untouched, and both #814 and #691 are explicit that they need their own channel rather than a relaxation of it.
+Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residual: a symlink planted *inside* the app's own attachment directory is not defended against (see § Containment is structural above) — bounded by the capability required (write access to `userData`, which already permits worse) and the single-principal nature of the directory, revisited only if that scope changes. Two further **SHOULD FIX**s land on the consumers rather than here: each composition root must pass an absolute, `app.getPath('userData')`-derived `baseDir`, computed at the composition root and never from renderer input. No IPC channel, no `contextBridge` API and no `BrowserWindow` are added in this slice — `src/main/index.ts`'s `setWindowOpenHandler` `file:` block is untouched, and [attachment save](attachment-save.md), [attachment bytes](attachment-bytes.md) and #691 each needed their own channel rather than a relaxation of it; #814 and #866 confirmed that in practice.
 
 ## Edge cases and limitations
 
-- **Nothing evicts these files.** Attachment-directory retention/cleanup has no ticket yet; worth revisiting once #687 is writing real bytes.
-- **The extension question is #691's, not this module's or #687's.** Naming it here so it isn't rediscovered at #691's implementation turn: the extension must come from a validated image type, never from the model-chosen name.
+- **Nothing evicts these files.** Attachment-directory retention/cleanup has no ticket yet; worth revisiting now that [`storeAttachment`](attachment-reassembly-and-store.md) is writing real bytes.
+- **The extension question is #691/#867's, not this module's or #995's.** Naming it here so it isn't rediscovered at that implementation turn: the extension must come from a validated image type, never from the model-chosen name.
 - **`baseDir` correctness is the caller's obligation.** This module cannot and does not validate it.
 
 ## Related
@@ -90,5 +92,7 @@ Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residu
 - [Secure store](secure-store.md) — hosts `fileSecretPersistence`, the base64url-encoding precedent for the *seam*, explicitly not for the *mechanism* here (see § Why refusal, not rewriting).
 - `docs/specs/architecture/818-attachment-identifier-path-resolution.md` — the full architecture spec, including the security review and the open questions this doc summarizes.
 - pyrycode `docs/specs/architecture/1781-attachment-directory-resolution.md` § "Why equality and not `withinDir`" — the daemon-side precedent this module's containment design deliberately diverges from, and why.
-- #814 (save-to-Downloads) and #691 (open-in-viewer, blocked-by this ticket) — the two intended consumers; neither is wired yet.
-- #687 — establishes the attachment directory and the on-disk write this module's contract (§ "The on-disk shape...") constrains.
+- [Attachment reassembly and store](attachment-reassembly-and-store.md) — #995, the first wired consumer: writes the verified attachment at the path this gate returns, flat and extension-less, closing the on-disk-shape open question below.
+- [Attachment save](attachment-save.md) — #814, the second wired consumer: copies the resolved file out to Downloads.
+- [Attachment bytes](attachment-bytes.md) — #866, the third wired consumer: reads the resolved file and delivers its bytes to the window for display.
+- #691/#867 (open-in-viewer) — the one remaining intended consumer; not wired yet.

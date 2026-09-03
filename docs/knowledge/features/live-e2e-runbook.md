@@ -95,6 +95,18 @@ the partition depends on the filename alone, which is what both configs always c
 `playwright test --list` under both configs in a throwaway ordinarily-named worktree, where the fix is
 a no-op: 10 tests under the real-claude config, 56 under the default, unchanged from before.
 
+**Red from 2026-09-02 ~21:00 to 2026-09-03, owned by #975, fixed by #987.** PR #982 (issue #975) deleted
+`MODEL_CATALOG`: the run-config sheet's Model rows became exactly the entries of the daemon's published
+`model_list` frame, which the daemon emits only from claude's own model announcement. `real-daemon-session-settings.spec.ts` is deliberately claude-less (`spawnClaude: false`), so no announcement is ever made
+and the rows could never appear — the spec failed at the first sheet read, parking the whole
+all-or-nothing floor. The break was first surfaced by issue #962's gate run at 22:57 that same day (10
+executed / 9 passed / 1 failed); with no baseline command configured the gate attributed it to
+`feature/962` by default, but it reproduces identically on `origin/main` through the untouched trigger
+\#962 later replaced. #987 re-keyed the round-trip onto the YOLO switch, the one run-config control that
+takes no published rows (detailed in
+[real-daemon-credential-light-e2e.md](real-daemon-credential-light-e2e.md)), restoring the floor to
+10/10 with no spec change needed elsewhere.
+
 Prior state, retained as history: the daemon's production interactive runner has been **stream-json**
 since 2026-07-24 — claude is driven over a structured stdin/stdout stream, not a PTY. The four
 interactive real-claude specs that existed at the time (send/stream, interrupt, permission-modal,

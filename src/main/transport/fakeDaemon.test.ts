@@ -17,6 +17,7 @@ import {
   startFakeDaemon,
   DEFAULT_REKEY_RESUME_MESSAGE,
   attachmentStoredReplyFrames,
+  attachmentRejectReplyFrames,
   type FakeDaemon,
   type FakeDaemonOptions
 } from './fakeDaemon'
@@ -31,7 +32,8 @@ import {
   base64StdDecode,
   encodeInnerFrame,
   decodeInnerFrame,
-  encodeEnvelope
+  encodeEnvelope,
+  decodeEnvelope
 } from './codec'
 import { buildClientHello, parseHelloAck } from './helloExchange'
 
@@ -1161,5 +1163,92 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     await expect(p1).resolves.toBeUndefined()
     await expect(p2).resolves.toBeUndefined()
     expect(await daemon.whenSettled()).toEqual({ ok: false, reason: 'closed' })
+  })
+})
+
+describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () => {
+  // Pure-function coverage: the builder is a stateless closure over the existing buildReplyFrames hook,
+  // so its contract is provable without a second wasm standup. The sibling's round-trip above already
+  // pins that a frame this builder shape produces survives the real ciphers; what is worth proving here
+  // is which chunk it answers and that the client decodes the answer into the matching outcome.
+  const chunkFrame = (index: number, id: number): Uint8Array =>
+    buildAttachmentChunk({
+      id,
+      ts: '2026-01-01T00:00:05Z',
+      payload: {
+        attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67',
+        index,
+        total_chunks: 3,
+        filename: 'holiday.png',
+        mime_type: 'image/png',
+        size: 6,
+        sha256: 'a'.repeat(64),
+        data: base64StdEncode(new Uint8Array([1, 2, 3]))
+      }
+    })
+
+  // The six codes are spelled out HERE as well as in narrowDaemonErrorOutcome's switch, and the
+  // duplication is deliberate: sharing one constant between the fake and the narrower would make both
+  // sides move together and leave the round-trip below asserting nothing. Two independent statements of
+  // the wire string mean a drift in either one reddens.
+  const LEG: ReadonlyArray<readonly [string, string]> = [
+    ['attachment.invalid_chunk', 'attachment-invalid-chunk'],
+    ['attachment.integrity_failed', 'attachment-integrity-failed'],
+    ['attachment.too_large', 'attachment-too-large'],
+    ['attachment.too_many_uploads', 'attachment-too-many-uploads'],
+    ['attachment.storage_failed', 'attachment-storage-failed'],
+    ['message.too_long', 'message-too-long']
+  ]
+
+  it.each(LEG)('answers the named chunk with %s, which the client narrows to its outcome', (code, outcome) => {
+    const frames = attachmentRejectReplyFrames(1, code as Parameters<typeof attachmentRejectReplyFrames>[1])(
+      chunkFrame(1, 42)
+    )
+
+    expect(frames).toHaveLength(1)
+    // Correlated to the REJECTED chunk's envelope id — the only handle the consumer (#861) can key on.
+    expect(decodeEnvelope(frames[0]).in_reply_to).toBe(42)
+    // End to end through the real decoder: the fake's reject becomes exactly the client-owned outcome
+    // and nothing else. Exact toEqual, so a leaked code / message / retryable reddens here too.
+    expect(parseInboundMessage(frames[0])).toEqual({
+      kind: 'daemon-error',
+      inReplyTo: 42,
+      outcome
+    })
+  })
+
+  it('carries the daemon reject table faithfully: static message, per-code retryable', () => {
+    // The fixture is a real reject rather than a code in an empty shell, so the no-leak assertions above
+    // are proving something. `retryable` mirrors the emit table (false for the three permanent refusals,
+    // true for the two that clear); it is on the wire and read by nothing.
+    const payloadFor = (code: string): Record<string, unknown> =>
+      decodeEnvelope(
+        attachmentRejectReplyFrames(0, code as Parameters<typeof attachmentRejectReplyFrames>[1])(
+          chunkFrame(0, 7)
+        )[0]
+      ).payload as Record<string, unknown>
+
+    const storage = payloadFor('attachment.storage_failed')
+    expect(storage.code).toBe('attachment.storage_failed')
+    expect(storage.retryable).toBe(true)
+    expect(typeof storage.message).toBe('string')
+    // Never a path, never a filesystem error — the daemon's own static-message promise for this code.
+    expect(storage.message).not.toContain('/')
+    expect(payloadFor('attachment.too_large').retryable).toBe(false)
+    expect(payloadFor('attachment.too_many_uploads').retryable).toBe(true)
+    // No advisory delay on this leg: attachmentReplyError marshals a closed {Code, Message, Retryable}.
+    expect('retry_after_s' in storage).toBe(false)
+  })
+
+  it('answers nothing for another index, another type, or an undecodable frame', () => {
+    const reject = attachmentRejectReplyFrames(1, 'attachment.too_large')
+    // A different chunk of the same upload — the refusal names ONE chunk, and silence everywhere else is
+    // the sibling's discipline: the fake answers only what it understands.
+    expect(reject(chunkFrame(0, 41))).toEqual([])
+    expect(
+      reject(encodeEnvelope({ id: 9, type: 'send_message', ts: '2026-01-01T00:00:05Z', payload: { text: 'hi' } }))
+    ).toEqual([])
+    // Not an envelope at all — a decode failure inside the fake must not masquerade as a daemon crash.
+    expect(reject(new Uint8Array([0xff, 0x00, 0xff]))).toEqual([])
   })
 })

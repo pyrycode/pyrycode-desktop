@@ -104,8 +104,10 @@ session can put any string it likes here, up to the frame cap. The concrete haza
 not exist. This module already treats `__proto__`/`constructor`/`prototype` as hazardous elsewhere
 (`RESERVED_MAP_KEYS`), but that guard exists because `optionalStringMap` *builds a container* from wire
 keys; this narrower builds no container from the value, so nothing in this slice is exploitable. The
-obligation is stated on the payload's doc block and the switch arm as the consumer's (#861): look the id
-up in a `Map` keyed by ids this client minted, never as an index into a plain object.
+obligation is stated on the payload's doc block and the switch arm as the consumer's — [#861](attachment-transfer.md),
+landed: `daemonConnection.ts`'s `attachment-stored` arm scans the live `activeTransfers` Set and compares
+`transfer.attachmentId === inbound.attachmentStored.attachment_id` with `===`, never as an index into a
+plain object, so the `Object.prototype` hazard has no way to fire.
 
 ## Bounds — deliberately not modelled
 
@@ -124,25 +126,31 @@ frame ahead of this call, the same declined-bound posture `parseSlashCommand` al
 [inbound message decode](inbound-message-decode.md) for the module's placement rule). Reach the type
 through `parseInboundMessage`, never a bare `as AttachmentStoredPayload` cast on `Envelope.payload`.
 
-Claims **nothing downstream**: `daemonConnection.ts`'s inbound switch has no catch-all and no
-`assertNever`, so the new `attachment-stored` kind decodes and is then simply unmatched — confirmed by
+At ship time claimed **nothing downstream**: `daemonConnection.ts`'s inbound switch had no catch-all and
+no `assertNever`, so the new `attachment-stored` kind decoded and was then simply unmatched — confirmed by
 `npm run build` passing with the arm unconsumed, not assumed from the switch's shape. The send driver,
-[#861](https://github.com/pyrycode/pyrycode-desktop/issues/861), is the first intended consumer and is not
-started.
+[Attachment transfer](attachment-transfer.md) ([#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)),
+has since landed and is the consumer: it scans the live transfer set for `attachment_id ===` on this
+arm.
 
 ## Edge cases and limitations
 
 - Reordering: a content-blind but on-path relay can deliver `attachment_stored` before the client has
-  finished sending later chunks. The decode is stateless and does not care; the send driver (#861) must
-  not treat the reply's arrival as proof every chunk was sent.
-- A dropped reply (relay drops it) leaves a transfer unresolved forever from this layer's point of view —
-  a liveness problem owned by #861's eventual timeout, not a safety problem here.
+  finished sending later chunks. The decode is stateless and does not care; [the send driver](attachment-transfer.md)
+  (#861) does not treat the reply's arrival as proof every chunk was sent — it settles on the reply alone,
+  by design, since the daemon is the authority on whether the assembled transfer is complete.
+- A dropped reply (relay drops it) leaves a transfer unresolved forever from this layer's point of view.
+  #861 landed with **no per-transfer timeout** — a deliberate, evidence-based deferral, not an oversight:
+  the deterministic backstop one layer down is `relayConnection.ts`'s `WIRE_PONG_TIMEOUT_MS`, which
+  eventually tears down a dead socket and fails every live transfer through the connection-teardown net.
+  Only a live-but-silent daemon reaches the residual; see [Attachment transfer](attachment-transfer.md) §
+  Security properties.
 - `Envelope.type` is `EnvelopeType | string` (open) with no exhaustive switch anywhere in the tree, so
   this widening is non-breaking, and nothing else would catch a dropped member — the `EnvelopeType`
   membership test in `types.test.ts` is what would.
 - `attachment_id` matching wants plain `===`/`Map.has`, never `crypto.timingSafeEqual` — the id is
   explicitly not a secret, so a constant-time compare would imply a confidentiality property it does not
-  have (noted for #861 so it is not cargo-culted from a different arm).
+  have. #861 landed with a plain `===` scan over the live transfer set, confirming this call.
 
 ## Testing strategy
 
@@ -185,6 +193,8 @@ fail-close valid traffic the moment they disagree.
 
 ## Related
 
+- [Daemon error outcome](daemon-error-outcome.md) — the reject-code sibling on the same upload leg (#965):
+  the six ways `attachment_chunk` can be answered with `error` instead of this frame's positive terminal.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the producer half this decodes the answer
   to; its "no inbound decode" edge case was scoped to `attachment_chunk` itself and still holds — this
   slice decodes `attachment_stored`, a different frame.
@@ -205,7 +215,17 @@ fail-close valid traffic the moment they disagree.
   own, so no new ADR was warranted.
 - `docs/specs/architecture/964-attachment-stored-decode.md` — the full architecture spec, including the
   security review this doc summarizes.
-- #861 (send driver, not started) — the intended consumer: recognise-or-ignore against ids it minted,
-  resolve the spinner, and own the reply-never-arrives timeout.
+- [Attachment transfer](attachment-transfer.md) — [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861),
+  landed: the consumer, recognising-or-ignoring against ids this client minted. Ships no per-transfer
+  timeout, deliberately (see that doc); the spinner and any future timeout policy are
+  [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Attachments — SSOT for the shape; its
   status prose is stale as of this ticket, its field/correlation prose is not.
+- [Request-attachment envelope](request-attachment-envelope.md) — the retrieval leg's ask (#993),
+  landed after this doc: the `request_attachment` frame that provokes more `attachment_chunk` frames
+  and, on failure, an `attachment.not_found` reject instead of this frame's terminal. Its payload
+  shares this one's declined-validation posture on the UUIDv4 shape.
+- [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the retrieval leg's
+  positive-terminal decode (#998), landed after this doc. **Its `inReplyTo` decision is the mirror
+  image of this arm's**: required there, absent here — read both docblocks, since neither decision is
+  precedent for the other.

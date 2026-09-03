@@ -6,15 +6,25 @@ chunk into serialized envelope bytes. Nothing here sends, reads a file, or holds
 
 Introduced in [#860](https://github.com/pyrycode/pyrycode-desktop/issues/860). The daemon publishes
 the contract in `pyrycode/pyrycode` `docs/protocol-mobile.md` § Attachments (SSOT pyrycode #1752 the
-frame, #1753 the 45000-byte stride, #1751 the client-facing contract). The consumer that mints
-`attachment_id`, reads a file, and actually sends is [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) —
-**not started**; this slice ships unreferenced.
+frame, #1753 the 45000-byte stride, #1751 the client-facing contract). The consumer that reads a file
+and actually sends is [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) — **landed**, see
+[Attachment transfer](attachment-transfer.md). It does not mint `attachment_id` itself; that stays with
+[#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), which picks the file and calls
+`planAttachmentChunks` with a caller-minted id.
 
 [#964](https://github.com/pyrycode/pyrycode-desktop/issues/964) added the **answer**: the fail-closed
 decode of `attachment_stored`, the upload's one positive terminal, into a typed [inbound
 message](inbound-message-decode.md) arm — see [Attachment-stored wire
 types](attachment-stored-wire-types.md). It is a distinct frame, not a decode of `attachment_chunk`
-itself; the "No inbound decode" edge case below, scoped to `attachment_chunk`, still holds.
+itself.
+
+[#998](https://github.com/pyrycode/pyrycode-desktop/issues/998) added the **inbound decode of this
+frame itself**, on the direction that was still unclaimed: an `attachment_chunk` arriving on the
+**retrieval** leg (the answer to [`request_attachment`](request-attachment-envelope.md), #993) now
+narrows into a typed `attachment-chunk` inbound arm instead of falling through to `default:`. See
+[Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the "No inbound decode of
+`attachment_chunk` itself" edge case below is resolved for that direction; nothing changed in this
+file, since #998 touches `inboundMessage.ts` and `wire/types.ts` only.
 
 ## What it does
 
@@ -60,7 +70,16 @@ round-trip passes silently on an unknown string.
 **One frame carries both directions.** `attachment_chunk` rides upload (client → daemon) and
 retrieval (daemon → client) alike, and all eight fields are always present in both — no `omitempty`,
 so a decoder may rely on all eight. This slice only ever produces the frame; decoding an inbound one
-is a later slice's job (see Non-goals).
+on the retrieval leg is [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md)
+(#998).
+
+**`filename` and `mime_type`'s field docs describe the upload direction only, since #998.** Read
+outbound (this module's direction) they are the uploading client's own strings, unchanged. Read
+inbound (the retrieval leg) the daemon stores under a *sanitised* filename and *sniffs* the media
+type from the stored bytes instead — a provenance correction, not a trust one; see [Attachment-chunk
+retrieval decode](attachment-chunk-retrieval-decode.md) § The provenance correction.
+`attachmentChunkPlan.ts`'s own docblock states the upload-direction claim correctly and was
+deliberately left untouched by #998.
 
 **There is no `conversation_id`, and the omission is a security property.** An upload lands in the
 conversation the authenticated session is already on, decided daemon-side from session context, so a
@@ -120,8 +139,9 @@ than a `seq` counter.
 `ATTACHMENT_MIME_TYPE_MAX_BYTES` (255) exist as named constants but nothing in either module checks a
 payload against them. Deliberate, on the same grounds
 [attachment-filename-sanitiser.md](attachment-filename-sanitiser.md) already used for its own declined
-length bound: no observed failure (#861 hasn't landed, nothing produces an attachment name yet), the
-sibling slice already made this call, and a deterministic backstop already exists in different fabric
+length bound: no observed failure (#861 has landed but mints no filename itself — it is a caller-supplied
+input still owned by the not-yet-started #862), the sibling slice already made this call, and a
+deterministic backstop already exists in different fabric
 — `encodeEnvelope`'s `WireEncodeError`. All three ceilings count **bytes of encoded UTF-8, not runes**
 — a `.length` check on a JS string is wrong for any non-ASCII value; the test suite proves this with
 one two-byte (`é`) and one four-byte (`🙂`) fixture, each built to exactly 255 bytes via
@@ -142,23 +162,28 @@ Both modules are **main-process only** (`src/main/transport/`) — they import `
 either file, asserted by a module-graph test — because `filename` is frequently private in itself and
 the file bytes are the most sensitive value either module touches.
 
-There is no consumer wired yet. #861 will: read a file into memory, mint `attachment_id`, call
-`planAttachmentChunks` once, then call `buildAttachmentChunk` per element of the result with its own
-id-counter and clock, catching `WireEncodeError` to drop an over-cap send.
+[Attachment transfer](attachment-transfer.md) (#861) is the consumer: it calls `planAttachmentChunks` once
+per upload and `buildAttachmentChunk` per element of the result, using `daemonConnection.ts`'s own
+monotonic envelope-id counter and clock, and catches `WireEncodeError` to resolve the transfer
+`send-failed`. It still does not mint `attachment_id` — that stays a caller-supplied input, now #862's.
 
 ## Edge cases and limitations
 
 - **Materializes the whole plan.** For an N-byte file, `planAttachmentChunks` holds N bytes of input
   plus ~1.33N bytes of base64 simultaneously — the whole file must already be in memory to compute
-  `size`/`sha256` up front. #861 owns whether that profile is acceptable for large attachments; the
-  function → generator conversion is signature-compatible at its one call site if it needs to change.
+  `size`/`sha256` up front. #861 considered this profile and **declined** the generator conversion: the
+  saving would be only the base64 (`size`/`sha256` are over the whole file regardless), and the
+  client-side size bound that decides how large N gets is #862's, not this module's. The conversion
+  remains signature-compatible at its one call site if a future ticket observes a reason to make it.
 - **No `attachment_id` minting.** It is a caller-supplied input, never generated here — minting is
   state and this module has none, and the id is explicitly not a capability (not secret, not
   unguessable), so there is nothing for a random generator to buy.
-- **No inbound decode of `attachment_chunk` itself.** The retrieval direction reuses this same frame,
-  but decoding and reassembling it — index-addressed, any order — is a later slice. `inboundMessage.ts`
-  is no longer untouched overall: [#964](attachment-stored-wire-types.md) added the decode of
-  `attachment_stored`, the sibling reply frame, which is a different `EnvelopeType` member entirely.
+- **No inbound decode of `attachment_chunk` itself — resolved for recognition by #998, still open for
+  reassembly.** [#964](attachment-stored-wire-types.md) added the decode of `attachment_stored`, a
+  different `EnvelopeType` member entirely; [#998](attachment-chunk-retrieval-decode.md) added the
+  decode of *this* frame's retrieval direction — one frame in, one typed
+  `RetrievedAttachmentChunk` out. What is still a later slice: concatenating the recognised chunks
+  into an assembled file. `inboundMessage.ts` claims the type; nothing consumes what it produces yet.
 - **A source-purity test can match its own disclaimer.** A test that greps a module's source for the
   literal string `'console.'` to prove it never logs will also match a header comment that names that
   string while explaining the module *doesn't* call it. `attachmentChunkPlan.ts`'s header was worded
@@ -172,11 +197,18 @@ id-counter and clock, catching `WireEncodeError` to drop an over-cap send.
 - [Attachment filename sanitiser](attachment-filename-sanitiser.md) / [Attachment path resolution](attachment-path-resolution.md) — the receiving-side siblings in the same attachment family (#818/#819); the filename sanitiser's declined-length-bound reasoning is the precedent this slice's own declined metadata-length validators follow.
 - `docs/specs/architecture/860-attachment-chunk-envelope.md` — the full architecture spec, including the security review this doc summarizes (verdict: PASS).
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Attachments — the source-of-truth contract this slice ports the producer half of.
-- #861 (send driver, not started) — the intended consumer: reads the file, mints `attachment_id`, iterates a plan into per-chunk envelopes, and owns the actual send/retry/progress.
+- [Attachment transfer](attachment-transfer.md) (#861, landed) — the send driver: iterates a plan into per-chunk envelopes over the live session and resolves the transfer on the daemon's one terminal. Deliberately no retry (see that doc). Does not mint `attachment_id`; that is [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s (not started).
 - [Question-shown wire types](question-shown-wire-types.md) — the other wire-vocabulary-only slice
   that reuses this doc's "documented, not validated" bound discipline (#883), shipped unreferenced
   ahead of its consumer for the same reason.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the **consumer** half (#964): the
   `attachment_stored` reply frame and its fail-closed decode into [inbound message
-  decode](inbound-message-decode.md). Still ships unreferenced downstream — the same send-driver
-  consumer, #861, claims both halves.
+  decode](inbound-message-decode.md). [Attachment transfer](attachment-transfer.md) (#861, landed) is
+  the consumer of both wire halves.
+- [Request-attachment envelope](request-attachment-envelope.md) — the **retrieval leg's ask** (#993):
+  a `request_attachment` frame this same `attachment_chunk` answers when the daemon streams a stored
+  file back, unlike the upload leg where this frame is the one being sent. Ships unreferenced ahead of
+  its own consumer for the same reason this doc's builder did in #860.
+- [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the **inbound decode**
+  of this same frame on the retrieval leg (#998): `RetrievedAttachmentChunk`, the required `inReplyTo`
+  correlation, and the `filename`/`mime_type` provenance correction referenced above.

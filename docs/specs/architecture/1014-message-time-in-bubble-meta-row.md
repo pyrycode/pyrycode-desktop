@@ -250,6 +250,57 @@ this tier — a bound locator hides the assertion from it, and a first-expect ab
 the failure log. Sweep by assertion name across all of `e2e/`, then resolve the consts. The spec now
 carries that warning as a comment above the `userRows` const, where the next person will meet it.
 
+### 2026-09-03 — the fill also guts the REAL tier's liveness predicate; the lesson above is still too narrow
+
+**The correction, first.** The lesson immediately above says to sweep "by assertion name across all of
+`e2e/`". That method is what this ticket ran, and it is still incomplete: it finds an `expect`, and the
+real-claude tier does not measure a bubble with one. It reads `textContent` itself, inside an
+`evaluateAll`. Both sentences stand above unedited, superseded by this entry rather than rewritten.
+
+**What breaks.** `real-claude.spec.ts`'s `nonEmptyAssistantCount` counts assistant rows whose text is
+non-empty *once the streaming cursor is stripped* — its docblock says outright that "a naive 'row exists'
+or unstripped-textContent check would pass on an empty streaming bubble". `BubbleMeta` is appended after
+the in-progress/settled fork, so it is the bubble's last child on the **streaming** branch too, and the
+running app injects a clock unconditionally. A streaming row's text is therefore `"<text>▎13.01.2026 -
+13:55"`, and after the cursor strip the stamp survives: `.trim().length > 0` became true for every
+assistant row that exists, whatever its text. The predicate was turned into the exact check it was
+written to replace. That predicate is the whole liveness proof of the tier — the named guard against
+\#854's fresh-daemon deadlock — and `playwright.config.ts`'s `testIgnore` keeps the tier out of every gate
+that runs, so nothing would ever have gone red over it.
+
+Four reads, all of them copies of the same shape: `real-claude.spec.ts`, `real-claude-interrupt.spec.ts`
+and `real-claude-queue-drop.spec.ts` each hold `nonEmptyAssistantCount`, and
+`real-claude-question-answer.spec.ts` holds `assistantText`, which generalises it from the count to the
+text. The last one carried a second, separate breakage from the same root cause: the stamp trails *each*
+row, so `continuationOf`'s `after.startsWith(before)` went false and the assertion silently dropped to its
+whole-text fallback. Stripping the meta row restores the prefix invariant, so it needs no fix of its own.
+
+**The fix, and why structural.** Each read now removes the `.bubble__meta` subtree before the non-empty
+check, on a **detached copy** so the live DOM the rest of each spec asserts on is untouched. That parallels
+the cursor strip beside it, and it survives whatever the row grows next — matching `BUBBLE_META_TIME`'s
+digit shape would have to be revisited by the next child that lands in that row. The four copies are kept
+textually identical, with the constant named `META_SELECTOR` in all four, so `rg META_SELECTOR e2e/` finds
+the whole set; that mirrors how `CURSOR_CHAR` is already duplicated across the same four specs rather than
+lifted, and lifting it would be a refactor of adjacent code this ticket has no reason to make.
+
+**What this could and could not be verified by.** The tier needs `pyry`, `claude` and a credential, and it
+is the operator's to run (`npm run e2e:real:gate`), not the builder's — so these four specs were not
+executed here. What was: the four files transform and load (`playwright test --list --config
+playwright.real-claude.config.ts`, 10 tests in 10 files), and the two DOM facts the strip rests on are
+already proven green in the *fake* tier by assertions that predate this leg — `message-copy.spec.ts`
+evaluates `bubble.locator('.bubble__meta')`, so that element exists inside a `.bubble` in the running app,
+and this ticket's own `bubbleTextExactly` sites prove the stamp is part of a bubble's text. The change is
+also conservative by construction: stripping more can only lower a count that is asserted with
+`toBeGreaterThan`/`toBeGreaterThanOrEqual`, so a mistake here reddens the gate and cannot green it. Given
+the diff edits four of its specs, an operator run of that gate before this merges is worth having.
+
+**The corrected sweep, for the next text-bearing child of `.bubble`.** Two greps, not one, and neither may
+filter by tier — the ungated specs are exactly the ones that will not tell you:
+`rg 'toHaveText|toContainText' e2e/` for the assertions, then resolve every const-bound locator; and
+`rg 'textContent|allTextContents|allInnerTexts|innerText' e2e/` for the raw reads, then read what each one
+is scoped to. The second grep is what this entry adds; it returns 16 lines across 8 files today, of which
+the four above are the ones that read a whole bubble.
+
 ## Size
 
 Re-counted against this written plan, not the opening sketch:
@@ -259,16 +310,18 @@ Re-counted against this written plan, not the opening sketch:
 | Production source files created or modified | ≤ 5 | **2** — `messageTime.ts` (new), `ConversationScreen.tsx` (edited) |
 | Total written work | ≤ 800 | ~500 |
 | New exported types / interfaces / components / stores | ≤ 5 | **0** (two functions, no new type) |
-| Consumer call sites needing simultaneous update | ≤ 10 | **15** — see below |
+| Consumer call sites needing simultaneous update | ≤ 10 | **19** — see below |
 | Acceptance criteria | ≤ 5 | **5** |
 | Distinct error / reject branches | ≤ 10 | **1** |
 
 **The call-site line is over, stated rather than split.** Two real consumers (`BubbleMeta`'s call sites,
-both in one file) plus thirteen one-line e2e text-expectation edits reaches 15 — the count read 11 when
-this table was first written, before the QA gate found the four const-bound sites the 2026-09-03
-Revisions entry above corrects. The overage is wider than it looked and the reading does not change: it
-is still entirely mechanical test edits in one-line form, and it is still the sizing floor that settles
-the ticket's shape rather than this line. The refiner's own
+both in one file) plus thirteen one-line e2e text-expectation edits and the four real-tier bubble reads
+reaches 19 — the count read 11 when this table was first written, then 15 when the QA gate found the four
+const-bound sites, and 19 now that the verifier found the four `evaluateAll` reads; both corrections are
+in the 2026-09-03 Revisions entries above. Each re-count found more of the same thing rather than
+something new, and the reading does not change: it is still entirely test-side edits against one
+unchanged production contract, and it is still the sizing floor that settles the ticket's shape rather
+than this line. The refiner's own
 boundary reading concluded the same and kept it whole, and the sizing floor is what settles it: the
 formatter has exactly one consumer, so splitting it out would mint a ticket whose only deliverable is
 consumed by its sibling — and the render half would inherit the entire e2e cascade regardless, so the

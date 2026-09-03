@@ -60,6 +60,7 @@ import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { copyMessageText } from './copyMessageText'
+import { formatMessageTime } from './messageTime'
 import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
@@ -684,19 +685,35 @@ const COPY_MESSAGE_LABEL = 'Copy message'
 // the bubble's opening child; and #691/#686's attachment slots will insert themselves above this row
 // simply by being written before it. Last-child is the shape, not a preference.
 //
-// The timestamp slot renders EMPTY until #970 fills it. An empty inline element generates no line box,
-// which is why .bubble__meta carries a min-height rather than taking its 16px from the text — see
-// conversation.css.
+// #1014 fills the timestamp slot from the item's own `createdAt`. The slot still renders EMPTY when the
+// item carries no stamp — #1013's contract makes an absent one a LEGAL item, not a defect: it is what
+// every producer with no injected clock yields, and the ~39 stamp-free fixtures in ConversationScreen's
+// spec are exactly that case. So the read is `createdAt === undefined`, NEVER `'createdAt' in item`,
+// which is always true (the reducer assigns the field unconditionally) and would render "undefined".
+// `{null}` children emit the same bytes as the self-closing span #969 shipped, so the empty case is
+// unchanged rather than re-implemented. An empty inline element generates no line box, which is why
+// .bubble__meta carries a min-height rather than taking its 16px from the text — see conversation.css;
+// that is also what makes the fill purely additive, with no CSS change and no reflow either way.
 //
 // NO INJECTED EFFECT, unlike QueuedBacklog's required `onDrop`. That injection exists because a queued
 // row cannot see the conversation id its send needs; a copy needs the row's own text and nothing else,
 // so the handler is a closure over that one value calling the module helper directly. Timeline's prop
 // surface is unchanged, which is what keeps the ~30 existing `<Timeline` render sites untouched. The
 // promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
-function BubbleMeta({ text, side }: { text: string; side: 'user' | 'daemon' }): JSX.Element {
+function BubbleMeta({
+  text,
+  side,
+  createdAt
+}: {
+  text: string
+  side: 'user' | 'daemon'
+  createdAt?: number
+}): JSX.Element {
   return (
     <div className={side === 'user' ? 'bubble__meta bubble__meta--user' : 'bubble__meta'}>
-      <span className="bubble__meta-time" />
+      <span className="bubble__meta-time">
+        {createdAt === undefined ? null : formatMessageTime(createdAt)}
+      </span>
       <button
         type="button"
         className="bubble__copy"
@@ -786,7 +803,7 @@ function TimelineRow({
                 settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
                 this subtree on that branch and is inert there: the JSX transform emits no whitespace
                 text nodes between elements on separate lines. */}
-            <BubbleMeta text={item.text} side="daemon" />
+            <BubbleMeta text={item.text} side="daemon" createdAt={item.createdAt} />
           </div>
         </div>
       )
@@ -834,7 +851,7 @@ function TimelineRow({
             {item.text}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). The copy source is the echo the composer wrote — the text as sent. */}
-            <BubbleMeta text={item.text} side="user" />
+            <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />
           </div>
         </div>
       )

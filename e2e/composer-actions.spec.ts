@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
 
@@ -102,9 +103,10 @@ test('picking Reset session sends /clear as an ordinary message (AC1, AC2, AC3)'
   // The command lands in the thread as a USER message, exactly as a typed one does — the same optimistic
   // `userText` echo the send button produces (`.bubble[data-thread-role="user"]`). It follows the thread
   // down through the same `onMessageSent()` notify, whose behaviour thread-scroll-pin.spec.ts owns.
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText('/clear', {
-    timeout: ROUNDTRIP_TIMEOUT_MS
-  })
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+    bubbleTextExactly('/clear'),
+    { timeout: ROUNDTRIP_TIMEOUT_MS }
+  )
 
   // BOTH the bubble AND the outbound: the bubble alone would pass if the echo were painted without
   // anything being sent. One `send_message`, whose text is the command verbatim — no new command type.
@@ -123,9 +125,10 @@ test('picking Compact session sends /compact — the mapping is per row (AC2)', 
 
   // A second entry carrying its own command is enough to prove the mapping is per-row rather than
   // hardcoded to the first one; a third adds no information.
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText('/compact', {
-    timeout: ROUNDTRIP_TIMEOUT_MS
-  })
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+    bubbleTextExactly('/compact'),
+    { timeout: ROUNDTRIP_TIMEOUT_MS }
+  )
   await expect.poll(() => sent.length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
   expect(sent[0].text).toBe('/compact')
 })

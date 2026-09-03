@@ -189,6 +189,27 @@ exist, and `message-copy.spec.ts` already owns the row's interactive half.
    `LONG_TOKEN_TEXT` and the new stamp?** Its current exact assertion says no; if the run shows
    otherwise, the finding goes in a `## Revisions` entry rather than into a loosened matcher.
 
+## Revisions
+
+### 2026-09-03 — both open questions resolved empirically; no design change
+
+Neither answer moved the design, so this entry records the measurements rather than a departure.
+
+1. **Playwright inserts no whitespace at the meta row's block boundary.** Measured by a negative
+   control: one site was reverted to its old `toHaveText(string)` form and run, and the failure printed
+   `Received: "hello from the composer03.09.2026 - 15:59"` — text and timestamp concatenated with no
+   separator. That same run is the proof the fill actually reaches the running app's DOM (the assertion
+   was green before this ticket and red after), which is what makes the nine updated sites non-vacuous.
+   The pattern's `\s*` is therefore never exercised today; it stays, because it costs nothing and the
+   pattern should not depend on that walk's treatment of a block boundary.
+2. **The settled code-block bubble carries nothing beyond `LONG_TOKEN_TEXT` and the new stamp** — the
+   anchored matcher is green at `assistant-whitespace.spec.ts`'s gate, so no matcher was loosened.
+
+Also checked while resolving these, and clear: no other assertion in the fake tier reads a bubble's
+text — the only `textContent` reads in the tier are on a code fence's header and the host label, and the
+tier holds no bubble-geometry assertion that the timestamp's width could move. `message-copy.spec.ts` is
+unaffected by construction: the copy control closes over the item's own `text`, never the rendered DOM.
+
 ## Size
 
 Re-counted against this written plan, not the opening sketch:

@@ -1,5 +1,6 @@
 import type { Page, Locator } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   AssistantDeltaPayload,
@@ -807,7 +808,7 @@ async function streamTheReplies(page: Page): Promise<void> {
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(assistantBubbles).toHaveCount(REPLY_TEXTS.length, { timeout: STREAM_TIMEOUT_MS })
-  await expect(assistantBubbles.nth(CODE)).toHaveText(LONG_TOKEN_TEXT)
+  await expect(assistantBubbles.nth(CODE)).toHaveText(bubbleTextExactly(LONG_TOKEN_TEXT))
 }
 
 test('#607s plain-text rule governs the in-progress tail, and markdown owns the settled bubble', async ({

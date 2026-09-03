@@ -54,6 +54,7 @@ import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
+import { ComposerAttachButton, ComposerAttachOutcome, useAttachmentUpload } from './ComposerAttach'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
@@ -2525,6 +2526,13 @@ function Composer({
   // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
   const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
+  // #863: the attach affordance's held outcome and the intent that clears it. ADR 0006 state — ephemeral,
+  // screen-local, read by nothing else — held HERE rather than in a store, and the two halves it feeds
+  // mount in different places (the button in the footer row, the line beneath it), which is why the hook
+  // returns a pair instead of this being one component. It resets on remount for free: PairedShellView
+  // keys the chat pane on the conversation id, so a switch rebuilds this component with a fresh outcome.
+  // No `window.pyry` dereference happens during render — see the hook.
+  const attach = useAttachmentUpload()
 
   // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command
   // takes the identical route a typed message does rather than a parallel one. The gate, the deps object,
@@ -2665,11 +2673,13 @@ function Composer({
           UNCONDITIONALLY and holds its height from the
           stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
 
-          Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #685 attach
-          remains blocked on daemon work that does not exist, and emitting an empty wrapper (or a spacer,
-          or a disabled control) for it is precisely the placeholder #811 forbade. #685 right-aligns with
-          margin-left: auto. The model and permission halves of that sentence stopped being true when #974
-          landed the daemon's published list and #1020/#1021 landed the mode's two wire halves.
+          Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws — and with #863
+          the reason has changed rather than gone. The old sentence here said attach was blocked on daemon
+          work that does not exist; #862 shipped that work and #863 wires the button to it, so the row now
+          holds all five items the design draws. What survives is the RULE, not the blocker: the group is a
+          Figma grouping, and emitting a wrapper element for it would buy nothing the row's own flex layout
+          does not already give. The attach button is a SIBLING of that group in the design too (115:3654
+          against 115:3660), which is what makes it right-aligned rather than the group's fifth member.
 
           #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
           `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
@@ -2696,14 +2706,35 @@ function Composer({
           label is the session's effort VALUE rather than a looked-up name: claude publishes these levels
           byte-identical to what it accepts, so there is nothing to relabel — where the permission menu
           above DOES look its label up, since a mode arrives as a camelCase machine identifier. All three
-          controls render nothing at all until a run-config snapshot has arrived. */}
+          controls render nothing at all until a run-config snapshot has arrived.
+
+          #863: the attach button (Figma 115:3654), the row's LAST item, right-aligned past all four
+          controls and the reading by `margin-left: auto` — which this comment block has named as attach's
+          alignment since #811. It is the one item here that renders UNCONDITIONALLY: the three menus above
+          each wait on a run-config snapshot, and this control has no daemon-published anything to be
+          missing. It takes no `conversationId` and reads no store, because the intent it dispatches names
+          no conversation and no file — the picker, the path and the bytes all stay in the background
+          process. */}
       <div className="composer__footer">
         <ComposerActionsMenu onCommand={sendText} />
         <ComposerPermissionModeMenu />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />
         <ContextUsageControl />
+        <ComposerAttachButton onAttach={attach.requestAttach} />
       </div>
+      {/* #863: the attach outcome, the composer column's last child and NOT a member of the footer row
+          above. Three reasons, and each is independently sufficient: the row holds a hard height: 20px, so
+          a sentence in it would overflow rather than grow it; four shipped e2e specs assert
+          `.composer__footer [role="alert"]` has count 0, which a live region in that row invites a
+          collision with; and the outcome wraps, which a 20px row cannot express. The status row's trailing
+          slot is not available either — ComposerErrorSlotControl owns it and .composer-status is
+          min-height sized BY that occupant, so a third thing there means settling precedence between two
+          error surfaces and can move the composer.
+
+          It renders `null` until an outcome arrives, and `null` costs no flex gap, which is the whole of
+          AC5's second half: nothing is reserved while nothing is showing. */}
+      <ComposerAttachOutcome outcome={attach.outcome} />
     </div>
   )
 }

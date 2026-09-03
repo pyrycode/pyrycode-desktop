@@ -2041,6 +2041,74 @@
   cursor: pointer;
 }
 
+/* #863 — the attach trigger (Figma 115:3654), the footer row's LAST item and the fifth control the row's
+   own comment was written to expect. Its treatment is .composer__footer-button's; this rule is what is
+   left after that.
+
+   THE SHARED CLASS WAS EVALUATED RATHER THAN ASSUMED, since this is the first consumer with no label. Its
+   reset (padding, border and background off), its flex centring and its `color: var(--color-primary)` are
+   exactly what an icon-only button needs; its type block and its `gap` are inert here, which is harmless
+   and consistent with the rule's own note that it is named for the ROW rather than for a consumer.
+   Declaring a private rule instead would duplicate a six-declaration reset to avoid five inert ones. No
+   shipped element is re-classed.
+
+   margin-left: auto IS THE RIGHT-ALIGNMENT, and it is the declaration .composer__footer's comment has
+   reserved for this control since #811. The design makes the point structurally: this node is a SIBLING of
+   the `Info and buttons` group (115:3660) rather than its fifth member, so it does not join that group's
+   20px rhythm — it sits at x=714 in a 741-wide row, and 714 + 11 = 725, exactly the right edge of the
+   content box under the row's 16px inset. An auto margin reproduces that without a number: it absorbs
+   whatever the four controls and the reading leave, and collapses to 0 when they leave nothing, so a
+   narrow window degrades by squeezing rather than by overflowing.
+
+   cursor: pointer is the operable half, the .composer__actions declaration verbatim — the shared class
+   deliberately omits it, because #988's inert model label wears that class while opening nothing.
+
+   flex: 0 0 auto so the row cannot squeeze the glyph. The four menu triggers do not declare this and do
+   not need to; this one does, and the difference is that they hold a label whose own max-width absorbs a
+   narrow row while this button's whole width IS its 11px glyph. Without it the icon is the first thing the
+   row gives up when the reading grows.
+
+   NO GLYPH RULE OF ITS OWN. The four chevrons each carry a one-declaration .composer__*-icon rule; this
+   button's only child is the glyph and the button is already flex: 0 0 auto, so nothing can squeeze it.
+   Declining it also keeps the standing four-rule tidy-up (.composer__actions-icon's note) from growing to
+   five for a rule that would be inert on arrival. */
+.composer__attach {
+  margin-left: auto;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+/* #863 — the attach outcome, beneath the footer row and NOT inside it. The row holds a hard height: 20px,
+   so a sentence in it would overflow rather than grow it; this line is a child of .composer instead, which
+   is a column and gives it a real row of its own.
+
+   NO height AND NO min-height, which is the whole of AC5's second half. .composer-status one row up
+   declares min-height: 24px because it is reserved whether or not it has an occupant; this one is the
+   opposite by design — the element is not rendered at all while there is no outcome, so an absent child
+   costs no flex gap and nothing is held open for it. Do not "match .composer-status" here.
+
+   .composer__context's treatment (M3 body/small in the row's primary colour), because it is the same voice
+   one row down. --color-primary by token NAME, never the export's #32628d fallback, which is the LIGHT
+   scheme's primary (desktop is dark-only, ADR 0003) — the standing rule in .composer-status and
+   .status-row.
+
+   NO white-space: nowrap, where .composer__context declares it. That declaration is about a hard-height
+   row a wrapped string would overflow; this line is in no such row, it is a sentence rather than a
+   13-character reading, and wrapping is the correct behaviour for it. It needs no truncation chain either:
+   every sentence it can hold is a client-owned constant selected over a sealed union, so there is no
+   claude-authored text here for a max-width to bound — unlike .composer__model-label one rule up.
+
+   The horizontal inset matches the footer's --space-4 rather than .composer's own padding, so the sentence
+   starts where the row above it starts and where the message box's text starts. */
+.composer__attach-outcome {
+  padding: 0 var(--space-4);
+  color: var(--color-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* The label's bound, and a SEPARATE rule from its two siblings rather than either class reused. The three
    answer different questions — a display NAME, a short published SCALE, and this one a permission mode —
    and each e2e spec locates its own label class bare, which a second wearer would break under Playwright

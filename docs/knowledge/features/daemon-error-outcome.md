@@ -256,9 +256,10 @@ gets a deterministic test as its safety net.
 
 - **`attachment.not_found` / `attachment.stream_aborted` are not modelled here.** Both exist upstream but
   belong to the retrieval direction (#687); a client asking after them on this leg gets `'unclassified'`.
-- **No consumer reads `outcome` yet.** `daemonConnection.ts`'s `case 'daemon-error':` block still reads
-  only `inbound.inReplyTo` — this slice does not edit that file. [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)
-  (the attachment upload send driver, not started) is the intended first reader.
+- **`outcome` now has a reader.** [Attachment transfer](attachment-transfer.md) (#861, landed) added a
+  fifth check inside `case 'daemon-error':`'s `if (inReplyTo !== undefined)` block — `transferForEnvelope`,
+  after `pendingSettings` and `pendingCreateFolders` — that reads `inbound.outcome` and passes it straight
+  to the matching transfer's `fail()`, unmodified. Nothing re-parses or re-classifies it downstream.
 - **No length bound on `code`.** Deliberate — a cap would imply the value is retained somewhere, which is
   the impression to avoid; nothing is copied, concatenated, or kept past the `switch`.
 
@@ -271,9 +272,11 @@ gets a deterministic test as its safety net.
   [internals](inbound-message-decode-internals.md) / [limits](inbound-message-decode-limits.md) — the
   boundary `daemon-error` lives in; `parseTurnStatePayload`'s closed-enum idiom this narrower reuses;
   `MAX_PLAINTEXT_BYTES`/`MAX_LOGGED_TYPE_CHARS`, the bounds this slice leans on rather than duplicates.
-- [Daemon connection — correlation](daemon-connection-correlation.md) — the four existing `daemon-error`
-  consumers (`sessionSettingsRejected` #269, `workspaceFolderRejected` #396, the debug-bundle reassembler
-  #116, `modalAnswerRejected` #248) this slice's terminal-not-throw design keeps firing unconditionally.
+- [Daemon connection — correlation](daemon-connection-correlation.md) — the `daemon-error` consumers this
+  slice's terminal-not-throw design keeps firing unconditionally: `sessionSettingsRejected` #269,
+  `workspaceFolderRejected` #396, the debug-bundle reassembler #116, `modalAnswerRejected` #248, and —
+  landed after this doc was written — the attachment-transfer reject correlation, #861, the first reader
+  of `outcome` itself.
 - [Fake daemon](fake-daemon.md#attachment-upload-scaffolding-964) — `attachmentStoredReplyFrames`, the
   sibling `attachmentRejectReplyFrames` mirrors member for member.
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md)
@@ -281,5 +284,5 @@ gets a deterministic test as its safety net.
 - `docs/specs/architecture/965-daemon-error-outcome-narrowing.md` — the full architecture spec, including
   the security review this doc summarizes and the two resolved open questions (no upstream message for
   `message.too_long`; `'unclassified'` kept over `'unknown'`).
-- [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) — the attachment upload send driver, not
-  started, the intended first consumer of `outcome`.
+- [Attachment transfer](attachment-transfer.md) — [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861),
+  landed: the attachment upload send driver, and the first consumer of `outcome`.

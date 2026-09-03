@@ -378,3 +378,28 @@ range is `changeSetting`'s session-id gate, which is synchronous with no `await`
 **OUT OF SCOPE:** greying out `auto` when the running model does not support it, and a visible refusal —
 both parked on **#1022**, both blocked on a design answer (the shared panel has no unavailable-row
 treatment and the footer has no error affordance) rather than on code.
+
+## Revisions
+
+**2026-09-03 — the three open questions, resolved during implementation.** No design change; recorded
+because the plan is what the next reader loads.
+
+1. **Display names** — kept faithful to the machine values, with `Bypass permissions` deliberately *not*
+   abbreviated to buy row width. The label naming a security posture is the last one to make ambiguous, so
+   `.composer__permission-label`'s bound was derived to clear it (120px) rather than the label shortened to
+   fit a tighter bound.
+2. **Row width at the 800px minimum** — the e2e geometry detector passes with four controls drawn and the
+   panel open (`.composer__footer` still exactly 20px tall, no horizontal body overflow), because the
+   realistic labels a drive can seed are short. The arithmetic in the plan still says five controls plus
+   worst-case daemon content exceed the row at the minimum window; that finding is recorded in
+   `.composer__permission-label`'s own comment and carried to the PR, and the fix stays the whole-row
+   shrink policy `.composer__effort-label`'s note already assigned elsewhere. No sibling bound was retuned.
+3. **Panel accessible name** — `Permission mode` collides with nothing (`Actions`, `Model`, `Effort` are
+   the three shipped constants), and the e2e drive locates the panel by that exact name.
+
+**One test-mechanics lesson, no production consequence.** React escapes a text child, so `Don't ask`
+appears in `renderToStaticMarkup` output as `Don&#x27;t ask`. Every markup assertion on a label therefore
+routes through a `rendered()` helper that derives the escaped form from React itself rather than
+hand-rolling an escaper — the unit file cannot disagree with the renderer about what escaping means.
+Playwright is unaffected: it reads DOM text, so the e2e locators match the label verbatim. Worth knowing
+for any later footer label carrying an apostrophe or an ampersand.

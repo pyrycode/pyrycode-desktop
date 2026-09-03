@@ -218,17 +218,22 @@ test('composer footer: the effort menu labels, offers, submits and reverts (AC1-
   // reason). An operable trigger over an empty panel would fail all three, and so would reading an absent
   // list as "offer every level". ---
   await expect(label).toHaveText(BASELINE_EFFORT, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(1)
-  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(1)
+  // TWO rather than one since #682: the Actions menu's, plus the permission-mode control's. That one is
+  // operable the moment a snapshot names a mode — its entries are a client-owned constant, so it has no
+  // list to be waiting for — and this baseline names one. Every count in this drive moved by exactly one
+  // for that reason; the STEPS between them, which are what isolate this control, are unchanged.
+  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
+  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(2)
 
   // --- The list arrives unsolicited (AC2). Exact equality on `value` resolves the session's model to the
   // graded row, so this control becomes operable while the label stays exactly what it was: the session's
   // effort is not re-derived from the list. ---
   daemon.pushFrame(modelListFrame([GRADED, FLAT]))
-  // Three anchors now: Actions, the model menu (one frame un-inerts both footer menus at once) and this
-  // one. Counted rather than assumed, because it is the cheapest proof this control became operable —
-  // and because the count is what the LAST step of this drive moves back down.
-  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(3, {
+  // Four anchors now: Actions, the permission-mode control (operable since the snapshot, and untouched by
+  // this frame), the model menu (one frame un-inerts both list-driven menus at once) and this one.
+  // Counted rather than assumed, because it is the cheapest proof this control became operable — and
+  // because the count is what the LAST step of this drive moves back down.
+  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(4, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   await expect(label).toHaveText(BASELINE_EFFORT)
@@ -294,11 +299,12 @@ test('composer footer: the effort menu labels, offers, submits and reverts (AC1-
   // list is replaced wholesale per conversation), and the session's model is untouched. The control must
   // go inert — still labelled, opening nothing — rather than falling back to a vocabulary of its own. ---
   daemon.pushFrame(modelListFrame([{ ...GRADED, effort_levels: [] }, FLAT]))
-  // Back to two anchors — Actions and the model menu, which still has rows to offer. THIS control is the
-  // one that dropped out, which is what the pair of counts across the two pushes isolates.
-  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(2, {
+  // Back to three anchors — Actions, the permission-mode control and the model menu, which still has rows
+  // to offer. THIS control is the one that dropped out, which is what the pair of counts across the two
+  // pushes isolates: 4 → 3, and the two controls that are not list-driven never move at all.
+  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(3, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   await expect(label).toHaveText(HAPPY_EFFORT)
-  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
+  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(3)
 })

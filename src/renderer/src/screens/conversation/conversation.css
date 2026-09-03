@@ -2008,14 +2008,81 @@
    a lift starts to pay, but performing it re-classes two shipped elements, moves their assertions, and
    would take ComposerActionsMenu's and ComposerModelMenu's duplicated CHEVRON_PATH consts with it —
    fan-out outside a slice whose subject is a menu, and squarely inside the don't-refactor-adjacent-code
-   rule. #682 is the FOURTH glyph and re-classes its own element anyway, so it can carry both lifts as a
-   one-line change. Same decision, same reasoning, for the glyph's path const in the three .tsx files. */
+   rule.
+
+   #682 IS THE FOURTH GLYPH, AND IT DECLINES AGAIN — with the note's premise corrected rather than the
+   number rolled forward one more time. That premise was "#682 re-classes its own element anyway, so it
+   can carry both lifts as a one-line change": it does not. A new control ADDS an element; the lift
+   re-classes three SHIPPED ones and moves five assertions across three test files this slice does not
+   otherwise touch, and #682 already carries an unavoidable ten-assertion re-count of its own (its menu is
+   the first footer control that is always operable, so the row's anchor and popup counts move).
+
+   The finding worth recording, since this is the fourth pass: the lift is not being deferred on its
+   merits — four identical single-declaration rules is past the point where it pays — but because every
+   footer ticket that meets it arrives already at or over its own size budget. So it is NOT reassigned to
+   #685; it belongs to a standalone tidy-up whose whole subject is the lift, which can also take the
+   CHEVRON_PATH const in the four .tsx files in the same pass. Whoever writes it: the four rules are
+   .composer__actions-icon, .composer__model-icon, .composer__effort-icon and .composer__permission-icon,
+   and their assertions live in the four Composer*Menu.test.tsx files — no e2e spec reads any of them. */
 .composer__actions-icon {
   flex: 0 0 auto;
 }
 
-/* #988 — the model trigger (Figma 115:3683), the footer row's second item until #682 inserts the
-   permission mode between them. Its treatment is .composer__footer-button's; this is the operable half,
+/* #682 — the permission-mode trigger (Figma 115:3678), the footer row's SECOND item. Its treatment is
+   .composer__footer-button's; this is the operable half, the .composer__actions declaration verbatim.
+
+   UNLIKE ITS THREE NEIGHBOURS THIS CLASS IS WORN UNCONDITIONALLY, and the difference is structural rather
+   than stylistic: the model and effort triggers each have an inert rendering, because their entries are a
+   daemon-published list that can be missing or empty, and that arm wears the shared button class WITHOUT
+   this one. This menu's entries are a client-owned constant, so there is never nothing to offer and never
+   an inert arm — the control either renders operable or does not render at all. Nothing follows for the
+   declaration itself; it is stated so a later reader does not go looking for the missing inert rule. */
+.composer__permission {
+  cursor: pointer;
+}
+
+/* The label's bound, and a SEPARATE rule from its two siblings rather than either class reused. The three
+   answer different questions — a display NAME, a short published SCALE, and this one a permission mode —
+   and each e2e spec locates its own label class bare, which a second wearer would break under Playwright
+   strict mode.
+
+   THE BOUND IS REQUIRED EVEN THOUGH FIVE OF THE SIX LABELS ARE CLIENT-OWNED CONSTANTS. A mode this client
+   does not know renders VERBATIM (ComposerPermissionModeMenu's permissionModeLabel), so this element is a
+   daemon-text position on that arm: an unbounded string in a row with a hard 20px height beside a nowrap
+   `Context: 100%` would push the reading out of the row, remotely triggerable by a hostile or merely buggy
+   daemon. nowrap (inherited above) stops it wrapping; these three stop it growing. min-width: 0 is what
+   makes the ellipsis reachable at all — this span is a flex item, and a flex item's default
+   min-width: auto refuses to shrink below its content.
+
+   120px IS DERIVED FROM THE CLIENT-OWNED VOCABULARY, not copied from .composer__model-label's identical
+   number. #988 measured the 13-character context reading at 82.5px, i.e. ~6.35px per character at 12px
+   body-small, so the longest display name (`Bypass permissions`, 18 characters) draws at ~114px and 120
+   clears it. It is NOT tuned below that to buy row width: ellipsizing `Bypass permis…` would make the one
+   label naming a security posture the one label the operator cannot read. A literal for the
+   .composer__send / .composer__footer reason — a control's own bound is structural geometry, not spacing.
+
+   THIS CONTROL IS THE ONE .composer__effort-label PREDICTED WOULD TAKE THE ROW PAST ITS BUDGET, and it
+   does. At the app's 800px minimum the conversation pane is 400px, less this row's two --space-4 paddings
+   = 368px, less four --space-5 gaps = 288px for five items; realistic content (Actions ~56px, this control
+   ~56px at `Default`, a real display name ~75px, `medium` ~62px, the reading 82.5px) is ~331px. The fix is
+   the one that rule already named and this one does not attempt: "a whole-row shrink policy on
+   .composer__footer, not a number in a single control's rule". Retuning a neighbour's 120px here would be
+   that policy written as a magic number in the wrong place, so neither sibling bound is touched. */
+.composer__permission-label {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* .composer__actions-icon's one declaration, for this trigger's own glyph — that rule's note is where the
+   fourth-glyph lift is declined and reassigned away from the footer controls entirely. */
+.composer__permission-icon {
+  flex: 0 0 auto;
+}
+
+/* #988 — the model trigger (Figma 115:3683), the footer row's THIRD item since #682 inserted the
+   permission mode ahead of it. Its treatment is .composer__footer-button's; this is the operable half,
    the .composer__actions declaration verbatim. The INERT arm (AC4) wears the shared class WITHOUT this
    one, which is the whole reason cursor is not shared. */
 .composer__model {

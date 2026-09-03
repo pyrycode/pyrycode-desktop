@@ -51,6 +51,7 @@ import {
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { ComposerActionsMenu } from './ComposerActionsMenu'
+import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
@@ -2664,31 +2665,41 @@ function Composer({
           UNCONDITIONALLY and holds its height from the
           stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
 
-          Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #682
-          permission mode and #685 attach remain blocked on daemon work that does not exist, and emitting
-          an empty wrapper (or a spacer, or a disabled control) for them is precisely the placeholder #811
-          forbade. #682 inserts itself between the two menus below when it lands; #685 right-aligns with
-          margin-left: auto. The model half of that sentence stopped being true when #974 landed the
-          daemon's published list.
+          Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #685 attach
+          remains blocked on daemon work that does not exist, and emitting an empty wrapper (or a spacer,
+          or a disabled control) for it is precisely the placeholder #811 forbade. #685 right-aligns with
+          margin-left: auto. The model and permission halves of that sentence stopped being true when #974
+          landed the daemon's published list and #1020/#1021 landed the mode's two wire halves.
 
           #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
           `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
           same submitMessage call, the same optimistic echo and the same scroll follow (AC3, AC4). No
           `canSend` prop goes down with it: the gate stays in one place.
 
-          #988: the model menu (Figma 115:3683), immediately right of Actions and NOT at the design's x=135
-          — #682's button is sequenced behind it, and a spacer held open for a control that does not exist
-          is the same placeholder. It takes `conversationId` and reads its own four store slices, so a
-          snapshot tick re-renders this leaf rather than the textarea beside it.
+          #682: the permission-mode menu (Figma 115:3678), the row's SECOND item, now at the design's
+          x=76 — it is the control the two notes below were holding the slot for, so the row finally
+          matches Figma's own order (Actions · mode · model · effort · reading). It takes NO props: unlike
+          the two menus beside it, its entries are a client-owned constant rather than a daemon-published
+          list, so it reads no model-list slice and needs no `conversationId` to select one with.
 
-          #989: the effort menu (Figma 115:3688), the row's LAST control before the reading and likewise
-          not at the design's x=197 — #682 inserts itself between Actions and the model menu when it
-          lands, and no spacer is emitted for it here either. Same shape as the model menu beside it and
-          the same four store slices, but its label is the session's effort VALUE rather than a looked-up
-          name: claude publishes these levels byte-identical to what it accepts, so there is nothing to
-          relabel. Both controls render nothing at all until a run-config snapshot has arrived. */}
+          IT IS ALSO THE ONE FOOTER MENU THAT IS ALWAYS OPERABLE. The other two go inert when no list has
+          arrived for the conversation; this one has nothing to be missing, so a mode being known is the
+          whole condition — which is why the row's anchor and aria-haspopup counts move by one here as
+          soon as a snapshot lands, and why several sibling assertions were re-counted with this ticket.
+
+          #988: the model menu (Figma 115:3683), at the design's x=135. It takes `conversationId` and
+          reads its own four store slices, so a snapshot tick re-renders this leaf rather than the textarea
+          beside it.
+
+          #989: the effort menu (Figma 115:3688), the row's LAST control before the reading, at the
+          design's x=197. Same shape as the model menu beside it and the same four store slices, but its
+          label is the session's effort VALUE rather than a looked-up name: claude publishes these levels
+          byte-identical to what it accepts, so there is nothing to relabel — where the permission menu
+          above DOES look its label up, since a mode arrives as a camelCase machine identifier. All three
+          controls render nothing at all until a run-config snapshot has arrived. */}
       <div className="composer__footer">
         <ComposerActionsMenu onCommand={sendText} />
+        <ComposerPermissionModeMenu />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />
         <ContextUsageControl />

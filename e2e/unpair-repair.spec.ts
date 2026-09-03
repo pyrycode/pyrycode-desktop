@@ -12,8 +12,9 @@ import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/convers
  * centred in the same 24px group, so the mark's offset is the label's.
  *
  * All three are read relative to the ROW, never to the viewport. The transition that grows the row also
- * mounts #279's banner and the composer's hint, so every absolute position in this column changes for
- * reasons this row does not own; a viewport-relative reading would pin those instead.
+ * mounts #279's banner, so absolute positions elsewhere in this column change for a reason this row does
+ * not own; a viewport-relative reading would pin that instead. (#968 retired the composer's own caption,
+ * which used to mount on the same transition and was the second such reason.)
  */
 async function readStatusRowGeometry(page: Page): Promise<{
   rowHeight: number
@@ -150,10 +151,12 @@ test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-ro
 
   // NO ASSERTION ON THE MESSAGE BOX'S POSITION, and the reason is worth recording rather than leaving as
   // an absence. The ticket accepts "the message box moves 8px on this transition" as a terminal-state
-  // cost; measured here, it moves 20px UPWARD, and none of that is the row's 8px. The same status change
-  // mounts #279's connection banner above the thread and the composer's own `Connection error` hint
-  // inside `.composer`, so three things resize at once and the box's absolute position isolates none of
-  // them. What the row's growth alone does is settled by the column: `.conversation` is a fixed-height
+  // cost, and the box does move by more than the row's own 8px: the same status change also mounts
+  // #279's connection banner above the thread, so two things resize at once and the box's absolute
+  // position isolates neither. (A 20px upward movement was measured here before #968 retired the
+  // composer's own caption, which used to be a third mover; that figure is stale and is deliberately not
+  // re-measured, because no assertion depends on it.)
+  // What the row's growth alone does is settled by the column: `.conversation` is a fixed-height
   // flex column whose thread region is `flex: 1 1 auto; min-height: 0`, so a `flex: 0 0 auto` sibling
   // growing is absorbed by the thread. An assertion here would pin the banner's and the hint's geometry
   // under a name that claims to be about this row.

@@ -43,7 +43,6 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
-  composerAvailability,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
@@ -2662,21 +2661,6 @@ describe('ConnectionBanner — the disconnected-only connection band', () => {
     expect(markup).toContain(CONNECTION_BANNER_COPY)
     expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
   })
-
-  // AC5: the prominent banner copy reads distinctly from the terse composer hints, so the two surfaces
-  // never render as the same string stacked twice. Pinned against the actual composerAvailability
-  // outputs (not hardcoded strings) so a future hint tweak can't silently collide with the banner.
-  it('is lexically distinct from all three composer hints (AC5)', () => {
-    const composerHints = [
-      composerAvailability({ type: 'connecting' }).hint,
-      composerAvailability({ type: 'disconnected' }).hint,
-      composerAvailability({
-        type: 'error',
-        error: { code: 'x', message: 'm', retryable: false }
-      }).hint
-    ]
-    expect(composerHints).not.toContain(CONNECTION_BANNER_COPY)
-  })
 })
 
 // #797: the connection-error chip in the composer status row — the FOURTH read of the ConnectionStatus
@@ -3665,8 +3649,9 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('composer__repair')
   })
 
-  // #31: while not connected the send control is disabled and the composer shows an inline
-  // "why" hint. The initial store state is `disconnected`, and zustand v5's useStore reads
+  // #31: while not connected the send control is disabled. (It also used to show an inline "why" caption
+  // beside it; #968 retired that, and the test below pins its absence.) The initial store state is
+  // `disconnected`, and zustand v5's useStore reads
   // getInitialState() under server rendering (never setState), so this container smoke test always
   // sees the disconnected branch. The connected/enabled branch is therefore NOT smoke-testable here
   // — it is covered by the composerAvailability(connected) pure test in composerSend.test.ts.
@@ -3676,25 +3661,27 @@ describe('ConversationScreen — store binding', () => {
     expect(sendButtonTag).toContain('disabled')
   })
 
-  it('renders an inline status hint (a polite live region) while not connected', () => {
+  // #968: no connection caption sits above the message box in any state. `disconnected` is the only arm
+  // a container render can reach (zustand's server snapshot is the state captured at creation) and it is
+  // the arm the caption used to show in, so this render is the one that could still carry it. The other
+  // three arms are covered structurally by composerSend.test.ts's exact-`toEqual` matrix: a gate that
+  // returns no string cannot render one. Asserting on the CLASS rather than on the retired copy keeps the
+  // three literals out of the file AC4's own grep reads.
+  it('renders no connection caption above the message box (#968)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('class="composer__hint"')
-    expect(markup).toContain('role="status"')
+    expect(markup).not.toContain('composer__hint')
   })
 
   // #279: the connection banner mounts against the initial (disconnected) store — unlike the re-pair
   // affordance, disconnected is a VISIBLE branch, so ConnectionBannerControl's visible path IS reachable
-  // under server render. It appears at the top of the thread and reads as distinct copy from the
-  // composer's terse hint; both remain visible while disconnected (AC1/AC4/AC5), and no daemon string
-  // reaches it (there is none at the initial disconnected status).
-  it('renders the connection banner while disconnected, distinct from the composer hint (AC1/AC4/AC5)', () => {
+  // under server render. It appears at the top of the thread, carrying its client-owned copy, and no
+  // daemon string reaches it (there is none at the initial disconnected status). Since #968 it is the
+  // ONLY thing said about the connection in this arm, which is why its presence here matters more than
+  // it did when the composer's caption said it a second time.
+  it('renders the connection banner while disconnected (AC1/AC4)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    // The prominent banner and its client-owned copy are present…
     expect(markup).toContain('conversation__banner')
     expect(markup).toContain(CONNECTION_BANNER_COPY)
-    // …alongside the terse composer hint, which reads as different copy (both visible, not duplicated).
-    expect(markup).toContain('Not connected')
-    expect(CONNECTION_BANNER_COPY).not.toContain('Not connected')
   })
 
   it('renders the banner above the message thread and below the header (top of the thread)', () => {

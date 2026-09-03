@@ -2397,7 +2397,7 @@ function Composer({
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
   const status = useSessionStore(selectStatus)
-  const { canSend, hint } = composerAvailability(status)
+  const { canSend } = composerAvailability(status)
   // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
   const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
@@ -2487,13 +2487,6 @@ function Composer({
     // to the author-level `.composer { display: flex }` regardless of specificity, so without it this
     // attribute is a no-op for layout and only the accessibility half works.
     <div className="composer" hidden={covered}>
-      {/* role="status" makes this a polite live region: a screen reader announces the change
-          without stealing focus (AC2/AC3). On connect, `hint` is null, the caption unmounts. */}
-      {hint && (
-        <p className="composer__hint" role="status">
-          {hint}
-        </p>
-      )}
       {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
           positions against it (`position: relative` in conversation.css) and inherits the clamp's
           --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,
@@ -2535,9 +2528,10 @@ function Composer({
         {typeAhead.panel}
       </div>
       {/* #811: the input footer row (Figma 110:3494), beneath the message box. An inline BEM child of
-          .composer like __hint and __row above it — not a component: ComposerStatusArea is one because it
+          .composer like __row above it — not a component: ComposerStatusArea is one because it
           is a SIBLING of .composer in the conversation column, with props and two slots, while this is
-          the composer's own third sub-row. It renders UNCONDITIONALLY and holds its height from the
+          the composer's own second sub-row (#968 retired __hint, which used to be the first). It renders
+          UNCONDITIONALLY and holds its height from the
           stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
 
           Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #682
@@ -2753,10 +2747,11 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
 // (AC3, a structural guarantee, not a convention — the EMPTY_THREAD_COPY / ThinkingIndicator idiom).
 // Visibility is a `status` PROP (not a store read) so the present/absent matrix is proven by directly
 // server-rendering this view (the ComposerErrorSlot discipline, RepairPrompt's before #963 retired it).
-// role="status" makes it a polite live region
-// (the .composer__hint treatment): the band persists visually, so a polite announcement suffices and
-// avoids an assertive double-announce with the composer hint. The band is deliberately MORE prominent
-// copy than the composer's terse gate (AC5), and both remain visible while disconnected.
+// role="status" makes it a polite live region: the band persists visually, so a polite announcement
+// suffices and nothing is lost by not stealing focus. It was also written to avoid an assertive
+// double-announce with the composer's own caption; #968 retired that caption, so this band is now the
+// only announcement of the transition in every non-connected arm — the reason for `status` over `alert`
+// is unchanged, and the surface it was avoiding is simply gone.
 export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.Element | null {
   if (!shouldShowBanner(status)) return null
   return (

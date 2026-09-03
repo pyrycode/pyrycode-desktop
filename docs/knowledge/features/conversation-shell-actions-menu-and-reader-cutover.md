@@ -63,14 +63,18 @@ chip or button](conversation-shell-composer.md#composer-error-chip-797) already 
 same reason; that caption is retired. `window.pyry` is still dereferenced only inside `sendText`, at
 interaction time, never during render, so the container smoke test still server-renders with no bridge mock.
 
-**Styling** — `.composer__actions` (`conversation.css`) is an explicit `<button>` reset (no border, no
-fill, no padding) plus `color: var(--color-primary)` and the `.composer__context` body-small type block;
-the file's `--color-primary`-onto-`.composer__footer` hoist question (raised at #811) is answered here as
-declined — the UA stylesheet sets `color` on form controls, so a hoisted value wouldn't reach a `<button>`
-at all, and every button-shaped consumer would still need its own `color: inherit` plus the same font
-block. The real extraction — a shared `.composer__footer-button` — is deferred to #682 landing as the
-row's second button, not built speculatively here. `outline: none` is deliberately absent: every close
-path in `ComposerOptionsMenu` returns DOM focus to this button, so its focus ring is load-bearing.
+**Styling** — `.composer__actions` (`conversation.css`) was originally an explicit `<button>` reset (no
+border, no fill, no padding) plus `color: var(--color-primary)` and the `.composer__context` body-small
+type block; the file's `--color-primary`-onto-`.composer__footer` hoist question (raised at #811) is
+answered here as declined — the UA stylesheet sets `color` on form controls, so a hoisted value wouldn't
+reach a `<button>` at all, and every button-shaped consumer would still need its own `color: inherit` plus
+the same font block. **The real extraction — a shared `.composer__footer-button` — landed with
+[#988](composer-model-menu.md)**, not #682 as first anticipated here: #682's permission-mode button turned
+out to be sequenced behind the model menu, so #988 was the row's actual second button and the moment the
+stylesheet's own comment assigned the lift to. `.composer__actions` now carries only `cursor: pointer`
+beside the shared class (`triggerClassName="composer__footer-button composer__actions"`, a two-class mix,
+the `.button-small` shape). `outline: none` is still deliberately absent: every close path in
+`ComposerOptionsMenu` returns DOM focus to the trigger, so its focus ring is load-bearing.
 
 **Testing.** `ComposerActionsMenu.test.tsx` pins the mapping (`renderToStaticMarkup` cannot fire
 `onCommand`, so only the data half and the closed-at-mount markup are unit-tested) plus a direct render

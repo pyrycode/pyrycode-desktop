@@ -58,7 +58,14 @@ import { contextUsagePercent } from './contextUsage'
 // The verbatim fallback is the correct outcome then — the operator sees the true running identifier
 // rather than a display name inferred from a resemblance. Widening this into a substring match to make
 // it fire more often would reintroduce exactly what #560 exists to stop.
-function publishedRowFor(
+//
+// #988 GAVE IT A THIRD CALLER AND IS WHY IT IS EXPORTED. The composer footer's model menu joins the
+// SESSION's model — EffortSection's input, not RunningModelSection's — for both its trigger label and its
+// row marking. Exporting is the whole change: copying the four-line body into that file would be the
+// second copy this docblock exists to prevent, and lifting the rule into a new co-located module would be
+// a refactor that ticket does not need. It stays declared here, beside the two of three callers that
+// already read it.
+export function publishedRowFor(
   models: ModelListEntry | null | undefined,
   model: string
 ): WireModelOption | undefined {

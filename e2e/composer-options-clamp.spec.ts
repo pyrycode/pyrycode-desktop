@@ -87,9 +87,15 @@ test('the options panel is clamped inside the window and released again on resiz
   await expect(panel).toBeVisible()
 
   // The anchor is ComposerOptionsMenu's own private wrapper; it has no role, so it is located by its class
-  // — the `.channel-list__row-open` / `.paired-shell__sidebar` idiom of the sibling specs. Exactly one
-  // exists (the footer's single control), so strict mode is a guard rather than an obstacle.
-  const anchor = page.locator('.composer-options-anchor')
+  // — the `.channel-list__row-open` / `.paired-shell__sidebar` idiom of the sibling specs.
+  //
+  // SCOPED TO THE ACTIONS TRIGGER, and #988 is why. This locator used to be bare, resting on "exactly one
+  // exists (the footer's single control)". The footer's model menu renders a second anchor whenever a
+  // model list has arrived, so that invariant is now CONDITIONAL — this spec pushes no model_list, so the
+  // model control renders its inert arm and the bare locator would still resolve one, by accident of what
+  // this launch happens to seed. `has:` pins it to the anchor whose trigger is the one being measured,
+  // which is what the measurements below have always meant. Nothing else in this spec changes.
+  const anchor = page.locator('.composer-options-anchor', { has: actionsTrigger(page) })
 
   // A missing box is a node not yet attached or laid out. NaN as the sentinel rather than the siblings'
   // `-1`: every checkpoint below expects 0, and -1 is a plausible real sub-pixel value here, while NaN can

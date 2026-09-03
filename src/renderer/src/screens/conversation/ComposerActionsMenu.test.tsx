@@ -28,9 +28,22 @@ function countOf(markup: string, needle: string): number {
   return markup.split(needle).length - 1
 }
 
+// #988 lifted the shared treatment out of .composer__actions, so the trigger wears a two-class mix and
+// this file's whole-attribute-run matches move with it. Kept as one constant: the class run is asserted
+// from three places below, and three copies of a string that changes together is three chances to update
+// two of them.
+const TRIGGER_CLASS_RUN = 'class="composer__footer-button composer__actions"'
+
 /** The trigger button's inner markup — what a browser computes the accessible name from. */
 function triggerInner(markup: string): string {
-  return markup.match(/<button[^>]*class="composer__actions"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? ''
+  const inner = markup.match(
+    new RegExp(`<button[^>]*${TRIGGER_CLASS_RUN}[^>]*>([\\s\\S]*?)</button>`)
+  )?.[1]
+  // A miss returns undefined, and an empty string would make every consumer's `toContain` pass VACUOUSLY
+  // — the exact failure #988 found at ConversationScreen.test.tsx's sibling extractor when the class run
+  // changed under it. Fail here instead, where the reason is legible.
+  if (inner === undefined) throw new Error(`no trigger matching ${TRIGGER_CLASS_RUN} in the markup`)
+  return inner
 }
 
 describe('COMPOSER_ACTIONS', () => {
@@ -63,7 +76,7 @@ describe('ComposerActionsMenu', () => {
   it('renders the footer trigger inside a composer-options anchor, closed (AC1)', () => {
     const markup = renderToStaticMarkup(<ComposerActionsMenu onCommand={noop} />)
     expect(markup).toContain('class="composer-options-anchor"')
-    expect(markup).toContain('class="composer__actions"')
+    expect(markup).toContain(TRIGGER_CLASS_RUN)
     expect(markup).toContain('aria-haspopup="menu"')
     expect(markup).toContain('aria-expanded="false"')
     // Closed at mount is ComposerOptionsMenu's useState(false) seen from outside: no panel, no rows.

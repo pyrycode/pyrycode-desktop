@@ -95,7 +95,11 @@ export function ComposerActionsMenu({
           </svg>
         </>
       }
-      triggerClassName="composer__actions"
+      // A two-class mix since #988 lifted the shared footer-button treatment out of this rule on its
+      // second consumer (the .button-small shape): the block carries the reset, the type and the colour,
+      // and .composer__actions is left with `cursor: pointer` alone. Five shipped assertions bind to the
+      // exact `class=` run this produces — see ComposerActionsMenu.test.tsx and ConversationScreen.test.tsx.
+      triggerClassName="composer__footer-button composer__actions"
     />
   )
 }

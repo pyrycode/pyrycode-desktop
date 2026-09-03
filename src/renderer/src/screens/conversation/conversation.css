@@ -1825,9 +1825,11 @@
    vitest spec can see that — the placement is measured only in Playwright.
 
    The row deliberately does NOT wear .composer-options-anchor, whose own comment anticipates this consumer:
-   e2e/composer-options-clamp.spec.ts locates that class and relies on Playwright strict mode resolving
-   EXACTLY ONE in the app, and the class carries only position: relative (declared here) and display: flex
-   (already here). Nothing is lost, and a shipped spec stays green.
+   the class carries only position: relative (declared here) and display: flex (already here), so nothing
+   is lost by declining it. Until #988 this rule gave a second reason — that e2e/composer-options-clamp.spec.ts
+   locates that class bare and relies on Playwright strict mode resolving EXACTLY ONE in the app. That
+   reason is SPENT: the footer's model menu renders a second anchor whenever a model list has arrived, and
+   that spec now scopes its locator to the Actions trigger. The decision above needs neither half of it.
 
    One visible consequence, recorded rather than corrected: .composer-options' shipped `left` pulls the
    panel 12px left of its anchor, so a row's LABEL lands flush with the message box's left edge while the
@@ -1937,34 +1939,46 @@
   white-space: nowrap;
 }
 
-/* #680 — the Actions trigger (Figma 115:3677), the footer row's leftmost item. A bare inline row in the
-   design: the word in M3 body/small at schemes/primary, a 4px gap, then the up chevron. No border, no
-   fill, no padding of its own — so the <button> needs an explicit reset, because the UA stylesheet gives
-   form controls a border, a background, padding AND their own font.
+/* #988 — the shared footer-button treatment, extracted on its SECOND consumer exactly as the comment
+   this rule replaced called for: "One consumer is not a pattern: #682 landing as the SECOND button is
+   the moment to lift the common declarations out of these two rules." #682 is sequenced behind the model
+   and effort menus, so the model trigger is that second button and this is that moment.
 
-   THE --color-primary HOIST ONTO .composer__footer IS DECLINED, and this rule is where the question the
-   comment above left open is answered. A hoisted `color` would not reach a <button> at all (the UA sets
-   `color` on form controls), so every button-shaped consumer would still declare `color: inherit` plus a
-   font block — not fewer declarations than `color: var(--color-primary)` plus the same font block, and
-   it would split the row's treatment across two rules for nothing. .composer__context stays as it is.
+   The design draws all four footer buttons as one instance of `Input footer button` (115:3660's children
+   at x=0/76/135/197): a bare inline row — a word in M3 body/small at schemes/primary, a 4px gap, then the
+   up chevron. No border, no fill, no padding, so the <button> needs an explicit reset, because the UA
+   stylesheet gives form controls a border, a background, padding AND their own font.
 
-   The real extraction is a shared .composer__footer-button carrying the reset, the body-small type and
-   the primary colour for all four footer buttons. One consumer is not a pattern: #682 landing as the
-   SECOND button is the moment to lift the common declarations out of these two rules.
+   A BLOCK worn as a two-class mix (`class="composer__footer-button composer__actions"`), #963's
+   .button-small shape on this same stylesheet, and named for the row rather than for either consumer —
+   it is worn by the Actions trigger, the model trigger, and the model menu's INERT arm, which is a
+   <span> rather than a button at all.
 
-   No `outline: none`. Every close path in ComposerOptionsMenu returns DOM focus to this button, so its
-   focus ring is load-bearing.
+   CURSOR IS DELIBERATELY NOT IN HERE, and that is this consumer's doing rather than an oversight. #988's
+   AC4 renders a non-operable label wearing this class whenever no model list has arrived, and a hand
+   cursor over an element that opens nothing is a lie a shared `cursor: pointer` would make unavoidable.
+   Each operable consumer declares its own, one rule down.
 
-   white-space: nowrap for .composer__context's reason verbatim — the row has a hard 20px height, so a
-   wrapped label would overflow it rather than grow it. The label is a client-owned constant. */
-.composer__actions {
+   white-space: nowrap lifts, but .composer__actions' JUSTIFICATION for it does not: that one rests on
+   "the label is a client-owned constant", and the model trigger's label is claude-authored. What
+   transfers is the declaration — the row has a hard 20px height, so a wrapped label would overflow it
+   rather than grow it (.composer__context's ruling). What does not is the claim that nowrap ALONE bounds
+   the label; see .composer__model-label.
+
+   THE --color-primary HOIST ONTO .composer__footer STAYS DECLINED, and the reasoning is unchanged by
+   this lift: a hoisted `color` would not reach a <button> at all (the UA sets `color` on form controls),
+   so every button-shaped consumer would still declare `color: inherit`. .composer__context stays as it
+   is, exactly as that comment ruled.
+
+   No `outline: none`. Every close path in ComposerOptionsMenu returns DOM focus to the trigger, so the
+   focus ring is load-bearing. */
+.composer__footer-button {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   padding: 0;
   border: none;
   background: none;
-  cursor: pointer;
   color: var(--color-primary);
   font-family: var(--font-sans);
   font-size: var(--text-body-small-size);
@@ -1974,9 +1988,57 @@
   white-space: nowrap;
 }
 
+/* #680 — the Actions trigger (Figma 115:3677), the footer row's leftmost item. Everything but its cursor
+   is .composer__footer-button's since #988; what is left is the one declaration that is about being
+   operable rather than about being a footer button. */
+.composer__actions {
+  cursor: pointer;
+}
+
 /* The chevron's size comes from the svg's own width/height attributes (the .composer__send-icon idiom);
-   this only stops the flex row squeezing it, which is the Figma node's own shrink-0. */
+   this only stops the flex row squeezing it, which is the Figma node's own shrink-0.
+
+   NOT lifted alongside the button rule above, and that is a scope call rather than an omission: the
+   standing comment assigned the BUTTON extraction, this one carries no such note, and lifting a single
+   declaration would re-class a shipped element and move a further test assertion for nothing. #682
+   landing as the third glyph is the moment to reconsider. */
 .composer__actions-icon {
+  flex: 0 0 auto;
+}
+
+/* #988 — the model trigger (Figma 115:3683), the footer row's second item until #682 inserts the
+   permission mode between them. Its treatment is .composer__footer-button's; this is the operable half,
+   the .composer__actions declaration verbatim. The INERT arm (AC4) wears the shared class WITHOUT this
+   one, which is the whole reason cursor is not shared. */
+.composer__model {
+  cursor: pointer;
+}
+
+/* AC1's second sentence, and the declaration .composer__actions' `white-space: nowrap` comment says it
+   cannot make: THIS LABEL IS CLAUDE-AUTHORED. It crossed the subprocess trust boundary and the daemon
+   bounds it without sanitizing it, so an unbounded published name in a row with a hard 20px height beside
+   a nowrap `Context: 100%` would push the reading out of the row — remotely triggerable by a hostile or
+   merely buggy daemon. nowrap (inherited above) stops it wrapping; these three stop it growing.
+
+   120px is derived from the row at the app's 800px minimum window: a ~400px conversation pane less the
+   row's --space-4 padding twice, the Actions trigger, the nowrap reading and two --space-5 gaps leaves
+   roughly 185px, so 120 fits with headroom while clearing a real published display name at 12px
+   body-small. A literal for the .composer__send / .composer__footer reason — a control's own bound is
+   structural geometry, not spacing.
+
+   min-width: 0 is what makes the ellipsis reachable at all: this span is a flex item of the trigger, and
+   a flex item's default min-width: auto refuses to shrink below its content. The chevron keeps its own
+   flex: 0 0 auto one rule down, so the label is the only part that gives. */
+.composer__model-label {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* .composer__actions-icon's one declaration, for the model trigger's own glyph — see that rule for why
+   the two are not one. */
+.composer__model-icon {
   flex: 0 0 auto;
 }
 

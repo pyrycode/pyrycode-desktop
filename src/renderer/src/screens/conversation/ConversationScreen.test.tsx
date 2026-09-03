@@ -3903,6 +3903,45 @@ describe('ConversationScreen — store binding', () => {
     }
   })
 
+  // #989: the effort menu's mount site — required, not optional coverage, for the reason stated above:
+  // every assertion in ComposerEffortMenu.test.tsx passes on an UNMOUNTED component.
+  //
+  // The snapshot seeds a non-empty EFFORT as well as a non-empty model, which is what makes both footer
+  // menus visible at once and lets this test pin the row's ORDER — the one claim neither component's own
+  // file can make. With no model list published (the model-list store's initial state is an empty map)
+  // both render their inert arms, so each label can only appear if its container actually read the
+  // snapshot, and the row still holds exactly one popup announcement and one anchor (the Actions menu's).
+  it('mounts the effort control in the footer row, between the model control and the reading (AC1, AC3)', () => {
+    const initial = runConfigStore.getInitialState()
+    const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      snapshot: {
+        model: 'seeded-session-model',
+        effort: 'seeded-session-effort',
+        yolo: false,
+        usedTokens: 168000,
+        windowTokens: 200000
+      }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const modelAt = markup.indexOf('composer__model-label')
+      const effortAt = markup.indexOf('composer__effort-label')
+      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      expect(modelAt).toBeGreaterThan(-1)
+      // The design's item order: Actions, the model control, the effort control, then the reading.
+      expect(effortAt).toBeGreaterThan(modelAt)
+      expect(markup.indexOf('composer__context')).toBeGreaterThan(effortAt)
+      // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
+      expect(markup).toContain('>seeded-session-effort<')
+      // AC3's inert arm: a third control in the row adds no third popup announcement and no third anchor.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   // #967: the three inert-render smoke tests that stood here — one each for #317's stall, #493's retry
   // and #496's compaction block — are GONE, and their coverage is subsumed rather than dropped. All three
   // asserted that a status renders nothing against the initial timeline store; the three regions they
@@ -4076,8 +4115,9 @@ describe('ConversationScreen — store binding', () => {
     // it was never one of the menu popups.) Pinned as a COUNT instead, and
     // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
     // which is the guard #276 wanted.
-    // (The count stays 1 with #988's model menu mounted: the bare tree has no run-config snapshot, so the
-    // effective model is '' and that control renders nothing at all.)
+    // (The count stays 1 with #988's model menu and #989's effort menu mounted: the bare tree has no
+    // run-config snapshot, so the effective model and effort are both '' and neither control renders
+    // anything at all.)
     expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
     // Adjacency-sensitive on purpose: it pins the class run immediately followed by aria-haspopup.
     expect(markup).toContain(`${ACTIONS_TRIGGER_CLASS_RUN} aria-haspopup="menu"`)

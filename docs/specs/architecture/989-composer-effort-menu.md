@@ -177,3 +177,15 @@ Adversarial pass over this plan, per the ticket's `security-sensitive` label.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — implementation
+
+The design held: no interface, arm or rule changed between the plan commit and the code. Three things are worth recording.
+
+**Open question 1 is resolved: 64px holds.** The e2e drive asserts it rather than leaving it to review — with all three footer controls drawn and the effort panel open, `.composer__footer` measures exactly 20px tall and `document.body.scrollWidth <= clientWidth`. That is a permanent detector rather than #988's throwaway measurement, and it is the check that will redden first if a later control makes this the row-overflow ticket after all.
+
+**One `model_list` frame un-inerts BOTH footer menus at once**, which the plan's e2e sketch had not thought through: the footer's `.composer-options-anchor` count moves 1 → 3 → 2 across the drive (Actions alone; then Actions + model + effort; then Actions + model once the matched row's levels go empty), not 1 → 2 → 1. The spec asserts all three counts, and the 3 → 2 step is what isolates *this* control as the one that dropped out — a stronger proof of AC3's third reading than asserting the label alone, which is unchanged across that push by design.
+
+**The two sibling footer specs and the clamp spec were run rather than reasoned about.** `e2e/composer-model-menu.spec.ts`'s two counted footer assertions still hold because they sit before that spec's own `model_list` push, where this control is still inert; its `.composer__model-label` locator stays unambiguous because this label wears `.composer__effort-label`; and `e2e/composer-options-clamp.spec.ts` was already scoped `has:` the Actions trigger by #988. All three pass unedited, as does `e2e/composer-actions.spec.ts`.

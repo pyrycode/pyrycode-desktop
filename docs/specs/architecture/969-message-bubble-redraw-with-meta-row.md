@@ -167,3 +167,24 @@ Ran because the ticket carries `security-sensitive` — applied for the copy con
 **8. Threat model alignment.** *Malicious relay:* content-blind and on-path — it can drop, delay or reorder, none of which reaches this control, and it cannot inject text into a session it cannot read. *Hostile daemon inside the session:* it can author arbitrary message text, which the user can now copy — that is finding 2, deferred, and bounded by finding 6. *Token theft from disk, key material, `safeStorage`:* untouched; this ticket writes nothing to disk and holds no secret. *Renderer compromise reaching the transport:* branch 1 adds nothing; branch 2 adds clipboard-write only, strictly less than the existing IPC surface, under the constraint in finding 3.
 
 **Not applicable, with the reason.** *Tokens/credentials* — no token, key or credential enters this path; the copy source is display text already held in the renderer store, and a secret a user pasted into their own composer returning to their own clipboard is no new exposure. *File and storage operations* — no filesystem access, no path construction, no persistence, so no traversal, TOCTOU, atomic-write or at-rest-encryption question arises. *Cryptographic primitives* — no randomness, no comparison against a secret, no key schedule; the feature is one DOM element and one clipboard call.
+
+## Revisions
+
+### 2026-09-03 — the clipboard measurement landed on **branch 2**
+
+Open question 1 is resolved, and against the plan's expectation. `src/main/index.ts`'s blanket permission denial **does** reach `navigator.clipboard.writeText`: with the control shipped and the handler untouched, `e2e/message-copy.spec.ts` seeded the OS clipboard with a sentinel, clicked the control, and read the clipboard back through the main process to find the sentinel still there. The write was silently refused — no exception the renderer could see, just a no-op control.
+
+So the ticket takes branch 2 and `src/main/index.ts` is a fifth production file. The change is one line: the handler goes from `callback(false)` to `callback(permission === 'clipboard-sanitized-write')`.
+
+That is exactly the shape `## Security review` finding 3 made binding, and it is met on both counts:
+
+- **An allowlist of one string, not a denylist.** An identity comparison against a single permission, so every permission Chromium adds in a future version is denied by default rather than granted.
+- **`clipboard-read` and `clipboard-sanitized-read` stay denied**, falling out of the same comparison. The e2e now carries the guard on that half of the line: it drives a permission that is *not* on the list (`Notification.requestPermission()`, which routes through the same handler) and asserts it still comes back `denied`, so the handler cannot quietly become "grant what the renderer asks for".
+
+The spec is a genuine two-sided proof rather than a green-only assertion: it failed on the sentinel before the one-line change and passes after it, with nothing else altered.
+
+No other part of the design moved. The renderer side is exactly as planned — `copyMessageText` still reaches `navigator.clipboard.writeText` directly, no IPC channel was added, and the `shared/ipc/unpair.ts` request/response idiom the Technical Notes ruled out was not reached for.
+
+### 2026-09-03 — open question 2, recorded as built
+
+The meta row **is** rendered on the in-progress assistant tail, appended after the streaming cursor rather than in place of it, for the no-reflow reason the Design section gives. `ConversationScreen.test.tsx` pins all three subjects (settled, in-progress, user) in one case so the decision is visible as a test rather than only as prose.

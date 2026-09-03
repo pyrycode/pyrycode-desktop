@@ -140,11 +140,31 @@ function isSameTarget(url: string, allowed: string): boolean {
 }
 
 app.whenReady().then(() => {
-  // Deny every renderer permission request by default (camera, microphone, geolocation,
-  // notifications, and the rest). The app needs none, so a compromised renderer cannot
-  // prompt its way to one.
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
-    callback(false)
+  // Deny every renderer permission request except the one the app actually needs (camera, microphone,
+  // geolocation, notifications, and the rest stay denied). A compromised renderer cannot prompt its way
+  // to anything not on this list.
+  //
+  // #969 opened the list, which until then was empty. Electron routes `navigator.clipboard.writeText`
+  // through this handler as `clipboard-sanitized-write`, so the message bubble's copy control was
+  // silently a no-op under the blanket deny — MEASURED, not assumed: e2e/message-copy.spec.ts wrote a
+  // sentinel, clicked the control, and read the OS clipboard back through the main process to find the
+  // sentinel still there. That spec is now the regression guard for this line.
+  //
+  // AN ALLOWLIST OF EXACTLY ONE STRING, and deliberately not a denylist: a denylist would grant every
+  // permission Chromium adds in a future version by default, which is the opposite of the posture this
+  // handler exists to hold. Two things it must never grow into. It must not cover `clipboard-read` or
+  // `clipboard-sanitized-read` — reading is a categorically worse capability than writing, since it
+  // exfiltrates whatever the user last copied (routinely a password-manager secret), and nothing in
+  // this app needs it. And it must not become a general "allow what the renderer asks for".
+  //
+  // Granting rather than routing the write through IPC is the narrower change, not the looser one: an
+  // ipcMain handler that writes the clipboard on the renderer's behalf grants the SAME capability
+  // through more code, and adds a channel that has to be validated. The marginal risk here is small —
+  // a renderer compromised badly enough to reach this already holds the `window.pyry` bridge, which
+  // sends to the daemon and unpairs. `clipboard-sanitized-write` is text/plain only, so no HTML flavour
+  // reaches the clipboard either.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) =>
+    callback(permission === 'clipboard-sanitized-write')
   )
 
   // Composition root for the pairing IPC channel (#54): construct the real secret chain —

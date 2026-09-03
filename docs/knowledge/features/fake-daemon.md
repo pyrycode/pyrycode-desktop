@@ -52,6 +52,14 @@ export function attachmentStoredReplyFrames(
   completingIndex: number
 ): (inboundPlaintext: Uint8Array) => Uint8Array[]
 
+// The reject-answer sibling (#965, see § Attachment upload reject scaffolding): answers the chunk that
+// TRIGGERED a reject condition with one error reply carrying the named code, silence otherwise.
+export type AttachmentRejectCode = /* the six wire code literals, see the linked section */
+export function attachmentRejectReplyFrames(
+  rejectedIndex: number,
+  code: AttachmentRejectCode
+): (inboundPlaintext: Uint8Array) => Uint8Array[]
+
 export type FakeDaemonOutcome = { ok: true } | { ok: false; reason: FakeDaemonErrorReason }
 
 export type FakeDaemonErrorReason =
@@ -188,6 +196,42 @@ delegate (verbatim delegation, no extra frame, no timing change) and waits on bo
 handled before asserting silence — the assertion now observes what it claims rather than inferring it from
 FIFO delivery.
 
+## Attachment upload reject scaffolding (#965)
+
+The reject-answer sibling of § Attachment upload scaffolding above, extending the same
+`buildReplyFrames` hook for the six ways an upload can be refused rather than the one way it can
+succeed — full account, including the wire-code table and the client-side narrowing this proves against,
+in [Daemon error outcome](daemon-error-outcome.md).
+
+```ts
+export type AttachmentRejectCode =
+  | 'attachment.invalid_chunk' | 'attachment.integrity_failed' | 'attachment.too_large'
+  | 'attachment.too_many_uploads' | 'attachment.storage_failed' | 'message.too_long'
+
+export function attachmentRejectReplyFrames(
+  rejectedIndex: number,
+  code: AttachmentRejectCode
+): (inboundPlaintext: Uint8Array) => Uint8Array[]
+```
+
+Answers the `attachment_chunk` at `rejectedIndex` with one `error` envelope whose `in_reply_to` is that
+chunk's envelope id and whose payload is `{ code, message, retryable }` mirrored from the daemon's own
+reject table (`ATTACHMENT_REJECTS`, a private module constant) — a real reject, not a code in an empty
+shell. `message.too_long`'s message is fake-owned rather than mirrored: the code exists in pyrycode's
+`codes.go` but has no emit site anywhere in the Go tree (checked 2026-09-03), so there is nothing upstream
+to be faithful to; it is static and path-free like the five entries that are mirrored. A non-`attachment_chunk`
+frame, a chunk at another index, or an undecodable frame all yield `[]` — the sibling's discipline.
+
+**The parameter is `rejectedIndex`, not the sibling's `completingIndex`.** A reject names the chunk that
+*triggered* the condition, which for `attachment.too_many_uploads` or `attachment.storage_failed` can be
+any chunk in the stream, not the one that closed the set — the naming difference is load-bearing, not
+cosmetic.
+
+Stateless by construction, like `attachmentStoredReplyFrames`: the closure holds one number and one
+string, no arrival set, so interleaved transfers cannot race and there is nothing to reset between tests.
+`ATTACHMENT_REJECT_ID`/`ATTACHMENT_REJECT_TS` are fixed constants, the same wall-clock-free convention as
+`ATTACHMENT_STORED_ID`/`ATTACHMENT_STORED_TS`.
+
 ## Test-file wall-clock deadline harness (`bounded`, #550, #931)
 
 `fakeDaemon.test.ts`'s own harness — not part of the daemon module above — bounds every stallable await
@@ -282,3 +326,4 @@ protects is vitest's, not the daemon's.
 - [#532 codebase notes](../codebase/532.md) / [Noise session](noise-session.md#rekey-window-routing-by-inner-frame-type-532) — the client-side rekey-desync fix #524/#525 set up: `pushFrame` now also serves in `awaiting-rekey-init` (§ above), the harness relaxation that let a test daemon emit the one frame kind the client-side fix needed to prove itself against. `driveClient.deliverFrame` was also threaded to pass the decoded inner type down to the real client session, where before it discarded `type` entirely and would have left the whole suite blind to the new client-side routing.
 - Cross-project prior art: pyrycode `fakerelay-harness.md` + the fake-phone peer (`internal/e2e`, #295 tree) — the same forwarder → fake-peer → consuming-test phasing; the desktop daemon deliberately drops the Go surface and ports only the structuring rationale.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — [#964](https://github.com/pyrycode/pyrycode-desktop/issues/964)'s decode this file's new `attachmentStoredReplyFrames` (§ above) proves end to end; [Attachment chunk envelope](attachment-chunk-envelope.md) (#860) is the real `buildAttachmentChunk`/`planAttachmentChunks` the AC4 test drives chunks through rather than hand-rolling them.
+- [Daemon error outcome](daemon-error-outcome.md) — [#965](https://github.com/pyrycode/pyrycode-desktop/issues/965)'s reject-code narrowing this file's `attachmentRejectReplyFrames` (§ Attachment upload reject scaffolding) proves end to end; the sibling of the line above, opposite terminal.

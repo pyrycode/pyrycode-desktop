@@ -437,6 +437,35 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   reply and silences the rest, deliberately naming a non-final completing chunk so a consumer that
   predicts the last envelope id fails the AC4 test. Ships unreferenced; #861 (not started) is the first
   consumer of both wire halves. Architect self-review PASS.
+- [Daemon error outcome](features/daemon-error-outcome.md) — the **reject** half of the attachment upload
+  leg's wire contract (#965, split from #961, unblocked by #964's fake-daemon scaffolding): the always
+  content-free `daemon-error` kind (#116) becomes **scoped, not absolute** — a new module-private
+  `narrowDaemonErrorOutcome` reads exactly one `ErrorPayload` field, `code`, as a comparand in an explicit
+  `switch`, mapping the attachment upload leg's six reject codes (`attachment.invalid_chunk` /
+  `.integrity_failed` / `.too_large` / `.too_many_uploads` / `.storage_failed` / `message.too_long`) onto a
+  new client-owned `DaemonErrorOutcome` union whose every member is a source literal, plus a catch-all
+  `'unclassified'` for anything else or an unparseable payload. `outcome` is **required** on the widened
+  `daemon-error` kind, not optional, and the narrower is **total** — never throws, no failure return — the
+  file's one deliberate exception to its own throw-on-malformed-payload idiom, because
+  `daemonConnection.ts`'s bare `catch { return }` around `parseInboundMessage` means a throw here would
+  silently kill the four existing `daemon-error` correlations (`sessionSettingsRejected` #269,
+  `workspaceFolderRejected` #396, the debug-bundle reassembler #116, `modalAnswerRejected` #248) — an error
+  frame is terminal because it arrived, not because its payload parsed. `retryable`/`retry_after_s` are
+  read from nowhere: the daemon never sends `retry_after_s` on this leg, and retryability is documented on
+  each outcome member rather than computed, since it is client-owned policy for #861 to apply, not this
+  decode boundary's concern. `ErrorPayload` gains a docblock arguing the read/no-read split on contract
+  ground rather than a borrowed measurement. New fake-daemon sibling, `attachmentRejectReplyFrames(rejectedIndex,
+  code)`, mirrors `attachmentStoredReplyFrames` member for member but names the chunk that *triggered* the
+  condition, not the one that closed the transfer — real for `too_many_uploads`/`storage_failed`, which can
+  fire on any chunk. A rework leg fixed two placement defects a verifier caught: the new type's declaration
+  had been inserted between `InboundDaemonMessage`'s docblock and the union itself, orphaning ~223 lines of
+  contract documentation (moved above the docblock instead, a pure relocation verified via the TypeScript
+  compiler API); and a `{ __proto__: {...} }` object-literal fixture was the prototype-*setter* form,
+  creating no own property and silently duplicating the plain-`{}` test one case above — rebuilt with
+  `JSON.parse` and now asserts the encoded bytes contain the literal `"__proto__"`. Security review PASS,
+  one SHOULD FIX (a daemon-controlled `code` string could typecheck cleanly into the diagnostic log under
+  ADR 0007's name-only allowlist) closed by a deterministic log-no-leak test rather than prose alone. Ships
+  unreferenced; #861 (not started) is the intended first reader of `outcome`.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

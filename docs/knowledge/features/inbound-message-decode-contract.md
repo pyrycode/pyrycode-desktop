@@ -14,7 +14,9 @@ export type InboundDaemonMessage =
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }   // #116, additive
   | { kind: 'bundle-done'; total: number }                    // #116, additive
-  | { kind: 'daemon-error'; inReplyTo?: number }               // #116, additive — content-free; inReplyTo added by #269
+  | { kind: 'daemon-error'; inReplyTo?: number; outcome: DaemonErrorOutcome }  // #116, additive; inReplyTo added
+                                                                 // by #269; outcome added by #965 — content-free
+                                                                 // rule now SCOPED, not absolute (see below)
   // { kind: 'snapshot'; snapshot: ScreenSnapshotPayload } — #180, additive; REMOVED #622
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }  // #199, additive
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }              // #199, additive
@@ -280,6 +282,21 @@ neither struct carries `omitempty` on any key. Full account, including the trust
 does **not** transfer from `slash_command_list`'s measured-`0x0a` evidence, in [Extension
 history](inbound-message-decode-history.md). Ships dormant: `daemonConnection.ts`'s inbound switch has
 no case for `'model-list'` yet.
+
+**[#965](https://github.com/pyrycode/pyrycode-desktop/issues/965) widens `daemon-error` by a field, not a
+kind** — the same #642/#773 shape applied to the file's one deliberately content-free kind. Since
+[#116](../codebase/116.md) this arm parsed no `ErrorPayload` field at all; that invariant is now
+**scoped** rather than absolute, narrowed for the attachment upload leg's six reject codes and still
+closed for everything else. A new module-private `narrowDaemonErrorOutcome(payload: unknown):
+DaemonErrorOutcome` reads exactly one field, `code`, as a **comparand** in an explicit `switch` — never a
+`Record`-keyed lookup, which would make untrusted text a lookup path — and is **total**: it never throws
+and has no failure return, the file's one deliberate exception to the throw-on-malformed-payload idiom,
+because a thrown `error` frame would silently kill the four correlations `daemonConnection.ts` drives off
+this kind (see [Daemon connection — correlation](daemon-connection-correlation.md)). `outcome` is
+**required** on the kind, not optional, so a malformed payload lands on `'unclassified'` rather than on
+absence. Full account — the six-code table, the `payload:null`-vs-no-`payload`-key split, the fake
+daemon's reject-answer counterpart, and a docblock-placement lesson from the first attempt — in
+[Daemon error outcome](daemon-error-outcome.md).
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

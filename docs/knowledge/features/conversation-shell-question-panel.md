@@ -252,13 +252,27 @@ keyboard focus, unchanged by #922): Previous *itself* unmounts on its own activa
 second question to the first with the keyboard removes the just-activated button, dropping focus to
 `<body>`. That is the direct, correct consequence of "absent, not disabled," not a bug to fix.
 
-**CSS joins two existing selector lists rather than minting a treatment.** Read against `347:6888` on
+**CSS joined two existing selector lists rather than minting a treatment.** Read against `347:6888` on
 2026-09-02 (and independently re-confirmed by the verifier's own `get_variable_defs` read — byte-identical
 tokens), Previous carries Cancel's treatment with no property changed: `Schemes/Background` fill, a 1px
-`Schemes/Primary` border, `Schemes/Primary` text, 16px/7px padding. `.question-panel__previous` joins
-`.question-panel__cancel, .question-panel__continue` for the shared type/geometry rule and joins
-`.question-panel__cancel` alone for the outlined fill/border/padding rule — a separate *class* from Cancel
-only so the markup does not name a Previous button after a different action, not a separate *rule*.
+`Schemes/Primary` border, `Schemes/Primary` text, 16px/7px padding. Through #963 that meant
+`.question-panel__previous` joined `.question-panel__cancel, .question-panel__continue` for the shared
+type/geometry rule and joined `.question-panel__cancel` alone for the outlined fill/border/padding rule —
+a separate *class* from Cancel only so the markup does not name a Previous button after a different
+action, not a separate *rule*.
+
+**[#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) lifted the shared type/geometry half out
+of that three-selector list into a `.button-small` base class**, on its second consumer — the composer
+status row's new actionable-error button wants the same reset, corner, nowrap and `flex: 0 0 auto`, and
+this repo's own "One consumer is not a pattern" ruling (at `.composer__actions`) is what triggers an
+extraction on the second one rather than a third selector on this list. See [Conversation shell — composer
+§ Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+for the class itself. All three of this panel's buttons now wear `button-small` *in their `className`*
+alongside their own class (`class="button-small question-panel__cancel"`, etc.) — an ordinary two-class
+BEM mix, not a rename — and `QuestionPanel.test.tsx`'s exact-string markup assertion on Cancel moved with
+it. The outlined fill/border/padding rule below, joining `.question-panel__previous` to
+`.question-panel__cancel` alone, is untouched: padding cannot live in the shared base class, since the
+outlined pair's 7px is a border-box compensation the filled variant must not inherit.
 **`.question-panel__continue` keeps its name even though the copy on it now usually reads Next** — the class
 names the design's filled treatment slot (`347:6692`), which is what stays constant; a rename would touch
 two call sites (the component and the e2e locator) to buy nothing observable, and both the stylesheet and the

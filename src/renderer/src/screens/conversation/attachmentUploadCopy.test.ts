@@ -214,12 +214,22 @@ describe('uploadProgressPercent — the computed figure (#864 AC1)', () => {
 
   it('rejects a count that is a string, which the global isFinite would have accepted', () => {
     // `Number.isFinite` does not coerce and the global `isFinite` does: `isFinite('5')` is true, so a
-    // guard written with the global would let a string reach the arithmetic. This is the assertion
-    // that tells the two apart.
-    const hostile = { type: 'progress', uploadId: 'u', sentChunks: '5', totalChunks: '10' }
+    // guard written with the global would let a string reach the arithmetic and state a figure derived
+    // from it.
+    //
+    // ASSERTED AS WHOLE-SENTENCE EQUALITY, NEVER AS A SUBSTRING. This test shipped as
+    // `toContain('0%')` against '5'/'10' and detected nothing: the coercing guard states `Uploading…
+    // 50%`, which CONTAINS "0%" and contains no "NaN", so both assertions held under both guards while
+    // the comment told the next reader they were covered. A substring of a percent figure is a
+    // sub-figure of every percent figure that ends in it.
+    const hostile = { type: 'progress', uploadId: 'u', sentChunks: '5', totalChunks: '8' }
     const sentence = attachmentUploadOutcomeCopy(hostile as unknown as AttachmentUploadEvent)
     expect(sentence).not.toContain('NaN')
-    expect(sentence).toContain('0%')
+    expect(sentence).toBe(attachmentUploadOutcomeCopy(progressWith(0, 8)))
+    // ...and the equality above is one this module can FAIL: read as numbers, the very same counts state
+    // a different sentence. Without this line the assertion would still pass against an implementation
+    // that had stopped distinguishing its inputs at all, which is the failure being repaired here.
+    expect(attachmentUploadOutcomeCopy(progressWith(5, 8))).not.toBe(sentence)
   })
 })
 

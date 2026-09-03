@@ -264,7 +264,8 @@ test('composer footer: the attach button dispatches the intent and states the la
 
   // --- AC4's second half: starting a NEW attach clears the one before it. The clear happens on the click
   // and not on an arriving event, which is the only ordering that works: this second pick is cancelled too
-  // and reports nothing at all, so an event-driven clear would leave the completion on screen forever. ---
+  // and reports nothing at all, so an event-driven clear would leave the terminal now on screen — the
+  // connection-lost line pushed just above, since #864's progress block runs before this — there forever. ---
   await attach.click()
   await expect(outcome).toHaveCount(0, { timeout: OUTCOME_TIMEOUT_MS })
 

@@ -271,12 +271,22 @@ reject, the connection-teardown net, or a local send throw. Progress rides that 
 connection lost mid-transfer stops progress and delivers `connection-lost` on the same path a
 completion takes (AC3).
 
-Re-render cost: up to `ATTACHMENT_MAX_UPLOAD_CHUNKS` (512) `setState` calls over a transfer bounded at
-~30 s, so ~17/s worst case. Coarsening the emission cadence — reporting only when the whole-percent
-figure changes — was considered and declined: nothing has been observed to strain, the live-region
-problem the ticket raises it for is already solved by the non-live element, and the identical text
-React would render between percent boundaries produces no DOM mutation. A future ticket that observes
-a real cost knows where the seam is.
+Re-render cost, and **the emission is NOT paced by the uplink** — see the Revisions entry below for the
+figure this replaces. Nothing in the send path awaits the wire: `sendAttachmentChunk` calls
+`noiseRelayDriver.sendMessage`, which returns `void` and buffers, and the only thing between two chunks
+is `yieldToEventLoop`, which `daemonConnection.uploadAttachment` leaves at its `setImmediate` default.
+So the reports are paced by event-loop turns, not by bandwidth: up to `ATTACHMENT_MAX_UPLOAD_CHUNKS`
+(512) `setState` calls arriving as a burst over scheduler turns rather than spread across the
+transfer's wire time, each re-rendering the `Composer` subtree, while the rendered text takes at most
+101 distinct values.
+
+Coarsening the emission cadence — reporting only when the whole-percent figure changes — is still
+declined, but on the honest grounds rather than on a low rate: nothing has been observed to strain, no
+acceptance criterion asks for it, and the live-region problem the ticket raises coarsening for is
+solved by the non-live element instead. Shipping a defence for an unmeasured cost is the trade this
+pipeline declines by default. What the reader needs is the seam and the true shape of the load, and a
+future ticket that observes real jank has both: the guard would go in `driveUpload`'s closure, beside
+the `ATTACHMENT_PROGRESS_MIN_CHUNKS` gate that already drops reports there.
 
 ## Error handling
 
@@ -440,3 +450,40 @@ One implementation detail worth naming for a later reader: the shared-union chan
 positive `Object.keys` walk passes on the object literal at runtime regardless. The typechecker is the
 gate that actually holds `AttachmentUploadEvent`'s shape, which is the same reason
 `attachmentUploadOutcomeCopy`'s missing `default` is load-bearing.
+
+### 2026-09-04 — rework leg 1: a test that could not detect what it claimed, and a rate figure that was wrong
+
+Both findings land on the same designed-in mitigation from the Security review's second trust-boundary
+item, from opposite sides: the guard was right, its proof was not, and the load figure that justified
+leaving the cadence alone was reasoned from the wrong clock. No interface, no contract and no shipped
+behaviour changed — the diff is one test, one plan section and one comment.
+
+1. **`uploadProgressPercent`'s string-coercion test proved nothing (MUST FIX).** It asserted
+   `not.toContain('NaN')` and `toContain('0%')` against `sentChunks: '5'` / `totalChunks: '10'`. The
+   coercing global `isFinite` states `Uploading… 50%` for those counts, which contains the substring
+   `0%` and no `NaN` — so both assertions held under both guards, and this was the only test in the
+   suite that could have reddened on the swap. The neighbouring totality test passes `NaN`, `Infinity`,
+   negatives and a zero total, on every one of which the two guards agree. Swapping `Number.isFinite`
+   for the global was therefore a green change, while the test's own comment told the next reader it
+   was covered.
+
+   Repaired as WHOLE-SENTENCE EQUALITY against a genuine zero rather than a substring, since a
+   substring of a percent figure is a sub-figure of every percent figure ending in it. The counts moved
+   to `'5'`/`'8'` so the coerced reading (`62%`) collides with nothing, and the test now carries its own
+   anti-vacuity line — asserting that the same counts read as NUMBERS state a different sentence, so the
+   equality above is one the module can actually fail. The general lesson, which is not specific to this
+   module: a `toContain` against a formatted NUMBER is a weak assertion by construction, because the
+   format's own alphabet is small and its values nest.
+
+2. **The re-render figure was derived from a clock the code does not have (SHOULD FIX).** The section
+   above read "512 `setState` calls over a transfer bounded at ~30 s, so ~17/s worst case", reasoning
+   from the 1 MB/s uplink that `ATTACHMENT_MAX_UPLOAD_CHUNKS`'s docblock uses. But the send loop is not
+   paced by the uplink at all: `sendMessage` returns `void` and buffers, nothing awaits socket drain,
+   and `yieldToEventLoop` is left at its `setImmediate` default, so the reports burst at scheduler
+   cadence. The rate was wrong by orders of magnitude in the direction that mattered — it made the load
+   look mild — and a future ticket investigating jank would have read it as measured.
+
+   The figure is corrected in place and the conclusion is deliberately unchanged: the cadence is still
+   not coarsened, now on the grounds that the cost is unobserved rather than on the grounds that it is
+   small. Shipping a defence for a failure mode nobody has seen is the trade this pipeline declines by
+   default, and the corrected paragraph names where the guard would go if someone measures one.

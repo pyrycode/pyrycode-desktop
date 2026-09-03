@@ -1,11 +1,12 @@
-# Session settings send (model / effort / YOLO write, outbound half)
+# Session settings send (model / effort / permission mode / YOLO write, outbound half)
 
-The **outbound send half** of a per-session model / reasoning-effort / YOLO change: a validated
-`setSessionSettings` command reaching `onCommand` becomes an encrypted `set_session_settings`
+The **outbound send half** of a per-session model / reasoning-effort / permission-mode / YOLO change: a
+validated `setSessionSettings` command reaching `onCommand` becomes an encrypted `set_session_settings`
 envelope on the live Noise session, asking the daemon to mutate one session's run configuration
-(pyrycode/pyrycode#844 wire vocab, #845 handler). Introduced in [#263](../codebase/263.md), the write-side
-counterpart to the read-only [screen snapshot fetch](screen-snapshot-fetch.md) (#180) — same `send`-twin
-shape, opposite direction.
+(pyrycode/pyrycode#844 wire vocab, #845 handler; `permission_mode` from pyrycode#1687, picked up in
+\#1021). Introduced in [#263](../codebase/263.md), the write-side counterpart to the
+read-only [screen snapshot fetch](screen-snapshot-fetch.md) (#180) — same `send`-twin shape, opposite
+direction.
 
 Shipped **dormant** and has since gained its live dispatch site. Its caller is the interactive
 Run-configuration controls ([#257](../codebase/257.md), shipped PR #283), exactly as
@@ -93,13 +94,13 @@ no consumer needs). `security-sensitive`, code review **PASS**, no findings.
 
 ## The omitempty presence contract — the crux of this slice
 
-The daemon's `SetSessionSettingsPayload{SessionID string; Model, Effort *string; YOLO *bool}` uses Go's
-`,omitempty` on three pointer fields: a **nil pointer omits the key**; a **non-nil pointer to a zero
-value marshals the key at its zero value**. So on the wire:
+The daemon's `SetSessionSettingsPayload{SessionID string; Model, Effort, PermissionMode *string; YOLO
+*bool}` uses Go's `,omitempty` on four pointer fields: a **nil pointer omits the key**; a **non-nil
+pointer to a zero value marshals the key at its zero value**. So on the wire:
 
 - an **absent** key means "leave this field unchanged"
 - a key **present at its zero value** (`''` / `false`) means "set this field to its zero value" (an
-  empty-string clear, or permissions-enforced)
+  empty-string clear, or permissions-enforced) — **except `permission_mode`**, below
 - this distinction is an absent key vs. a present key — **never** a literal `null`
 
 TS has no `omitempty`. The wire type (`src/shared/wire/types.ts`) merely *permits* absence via `?:`; the
@@ -112,13 +113,41 @@ const wire: SetSessionSettingsPayload = { session_id: payload.session_id }
 if (payload.model !== undefined) wire.model = payload.model
 if (payload.effort !== undefined) wire.effort = payload.effort
 if (payload.yolo !== undefined) wire.yolo = payload.yolo
+if (payload.permission_mode !== undefined) wire.permission_mode = payload.permission_mode
 ```
 
-This conditional-key literal — naming exactly the four modeled keys, never a spread of `payload` —
+This conditional-key literal — naming exactly the five modeled keys, never a spread of `payload` —
 **doubles as the anti-smuggling net**: any extra field a compromised renderer smuggled past the
 structural-minimum command guard is dropped here, never reaching the wire.
 
-## The four pieces
+### `permission_mode` (#1021) — presence, not value
+
+The builder is a **presence** enforcer, not a value-policy point, and `permission_mode` is where that
+split first matters: unlike `model`/`effort`, a present `''` means nothing to the daemon (the default
+posture is itself a nameable mode, so an explicit empty string is refused rather than read as "clear to
+default"). The builder still crosses it verbatim on `!== undefined` — pre-empting the daemon's refusal
+with a truthiness test here would be exactly the collapse the presence contract forbids elsewhere; the
+refusal is the daemon's call to make, not the builder's.
+
+Two more daemon rules the builder deliberately does **not** enforce, because they're the daemon's policy
+and this codebase's guards stay structural (see § Security properties):
+
+- **The closed vocabulary.** The daemon accepts a closed five — `default`, `acceptEdits`, `plan`, `auto`,
+  `dontAsk` — via `validPermissionMode`, and refuses `bypassPermissions` on this field: the escalation
+  keeps exactly one spelling on the wire, `yolo: true`. Nothing on the write path allowlists, normalises,
+  or maps a mode onto the `yolo` bit — the value crosses verbatim end to end, from
+  `runSettingsWriteBridge.ts`'s `buildSettingsPayload` through this builder.
+- **The both-fields refusal.** `permission_mode` and `yolo` are two spellings of one posture, and the
+  daemon refuses a frame carrying both as malformed, checked *before* the mode's value. Nothing here
+  enforces that either — the intended path cannot produce it, since `buildSettingsPayload`
+  ([run settings write store](run-settings-write-store.md)) emits a fresh literal with exactly one key,
+  so the two fields are structurally never on the same `SettingsChange`.
+
+A lone `permission_mode` **can move a session out of bypass** (the daemon's pool sets `merged.YOLO =
+(mode == "bypassPermissions")` on any present mode) but **can never move one into it**, since the value
+that would do so is the refused one.
+
+## The five pieces
 
 | Piece | File | Role |
 |---|---|---|
@@ -132,11 +161,20 @@ structural-minimum command guard is dropped here, never reaching the wire.
 ```ts
 export interface SetSessionSettingsPayload {
   session_id: string
-  model?: string   // *string omitempty — absent = leave unchanged; '' = clear to daemon default
-  effort?: string  // *string omitempty — absent = leave unchanged; '' = clear
-  yolo?: boolean    // *bool  omitempty — absent = leave unchanged; false = permissions enforced
+  model?: string            // *string omitempty — absent = leave unchanged; '' = clear to daemon default
+  effort?: string           // *string omitempty — absent = leave unchanged; '' = clear
+  yolo?: boolean             // *bool  omitempty — absent = leave unchanged; false = permissions enforced
+  permission_mode?: string  // *string omitempty (#1021) — absent = leave unchanged; '' REFUSED, not clear
 }
 ```
+
+`permission_mode` is one of the daemon's closed five (`bypassPermissions` refused here — see above); this
+type is a structural mirror, not a policy, so it permits both `permission_mode` and `yolo` together even
+though the daemon refuses that combination as malformed. Note the read half is **wider**:
+`SessionSettingsPayload.permission_mode` ([run config store](run-config-store.md), #1020) additionally
+reports `bypassPermissions`, so a value observed there is not necessarily one this field will accept back
+— a trap for a future consumer, named in `selectEffectiveSettings`'s docblock in the
+[write store](run-settings-write-store.md).
 
 `'set_session_settings'` joins `EnvelopeType` in the outbound group beside `'request_snapshot'`. Adding
 an outbound member is safe: `Envelope.type` is `EnvelopeType | string` (permissive), no `assertNever`
@@ -204,6 +242,7 @@ function isSetSessionSettingsPayload(value: unknown): value is SetSessionSetting
   if ('model' in value && typeof value.model !== 'string') return false
   if ('effort' in value && typeof value.effort !== 'string') return false
   if ('yolo' in value && typeof value.yolo !== 'boolean') return false
+  if ('permission_mode' in value && typeof value.permission_mode !== 'string') return false
   return true
 }
 ```
@@ -215,6 +254,16 @@ typed, structural minimum (an extra field is accepted here — the builder's fre
 regardless). This is the guard the [command channel](command-channel.md)'s lockstep discipline requires —
 the union member, the `isRendererCommand` switch case, and this guard land together, or the member is
 silently dropped at the boundary.
+
+`permission_mode`'s check (#1021) is deliberately a **type** check, not closed-set membership, and that
+asymmetry is the point — contrast `isNotifyPayload` elsewhere in this file, which *does* validate a closed
+set. The difference is which side owns the policy: a renderer able to smuggle a bad `permission_mode`
+(the daemon simply refuses it) can instead send `yolo: true` through this same guard, the strictly
+stronger capability already admitted here. An allowlist would defend nothing and would drift from the
+daemon's `validPermissionMode` the next time upstream adds a mode. `isNotifyPayload`'s closed set exists
+because a bad value there reaches an OS notification with no server-side check behind it — here the
+daemon *is* that check. The guard likewise does not reject a payload carrying both `permission_mode` and
+`yolo` on one object; see § `permission_mode` — presence, not value above for why.
 
 **No renderer-side constructor this slice** — mirrors `requestSnapshot`/`createConversation` (neither has
 one); #257 constructs the command inline.
@@ -233,7 +282,7 @@ change has no download-progress state to coordinate.
 ## Data flow
 
 ```
-window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, effort?, yolo?}, changeId})
+window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, effort?, yolo?, permission_mode?}, changeId})
       → COMMAND_CHANNEL → onCommand (isRendererCommand → isSetSessionSettingsPayload + changeId guard)
       → connection.setSessionSettings(payload, changeId)
       → buildSetSessionSettings (presence contract + fresh literal) → driver.sendMessage
@@ -278,7 +327,13 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   re-exported through a renderer barrel — raw bytes stay out of the web layer.
 - **Bounded wire shape.** The builder's fresh, conditionally-keyed literal — not the command guard —
   is the deterministic net that bounds the outbound wire to exactly `{session_id, model?, effort?,
-  yolo?}`, regardless of what the structural-minimum guard admitted.
+  yolo?, permission_mode?}`, regardless of what the structural-minimum guard admitted.
+- **(#1021) No allowlist is a deliberate non-control, not a gap.** `permission_mode` crosses this whole
+  path — command guard, builder, connection method — with a type check and nothing else. An allowlist
+  here would read as a security boundary while `yolo: true`, the strictly stronger and unguarded
+  escalation, sits in the same payload shape; it would also drift from the daemon's `validPermissionMode`
+  the next time upstream adds a mode. Architect self-review verdict **PASS**, code review **PASS**, no
+  findings on either pass.
 - **Log-free; classify-don't-forward.** The method's `catch {}` drops the caught object with no log,
   no event — it could echo `model`/`effort`/`session_id`.
 - **No new IPC surface, no new crypto, no new RNG** (unlike `answerModal`, this command mints no token).
@@ -332,3 +387,8 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md)
   — the pending-write store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; see
   § Consumption above.
+- **#1021** — added `permission_mode` as this slice's fourth field, mirroring pyrycode#1687's write-side
+  addition. One new arm threaded through the wire type, the command guard, the builder, and (in the
+  [write store](run-settings-write-store.md)) the `SettingsChange` union and its two hand-widened
+  selectors. No consumer is built by this ticket; the control that submits a mode is #682.
+  Split from #682.

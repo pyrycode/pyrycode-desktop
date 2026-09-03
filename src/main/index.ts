@@ -43,6 +43,7 @@ import {
 } from '../shared/ipc/attachmentRetrieval'
 import { createAttachmentSave } from './attachmentSave'
 import { createAttachmentBytes } from './attachmentBytes'
+import { ATTACHMENT_OPEN_DIR_NAME, createAttachmentOpen } from './attachmentOpen'
 import {
   ATTACHMENT_SAVE_CHANNEL,
   ATTACHMENT_SAVE_EVENT_CHANNEL,
@@ -53,6 +54,11 @@ import {
   ATTACHMENT_BYTES_EVENT_CHANNEL,
   isAttachmentBytesRequest
 } from '../shared/ipc/attachmentBytes'
+import {
+  ATTACHMENT_OPEN_CHANNEL,
+  ATTACHMENT_OPEN_EVENT_CHANNEL,
+  isAttachmentOpenRequest
+} from '../shared/ipc/attachmentOpen'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -686,6 +692,52 @@ app.whenReady().then(() => {
   app.on('will-quit', () =>
     ipcMain.removeListener(ATTACHMENT_BYTES_CHANNEL, attachmentBytesListener)
   )
+
+  // The open-in-the-OS-viewer edge (#867) — the third consumer of what the retrieval edge puts on
+  // this machine, and the FOURTH READER of the one `attachmentDir` joined above. It adds the only
+  // new directory this file has needed since #996: `openDir`, where the suffixed derived copies
+  // live. Both are joined onto `app.getPath('userData')` here and closed into the driver, so neither
+  // is ever derived from anything the window sent, and attachmentOpen.ts stays Electron-free and
+  // unit-testable against a temp directory.
+  //
+  // setWindowOpenHandler's `file:` and custom-protocol denies are deliberately UNTOUCHED, and matter
+  // more here than on any sibling: the open runs in THIS process, on a path this process computed
+  // from bytes this process read, never on a URL or a path the window supplied. That is what lets
+  // the app hand a file to the operating system without reopening the window-open path to local
+  // files.
+  //
+  // THE `openPath` SEAM IS NARROWED TO A BOOLEAN HERE, AND THAT IS LOAD-BEARING. `shell.openPath`
+  // does not throw — it resolves with the operating system's error MESSAGE, empty on success, and
+  // that message carries the path. Collapsing it to a bit at this boundary means the driver, which
+  // builds the reasons and the log records, never holds the string at all (AC 5). This is the repo's
+  // first `shell.openPath` call; `shell.showItemInFolder` above is the save leg's reveal and is a
+  // different API for a different job.
+  const openDir = join(app.getPath('userData'), ATTACHMENT_OPEN_DIR_NAME)
+  const openAttachment = createAttachmentOpen({
+    attachmentDir,
+    openDir,
+    open: async (path) => (await shell.openPath(path)).length === 0,
+    diagnosticLog
+  })
+
+  // The bytes listener's posture verbatim — the ask carries an untrusted identifier and nothing
+  // else, and owes the same boundary check. A malformed ask is DROPPED: no filesystem call, no file
+  // opened, no event — the only sound answer when there is no identifier to address a reply to.
+  //
+  // The bare `void` is safe because the driver never rejects — a property of that module, not of a
+  // `.catch()` anyone must remember. `event.sender` is closed into the reply so the outcome goes
+  // back to the window that asked, behind the upload edge's isDestroyed() guard for a window closed
+  // mid-open.
+  const attachmentOpenListener = (event: Electron.IpcMainEvent, request: unknown): void => {
+    if (!isAttachmentOpenRequest(request)) return
+    const sender = event.sender
+    void openAttachment(request).then((openEvent) => {
+      if (sender.isDestroyed()) return
+      sender.send(ATTACHMENT_OPEN_EVENT_CHANNEL, openEvent)
+    })
+  }
+  ipcMain.on(ATTACHMENT_OPEN_CHANNEL, attachmentOpenListener)
+  app.on('will-quit', () => ipcMain.removeListener(ATTACHMENT_OPEN_CHANNEL, attachmentOpenListener))
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

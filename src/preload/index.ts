@@ -34,6 +34,12 @@ import {
   type AttachmentBytesEvent,
   type AttachmentBytesRequest
 } from '../shared/ipc/attachmentBytes'
+import {
+  ATTACHMENT_OPEN_CHANNEL,
+  ATTACHMENT_OPEN_EVENT_CHANNEL,
+  type AttachmentOpenEvent,
+  type AttachmentOpenRequest
+} from '../shared/ipc/attachmentOpen'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -301,6 +307,53 @@ const api = {
     const handler = (_event: IpcRendererEvent, event: AttachmentBytesEvent): void => listener(event)
     ipcRenderer.on(ATTACHMENT_BYTES_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(ATTACHMENT_BYTES_EVENT_CHANNEL, handler)
+  },
+
+  /**
+   * Ask the background process to open an attachment already on this machine in the operating
+   * system's default handler for its type (#867). Fire-and-forget (no reply); the outcome arrives
+   * later on the push channel below, matching the three sibling pairs rather than an invoke.
+   *
+   * CALLED WITH AN IDENTIFIER AND NOTHING ELSE, because the window cannot be handed a path and must
+   * not be able to name one: `setWindowOpenHandler`'s `file:` and custom-protocol denies stay
+   * closed, and this channel is the whole reason they can. NO PATH, DIRECTORY OR URL crosses in
+   * either direction. The identifier is UNTRUSTED at this boundary regardless of the declared type,
+   * so the main side re-checks the shape with `isAttachmentOpenRequest` and drops a malformed ask,
+   * then refuses a non-canonical one at `resolveAttachmentPath` before any filesystem call.
+   * ATTACHMENT_OPEN_CHANNEL is fixed here so the renderer cannot address arbitrary IPC channels, and
+   * ipcRenderer never crosses the bridge.
+   *
+   * THE WINDOW DOES NOT CHOOSE THE TYPE, and cannot. What the operating system is told is decided in
+   * the background process from the file's own leading bytes, against a closed set of raster image
+   * signatures — a file matching none of them is refused rather than opened, whatever a `mime_type`
+   * claimed. IT DOES NOT FETCH either: an attachment that is not on this machine answers
+   * `unavailable`; fetching it is `requestAttachment` above. No caller is wired yet — the thumbnail
+   * that becomes this control is #869.
+   */
+  openAttachment: (request: AttachmentOpenRequest): void => {
+    ipcRenderer.send(ATTACHMENT_OPEN_CHANNEL, request)
+  },
+
+  /**
+   * Subscribe to attachment-open outcomes from the background process (#867); returns an unsubscribe
+   * handle the renderer must call on teardown so listeners don't accumulate across remounts. The
+   * onDaemonEvent shape — the raw IpcRendererEvent (exposing .sender/.ports) is stripped before the
+   * listener runs, and removeListener uses the exact handler registered.
+   *
+   * Correlate on the event's `attachmentId`: it is this window's OWN value coming back, echoed even
+   * on a refused identifier. Exactly one event arrives per ask that passed the boundary guard, and a
+   * malformed ask delivers nothing at all, so a listener must not assume one event per call.
+   *
+   * FOUR FAILURE REASONS, AND THEY ARE APART BECAUSE A CONSUMER ACTS ON THE DIFFERENCE: `refused` is
+   * permanent, `unavailable` is fetched and asked for again, `unsupported-type` means offer the save
+   * leg instead, and `open-failed` is the only one a plain retry can fix. The event carries no path,
+   * no derived file name, no matched type and no operating-system message by construction (see
+   * AttachmentOpenEvent).
+   */
+  onAttachmentOpenEvent: (listener: (event: AttachmentOpenEvent) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: AttachmentOpenEvent): void => listener(event)
+    ipcRenderer.on(ATTACHMENT_OPEN_EVENT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(ATTACHMENT_OPEN_EVENT_CHANNEL, handler)
   }
 }
 

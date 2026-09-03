@@ -13,8 +13,9 @@ Introduced in [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996), s
 ([#814](https://github.com/pyrycode/pyrycode-desktop/issues/814), landed — save into Downloads),
 [attachment bytes](attachment-bytes.md)
 ([#866](https://github.com/pyrycode/pyrycode-desktop/issues/866), landed — deliver bytes to the window)
-and [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) (open in the OS viewer) are the
-consumers; the last is still blocked on this.
+and [attachment open](attachment-open.md)
+([#867](https://github.com/pyrycode/pyrycode-desktop/issues/867), landed — open in the OS viewer) are
+the consumers, all three now landed on the background-process side.
 
 ## Correlation is two different keys, and that's the design
 
@@ -103,8 +104,10 @@ can reach the envelope even when the ask carries extra ones (`createConversation
 `requestAttachment(request)` sends on the fixed request channel; `onAttachmentRetrievalEvent(listener)`
 subscribes on the fixed event channel and returns an unsubscribe handle — `requestAttachmentUpload` /
 `onAttachmentUploadEvent`'s shape verbatim, including stripping the raw `IpcRendererEvent` before the
-listener runs. **No caller is wired** — the consumers are [attachment save](attachment-save.md) (#814)
-and [attachment bytes](attachment-bytes.md) (#866), both landed, and #867, not started.
+listener runs. **No caller is wired** — the consumers are [attachment save](attachment-save.md) (#814),
+[attachment bytes](attachment-bytes.md) (#866) and [attachment open](attachment-open.md) (#867), all
+three landed on the background-process side; the renderer clicks that call them (#815/#816, #868/#869)
+are not started.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 
@@ -358,5 +361,5 @@ queue rather than taking a single tick.
   out to Downloads.
 - [Attachment bytes](attachment-bytes.md) — #866, landed: the second consumer, delivering the bytes
   to the window for display.
-- [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) — the remaining consumer, blocked on
-  this; not started.
+- [Attachment open](attachment-open.md) — #867, landed: the third consumer, opening a file in the OS
+  image viewer.

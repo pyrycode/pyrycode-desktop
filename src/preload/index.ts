@@ -22,6 +22,12 @@ import {
   type AttachmentRetrievalEvent,
   type AttachmentRetrievalRequest
 } from '../shared/ipc/attachmentRetrieval'
+import {
+  ATTACHMENT_SAVE_CHANNEL,
+  ATTACHMENT_SAVE_EVENT_CHANNEL,
+  type AttachmentSaveEvent,
+  type AttachmentSaveRequest
+} from '../shared/ipc/attachmentSave'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -207,6 +213,44 @@ const api = {
       listener(event)
     ipcRenderer.on(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, handler)
+  },
+
+  /**
+   * Ask the background process to save an attachment already on this machine into the operating
+   * system's Downloads folder, with no save dialog, and reveal it there with the file selected (#814).
+   * Fire-and-forget (no reply); the outcome arrives later on the push channel below, matching the
+   * retrieval pair rather than an invoke.
+   *
+   * CALLED WITH AN IDENTIFIER AND A DISPLAY NAME. NO PATH AND NO DIRECTORY CROSSES in either direction:
+   * both the app-private attachment directory and Downloads are computed in the background process from
+   * Electron, never from anything this window sends. The name is DISPLAY-DERIVED, NOT ADDRESSING — the
+   * bytes are selected by the identifier alone — and it is UNTRUSTED at this boundary regardless of the
+   * declared type, so the main side re-runs its own sanitiser on the value it actually builds the path
+   * from and re-checks the shape with isAttachmentSaveRequest, dropping a malformed ask.
+   * ATTACHMENT_SAVE_CHANNEL is fixed here so the renderer cannot address arbitrary IPC channels, and
+   * ipcRenderer never crosses the bridge. No caller is wired yet — the file row is #815 and the click
+   * that calls this is #816.
+   */
+  saveAttachment: (request: AttachmentSaveRequest): void => {
+    ipcRenderer.send(ATTACHMENT_SAVE_CHANNEL, request)
+  },
+
+  /**
+   * Subscribe to attachment-save outcomes from the background process (#814); returns an unsubscribe
+   * handle the renderer must call on teardown so listeners don't accumulate across remounts. The
+   * onDaemonEvent shape — the raw IpcRendererEvent (exposing .sender/.ports) is stripped before the
+   * listener runs, and removeListener uses the exact handler registered.
+   *
+   * Correlate on the event's `attachmentId`: it is this window's OWN value coming back, echoed even on a
+   * refused identifier. Exactly one event arrives per ask that passed the boundary guard; a malformed
+   * one delivers nothing at all, so a listener must not assume one event per call. The event carries no
+   * path, no directory and no saved file name by construction (see AttachmentSaveEvent). No consumer is
+   * wired yet — the rendering is #816.
+   */
+  onAttachmentSaveEvent: (listener: (event: AttachmentSaveEvent) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: AttachmentSaveEvent): void => listener(event)
+    ipcRenderer.on(ATTACHMENT_SAVE_EVENT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(ATTACHMENT_SAVE_EVENT_CHANNEL, handler)
   }
 }
 

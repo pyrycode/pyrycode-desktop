@@ -323,6 +323,29 @@ and #860's `attachment-chunk wire vocabulary` block already pins its shape. AC4 
 
 Each resolution that changes the design is recorded in a `## Revisions` entry.
 
+## Revisions
+
+**2026-09-03 — both open questions resolved in RED/GREEN; the design is unchanged.**
+
+1. **`requireNonEmptyString` on `attachment_id` does not fail-close valid traffic.** The daemon's
+   committed retrieval fixture carries a canonical lowercase UUID, and on this leg the daemon echoes
+   the id from the request it is answering — an empty one can only come from a truncated or hostile
+   frame. Kept as designed.
+2. **`toEqual` does compare `Uint8Array` by content in this vitest (2.1.9).** The exact-equality
+   assertion AC3 rests on passes against the whole result with `data` as bytes, so no fallback and no
+   downgrade to `toMatchObject` was needed. A separate byte-level assertion via `Array.from` was kept
+   anyway, because it is the one that would distinguish "decoded to bytes" from "carried the base64
+   string through" if the equality semantics ever changed.
+
+**One test-harness correction, made in GREEN and worth recording because it produced a
+false-negative rather than a failure.** `encodeAttachmentChunk(payload, undefined)` was intended to
+build the envelope with no `in_reply_to` key, but passing `undefined` to a parameter that has a
+default *takes the default* — so the "envelope carries no correlation" test was asserting against a
+correlated frame and read as if it covered the reject branch. Replaced with an explicit
+`OMIT_IN_REPLY_TO` symbol sentinel. The bug surfaced only because the arm's implementation was
+already correct and the test failed to throw; had the implementation been written first, the test
+would have passed green while proving nothing.
+
 ## Security review
 
 **Verdict:** PASS

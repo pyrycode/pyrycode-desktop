@@ -161,6 +161,36 @@ function encodeAttachmentStored(payload: unknown, inReplyTo = 904): Uint8Array {
   })
 }
 
+/**
+ * Build an `attachment_chunk` envelope with NO `in_reply_to` key at all (#998).
+ *
+ * A SENTINEL rather than `undefined`, and the distinction is a real trap rather than a style choice:
+ * passing `undefined` to a parameter that has a default TAKES THE DEFAULT, so
+ * `encodeAttachmentChunk(payload, undefined)` would silently build a correlated frame and the
+ * "envelope carries no correlation" test would assert against the happy path while reading as if it
+ * covered the reject. On this leg the correlation is required, so building the absent case is
+ * load-bearing.
+ */
+const OMIT_IN_REPLY_TO = Symbol('omit in_reply_to')
+
+/**
+ * An `attachment_chunk` envelope's plaintext bytes, wrapping an arbitrary payload (#998).
+ *
+ * `inReplyTo` is a PARAMETER typed `unknown`, and unlike encodeAttachmentStored's it also has to be
+ * able to carry the off-contract values `decodeEnvelope` collapses: it assigns `in_reply_to` only when
+ * it decodes as a NUMBER, so a `null` and a string both reach the arm as `undefined` — the same thing
+ * an absent key does. Pass OMIT_IN_REPLY_TO for the absent case.
+ */
+function encodeAttachmentChunk(payload: unknown, inReplyTo: unknown = 91): Uint8Array {
+  return encodeEnvelope({
+    id: 813,
+    type: 'attachment_chunk',
+    ts: FIXED_TS,
+    payload,
+    in_reply_to: (inReplyTo === OMIT_IN_REPLY_TO ? undefined : inReplyTo) as number | undefined
+  })
+}
+
 /** A `conversation_created` envelope's plaintext bytes, wrapping an arbitrary payload (#241). */
 function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -695,6 +725,54 @@ const QUESTION_DISMISSED = {
  */
 const ATTACHMENT_STORED = {
   attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67'
+}
+
+/**
+ * The daemon's committed retrieval-chunk payload (#998), transcribed field-for-field from
+ * `internal/protocol/testdata/attachment_chunk_retrieval.json`. Its envelope rides `in_reply_to: 91`
+ * against `request_attachment.json`'s `id: 91` — the pair #993's requestAttachmentEnvelope.test.ts
+ * already pins the request half of, so both halves of the correlation agree in this repo the way they
+ * do upstream.
+ */
+const ATTACHMENT_CHUNK_RETRIEVAL = {
+  attachment_id: '7c1d5e92-4a30-4b8f-9e21-6d4c3b0a8f55',
+  index: 1,
+  total_chunks: 2,
+  filename: 'screenshot.png',
+  mime_type: 'image/png',
+  size: 60,
+  sha256: 'bf848ca98a786db9fe841b727fa49abab5364b097f88f43dba6eb515ff701e22',
+  data: 'YXR0YWNobWVudCByZXRyaWV2YWwsIGNodW5rIDEK'
+}
+
+/** The envelope id `attachment_chunk_retrieval.json` answers — `request_attachment.json`'s `id`. */
+const RETRIEVAL_REQUEST_ID = 91
+
+/** What `ATTACHMENT_CHUNK_RETRIEVAL.data` decodes to: 29 raw bytes, asserted as bytes not as text. */
+const ATTACHMENT_CHUNK_BYTES = new TextEncoder().encode('attachment retrieval, chunk 1\n')
+
+/** The decoded form the whole suite compares against — the eight fields with `data` as raw bytes. */
+const ATTACHMENT_CHUNK_DECODED = {
+  ...ATTACHMENT_CHUNK_RETRIEVAL,
+  data: ATTACHMENT_CHUNK_BYTES
+}
+
+/**
+ * The daemon's committed ALL-ZERO chunk payload (#998), from
+ * `internal/protocol/testdata/attachment_chunk_zero.json`: `total_chunks: 0`, `data: null`, every
+ * string empty. Its envelope has no `in_reply_to` key at all, so it trips several branches at once —
+ * which is why it proves fail-closed against the daemon's own zero value and why every branch is
+ * ALSO isolated by a single-field mutation of the retrieval fixture.
+ */
+const ATTACHMENT_CHUNK_ZERO = {
+  attachment_id: '',
+  index: 0,
+  total_chunks: 0,
+  filename: '',
+  mime_type: '',
+  size: 0,
+  sha256: '',
+  data: null
 }
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
@@ -5005,6 +5083,276 @@ describe('parseInboundMessage — attachment_stored fail-closed (#964)', () => {
   })
 })
 
+/** The retrieval fixture with one field replaced — the single-field mutation AC2's branches isolate with. */
+function chunkWith(overrides: Record<string, unknown>): Record<string, unknown> {
+  return { ...ATTACHMENT_CHUNK_RETRIEVAL, ...overrides }
+}
+
+/** The retrieval fixture with one field deleted — "absent" is a different case from "wrong-typed". */
+function chunkWithout(field: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...ATTACHMENT_CHUNK_RETRIEVAL }
+  delete payload[field]
+  return payload
+}
+
+const ATTACHMENT_CHUNK_FIELDS = [
+  'attachment_id',
+  'index',
+  'total_chunks',
+  'filename',
+  'mime_type',
+  'size',
+  'sha256',
+  'data'
+] as const
+
+describe('parseInboundMessage — attachment_chunk recognition (#998, additive)', () => {
+  it("decodes the daemon's committed retrieval fixture to exactly eight fields plus the correlation (AC1, AC3)", () => {
+    // The EXACT equality over the WHOLE result is what makes AC3 falsifiable: a subset match would
+    // pass with a smuggled field riding along, which is precisely the leak the AC exists to police.
+    expect(parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL))).toEqual({
+      kind: 'attachment-chunk',
+      attachmentChunk: ATTACHMENT_CHUNK_DECODED,
+      inReplyTo: RETRIEVAL_REQUEST_ID
+    })
+  })
+
+  it("surfaces in_reply_to naming the request_attachment this stream answers (AC1)", () => {
+    // The pair upstream commits in bytes rather than prose: attachment_chunk_retrieval.json rides
+    // `in_reply_to: 91` against request_attachment.json's `id: 91`, and #993's
+    // requestAttachmentEnvelope.test.ts already pins the request half of that same literal. This is
+    // where attachment_stored's decision INVERTS: there the envelope id names the chunk whose arrival
+    // completed the transfer, which no client can predict, so carrying it would offer a match key that
+    // silently never fires. Here it names the request the client itself sent — the only handle the
+    // answer carries, and the one a consumer must correlate on.
+    const result = parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL))
+    expect(result).toMatchObject({ inReplyTo: RETRIEVAL_REQUEST_ID })
+    for (const inReplyTo of [1, 7, 4242]) {
+      expect(parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL, inReplyTo))).toEqual({
+        kind: 'attachment-chunk',
+        attachmentChunk: ATTACHMENT_CHUNK_DECODED,
+        inReplyTo
+      })
+    }
+  })
+
+  it('decodes data to RAW BYTES at this boundary, never a re-encoded string (AC1)', () => {
+    // The base64 decode happens here so the reassembler (#995) stays byte-pure — parseDebugBundleChunk's
+    // posture. Asserted as bytes, since a `toEqual` against a string would pass on the wire value.
+    const result = parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL)) as {
+      attachmentChunk: { data: Uint8Array }
+    }
+    expect(result.attachmentChunk.data).toBeInstanceOf(Uint8Array)
+    expect(Array.from(result.attachmentChunk.data)).toEqual(Array.from(ATTACHMENT_CHUNK_BYTES))
+  })
+
+  it('drops unknown server keys, keeping only the eight (AC3)', () => {
+    // A `conversation_id` is the planted extra worth naming: the frame deliberately has none, and the
+    // omission is a security property — an upload lands in the conversation the authenticated session
+    // is already on, so a client cannot steer bytes by naming one.
+    const withExtras = chunkWith({
+      conversation_id: 'conv-1',
+      host_path: '/var/lib/pyry/attachments/7c1d5e92',
+      seq: 3
+    })
+    expect(parseInboundMessage(encodeAttachmentChunk(withExtras))).toEqual({
+      kind: 'attachment-chunk',
+      attachmentChunk: ATTACHMENT_CHUNK_DECODED,
+      inReplyTo: RETRIEVAL_REQUEST_ID
+    })
+  })
+
+  it('accepts index at BOTH ends of the half-open range [0, total_chunks) (AC1)', () => {
+    // The boundary is half-open and an off-by-one either way is a real defect: rejecting `0` would
+    // drop the first chunk of every transfer, accepting `total_chunks` would admit one that addresses
+    // nothing. Chunks are INDEX-ADDRESSED and may arrive in any order, so recognition must not narrow
+    // in a way that presumes succession — debug_bundle_chunk's strict ascending `seq` is the
+    // neighbouring rule and the wrong one here.
+    for (const index of [0, 1]) {
+      expect(parseInboundMessage(encodeAttachmentChunk(chunkWith({ index })))).toMatchObject({
+        kind: 'attachment-chunk',
+        attachmentChunk: { index, total_chunks: 2 }
+      })
+    }
+    // The single-chunk transfer: total_chunks 1 makes 0 the only legal index, and it must be legal.
+    expect(
+      parseInboundMessage(encodeAttachmentChunk(chunkWith({ index: 0, total_chunks: 1 })))
+    ).toMatchObject({ attachmentChunk: { index: 0, total_chunks: 1 } })
+  })
+
+  it('carries a non-canonical attachment_id verbatim — this layer polices TYPE, not SHAPE', () => {
+    // The canonical lowercase-UUIDv4 rule binds the side that MINTS ids (the outbound leg), where the
+    // id becomes a directory name and only a lowercase alphabet keeps the mapping injective on a
+    // case-insensitive filesystem. A second copy of that rule here would fail-close a valid frame the
+    // moment the two disagreed.
+    for (const attachment_id of ['NOT-A-UUID', 'x', '7C1D5E92-4A30-4B8F-9E21-6D4C3B0A8F55']) {
+      expect(
+        parseInboundMessage(encodeAttachmentChunk(chunkWith({ attachment_id })))
+      ).toMatchObject({ attachmentChunk: { attachment_id } })
+    }
+  })
+
+  it('returns a fresh literal a consumer cannot use to reach Object.prototype', () => {
+    // A hostile daemon inside the session picks these strings. The `attachment_id` is the sharp one:
+    // #995 must look it up in a Map keyed by ids this client minted, never as `pending[id]` on a plain
+    // object where `__proto__` reads back a truthy Object.prototype. The decode's job is to hand back
+    // an ordinary own property, which it does. Note the CONTRAST with `inReplyTo`, a number — a
+    // plain-object lookup keyed on THAT is prototype-safe by construction, so the two correlation
+    // handles this frame carries do not share one consumer rule.
+    const hostile = chunkWith({ attachment_id: '__proto__', filename: '__proto__' })
+    const result = parseInboundMessage(encodeAttachmentChunk(hostile)) as {
+      attachmentChunk: { attachment_id: string; filename: string }
+    }
+    expect(Object.prototype.hasOwnProperty.call(result.attachmentChunk, 'attachment_id')).toBe(true)
+    expect(result.attachmentChunk.attachment_id).toBe('__proto__')
+    expect(result.attachmentChunk.filename).toBe('__proto__')
+    // And the decode altered no prototype: a plain object gains neither key from it.
+    expect('attachment_id' in {}).toBe(false)
+    expect('filename' in {}).toBe(false)
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — attachment_chunk fail-closed (#998)', () => {
+  it('throws when the payload is not a record (AC2)', () => {
+    const bad: unknown[] = ['nope', ['a'], 42, null, true]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeAttachmentChunk(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when ANY of the eight fields is absent (AC2)', () => {
+    // No field carries `omitempty` daemon-side and all eight are present in both directions, so an
+    // absent one is a defect rather than a variant. Driven per field so no branch hides behind another.
+    for (const field of ATTACHMENT_CHUNK_FIELDS) {
+      expect(() => parseInboundMessage(encodeAttachmentChunk(chunkWithout(field)))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when any field is WRONG-TYPED (AC2)', () => {
+    const wrong: Record<string, unknown> = {
+      attachment_id: 42,
+      index: '1',
+      total_chunks: null,
+      filename: ['screenshot.png'],
+      mime_type: {},
+      size: '60',
+      sha256: true,
+      data: 7
+    }
+    for (const field of ATTACHMENT_CHUNK_FIELDS) {
+      expect(() =>
+        parseInboundMessage(encodeAttachmentChunk(chunkWith({ [field]: wrong[field] })))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an EMPTY attachment_id — a success naming no transfer (AC2)', () => {
+    // #964's argument transfers verbatim: every key is optional to Go's encoding/json, so a truncated
+    // or hostile frame decodes daemon-side to the ZERO VALUE and arrives here present, typed and empty.
+    // Note the deliberate ASYMMETRY with `filename` / `mime_type` / `sha256` below, where emptiness is
+    // not a modelled failure and requireString's type-only posture is the correct one.
+    expect(() =>
+      parseInboundMessage(encodeAttachmentChunk(chunkWith({ attachment_id: '' })))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws when the envelope carries NO usable in_reply_to (AC2)', () => {
+    // The correlation is REQUIRED on this kind rather than optional: a chunk arriving without one is
+    // malformed, not an uncorrelated variant. Upstream sets InReplyTo on every frame the retrieval
+    // stream builds and its own reader drops a chunk whose InReplyTo is nil or mismatches. On this side
+    // `decodeEnvelope` assigns `in_reply_to` only when it decodes as a NUMBER, so an absent key, a null
+    // and a string all reach the arm identically as `undefined` — one check covers all three, and this
+    // test drives all three to prove it.
+    for (const inReplyTo of [OMIT_IN_REPLY_TO, null, '91', {}]) {
+      expect(() =>
+        parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL, inReplyTo))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an index outside [0, total_chunks), and the message names no wire value (AC2)', () => {
+    // The message assertion is the point of this test as much as the rejection is. The natural phrasing
+    // interpolates the two daemon-supplied numbers into a WireDecodeError that daemonConnection catches
+    // into a caller that may log it — this module's messages name the failure CATEGORY and a static
+    // field name only, never a value.
+    for (const index of [-1, 2, 3, 1.5, -0.5]) {
+      const call = (): unknown =>
+        parseInboundMessage(encodeAttachmentChunk(chunkWith({ index })))
+      expect(call).toThrow(WireDecodeError)
+      expect(call).toThrow('invalid attachment_chunk index')
+    }
+  })
+
+  it('throws on a total_chunks below 1, and the message names no wire value (AC2)', () => {
+    for (const total_chunks of [0, -1, 1.5]) {
+      const call = (): unknown =>
+        parseInboundMessage(encodeAttachmentChunk(chunkWith({ index: 0, total_chunks })))
+      expect(call).toThrow(WireDecodeError)
+      expect(call).toThrow('invalid attachment_chunk total_chunks')
+    }
+  })
+
+  it('throws when data is not valid PADDED base64 (AC2)', () => {
+    // base64StdDecode is STRICT — it decodes, then requires the input to be the exact base64-std
+    // re-encoding of those bytes — so Node's lenient Buffer.from, which strips non-alphabet characters
+    // and tolerates missing padding, cannot turn a corrupt frame into a plausible shorter file.
+    const bad = [
+      'YXR0YWNobWVudCByZXRyaWV2YWwsIGNodW5rIDE', // padding stripped
+      'YXR0YWNobWVudCByZXRyaWV2YWwsIGNodW5rIDEK=', // over-padded
+      'YXR0YWNo bWVudA==', // embedded space
+      'YXR0YWNo!bWVudA==', // non-alphabet byte
+      'YXR0YWNobWVudA--' // url-safe alphabet, not std
+    ]
+    for (const data of bad) {
+      expect(() => parseInboundMessage(encodeAttachmentChunk(chunkWith({ data })))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it("rejects the daemon's committed ALL-ZERO chunk (AC2)", () => {
+    // Fail-closed against the daemon's own zero value, in daemon-authored bytes. It trips several
+    // branches at once — `total_chunks: 0`, `data: null`, an empty `attachment_id`, and an envelope
+    // with no in_reply_to key — which is exactly why every branch is ALSO isolated above by a
+    // single-field mutation of the retrieval fixture.
+    expect(() =>
+      parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_ZERO, OMIT_IN_REPLY_TO))
+    ).toThrow(WireDecodeError)
+    // And still rejected once the correlation is supplied — the payload alone is enough.
+    expect(() => parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_ZERO))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('REJECTS rather than ignores — the same bad payload on an UNCLAIMED type returns null (AC2)', () => {
+    // Reject and ignore are two different signals in this module and this is the assertion that keeps
+    // them apart, by driving ONE malformed payload down both paths. On `attachment_chunk` — now a
+    // CLAIMED type — it throws. On a type this module has never claimed it returns the content-free
+    // "unclaimed" result, which is what the arm would have done before this slice. The two are
+    // indistinguishable downstream (daemonConnection catches WireDecodeError and drops the frame
+    // WITHOUT logging), so the unit boundary is the only place the difference is observable.
+    const malformed = chunkWith({ total_chunks: 0 })
+    expect(() => parseInboundMessage(encodeAttachmentChunk(malformed))).toThrow(WireDecodeError)
+    expect(
+      parseInboundMessage(
+        encodeEnvelope({
+          id: 814,
+          type: 'attachment_not_a_real_type',
+          ts: FIXED_TS,
+          payload: malformed,
+          in_reply_to: RETRIEVAL_REQUEST_ID
+        })
+      )
+    ).toBeNull()
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -5929,6 +6277,60 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     // already holds, at the cost of a per-upload identifier in a JSON-lines log the operator can ship
     // off-box in a debug bundle.
     expect(lines[0]).not.toContain(SECRET_ATTACHMENT)
+  })
+
+  it('logs an attachment_chunk content-free — no bytes, filename, digest, media type or id (#998, AC4)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_FILENAME = 'tax-return-2025.pdf'
+    const SECRET_MIME = 'application/x-secret-marker'
+    const SECRET_ID = 'secret-attachment-id-4b7e'
+    const SECRET_DIGEST = 'c0ffee'.repeat(10) + 'cafe'
+    const SECRET_TEXT = 'the quick brown fox jumps'
+    const plaintext = encodeAttachmentChunk({
+      ...ATTACHMENT_CHUNK_RETRIEVAL,
+      attachment_id: SECRET_ID,
+      filename: SECRET_FILENAME,
+      mime_type: SECRET_MIME,
+      sha256: SECRET_DIGEST,
+      data: base64StdEncode(new TextEncoder().encode(SECRET_TEXT))
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('attachment_chunk')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // AC4's second sentence is a NEGATIVE, so the whole-key-set assertion is what proves it: checking
+    // only that the expected fields are present would pass with a filename riding alongside. And
+    // DiagnosticEvent already carries `code` and `count`, so nothing structural stops an implementer
+    // emitting `total_chunks` as a count — the omission has to be deliberate and asserted. Widening
+    // DiagnosticEvent would also disturb the renderer pin at #131.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    // Upstream permits logging the id, the index and the total ("never the bytes, and never a raw
+    // filename"). This client logs none of the three, and the id is out for #993's reason rather than
+    // by inheritance: upstream permits logging an id only AFTER its shape has been validated, and
+    // nothing on this side validates. `filename` is doubly out — often private in itself, and a
+    // client-supplied string in a line-oriented log is a log-injection shape.
+    for (const secret of [SECRET_FILENAME, SECRET_MIME, SECRET_ID, SECRET_DIGEST, SECRET_TEXT]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on either attachment_chunk throw path (#998, AC4)', () => {
+    // Driven from BOTH throw sites, because the narrow-before-log ordering has to hold on each: the
+    // envelope-level correlation check and the payload narrowing are separate rejections and either
+    // one leaving a record would be a footprint for a frame the client refused.
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeAttachmentChunk(ATTACHMENT_CHUNK_RETRIEVAL, OMIT_IN_REPLY_TO), log)
+    ).toThrow(WireDecodeError)
+    expect(() =>
+      parseInboundMessage(encodeAttachmentChunk(chunkWith({ total_chunks: 0 })), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
   })
 
   it('does NOT log on a malformed attachment_stored throw path (#964, AC3)', () => {

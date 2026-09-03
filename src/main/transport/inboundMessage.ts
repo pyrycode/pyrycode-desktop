@@ -64,7 +64,8 @@ import type {
   WireSlashCommand,
   ModelListPayload,
   WireModelOption,
-  AttachmentStoredPayload
+  AttachmentStoredPayload,
+  AttachmentChunkPayload
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -137,6 +138,37 @@ export type DaemonErrorOutcome =
    *  non-object, or `code` missing / not a string. Both mean the same thing to a consumer, "this client
    *  declined to classify the failure", and neither is a reason to drop a terminal frame. */
   | 'unclassified'
+
+/**
+ * One decoded `attachment_chunk` frame from the RETRIEVAL leg (#998) — the client-owned form of
+ * AttachmentChunkPayload, differing in exactly one field: `data` is raw bytes here, base64 on the wire.
+ *
+ * IT IS DECLARED IN THIS FILE RATHER THAN IN wire/types.ts, and that placement is a decision. That
+ * module mirrors the daemon field-for-field (CLAUDE.md § Wire protocol); a `Uint8Array` where the daemon
+ * has a base64 string is a DECODE PRODUCT, not a wire type, and putting it there would drift the mirror.
+ * DaemonErrorOutcome above — the other client-owned type derived from a wire payload — is exported from
+ * here for the same reason, and `bundle-chunk` declares its own `data: Uint8Array` inline on the union
+ * member. This one earns a name rather than an inline literal only because it carries eight fields.
+ *
+ * The `Omit` REUSES the seven metadata fields instead of restating them, so their doc comments, their
+ * byte ceilings and any later daemon-side correction reach this type automatically. Restating them here
+ * would create a second place to keep in agreement with the wire contract.
+ *
+ * DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT, and the type system carries no signal for that
+ * — a `string` is a `string`. `filename`, `mime_type` and `sha256` are attacker-shaped text and `data` is
+ * attacker-chosen bytes even though they now sit in a settled-looking type. Deriving `mime_type`
+ * host-side improved these fields' PROVENANCE — genuinely daemon-authored rather than client strings
+ * echoed back — and not their TRUST: a sniffed `text/html` is exactly as dangerous to render as a
+ * declared one. Every client obligation stands: sanitise `filename` before rendering it, never resolve
+ * it into a path or a filesystem name, and never dispatch on `mime_type` in a way that grants the
+ * content privileges.
+ */
+export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, 'data'> {
+  /** This chunk's RAW bytes, base64-decoded at the untrusted boundary so the reassembler (#995) stays
+   *  byte-pure — parseDebugBundleChunkPayload's posture. Content-bearing: a user's own private file
+   *  bytes, never logged, and never written to a path derived from `filename`. */
+  data: Uint8Array
+}
 
 /**
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
@@ -364,6 +396,51 @@ export type DaemonErrorOutcome =
  * reach is the one that works. A consumer that later needs the envelope id must argue for it on its own
  * ticket. Nothing consumes this arm yet: the send driver is #861, and daemonConnection's inbound switch
  * has no catch-all, so it stops here until claimed.
+ *
+ * The `attachment-chunk` kind (#998) carries one decoded slice of the RETRIEVAL leg's byte stream — the
+ * answer to the `request_attachment` #993 builds. It sits directly beneath `attachment-stored` and the
+ * two SAY OPPOSITE THINGS ABOUT THE SAME ENVELOPE FIELD, so read both before changing either.
+ *
+ * **ITS `inReplyTo` IS REQUIRED, where the three kinds above type theirs OPTIONAL.** Those frames can
+ * legitimately arrive unsolicited; a retrieval chunk cannot. `Envelope.in_reply_to` here names the
+ * `request_attachment` THE CLIENT ITSELF SENT — the only handle the answer carries — where on
+ * `attachment-stored` the same field names whichever chunk closed the set, which no client can predict.
+ * So the argument for omitting it there is the argument for requiring it here, and neither is precedent
+ * for the other. Upstream sets it on every frame the retrieval stream builds and its own reader drops a
+ * chunk whose value is nil or mismatched; the daemon's committed `attachment_chunk_retrieval.json` rides
+ * `in_reply_to: 91` against `request_attachment.json`'s `id: 91`. Requiring it makes a chunk without one
+ * MALFORMED rather than an uncorrelated variant, which keeps a can't-happen branch out of #995.
+ *
+ * CHUNKS ARE INDEX-ADDRESSED AND MAY ARRIVE IN ANY ORDER — `debug_bundle_chunk`'s strict ascending `seq`
+ * is the neighbouring rule and the wrong one here. Recognition claims one frame at a time and enforces
+ * no ordering; it only refuses an `index` outside `[0, total_chunks)`. And THERE IS NO COMPLETION FRAME
+ * and none is coming: `total_chunks` rides every chunk, so a receiver knows the expected count from the
+ * first frame it sees. Nothing analogous to `debug_bundle_done` exists on this leg — do not invent one.
+ *
+ * FOUR OBLIGATIONS LAND ON #995 RATHER THAN HERE, each because this boundary cannot discharge it:
+ *
+ *   - NEVER ALLOCATE FROM A CLAIM. `total_chunks` and `size` are unbounded daemon-supplied numbers and
+ *     this arm allocates from neither (its one allocation is the base64 decode, already bounded by
+ *     MAX_PLAINTEXT_BYTES above). `new Array(total_chunks)` from a claimed 2**53 is an instant OOM. The
+ *     bound to use is a DAEMON-PUBLISHED INVARIANT rather than an invented ceiling —
+ *     `total_chunks == max(1, ceil(size / 45000))`, the admission check ATTACHMENT_CHUNK_DATA_BYTES's
+ *     docblock records — because a client-invented ceiling here would fail-close a large valid transfer.
+ *   - VERIFY `sha256` AT ASSEMBLY, never per chunk: the digest is over the WHOLE file and this arm sees
+ *     one slice. Carrying it through is what makes that possible. It is INTEGRITY and not authenticity
+ *     (the same party supplies the bytes and the digest), and comparing it needs no constant-time
+ *     primitive since neither side is a secret.
+ *   - MATCH ON A REQUEST THIS CLIENT MINTED. A required `inReplyTo` makes a chunk CORRELATABLE, not
+ *     AUTHENTIC: a hostile daemon inside the session can answer a request never sent, or aim chunks at a
+ *     different pending one. Note the contrast with #861's rule — `inReplyTo` is a NUMBER, so a
+ *     plain-object lookup keyed on it is prototype-safe by construction, where `attachment_stored`'s
+ *     string `attachment_id` needs a `Map` to dodge `__proto__`. The `attachment_id` this frame also
+ *     carries is still a string and still needs one.
+ *   - TREAT `filename` AS A DISPLAY STRING ONLY. It arrives unsanitised on purpose (see
+ *     RetrievedAttachmentChunk): sanitising at the decode would hide the untrusted-ness behind a value
+ *     that looks cleaned, and would drift wire/types.ts from the daemon's mirror.
+ *
+ * Nothing consumes this arm yet: the reassembler is #995, and daemonConnection's inbound switch has no
+ * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -409,6 +486,13 @@ export type InboundDaemonMessage =
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
   | { kind: 'model-list'; modelList: ModelListPayload }
   | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
+  | {
+      kind: 'attachment-chunk'
+      attachmentChunk: RetrievedAttachmentChunk
+      // REQUIRED, not optional — see the type's docblock above. It names the request_attachment this
+      // stream answers, the one handle a consumer can correlate on.
+      inReplyTo: number
+    }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -1872,6 +1956,72 @@ function parseAttachmentStoredPayload(payload: unknown): AttachmentStoredPayload
 }
 
 /**
+ * Narrow an opaque payload into a RetrievedAttachmentChunk (#998) — one slice of the retrieval leg's
+ * byte stream. parseAttachmentStoredPayload's shape with seven more fields and a base64 decode: an
+ * isRecord guard, then each required key, returning a fresh EIGHT-KEY literal so unknown server-added
+ * keys are tolerated (forward-compat) but NOT copied through, which also makes it
+ * prototype-pollution-safe. Every failure throws; nothing partial is ever returned.
+ *
+ * THE BASE64 DECODE HAPPENS HERE, at the untrusted boundary, so the reassembler stays byte-pure —
+ * parseDebugBundleChunkPayload's posture. base64StdDecode is STRICT (it decodes, then requires the input
+ * to be the exact base64-std re-encoding of those bytes), so Node's lenient Buffer.from — which strips
+ * non-alphabet characters and tolerates missing padding — cannot turn a corrupt frame into a plausible
+ * SHORTER file that then fails the whole transfer's digest for no legible reason.
+ *
+ * WHICH FIELDS GET WHICH NARROWER IS THE INTERESTING PART, and the asymmetry is deliberate:
+ *
+ *   - `attachment_id` goes through requireNonEmptyString for #964's reason, which transfers verbatim:
+ *     every key is optional to Go's encoding/json, so a truncated or hostile frame arrives with the
+ *     field present, typed and EMPTY, and `''` names no transfer any client ever started.
+ *   - `filename` / `mime_type` / `sha256` get plain requireString — TYPE ONLY. Emptiness is not a
+ *     modelled failure on any of the three, and a second emptiness rule would fail-close valid traffic
+ *     for a rule this layer never agreed to enforce. `sha256` gets no 64-character length check either:
+ *     this layer declares shapes and validates none, and integrity belongs to #995, against the
+ *     assembled bytes rather than one slice.
+ *   - `index` and `total_chunks` get an INTEGER check on top of requireNumber, because the daemon types
+ *     both `integer` and a fractional `index` would address nothing in an index-addressed accumulator.
+ *     `total_chunks >= 1` is the daemon's own bound and it is what makes `[0, total_chunks)` a non-empty
+ *     range; it is narrowed FIRST so the index range check has its bound.
+ *
+ * NO UPPER BOUND ON `total_chunks` OR `size`, deliberately. This function allocates from neither — its
+ * one allocation is the base64 decode of `data`, already bounded by parseInboundMessage's
+ * MAX_PLAINTEXT_BYTES guard ahead of it. Upstream's "bound what you allocate from an outbound size /
+ * total_chunks" binds the component that pre-allocates the assembly buffer (#995), which has a
+ * daemon-published invariant available rather than an invented ceiling; see the union member's docblock.
+ *
+ * NO SHAPE VALIDATION ON `attachment_id`, for parseAttachmentStoredPayload's reason: the canonical
+ * lowercase-UUIDv4 rule binds the side that MINTS ids, and re-validating a value this client originated
+ * fail-closes a valid frame the moment the two copies disagree.
+ *
+ * Its messages name the failure CATEGORY and a STATIC field name only. That matters more here than on
+ * its neighbours: the natural phrasing of a range rejection interpolates the two daemon-supplied numbers,
+ * and daemonConnection catches WireDecodeError into a caller that may log it. The unit tests assert the
+ * exact message text, not merely the error class, so a later interpolation reddens.
+ */
+function parseAttachmentChunkPayload(payload: unknown): RetrievedAttachmentChunk {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed attachment_chunk payload')
+  }
+  const attachment_id = requireNonEmptyString(payload, 'attachment_id')
+  const total_chunks = requireNumber(payload, 'total_chunks')
+  if (!Number.isInteger(total_chunks) || total_chunks < 1) {
+    throw new WireDecodeError('invalid attachment_chunk total_chunks')
+  }
+  const index = requireNumber(payload, 'index')
+  if (!Number.isInteger(index) || index < 0 || index >= total_chunks) {
+    throw new WireDecodeError('invalid attachment_chunk index')
+  }
+  const filename = requireString(payload, 'filename')
+  const mime_type = requireString(payload, 'mime_type')
+  const size = requireNumber(payload, 'size')
+  const sha256 = requireString(payload, 'sha256')
+  const data = base64StdDecode(requireString(payload, 'data'))
+  // Wire order, for readability against the daemon's own field table — this is a decoded object, so
+  // key order carries no contract the way an outbound builder's does.
+  return { attachment_id, index, total_chunks, filename, mime_type, size, sha256, data }
+}
+
+/**
  * Map a daemon `error` frame's payload onto a client-owned DaemonErrorOutcome (#965).
  *
  * TOTAL BY CONSTRUCTION: it never throws and has no failure return, which INVERTS this module's usual
@@ -2513,6 +2663,46 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'attachment-stored', attachmentStored }
+    }
+    case 'attachment_chunk': {
+      // The RETRIEVAL leg's byte stream (#998), and the frame that until now fell through to `default:`
+      // and was dropped as unrecognised — it rides outbound only today, for uploads (#860 built its
+      // envelope, #861 drives it).
+      //
+      // THE CORRELATION IS CHECKED BEFORE THE PAYLOAD IS PARSED, AND THE ORDER IS LOAD-BEARING. Parsing
+      // base64-decodes up to 45000 raw bytes; a frame that cannot be correlated is rejected anyway, so
+      // doing that work first would let a hostile daemon spend this client's memory and CPU on frames it
+      // has already disqualified. Both steps throw before the log, so the ordering changes no record.
+      //
+      // decodeEnvelope assigns `in_reply_to` only when it decodes as a NUMBER, so an absent key, a null
+      // and a string all arrive here identically as `undefined` — one check covers all three. Requiring
+      // it is THE inversion of the `attachment_stored` arm directly above, which deliberately propagates
+      // nothing; see the union member's docblock for why neither is precedent for the other.
+      const inReplyTo = envelope.in_reply_to
+      if (typeof inReplyTo !== 'number') {
+        throw new WireDecodeError('missing required field: in_reply_to')
+      }
+      const attachmentChunk = parseAttachmentChunkPayload(envelope.payload)
+      // NOTHING DECODED IS LOGGED, and on this frame that is STRICTER than what upstream permits.
+      // § Trust and content hygiene says "log the attachment id, the index and the total; never the
+      // bytes, and never a raw filename". This client logs none of the three. `data` is a user's own
+      // private file bytes and `filename` is doubly out — often private in itself, and a
+      // client-supplied string in a line-oriented log is a log-injection shape. `sha256` and
+      // `mime_type` follow. The ID is out for #993's reason rather than by inheritance: upstream
+      // permits logging an id only AFTER its shape has been validated, and nothing on this side
+      // validates. `index` / `total_chunks` follow the slash_command_list / model_list posture —
+      // DiagnosticEvent already carries `count`, so emitting one would cost nothing structurally and
+      // is omitted on purpose, because how a user's file is shaped is a fact about that file. Only the
+      // frame's byte length + one-way hash, the existing content-free field set (no new
+      // DiagnosticEvent field, so #131's renderer pin is untouched). Strictly safer than the
+      // `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED `envelope.type`.
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'attachment_chunk',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'attachment-chunk', attachmentChunk, inReplyTo }
     }
     case 'error': {
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

@@ -417,8 +417,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   documented, not validated, the same declined-bound call as [attachment filename
   sanitiser](features/attachment-filename-sanitiser.md); `encodeEnvelope`'s existing `WireEncodeError` above
   `MAX_PLAINTEXT_BYTES` is the sole, inherited backstop. Nothing sends, reads a file, or mints an
-  `attachment_id` — both modules main-process-only, unreferenced until #861 (send driver, not started).
-  Architect self-review PASS.
+  `attachment_id` — both modules main-process-only. [Attachment transfer](features/attachment-transfer.md)
+  (#861, landed) is the consumer. Architect self-review PASS.
 - [Attachment-stored wire types](features/attachment-stored-wire-types.md) — the **consumer** half of
   the attachment wire contract (#964, split from #961): the `attachment_stored` `EnvelopeType` member +
   one-field `AttachmentStoredPayload` (`attachment_id` only — no `size`/`sha256`/`total_chunks`/
@@ -435,8 +435,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   recorded as a consumer obligation (#861: use a `Map`) rather than a fourth reject branch. New
   fake-daemon scaffolding, `attachmentStoredReplyFrames(completingIndex)`, answers one chunk with the
   reply and silences the rest, deliberately naming a non-final completing chunk so a consumer that
-  predicts the last envelope id fails the AC4 test. Ships unreferenced; #861 (not started) is the first
-  consumer of both wire halves. Architect self-review PASS.
+  predicts the last envelope id fails the AC4 test. [Attachment transfer](features/attachment-transfer.md)
+  (#861, landed) is the consumer of both wire halves. Architect self-review PASS.
 - [Daemon error outcome](features/daemon-error-outcome.md) — the **reject** half of the attachment upload
   leg's wire contract (#965, split from #961, unblocked by #964's fake-daemon scaffolding): the always
   content-free `daemon-error` kind (#116) becomes **scoped, not absolute** — a new module-private
@@ -464,8 +464,32 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   creating no own property and silently duplicating the plain-`{}` test one case above — rebuilt with
   `JSON.parse` and now asserts the encoded bytes contain the literal `"__proto__"`. Security review PASS,
   one SHOULD FIX (a daemon-controlled `code` string could typecheck cleanly into the diagnostic log under
-  ADR 0007's name-only allowlist) closed by a deterministic log-no-leak test rather than prose alone. Ships
-  unreferenced; #861 (not started) is the intended first reader of `outcome`.
+  ADR 0007's name-only allowlist) closed by a deterministic log-no-leak test rather than prose alone.
+  [Attachment transfer](features/attachment-transfer.md) (#861, landed) is the first reader of `outcome`.
+- [Attachment transfer](features/attachment-transfer.md) — the **send driver** in the middle of the
+  attachment upload chain (#861, split from #685): a new settle-once `attachmentTransfer.ts` state machine
+  (structural sibling of `bundleReassembler.ts`) drives a `planAttachmentChunks()` result onto the live
+  session chunk by chunk, yielding a real `setImmediate` macrotask between chunks (not a microtask — socket
+  reads are macrotasks) so a settle from any source stops the remaining chunks. Correlation uses **two
+  keys, not one**: the success reply is matched on the payload's `attachment_id` (the only inbound arm that
+  correlates on a payload field rather than `Envelope.in_reply_to`, since the daemon deliberately omits
+  `inReplyTo` on this arm — see [attachment-stored wire types](features/attachment-stored-wire-types.md));
+  the rejects are matched on `sentEnvelope`, a fifth member of the `daemon-error` precedence tier beside
+  `pendingSettings`/`pendingCreateFolders` (see [daemon connection —
+  correlation](features/daemon-connection-correlation.md)). `daemonConnection.ts` gained
+  `uploadAttachment(input)` — its first `async` method, never throwing or rejecting out of the module — a
+  new `activeTransfers: Set<AttachmentTransfer>`, and `failAttachmentTransfers()` joining
+  `failBundleStream()` at all four connection-teardown sites. No retry and **no per-transfer deadline**,
+  both deliberate: every reject is permanent-or-backoff with no `retry_after_s` to derive a delay from, and
+  a live-but-silent daemon is backstopped one layer down by `relayConnection.ts`'s `WIRE_PONG_TIMEOUT_MS`,
+  not by a timeout invented here for an unobserved hang. `planAttachmentChunks`'s materialize-the-whole-plan
+  memory profile was this ticket's call to make and was declined — the saving is only the base64, and the
+  client-side size bound lands with #862. Ships with **no IPC, no daemon event, and no renderer change** —
+  the outcome is a value returned to the caller; surfacing it to the window is
+  [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s (not started). Architect self-review
+  PASS, four SHOULD FIX items addressed in prose (buggy-caller duplicate-id scan order, the absent
+  per-transfer deadline, the first-async-method never-rejects guarantee, and `attachment_id` staying out of
+  the diagnostic log even though it isn't a capability).
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

@@ -53,6 +53,7 @@ export interface DaemonConnection {
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
+  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, not send's silent no-op
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -61,6 +62,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 **`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
 
 **`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). The renderer command that calls it is wired by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the orchestrator half of #118's split; the IPC contract itself shipped in [#168](debug-bundle-request.md)). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
+
+**`uploadAttachment(input)` was added in [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)** — the third **consumer-failing
+twin**, alongside `requestDebugBundle`: the caller awaits a terminal, so a request made while disconnected
+resolves `{ ok: false, outcome: 'not-connected' }` rather than hanging like `send`'s silent no-op. It
+drives a `planAttachmentChunks()` result onto the live session chunk by chunk via a new
+[`AttachmentTransfer`](attachment-transfer.md) state machine, and correlates the daemon's two terminal
+answers with **two different keys** — the success reply by the payload's `attachment_id` (the only inbound
+arm in this file that correlates on a payload field rather than `Envelope.in_reply_to`), the rejects by
+scanning the live transfers' sent envelope ids, the fifth member of the `daemon-error` precedence tier (see
+[Daemon connection — correlation](daemon-connection-correlation.md) § Attachment-upload correlation). It is
+the **first `async` method** on this interface and never throws or rejects out of the module (parity #490,
+restated for a promise-returning method). See [Attachment transfer](attachment-transfer.md) for the full
+design, including why the envelope-id-only correlation the two existing patterns suggest would never
+resolve.
 
 **`requestSnapshot(payload)` was added in [#180](../codebase/180.md) and removed in
 [#620](../codebase/620.md).** It was the outbound half of an on-demand fetch of the session's current
@@ -227,6 +242,7 @@ never crosses to the renderer.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
+- [Attachment transfer](attachment-transfer.md) / [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) — the `uploadAttachment(input)` method added to this factory, the `activeTransfers` Set + `failAttachmentTransfers()` teardown net + the two new inbound correlation arms it added here, and the `AttachmentTransfer` state machine it drives.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin) and the payload-carrying `buildRequestSnapshot` builder it drove, both removed by [#620](../codebase/620.md); the `case 'message'` consumer's content-minimisation emit removed by [#621](../codebase/621.md); the `snapshot` inbound kind and its decode removed by [#622](../codebase/622.md) — no piece of this feature survives on this factory today.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `requestConversations()` method added to this factory (another `send` twin, but bare like `requestDebugBundle`'s builder), the `buildListConversations` builder it drives, and the `conversations` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings(conversationId?)` method added to this factory, the conversation-keying correction that gave the signature a real parameter, and [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946), which made the sole caller actually pass one.

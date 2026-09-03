@@ -210,8 +210,8 @@ export const CONNECTION_BANNER_COPY =
 
 /**
  * Whether the prominent, disconnected-only connection banner should show (#279) — the third,
- * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the terse
- * inline composer gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
+ * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the composer's
+ * send gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
  * non-connected arm (`disconnected` | `connecting` | `error`), false only when `connected` (AC1/AC2).
  *
  * Expressed as `!== 'connected'` rather than an exhaustive switch/assertNever (composerAvailability's
@@ -268,7 +268,7 @@ export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
  * what lets this occupant drop the chip's visually-hidden `Error: ` prefix — that prefix exists because
  * "Host connection down!" does not say it is an error, and "Pairing error" does. The action is what makes
  * the control read as a button rather than as a status. Since the button carries no `aria-label`, this
- * string is also the accessible name, which is the first time one of these five is both.
+ * string is also the accessible name, which is the first time one of these three is both.
  *
  * It carries CONNECTION_BANNER_COPY's three-part contract: (a) one client-owned constant, (b) lexically
  * distinct from the two strings above — it leads with "Pairing" and shares no leading word with

@@ -283,7 +283,7 @@ describe('shouldOfferRepair', () => {
   })
 
   // AC4: a retryable daemon wire-error (server.binary_offline, rate_limited) is a transient daemon-side
-  // condition, not a broken pairing — the composer keeps its plain error hint, no re-pair prompt.
+  // condition, not a broken pairing — the status row keeps #797's plain error chip, no re-pair button.
   it('false for a retryable daemon error (server.binary_offline)', () => {
     expect(
       shouldOfferRepair({
@@ -340,12 +340,13 @@ describe('shouldShowBanner', () => {
   })
 })
 
-// #797: the error chip's two client-owned strings — the FOURTH and fifth strings this module owns about
-// the one ConnectionStatus fact. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces
-// that can break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` →
-// `&#x27;`, so an apostrophe makes every toContain on these constants fail without a copy change being
-// suspected), the lexical distinctness from the four strings already on screen for this fact, and the
-// prefix's trailing space, which is what separates the two runs when a screen reader concatenates them.
+// #797: the error chip's two client-owned strings — the chip copy is one of the three this module owns
+// about the one ConnectionStatus fact (#968 retired the three composerAvailability captions), and the
+// prefix rides with it. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces that can
+// break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` → `&#x27;`,
+// so an apostrophe makes every toContain on these constants fail without a copy change being suspected),
+// the lexical distinctness from the banner and the re-pair button, and the prefix's trailing space,
+// which is what separates the two runs when a screen reader concatenates them.
 describe('the composer error chip copy (#797)', () => {
   it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
     expect(COMPOSER_ERROR_CHIP_COPY).not.toContain("'")

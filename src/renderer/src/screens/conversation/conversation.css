@@ -1645,7 +1645,7 @@
 }
 
 /* Pinned composer — never grows or shrinks. A vertical stack holding the message box row and the input
-   footer beneath it (#811), each with its own flex layout. #968 retired the third child, the #31 status
+   footer beneath it (#811), each with its own flex layout. #968 retired the first child, the #31 status
    caption that used to sit above the row; the column shape is what the footer needs on its own.
 
    padding-top is --space-2 = the design's 8px between the status row's bottom edge and the message box's
@@ -1759,9 +1759,10 @@
   opacity: 0.41;
 }
 
-/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's third sub-row, beneath the
-   message box. Four more tickets fill it (#680 Actions, #682 permission mode, #683 model and effort,
-   #685 attach); today it carries the context reading alone and NOTHING stands in for the rest.
+/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's second sub-row, beneath the
+   message box (#968 retired .composer__hint, which used to be the first). Four more tickets fill it
+   (#680 Actions, #682 permission mode, #683 model and effort, #685 attach); today it carries the context
+   reading alone and NOTHING stands in for the rest.
 
    The height is the whole point (AC4). flex: 0 0 auto so it never claims a competing flex region, and
    NO vertical padding, so 20px is the exact box under this repo's absent global box-sizing reset — the

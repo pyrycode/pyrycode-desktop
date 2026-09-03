@@ -158,8 +158,8 @@ test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-ro
   // re-measured, because no assertion depends on it.)
   // What the row's growth alone does is settled by the column: `.conversation` is a fixed-height
   // flex column whose thread region is `flex: 1 1 auto; min-height: 0`, so a `flex: 0 0 auto` sibling
-  // growing is absorbed by the thread. An assertion here would pin the banner's and the hint's geometry
-  // under a name that claims to be about this row.
+  // growing is absorbed by the thread. An assertion here would pin the banner's geometry under a name
+  // that claims to be about this row.
   //
   // AC3's focus ring. The design draws Default and Hover and no focus state, so the treatment is the UA's
   // and the requirement is that nothing suppresses it — `.button-small` declines `outline: none` on

@@ -173,4 +173,44 @@ web-side.
 - Whether `.composer`'s `gap` / `.composer__footer`'s `margin-top` split should collapse now that its
   original reason (separating the caption from the row) is gone. Resolved: no — the ticket's scope ruling
   is explicit, and the comment records the split as deliberate rather than vestigial.
-</content>
+
+## Revisions
+
+### 2026-09-03 — the copy constants' ordinals count strings, so they do move
+
+**Driven by:** verifier finding [MUST FIX] on PR #1011 — the implementation renumbered the copy-constant
+docblocks and § Design had ruled that it would not.
+
+**What the plan said.** § Design's copy-constant paragraph claimed the ordinal each docblock gives itself
+("the fourth/fifth string…") counts *reads of the `ConnectionStatus` slice*, that `composerAvailability`
+is still such a read, and that the ordinals were therefore correct as they stood and did not move.
+
+**What is actually true.** The premise was falsified by the docblocks' own wording. They say "string", not
+"read", and `COMPOSER_ERROR_CHIP_COPY` enumerated its co-members explicitly as "CONNECTION_BANNER_COPY and
+the three `composerAvailability` hints" — a set of strings, three of which this ticket retires. The
+ordinals are therefore stale the moment the captions go, and the implementation was right to move them:
+`COMPOSER_ERROR_CHIP_COPY` from "the fourth string" to "one of the three",
+`COMPOSER_REPAIR_BUTTON_COPY` from "the FIFTH string" to "the third of the strings".
+
+**The contract as it now stands.** Two distinct counted sets live in `composerSend.ts` and only one of them
+moves:
+
+- **Strings this module owns about the single `ConnectionStatus` fact** — now three:
+  `CONNECTION_BANNER_COPY`, `COMPOSER_ERROR_CHIP_COPY` (with `COMPOSER_ERROR_CHIP_PREFIX_COPY` riding with
+  it) and `COMPOSER_REPAIR_BUTTON_COPY`. Was five. This is the set the distinctness contracts argue over,
+  and every ordinal in those docblocks — plus the `composerSend.test.ts` describe header that restates
+  them — counts it.
+- **Independent reads of the `ConnectionStatus` slice** — still three: `composerAvailability`,
+  `shouldShowBanner`, `shouldOfferRepair`. `composerAvailability` returns no copy any more but is still a
+  read, so `shouldShowBanner`'s "the third, independent read" and `ConversationScreen`'s "A third read"
+  are correct and were left as they stand.
+
+**Also trued up in the same sweep**, all consequences of the same two facts rather than separate decisions
+(verifier findings 2–5 plus the NIT): `COMPOSER_REPAIR_BUTTON_COPY`'s surviving "one of these five";
+`.composer`'s "retired the third child" and `.composer__footer`'s "the composer's third sub-row" in
+`conversation.css` (the caption was the composer's *first* child, and the footer is now its *second*
+sub-row — the `ConversationScreen.tsx` twin of that comment already said so); `e2e/unpair-repair.spec.ts`'s
+"the banner's and the hint's geometry"; `composerSend.test.ts`'s "the FOURTH and fifth strings" describe
+header and its `shouldOfferRepair` "plain error hint"; and the two surviving "terse inline gate"
+descriptors of `composerAvailability`, which the same phrase's removal elsewhere in this commit had
+missed. No behaviour, type or test assertion changed in this revision — every edit is prose.

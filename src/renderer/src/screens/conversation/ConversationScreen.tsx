@@ -259,7 +259,7 @@ export function ConversationScreen({
       <UnpairControl onUnpaired={onUnpaired} />
       {/* #279: the prominent, disconnected-only connection banner — the top of the thread, below the
           header row and above the message list. A third read of the connection status, distinct from
-          the composer's terse inline gate below. */}
+          the composer's send gate below. */}
       <ConnectionBannerControl />
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It

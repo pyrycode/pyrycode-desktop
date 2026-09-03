@@ -30,6 +30,7 @@ export interface ComposerSendDeps {
   dispatch: (event: ThreadEvent) => void
   dispatchFor: (conversationId: string, event: ThreadEvent) => void   // #756
   newMessageId: () => string
+  now?: () => number   // #1013 — optional, no Date.now fallback
 }
 
 export function submitMessage(text: string, conversationId: string | null, deps: ComposerSendDeps): boolean
@@ -46,6 +47,24 @@ mechanical test edits and buys a compile error for "forgot to wire it." `submitM
 `userText` echo once and hands the same `ThreadEvent` reference to both `dispatch` and `dispatchFor(conversationId, echo)`,
 under the conversation the message was sent to — safe because `reduceTimeline` is pure and always builds
 fresh arrays.
+
+[#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) added `now?: () => number` — the echo's
+clock, read once as `createdAt: deps.now?.()` when the `userText` `ThreadEvent` is built, so the stamp
+that reaches `dispatch` and `dispatchFor` is the same value in both (the "built once" property above,
+now also true of the timestamp). It goes the **opposite** way from `dispatchFor`'s own #756 precedent, and
+for a reason that precedent did not face: `dispatchFor`'s six call sites made *requiring* it cheap (six
+mechanical test edits for a compile error on "forgot to wire it"); requiring `now` here would not merely
+cost edits — this deps object now has thirteen call sites, not `dispatchFor`'s six — it would **redden**
+the three existing `toHaveBeenCalledWith({ type: 'userText', text })` assertions in
+`composerSend.test.ts`, since every deps literal would then supply a clock and every echo would carry a
+defined `createdAt` those assertions name none of. So `now` is optional with **no `Date.now` fallback** —
+absent clock means no stamp, the same rule [conversation timeline store](conversation-timeline-store.md)'s
+`translateTimelineEvent`/`subscribeTimeline` follow for the assistant side. The cost: the wiring at `ConversationScreen.tsx`'s `Composer.sendText` — the one production call site
+that builds a `ComposerSendDeps` literal and now includes `now: Date.now` — is not compile-enforced; a
+forgotten `now` there would silently ship unstamped echoes. `composerSend.test.ts` pins the wired
+behavior with its own spec instead of relying on the type system. See [Thread timeline §
+Types](thread-timeline.md#types) for the full field-pair contract and why the clock rides the event
+rather than a `reduceTimeline` parameter.
 
 `submitMessage` contract:
 
@@ -274,6 +293,12 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
 - **DOM interaction is untested.** Only the pure `submitMessage` and `shouldSubmitOnKeyDown` are unit-tested (spies/plain values + a stub id). `onChange`, clear-on-success, and `handleKeyDown`'s own three-statement wiring have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries, and the one carved out by [#512](../codebase/512.md) is that the IME-vs-plain-Enter *decision* no longer has to live in that untested surface.
 - **`auto-grow` on the textarea is unbuilt** (cosmetic, no AC). *(The "single active conversation, `MILESTONE_CONVERSATION_ID`" limitation this bullet used to name was closed by #448, which added the `conversationId` parameter documented above; the rest of this page's narrative sections still describe the pre-#448/#179 shape and are due a fuller pass — flagged here rather than silently left contradicting the current signature.)*
+- **A submit refused by `submitMessage`'s two early `false` returns reads no clock at all**
+  ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — `deps.now?.()` sits below both the
+  whitespace-only and null-conversation guards, alongside the echo it stamps, so a refused submit performs
+  neither the wire send nor the clock read. `now` omitted entirely (as every pre-#1013 test literal is)
+  produces an echo whose `createdAt` is `undefined` — a legal item, not a defect; [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
+  draws it as the [thread timeline](thread-timeline.md#edge-cases-and-limitations) meta row's empty slot.
 
 ## Related
 
@@ -292,4 +317,5 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
 - [Conversation shell § Composer error chip](conversation-shell-composer.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
+- [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the optional `now` clock on `ComposerSendDeps`, implementation summary above. [Thread timeline § Types](thread-timeline.md#types) has the full `createdAt` contract; [conversation timeline store](conversation-timeline-store.md) has the mirror wiring for the assistant-side echo.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the send button this page describes is one component with two variants: `ComposerSendButton` renders send at idle and the stop affordance (that page's subject) while a turn is running. `Composer` is the one render site for both.

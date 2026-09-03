@@ -192,6 +192,21 @@ switches) and is dropped from the keyed path — with no key invented — when n
 receiving both arms exactly as before: this ships as a verified no-op on what the operator sees, same as
 \#756.
 
+[#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) widened `translateTimelineEvent` and
+`subscribeTimeline` with one optional trailing parameter each, `now?: () => number` — read only on the
+`assistantDelta` arm, assigned unconditionally as `createdAt: now?.()`, every other arm byte-identical.
+Optional and trailing for `subscribeTimeline`'s own #756 reason (a required parameter would cascade over
+all 25 existing call sites; an optional one over none), but with **no `Date.now` fallback** — the
+load-bearing half, since a defaulting clock would stamp every event a spec produces by calling
+`translateTimelineEvent`/`subscribeTimeline` with no clock, and those events are asserted with `toEqual`,
+which fails on a defined `createdAt` where the fixture names none. `useTimelineBridge` is the clock's
+composition root for the assistant side: it passes `Date.now` (referenced, not called) as
+`subscribeTimeline`'s third argument, read once per translated event inside the listener — so each
+assistant bubble is stamped at *its own* arrival, not at subscribe time — and outside the effect's
+dependency array, since `Date.now` is a module-level intrinsic whose identity never changes. See [Thread
+timeline § Types](thread-timeline.md#types) for the full field-pair contract and the "why not a reducer
+parameter" arithmetic; [composer send](composer-send.md) has the mirror wiring for the user echo.
+
 ## Where the detail lives
 
 Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the link points at the right file.
@@ -338,6 +353,10 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   slice of the conversation on screen (or drops them, inventing no key, when none is open) via an
   injected `getOpenConversationId` getter from `App.tsx`, keeping `timelineTargetFor` and
   `subscribeTimeline` byte-identical. Spec: `docs/specs/architecture/785-open-conversation-timeline-arms.md`.
+- [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the `now?: () => number` clock
+  parameter on `translateTimelineEvent`/`subscribeTimeline`, and `useTimelineBridge`'s `Date.now` wiring:
+  implementation summary above. See [Thread timeline § Types](thread-timeline.md#types) for the full
+  `createdAt` contract this seam feeds.
 - [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
   `reduceTimeline` model this store wraps verbatim.
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the sibling bridge this one mirrors in

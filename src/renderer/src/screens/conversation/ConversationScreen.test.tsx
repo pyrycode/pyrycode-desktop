@@ -42,6 +42,7 @@ import {
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
+import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
@@ -113,6 +114,11 @@ function threadBubbleCount(markup: string): number {
 // assertions in the footer block below pin that exact run, and one constant is what keeps them from
 // drifting apart one at a time.
 const ACTIONS_TRIGGER_CLASS_RUN = 'class="composer__footer-button composer__actions"'
+
+// #863: the attach trigger's rendered `class` attribute, on the same terms and for the same reason — it
+// wears the shared footer treatment as a two-class mix, and the mount proofs below locate it by that whole
+// run rather than by a bare class.
+const ATTACH_TRIGGER_CLASS_RUN = 'class="composer__footer-button composer__attach"'
 
 const CURSOR = 'bubble__cursor'
 
@@ -3999,6 +4005,79 @@ describe('ConversationScreen — store binding', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+
+  // #863: the attach button's mount site, and the only proof it is wired into the row — every assertion in
+  // ComposerAttach.test.tsx passes on an UNMOUNTED component.
+  //
+  // It renders UNCONDITIONALLY, unlike the three menus beside it: they each go inert or absent until a
+  // run-config snapshot has arrived, while this control has no daemon-published anything to be missing.
+  // So this half needs no store spy at all — which is itself the assertion, since a control gated on a
+  // snapshot it does not need would fail here.
+  it('mounts the attach button in the footer row against the empty stores (AC1)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    const footerAt = markup.indexOf('class="composer__footer"')
+    const attachAt = markup.indexOf(ATTACH_TRIGGER_CLASS_RUN)
+    expect(footerAt).toBeGreaterThanOrEqual(0)
+    expect(attachAt).toBeGreaterThan(footerAt)
+    expect(markup).toContain(`aria-label="${COMPOSER_ATTACH_LABEL}"`)
+    // It adds no popup and no anchor to the row: it is a button, not a menu. Stated here because the
+    // anchor and aria-haspopup counts three tests up are re-derived by every footer ticket that lands a
+    // MENU, and this one deliberately leaves them where it found them — which is why those two counts
+    // needed no re-count with this ticket, unlike every sibling before it.
+    //
+    // Read off the attach button's OWN tag, not off the whole markup: the Actions trigger renders both an
+    // anchor and an aria-haspopup in this same render, so a document-wide `not.toContain` asserts the
+    // opposite of what it looks like and fails against a correct implementation.
+    const attachTag = markup.match(/<button[^>]*composer__attach"[^>]*>/)?.[0]
+    expect(attachTag).toBeTruthy()
+    expect(attachTag).not.toContain('aria-haspopup')
+    expect(attachTag).not.toContain('aria-expanded')
+    expect(attachTag).not.toContain('disabled')
+  })
+
+  // AC1's "the row's LAST item", in the only form a static render can state it: past the context reading,
+  // which is the item the design puts immediately before it. The same getInitialState SPY as the three
+  // tests above, and for the same reason — zustand v5 reads getInitialState() under renderToStaticMarkup,
+  // so a seeded snapshot is what makes the reading (and the three menu labels) appear at all.
+  it('places the attach button last in the footer row, past all four controls and the reading (AC1)', () => {
+    const initial = runConfigStore.getInitialState()
+    const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      snapshot: {
+        model: 'seeded-session-model',
+        effort: 'seeded-session-effort',
+        yolo: false,
+        permissionMode: 'acceptEdits',
+        usedTokens: 168000,
+        windowTokens: 200000
+      }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const attachAt = markup.indexOf(ATTACH_TRIGGER_CLASS_RUN)
+      const contextAt = markup.indexOf('composer__context')
+      expect(contextAt).toBeGreaterThan(-1)
+      expect(attachAt).toBeGreaterThan(contextAt)
+      // And past every control ahead of the reading, so this holds as the row's order changes rather than
+      // only against the reading's current position.
+      expect(attachAt).toBeGreaterThan(markup.indexOf('composer__effort-label'))
+      expect(attachAt).toBeGreaterThan(markup.indexOf('composer__model-label'))
+      expect(attachAt).toBeGreaterThan(markup.indexOf('composer__permission-label'))
+      expect(attachAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // AC5's second half at the mount site: with no outcome arrived, the composer reserves NOTHING for one.
+  // The pure view's own absent arm is proven exact-empty in ComposerAttach.test.tsx; what this adds is
+  // that the mounted container starts there — a hook seeded with anything but `null` would fail here.
+  it('reserves no space for an outcome before one arrives (AC5)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('composer__attach-outcome')
+    // The button is present in the same render, so this is not passing because the composer is absent.
+    expect(markup).toContain(ATTACH_TRIGGER_CLASS_RUN)
   })
 
   // #967: the three inert-render smoke tests that stood here — one each for #317's stall, #493's retry

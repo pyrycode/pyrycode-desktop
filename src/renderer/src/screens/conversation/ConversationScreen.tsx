@@ -2528,7 +2528,11 @@ function Composer({
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor,
-      newMessageId: () => crypto.randomUUID()
+      newMessageId: () => crypto.randomUUID(),
+      // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
+      // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because
+      // the moment being recorded IS now: this line is inside the send handler, not the render path.
+      now: Date.now
     })
     // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
     // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`

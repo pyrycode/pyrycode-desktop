@@ -75,6 +75,21 @@ function userText(text: string): ThreadEvent {
   return { type: 'userText', text }
 }
 
+/**
+ * #1013's siblings of `delta(...)` / `userText(...)`, carrying the producer's stamped creation time.
+ * Separate builders rather than widened ones, following `toolUseWithInput`'s reasoning exactly: widening
+ * would push a present-but-`undefined` `createdAt` into every existing caller's fixture. The two builders
+ * above stay the UNSTAMPED ones — the shape a spec that injects no clock produces, and the shape #1014
+ * renders as the empty slot.
+ */
+function deltaAt(turnId: string, text: string, createdAt: number, seq = 0): ThreadEvent {
+  return { type: 'assistantDelta', turnId, seq, text, createdAt }
+}
+
+function userTextAt(text: string, createdAt: number): ThreadEvent {
+  return { type: 'userText', text, createdAt }
+}
+
 function sessionBoundary(
   reason: 'clear' | 'idle_evict' | 'workspace_change' = 'clear',
   workspaceCwd: string | null = null,
@@ -392,6 +407,77 @@ describe('reduceTimeline — userText (user message)', () => {
   it('lands in arrival order interleaved among the other fresh-append arms', () => {
     const state = run([userText('q'), delta('A', 'answer'), turnEnd('A')])
     expect(state.items.map((i) => i.kind)).toEqual(['userText', 'assistantText', 'turnBoundary'])
+  })
+})
+
+describe('reduceTimeline — the text items’ creation time (#1013)', () => {
+  const T0 = 1_700_000_000_000
+  const T1 = T0 + 5_000
+  const T2 = T0 + 9_000
+
+  it('carries a stamped userText event’s time onto the item', () => {
+    const state = run([userTextAt('hello', T0)])
+    expect(state.items).toEqual([{ kind: 'userText', text: 'hello', createdAt: T0 }])
+  })
+
+  it('leaves createdAt undefined on a userText event that carries none (AC1: the optional shape)', () => {
+    const state = run([userText('hello')])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'userText' }>
+    // `=== undefined`, never `'createdAt' in item`: the reducer assigns the field unconditionally, so
+    // the key is present with an undefined value. Absence and undefined are the same fact here, and
+    // #1014's AC3 renders both as the empty slot.
+    expect(item.createdAt).toBe(undefined)
+  })
+
+  it('stamps a fresh assistant bubble with the first delta’s time', () => {
+    const state = run([deltaAt('A', 'Hel', T0)])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>
+    expect(item.createdAt).toBe(T0)
+  })
+
+  it('leaves createdAt undefined on an assistantDelta that carries none', () => {
+    const state = run([delta('A', 'Hel')])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>
+    expect(item.createdAt).toBe(undefined)
+  })
+
+  // AC2. Three deltas, three DIFFERENT times: the coalesced item must keep the first. The arm rebuilds
+  // the item as a fresh object literal on every delta, which is exactly where a stamp gets dropped.
+  it('keeps the FIRST delta’s time when later deltas coalesce into the same bubble (AC2)', () => {
+    const state = run([deltaAt('A', 'Hel', T0), deltaAt('A', 'lo ', T1), deltaAt('A', 'there', T2)])
+    expect(state.items).toHaveLength(1)
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>
+    expect(item.text).toBe('Hello there')
+    expect(item.createdAt).toBe(T0)
+  })
+
+  it('preserves the tail’s time only — a new turn starts a fresh bubble at its own time', () => {
+    const state = run([deltaAt('A', 'first', T0), deltaAt('A', ' more', T1), deltaAt('B', 'second', T2)])
+    expect(state.items).toHaveLength(2)
+    const [first, second] = state.items as Extract<ThreadItem, { kind: 'assistantText' }>[]
+    expect(first.createdAt).toBe(T0)
+    expect(second.createdAt).toBe(T2)
+  })
+
+  it('does not fill an unstamped bubble from a later stamped delta of the same turn', () => {
+    const state = run([delta('A', 'Hel'), deltaAt('A', 'lo', T1)])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>
+    expect(item.text).toBe('Hello')
+    expect(item.createdAt).toBe(undefined)
+  })
+
+  // AC5's fence, from the inside: the one item kind that already holds a time keeps holding its own,
+  // and gains nothing.
+  it('leaves sessionBoundary’s wire-supplied occurredAt alone and gives it no createdAt', () => {
+    const state = run([sessionBoundary('clear', '/w', '2026-01-15T12:00:00.000Z')])
+    expect(state.items).toEqual([
+      {
+        kind: 'sessionBoundary',
+        reason: 'clear',
+        workspaceCwd: '/w',
+        occurredAt: '2026-01-15T12:00:00.000Z'
+      }
+    ])
   })
 })
 

@@ -47,7 +47,18 @@ export interface ToolResult {
  * carried beside `items`, not a row in the timeline (ADR 0008).
  */
 export type ThreadItem =
-  | { kind: 'assistantText'; turnId: string; text: string }
+  // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
+  // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
+  // `assistantDelta` IPC arm names four fields fail-closed and does not forward it; the two agree to within
+  // network latency, and the timeline is in-memory and cleared on exit and pairing end (#757), so nothing
+  // replays old messages a fresh clock would mis-stamp). ABSENT means no clock was injected at the producer
+  // — test `item.createdAt === undefined`, never `'createdAt' in item`, since the reducer assigns the field
+  // unconditionally. Absence is a LEGAL item, not a defect: it is what every spec that injects no clock
+  // produces, and #1014 renders it as the empty meta slot. Stored raw and formatted at render (the
+  // `sessionBoundary.occurredAt` precedent); this store parses, compares and formats nothing.
+  // Deliberately named apart from `occurredAt` below — that one is a wire-supplied ISO STRING about a
+  // session rotation, this one a renderer-minted number about a message.
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
   | {
       kind: 'toolCall'
       turnId: string
@@ -70,7 +81,11 @@ export type ThreadItem =
   // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
   // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
   // dormant; #179 wires the producer (the composer echo) and the render row.
-  | { kind: 'userText'; text: string }
+  //
+  // #1013: `createdAt` carries the `assistantText` contract above verbatim, with one difference in WHICH
+  // moment it names — the optimistic echo, i.e. when the operator pressed send, which for a
+  // renderer-sourced item is the only moment there is.
+  | { kind: 'userText'; text: string; createdAt?: number }
   // #286: the session-boundary delimiter — a `/clear`, an idle eviction, or a workspace change started a
   // fresh session. A whole marker, never coalesced. Carries the RAW `occurredAt` (formatted at render, the
   // channel-list precedent, so the relative time stays fresh) and the untrusted `workspaceCwd` (rendered as
@@ -108,7 +123,14 @@ export type ThreadItem =
 export type ThreadEvent =
   // `seq` is carried for wire fidelity (and a future monotonicity guard) but not consulted —
   // arrival order is authoritative, per ADR 0004's caller-owns-ordering stance.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  //
+  // #1013: `createdAt` is the producer's stamp, field-for-field with the `assistantText` item, so the
+  // reducer stays a CARRIER of this fact rather than its source (the `input` #643 / `resultDetail` #773
+  // discipline). It rides the EVENT rather than arriving as a reducer parameter for a reason worth
+  // recording: `reduceTimeline` is called by the two timeline stores, which ARE production paths, so a
+  // clock parameter there would stamp every item the store-level specs assert on. Absent means the
+  // producer injected no clock — see the item.
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
   // The tool-call arm. #763 widened the `toolUse` DaemonEvent with a `conversationId` the bridge drops,
   // so the bridge stays a filter + fresh copy, not a remap.
   //
@@ -144,7 +166,11 @@ export type ThreadEvent =
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
   // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
-  | { type: 'userText'; text: string }
+  //
+  // #1013: `createdAt` is the composer's stamp, field-for-field with the `userText` item. Its sole
+  // producer (`composerSend.ts`) reads it from an OPTIONAL injected `now`, so an omitted clock leaves it
+  // undefined rather than falling back to the wall clock.
+  | { type: 'userText'; text: string; createdAt?: number }
   // #286: the session boundary. Field-for-field identical to the `sessionBoundary` ThreadItem, so the
   // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
   // discipline), never coalesced.
@@ -255,18 +281,32 @@ function assertNever(event: never): never {
  * `assistantText`. The tail-check naturally renders text → tool → text as three items while
  * collapsing consecutive deltas into one growing bubble. Always returns a new array (a delta is
  * always a change), matching `appendUnique`'s new-reference-on-change discipline.
+ *
+ * #1013: `createdAt` names WHEN THE BUBBLE FIRST APPEARED, so the two branches read it from different
+ * places and that asymmetry is the whole of the feature. The grow branch takes the TAIL's stamp — this
+ * function rebuilds the item as a fresh literal on every coalesced delta, so carrying the incoming one
+ * instead (or omitting it) would silently re-date a bubble to its most recent fragment. Only the
+ * fresh-append branch uses the delta's own. Required parameter, not optional: this is module-private with
+ * one call site, so there is no cascade to buy off, and a required parameter makes forgetting it a
+ * compile error at that site.
  */
 function appendDelta(
   items: readonly ThreadItem[],
   turnId: string,
-  text: string
+  text: string,
+  createdAt: number | undefined
 ): readonly ThreadItem[] {
   const tail = items[items.length - 1]
   if (tail && tail.kind === 'assistantText' && tail.turnId === turnId) {
-    const grown: ThreadItem = { kind: 'assistantText', turnId, text: tail.text + text }
+    const grown: ThreadItem = {
+      kind: 'assistantText',
+      turnId,
+      text: tail.text + text,
+      createdAt: tail.createdAt
+    }
     return [...items.slice(0, -1), grown]
   }
-  return [...items, { kind: 'assistantText', turnId, text }]
+  return [...items, { kind: 'assistantText', turnId, text, createdAt }]
 }
 
 /**
@@ -312,7 +352,9 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // Turn activity — clears a live stall (AC2). Already returns a fresh `items`, so just carry
       // `stalled: false`.
       return {
-        items: appendDelta(state.items, event.turnId, event.text),
+        // #1013: the stamp is handed through unconditionally; `appendDelta` decides which of the two
+        // branches it lands on. `undefined` (no clock at the producer) is a legal value here.
+        items: appendDelta(state.items, event.turnId, event.text, event.createdAt),
         phase: state.phase,
         stalled: false,
         apiRetry: state.apiRetry,
@@ -434,8 +476,12 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       //
       // A redundant open (already pending) is deliberately NOT special-cased into a same-reference no-op:
       // this arm always builds a fresh `items` array, so it has never returned the same reference.
+      //
+      // #1013: `createdAt` is carried onto the item verbatim and UNCONDITIONALLY — the `input` / `resultDetail`
+      // discipline, never a conditional spread. Never coalesced, so unlike `appendDelta` there is no earlier
+      // stamp to preserve: a user message is whole on arrival and its time is the one the composer stamped.
       return {
-        items: [...state.items, { kind: 'userText', text: event.text }],
+        items: [...state.items, { kind: 'userText', text: event.text, createdAt: event.createdAt }],
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,

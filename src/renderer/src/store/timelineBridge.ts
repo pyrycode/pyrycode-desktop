@@ -38,11 +38,31 @@ function assertNever(event: never): never {
  * stale count here fails no typecheck. Derive the set by grep rather than from prose: the exhaustive
  * bridges are the ones whose `DaemonEvent` switch ends in `assertNever`, not the ~20 siblings ending
  * in `default: return null`.
+ *
+ * #1013 adds the OPTIONAL `now` clock, read on the `assistantDelta` arm and nowhere else. Optional and
+ * trailing for `subscribeTimeline`'s own #756 reason — a required parameter would cascade over every
+ * existing call site, an optional one over none — and with NO `Date.now` fallback, which is the load-bearing
+ * half: a defaulting clock would stamp every event produced by a spec that injects none, and those events
+ * are asserted with `toEqual`, which ignores an undefined-valued property and fails on a defined one. So
+ * **an absent clock means no stamp**, here and at every other seam this field crosses.
  */
-export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
+export function translateTimelineEvent(
+  event: DaemonEvent,
+  now?: () => number
+): ThreadEvent | null {
   switch (event.type) {
     case 'assistantDelta':
-      return { type: 'assistantDelta', turnId: event.turnId, seq: event.seq, text: event.text }
+      // #1013: the assistant bubble's creation time. `now?.()` expresses "absent clock ⇒ no stamp" without
+      // a branch, and the field is assigned unconditionally (the `input` / `resultDetail` discipline). The
+      // reducer, not this bridge, decides that only the FIRST delta of a bubble keeps its stamp — every
+      // delta is translated identically here, which is what keeps this function a total, opinion-free map.
+      return {
+        type: 'assistantDelta',
+        turnId: event.turnId,
+        seq: event.seq,
+        text: event.text,
+        createdAt: now?.()
+      }
     case 'turnEnd':
       return { type: 'turnEnd', turnId: event.turnId, stopReason: event.stopReason }
     case 'turnState':
@@ -432,13 +452,20 @@ export function timelineWriteTarget(
  * dispatch's arguments now names the id too. A third parameter would have cascaded over all 20 instead.
  * `timelineTargetFor` is called only on the non-null path, so its `default` group is unreachable in
  * production.
+ *
+ * #1013 threads an OPTIONAL `now` clock through to `translateTimelineEvent`, and the same arithmetic
+ * decides its shape: a required third parameter would cascade over every existing call site, an optional
+ * one over none — which is #756's lesson applied a second time to the same function. It is read once per
+ * translated event, inside the listener, so each assistant bubble is stamped at ITS OWN arrival rather
+ * than at subscribe time.
  */
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ThreadEvent, conversationId: string | null) => void
+  dispatch: (event: ThreadEvent, conversationId: string | null) => void,
+  now?: () => number
 ): () => void {
   return onDaemonEvent((event) => {
-    const threadEvent = translateTimelineEvent(event)
+    const threadEvent = translateTimelineEvent(event, now)
     if (threadEvent) dispatch(threadEvent, timelineTargetFor(event))
   })
 }
@@ -470,17 +497,29 @@ export function subscribeTimeline(
  * module-level constant: it is the effect's only dependency, so an inline arrow would resubscribe on
  * every `App` render instead of holding one listener for the app's lifetime. The dependency array names
  * it rather than staying `[]`, which is honest about that requirement rather than hiding it.
+ *
+ * #1013 makes this the CLOCK's composition root for the assistant side: `Date.now` is passed as
+ * `subscribeTimeline`'s third argument, referenced rather than called, exactly as `window.pyry.onDaemonEvent`
+ * is passed beside it. It is a plain third argument and not an effect dependency because `Date.now` is a
+ * module-level intrinsic whose identity never changes — the array stays `[getOpenConversationId]` and no
+ * resubscribe is introduced. This wiring is not compile-enforced (the parameter is optional, for the
+ * cascade reason stated on `subscribeTimeline`); `timelineBridge.test.ts` pins it at the `subscribeTimeline`
+ * seam instead, since this hook's effect never runs under `renderToStaticMarkup`.
  */
 export function useTimelineBridge(getOpenConversationId: () => string | null): void {
   useEffect(
     () =>
-      subscribeTimeline(window.pyry.onDaemonEvent, (event, conversationId) => {
-        timelineStore.getState().dispatch(event)
-        const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
-        if (target !== null) {
-          conversationTimelineStore.getState().dispatchFor(target, event)
-        }
-      }),
+      subscribeTimeline(
+        window.pyry.onDaemonEvent,
+        (event, conversationId) => {
+          timelineStore.getState().dispatch(event)
+          const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
+          if (target !== null) {
+            conversationTimelineStore.getState().dispatchFor(target, event)
+          }
+        },
+        Date.now
+      ),
     [getOpenConversationId]
   )
 }

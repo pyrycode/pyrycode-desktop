@@ -509,6 +509,20 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   Architect self-review: first pass FAILED on the size-only guard, PASSED after the `isFile()` revision.
   Nothing renders — the button and the outcome's appearance are #863 (not started); #864 (progress) and
   #890/#891 (drop/paste, second entries into this same flow) are also not started.
+- [Request-attachment envelope](features/request-attachment-envelope.md) — the **outbound half of the
+  retrieval leg** (#993, split from #687): a new `request_attachment` `EnvelopeType` member, a
+  two-field `RequestAttachmentPayload` (`conversation_id`, `attachment_id`, both required, no
+  request-id key), and a pure `buildRequestAttachment` builder — ships unreferenced, exactly as
+  `attachment_chunk`'s builder did in #860 ahead of #861. Correlation rides `Envelope.in_reply_to`,
+  already declared and decoded, so nothing new was needed for it. `conversation_id` is present here
+  where `attachment_chunk` deliberately omits it — an upload lands in the session's own conversation,
+  a retrieval must name which one — and naming one is explicitly not authorization: pairing (Noise IK)
+  is, and the daemon confines resolution to the named conversation's directory before any path join.
+  Both ids documented against the canonical lowercase-UUIDv4 shape and validated by neither side of
+  this repo's wire layer, matching both sibling payload types. The builder takes a whole typed
+  payload rather than two discrete id args specifically so it can never mint the zero-value pair
+  (`filepath.Join(dir, "", "")` is `dir` daemon-side) the way `buildRequestSessionSettings`'s `?? ''`
+  would. The inbound decode of the chunks and reject this provokes is #994's.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

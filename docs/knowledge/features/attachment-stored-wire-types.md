@@ -221,3 +221,7 @@ fail-close valid traffic the moment they disagree.
   [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Attachments — SSOT for the shape; its
   status prose is stale as of this ticket, its field/correlation prose is not.
+- [Request-attachment envelope](request-attachment-envelope.md) — the retrieval leg's ask (#993),
+  landed after this doc: the `request_attachment` frame that provokes more `attachment_chunk` frames
+  and, on failure, an `attachment.not_found` reject instead of this frame's terminal. Its payload
+  shares this one's declined-validation posture on the UUIDv4 shape.

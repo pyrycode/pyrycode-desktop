@@ -186,3 +186,7 @@ monotonic envelope-id counter and clock, and catches `WireEncodeError` to resolv
   `attachment_stored` reply frame and its fail-closed decode into [inbound message
   decode](inbound-message-decode.md). [Attachment transfer](attachment-transfer.md) (#861, landed) is
   the consumer of both wire halves.
+- [Request-attachment envelope](request-attachment-envelope.md) — the **retrieval leg's ask** (#993):
+  a `request_attachment` frame this same `attachment_chunk` answers when the daemon streams a stored
+  file back, unlike the upload leg where this frame is the one being sent. Ships unreferenced ahead of
+  its own consumer for the same reason this doc's builder did in #860.

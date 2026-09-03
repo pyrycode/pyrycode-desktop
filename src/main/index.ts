@@ -30,10 +30,17 @@ import { logSessionStart } from './sessionBanner'
 import { onCommand } from './receiveCommand'
 import { onDiagnostic } from './receiveDiagnostic'
 import { uploadAttachmentFile } from './attachmentUpload'
+import { createAttachmentRetrieval } from './attachmentRetrieval'
+import { ATTACHMENT_DIR_NAME, storeAttachment } from './attachmentStore'
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL
 } from '../shared/ipc/attachmentUpload'
+import {
+  ATTACHMENT_RETRIEVAL_CHANNEL,
+  ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
+  isAttachmentRetrievalRequest
+} from '../shared/ipc/attachmentRetrieval'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -552,6 +559,47 @@ app.whenReady().then(() => {
   }
   ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL, attachmentUploadListener)
   app.on('will-quit', () => ipcMain.removeListener(ATTACHMENT_UPLOAD_CHANNEL, attachmentUploadListener))
+
+  // The retrieval flow's composition-root edge (#996) — the mirror image of the attach edge above,
+  // and the ONE place the attachment directory is named. `app.getPath('userData')` is this slice's
+  // only Electron touch: ATTACHMENT_DIR_NAME is joined onto it HERE and closed into the store, so
+  // attachmentStore.ts stays Electron-free and unit-testable (the downloadsDir / saveDebugBundle seam),
+  // and no path is ever derived from anything the window sent.
+  //
+  // Registered on its OWN channel pair for the upload leg's reason: the outcome must not reach the
+  // daemon-event bridges, and a new DaemonEvent member would be a compile-forced edit in four renderer
+  // bridges that each end their switch in assertNever, for four no-op arms.
+  // ONE driver for the app lifetime, not one per ask: its concurrency cap and its coalescing are
+  // state that only means anything ACROSS asks, so rebuilding it per ask would silently disable both.
+  const attachmentDir = join(app.getPath('userData'), ATTACHMENT_DIR_NAME)
+  const retrieveAttachment = createAttachmentRetrieval({
+    requestAttachment: (payload, consumer) => connection.requestAttachment(payload, consumer),
+    store: (attachmentId, bytes) => storeAttachment(attachmentDir, attachmentId, bytes),
+    diagnosticLog
+  })
+
+  // UNLIKE THE ATTACH LISTENER, THIS ONE READS ITS IPC ARGUMENT, so it owes the boundary check the
+  // bare intent above does not: two identifiers arrive from an untrusted renderer. A malformed ask is
+  // DROPPED — no request frame, no filesystem call, no event — the isRendererCommand / onCommand
+  // posture, and the only sound answer when there is no identifier to address a reply to.
+  //
+  // `event.sender` — the window that asked — is passed PER ASK rather than closed in at construction,
+  // which is what lets one process-lifetime driver still answer the right window; the driver holds it
+  // with the in-flight entry. The isDestroyed() guard is the upload edge's: a window closed
+  // mid-retrieval drops the outcome instead of throwing. It cannot route through `live.sink`, whose
+  // send re-supplies DAEMON_EVENT_CHANNEL and ignores the channel it is given.
+  const attachmentRetrievalListener = (event: Electron.IpcMainEvent, request: unknown): void => {
+    if (!isAttachmentRetrievalRequest(request)) return
+    const sender = event.sender
+    retrieveAttachment(request, (retrievalEvent) => {
+      if (sender.isDestroyed()) return
+      sender.send(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, retrievalEvent)
+    })
+  }
+  ipcMain.on(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
+  app.on('will-quit', () =>
+    ipcMain.removeListener(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
+  )
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

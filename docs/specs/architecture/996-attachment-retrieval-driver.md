@@ -467,3 +467,32 @@ shipped clean. Keeping `attachmentReassembler.ts` off the list (§ 3) is what ho
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — `emit` moved from a construction dep to a per-ask argument
+
+**What changed.** `AttachmentRetrievalDeps` no longer carries `emit`; the driver's returned function
+takes it as a second argument (`(request, emit) => void`), and the in-flight `Set<string>` became a
+`Map<string, AttachmentRetrievalEmit>` so a terminal reaches the window that started the retrieval.
+
+**What drove it.** The design as written was internally inconsistent, and implementing § 5 surfaced it.
+The driver must be **process-lifetime** — its concurrency cap and its coalescing are state that only
+means anything across asks — while the answer must go back to the window that asked, which is
+`event.sender`, a **per-ask** value. Those two cannot both hold with `emit` fixed at construction. The
+first attempt at the composition root built a driver per ask, which silently disabled the cap and the
+coalescing outright; the security review's MUST FIX would have shipped as a no-op.
+
+**Alternatives rejected.** Routing to the current window instead of the asker (`debugBundleDownload`'s
+shape) is unavailable: `live.sink`'s send re-supplies `DAEMON_EVENT_CHANNEL` and `live.window` exposes
+no `webContents`, so it would need `LiveWindow` widened — a sixth production file. Keeping an
+`attachmentId → sender` correlation map in `src/main/index.ts` works, but puts stateful routing logic
+in the one file this repo does not unit-test.
+
+**New contract.** The driver is `createAttachmentRetrieval(deps): (request, emit) => void`. The emit is
+captured with the in-flight entry at start, so a coalesced duplicate ask cannot redirect a retrieval
+already under way to a different window, and a `busy` refusal is answered on the refused ask's own emit
+because there is no entry to look one up from. Both are pinned by tests. Nothing else in the design
+moves: the failure union, the correlation model, the timeout and the teardown net are unchanged, and
+`AttachmentRetrievalEmit` is a type alias for the function shape rather than a sixth exported type in
+the counted sense (it replaces the dep field it was extracted from).

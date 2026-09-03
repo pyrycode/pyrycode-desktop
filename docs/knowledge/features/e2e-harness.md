@@ -267,6 +267,28 @@ Teardown must run on **every** exit path — success, test failure, and a failur
   INVARIANT 4 that told the reader not to finish this sweep (its named negative-control purpose had
   already been served); kept the still-true half, that `unpair-repair.spec.ts` is not a
   `pairFromUnpairedLaunch` caller. Zero production code.
+- **[#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) filled the message bubble's meta-row timestamp slot
+  ([Conversation shell — message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row))
+  and broke thirteen fake-tier `toHaveText` assertions across five files that read a whole `.bubble`'s
+  text — a selector grep alone missed four of them.** `.bubble__meta` is the bubble's last child on both
+  branches, and Playwright's `toHaveText(string)` asserts an element's *entire* normalized text, so every
+  site asserting a bubble's exact message text broke the moment the slot filled. The fix keeps each site
+  an exact bound rather than loosening it to `toContainText` (which would have deleted what several of
+  them prove — one spec's own comment says its assertion is the guard against the default-echo trap): a
+  new `e2e/fixtures/bubbleText.ts` exports `bubbleTextExactly(text)`, which regex-escapes the expected
+  message text and anchors an optional digit-shape timestamp pattern after it
+  (`^<escaped text>\s*<DD.MM.YYYY - HH:MM shape>$`), and every broken site swaps its string literal (or,
+  for `toHaveText`'s array-of-strings form, each array element) for this call — no locator, timeout,
+  `.nth()`, or `.last()` moved. **The sweep that finds these sites is by assertion name across all of
+  `e2e/`, not by the selector.** `conversation-switch-keeps-both-threads.spec.ts` binds its locator to a
+  const eleven lines above its four assertions, so neither `.bubble` nor the selector string appears on
+  the assertion lines a selector grep finds — `rg 'toHaveText|toContainText' e2e/` (no path or `bubble`
+  filter) followed by resolving every const-bound locator is what catches those. The QA gate is what
+  caught the first three of the four here (a first failed `expect` aborts a Playwright test, hiding its
+  siblings from the same failure log — all four bounced in one pass once found). See [Real-claude
+  liveness e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the
+  second half of this sweep — the real-claude tier's raw `textContent`/`evaluateAll` reads, which no
+  `expect`-based grep finds at all.
 
 ## Related
 

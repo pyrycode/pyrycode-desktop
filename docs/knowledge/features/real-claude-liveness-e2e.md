@@ -249,9 +249,30 @@ within the timeout rather than needing an explicit relay-registration wait.
 
 Real claude's words are non-deterministic, so the scenario asserts liveness only:
 
-- **Strip the cursor before counting.** The streaming cursor `▎` is a child `<span
-  class="bubble__cursor">` **inside** the assistant row, so raw `textContent` is non-empty even on an
-  empty streaming bubble. `nonEmptyAssistantCount()` strips `▎`, trims, and counts non-empty rows.
+- **Strip the cursor, and since [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014), the
+  meta row, before counting.** The streaming cursor `▎` is a child `<span class="bubble__cursor">`
+  **inside** the assistant row, so raw `textContent` is non-empty even on an empty streaming bubble.
+  [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) filled `.bubble__meta`'s timestamp
+  slot (the [message bubble's meta row](conversation-shell-message-bubble.md#the-meta-row)), and that row
+  is the bubble's last child on the streaming branch too, so an unstripped read turned this tier's whole
+  liveness predicate into the "row merely exists" check its own docblock says it was written to replace —
+  every assistant row now carries a non-empty trailing stamp regardless of what claude actually said.
+  `nonEmptyAssistantCount()` strips both `▎` and the `.bubble__meta` subtree (`META_SELECTOR`, on a
+  **detached clone** so the live DOM the rest of each spec asserts on is untouched), trims, and counts
+  non-empty rows; `real-claude-question-answer.spec.ts`'s `assistantText()` generalises the same strip
+  from the count to the concatenated text, which also restores `continuationOf`'s
+  `after.startsWith(before)` prefix invariant — the stamp trails *every* row, so an unstripped read had
+  silently dropped that assertion to its whole-text fallback. The strip is structural (remove the
+  subtree), not a digit-shape match against the timestamp's format, so it survives whatever the row grows
+  next. All four reads (`real-claude.spec.ts`, `real-claude-interrupt.spec.ts`,
+  `real-claude-queue-drop.spec.ts`, `real-claude-question-answer.spec.ts`) keep the constant named
+  `META_SELECTOR` verbatim, so `rg META_SELECTOR e2e/` finds the whole set — mirroring how `CURSOR_CHAR`
+  is already duplicated across the same four specs rather than lifted. Because `testIgnore` keeps this
+  whole tier out of every gate that runs by default, nothing would have caught the regression without an
+  operator run of `npm run e2e:real-claude` — the next text-bearing child added to `.bubble` needs the
+  same two-grep sweep (`toHaveText|toContainText` **and** `textContent|allTextContents|allInnerTexts|
+  innerText`, across all of `e2e/` with no tier filter) documented in [E2E test
+  harness](e2e-harness.md#edge-cases-and-limitations).
 - **Turn 1** sends a message, polls `nonEmptyAssistantCount() ≥ 1`, then waits `.bubble__cursor` to
   reach count 0 — the `turn_end` quiesce signal — before turn 2 reads its baseline. This removes the
   race where turn 2's poll could observe turn 1's still-streaming reply.

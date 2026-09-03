@@ -7,6 +7,7 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 - [Actions menu and reader cutover](conversation-shell-actions-menu-and-reader-cutover.md) — the composer's Actions menu (#680) and the per-conversation timeline reader cutover (#758).
 - [Modals](conversation-shell-modals.md) — the permission/trust modal (#224, its rejection surface #249) and the question panel (#906).
 - [Session boundaries and channel info](conversation-shell-session-and-channel-info.md) — the session-boundary delimiter row (#286/#690) and the Channel Info sheet (#365, with its Rename/Archive/Delete actions).
+- [Message bubble](conversation-shell-message-bubble.md) — the later redraw of the bubble itself (#969): the desktop `Message` shape, the meta row and its copy control.
 
 ## The interactive flip + thread cutover (#179)
 
@@ -33,7 +34,9 @@ Advertising `interactive` stops the daemon's coarse `message` fan-out in the sam
 - **`TimelineRow`'s `case 'userText'`** (the [#245](../codebase/245.md) dormant placeholder) now draws
   the right-aligned user bubble — `.message-row--user` / `.bubble--user` (`data-thread-role="user"`,
   distinct from `MessageBubble`'s `data-message-role`), reusing the coarse thread's own user-bubble
-  treatment verbatim (no new CSS). Text renders as auto-escaped React children, never
+  treatment verbatim (no new CSS at the time — [#969](conversation-shell-message-bubble.md) later
+  redrew both bubbles' CSS from the desktop `Message` component and added the meta row + copy control
+  this arm now also renders). Text renders as auto-escaped React children, never
   `dangerouslySetInnerHTML`.
 - **`MessageThread` is retired.** Its mount (`<MessageThread messages={messages} />`) and the
   `useSessionStore(selectMessages)` read are removed from `ConversationScreen`. `MessageThread` /
@@ -55,7 +58,10 @@ region, no chrome — the `ThinkingIndicator` posture); non-empty → one row pe
 order, inside a `.conversation__queued` wrapper dimmed to 50% opacity (the `.tool-row` pending
 precedent, the single "waiting / not yet run" signal). Each row reuses the delivered user-bubble
 treatment (`message-row--user` / `bubble--user`) but is tagged `data-thread-role="queued"` —
-distinct from a delivered row's `data-thread-role="user"`. `QueuedBacklogControl`, the in-file
+distinct from a delivered row's `data-thread-role="user"`. Reusing `.bubble--user` with no CSS of its
+own means the row inherited [#969](conversation-shell-message-bubble.md#what-stays-untouched)'s desktop
+restyle for free; the ticket deliberately withheld the meta row it added there — a queued message has
+no timestamp and nothing sent yet to copy. `QueuedBacklogControl`, the in-file
 container, binds a module-scope-hoisted `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (the same
 milestone constant the composer sends under — this screen has no conversation id in nav scope, and
 the spec explicitly ruled out threading one through for this slice).

@@ -4,7 +4,7 @@ The **untrusted→trusted boundary for a decrypted daemon message**. The [Noise 
 
 Introduced in [#68](../codebase/68.md). It fills the last no-op arm the [daemon connection](daemon-connection.md) left behind — [#62](../codebase/62.md) wired the handshake-status path but left the inbound-message arm a `// TODO`. This ticket produces the `messageReceived` / `messagesReceived` events that feed the already-complete renderer pipeline: the [daemon-event channel](daemon-event-channel.md) ([#18](../codebase/18.md)) carries them, the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md)) translates them into `SessionAction`s, and the [session store](session-store.md) ([#2](../codebase/2.md)) appends them (deduped by `message_id`, arrival order preserved).
 
-Extended additively twenty-four times since, most recently [#972](https://github.com/pyrycode/pyrycode-desktop/issues/972)'s `model_list` decode. The full chronological, kind-by-kind account — what each ticket added, which helper it introduced or reused, and what the consumer arm did with the result — lives in [Extension history](inbound-message-decode-history.md), split out 2026-09-02 once that history alone had grown past the size cap.
+Extended additively twenty-five times since, most recently [#998](https://github.com/pyrycode/pyrycode-desktop/issues/998)'s `attachment_chunk` retrieval decode. The full chronological, kind-by-kind account — what each ticket added, which helper it introduced or reused, and what the consumer arm did with the result — lives in [Extension history](inbound-message-decode-history.md), split out 2026-09-02 once that history alone had grown past the size cap.
 
 See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
@@ -140,3 +140,14 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   (full account in [Extension history](inbound-message-decode-history.md)); no consumer arm exists yet —
   the IPC carry, the store and the run-configuration rows that replace `RunConfigSections.tsx`'s
   hardcoded `MODEL_CATALOG`/`EFFORT_LEVELS` are still to come.
+- [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the twenty-fifth
+  additive extension: the `attachment_chunk` kind now claims its **retrieval** direction too (the
+  upload direction is [#860](attachment-chunk-envelope.md)'s producer). `parseAttachmentChunkPayload`
+  ([#998](https://github.com/pyrycode/pyrycode-desktop/issues/998)) scales `parseAttachmentStoredPayload`'s
+  shape to eight fields plus a base64 decode via `base64StdDecode`, and introduces the file's first
+  **required** `inReplyTo` on a kind that also has siblings typing it optional — a retrieval chunk
+  cannot legitimately arrive unsolicited, where `daemon-error`/`session-settings`/
+  `session-settings-updated` can. Also corrects `AttachmentChunkPayload`'s `filename`/`mime_type` field
+  docs, true inbound and false outbound (the daemon sanitises/sniffs on the retrieval leg). Ships
+  dormant: `daemonConnection.ts`'s inbound switch has no case for `'attachment-chunk'` yet — the
+  reassembler is a later slice.

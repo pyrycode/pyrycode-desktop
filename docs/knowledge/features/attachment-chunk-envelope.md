@@ -16,7 +16,15 @@ and actually sends is [#861](https://github.com/pyrycode/pyrycode-desktop/issues
 decode of `attachment_stored`, the upload's one positive terminal, into a typed [inbound
 message](inbound-message-decode.md) arm — see [Attachment-stored wire
 types](attachment-stored-wire-types.md). It is a distinct frame, not a decode of `attachment_chunk`
-itself; the "No inbound decode" edge case below, scoped to `attachment_chunk`, still holds.
+itself.
+
+[#998](https://github.com/pyrycode/pyrycode-desktop/issues/998) added the **inbound decode of this
+frame itself**, on the direction that was still unclaimed: an `attachment_chunk` arriving on the
+**retrieval** leg (the answer to [`request_attachment`](request-attachment-envelope.md), #993) now
+narrows into a typed `attachment-chunk` inbound arm instead of falling through to `default:`. See
+[Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the "No inbound decode of
+`attachment_chunk` itself" edge case below is resolved for that direction; nothing changed in this
+file, since #998 touches `inboundMessage.ts` and `wire/types.ts` only.
 
 ## What it does
 
@@ -62,7 +70,16 @@ round-trip passes silently on an unknown string.
 **One frame carries both directions.** `attachment_chunk` rides upload (client → daemon) and
 retrieval (daemon → client) alike, and all eight fields are always present in both — no `omitempty`,
 so a decoder may rely on all eight. This slice only ever produces the frame; decoding an inbound one
-is a later slice's job (see Non-goals).
+on the retrieval leg is [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md)
+(#998).
+
+**`filename` and `mime_type`'s field docs describe the upload direction only, since #998.** Read
+outbound (this module's direction) they are the uploading client's own strings, unchanged. Read
+inbound (the retrieval leg) the daemon stores under a *sanitised* filename and *sniffs* the media
+type from the stored bytes instead — a provenance correction, not a trust one; see [Attachment-chunk
+retrieval decode](attachment-chunk-retrieval-decode.md) § The provenance correction.
+`attachmentChunkPlan.ts`'s own docblock states the upload-direction claim correctly and was
+deliberately left untouched by #998.
 
 **There is no `conversation_id`, and the omission is a security property.** An upload lands in the
 conversation the authenticated session is already on, decided daemon-side from session context, so a
@@ -161,10 +178,12 @@ monotonic envelope-id counter and clock, and catches `WireEncodeError` to resolv
 - **No `attachment_id` minting.** It is a caller-supplied input, never generated here — minting is
   state and this module has none, and the id is explicitly not a capability (not secret, not
   unguessable), so there is nothing for a random generator to buy.
-- **No inbound decode of `attachment_chunk` itself.** The retrieval direction reuses this same frame,
-  but decoding and reassembling it — index-addressed, any order — is a later slice. `inboundMessage.ts`
-  is no longer untouched overall: [#964](attachment-stored-wire-types.md) added the decode of
-  `attachment_stored`, the sibling reply frame, which is a different `EnvelopeType` member entirely.
+- **No inbound decode of `attachment_chunk` itself — resolved for recognition by #998, still open for
+  reassembly.** [#964](attachment-stored-wire-types.md) added the decode of `attachment_stored`, a
+  different `EnvelopeType` member entirely; [#998](attachment-chunk-retrieval-decode.md) added the
+  decode of *this* frame's retrieval direction — one frame in, one typed
+  `RetrievedAttachmentChunk` out. What is still a later slice: concatenating the recognised chunks
+  into an assembled file. `inboundMessage.ts` claims the type; nothing consumes what it produces yet.
 - **A source-purity test can match its own disclaimer.** A test that greps a module's source for the
   literal string `'console.'` to prove it never logs will also match a header comment that names that
   string while explaining the module *doesn't* call it. `attachmentChunkPlan.ts`'s header was worded
@@ -190,3 +209,6 @@ monotonic envelope-id counter and clock, and catches `WireEncodeError` to resolv
   a `request_attachment` frame this same `attachment_chunk` answers when the daemon streams a stored
   file back, unlike the upload leg where this frame is the one being sent. Ships unreferenced ahead of
   its own consumer for the same reason this doc's builder did in #860.
+- [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the **inbound decode**
+  of this same frame on the retrieval leg (#998): `RetrievedAttachmentChunk`, the required `inReplyTo`
+  correlation, and the `filename`/`mime_type` provenance correction referenced above.

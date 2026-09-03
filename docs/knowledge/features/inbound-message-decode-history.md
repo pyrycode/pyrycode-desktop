@@ -327,3 +327,33 @@ Architect self-review PASS.
 `modelList` `DaemonEvent` arm, a fresh named-field literal built at the emit rather than a spread of
 this decode's payload. See [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md).
+
+[#998](https://github.com/pyrycode/pyrycode-desktop/issues/998) added a twenty-fifth kind,
+`attachment_chunk` → `attachment-chunk` — the same `EnvelopeType` member [#860](attachment-chunk-envelope.md)
+already produces on the upload leg, now also recognised on the **retrieval** leg (the daemon's answer
+to a `request_attachment`, [#993](request-attachment-envelope.md)), into the [attachment-chunk
+retrieval decode](attachment-chunk-retrieval-decode.md) vocabulary. `parseAttachmentChunkPayload` is
+`parseAttachmentStoredPayload`'s shape (#964) scaled to eight fields plus a base64 decode:
+`attachment_id` through the existing `requireNonEmptyString`, `total_chunks` then `index` each through
+`requireNumber` plus an integer + range check (narrowed in that order so the range check has its
+bound), `filename`/`mime_type`/`sha256`/`size` through plain `requireString`/`requireNumber` (type
+only — the reassembler owns integrity, against the assembled bytes, not this decode), and `data`
+through `base64StdDecode(requireString(…))` — the wire codec's STRICT decoder, which requires the
+input to be the exact base64-std re-encoding rather than tolerating Node's lenient `Buffer.from`. No
+new field narrower: every check reuses an existing helper. The kind is the file's first to type
+`inReplyTo` **required** rather than optional, where the three prior kinds that surface it
+(`daemon-error`/`session-settings`/`session-settings-updated`) all type it `?: number` — a retrieval
+chunk cannot legitimately arrive unsolicited, so one without a correlation is malformed rather than an
+uncorrelated variant, checked *before* the payload is parsed so an uncorrelatable frame is rejected
+before the base64 decode's work is spent. Deliberately **not** precedent from `attachment-stored`'s
+no-`inReplyTo` decision — the two arms sit adjacent in the switch and argue opposite directions for
+the same envelope field. Content-free-logged as `inbound-decoded(code: 'attachment_chunk')` before the
+`default` branch, narrowed (including the `inReplyTo` check) before logging, stricter than upstream
+permits: never the id, index or total the daemon's own doc allows logging. The same ticket also
+corrected two field docs on `AttachmentChunkPayload` itself — `filename`/`mime_type` were documented as
+the uploading client's own strings, true inbound and false on this newly-decoded retrieval direction,
+where the daemon sanitises the filename and sniffs the media type instead; a provenance correction
+only; every client obligation (sanitise before render, never a path, never a privileged dispatch)
+survives verbatim. Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no case for
+`'attachment-chunk'` and no catch-all, so the reassembler that concatenates chunks into a file is the
+first intended consumer, not yet started. Architect self-review PASS.

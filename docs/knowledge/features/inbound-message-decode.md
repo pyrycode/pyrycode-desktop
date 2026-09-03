@@ -129,6 +129,10 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   `requireNonEmptyString`. [Attachment chunk envelope](attachment-chunk-envelope.md) (#860) is the
   producer half this decodes the answer to; [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)
   (send driver, not started) is the first intended consumer of both.
+- [Daemon error outcome](daemon-error-outcome.md) — [#965](https://github.com/pyrycode/pyrycode-desktop/issues/965)
+  widens the `daemon-error` kind by a field, not a new kind: the always-content-free rule since #116
+  becomes scoped rather than absolute, narrowed onto a client-owned `DaemonErrorOutcome` for the
+  attachment upload leg's six reject codes and still closed for everything else.
 - [Model-list wire types](model-list-wire-types.md) — the
   `ModelListPayload`/`WireModelOption` vocabulary ([#971](https://github.com/pyrycode/pyrycode-desktop/issues/971)),
   `slash_command_list`'s sibling from the same `initialize` reply.

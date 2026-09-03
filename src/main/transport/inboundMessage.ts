@@ -90,17 +90,71 @@ function hashPlaintext(plaintext: Uint8Array): string {
 }
 
 /**
+ * WHICH WAY a daemon `error` frame failed, as a CLIENT-OWNED value (#965). Every inhabitant is a
+ * literal written in this file, so the type itself is the trust signal: a value of this type provably
+ * holds no daemon text. That is the whole point — `ErrorPayload.code` is untrusted text from an
+ * internet-exposed boundary, and CLAUDE.md forbids it becoming a lookup path, a filename or a cache
+ * key, so it is compared against these constants and dropped, never carried.
+ *
+ * The six classified members are the attachment UPLOAD leg's reject codes. `attachment.not_found` and
+ * `attachment.stream_aborted` exist upstream but are deliberately absent: both belong to the RETRIEVAL
+ * direction (#687) — one answers a fetch that resolved to nothing, the other abandons a download
+ * mid-stream — and modelling them here would assert a contract this leg does not have.
+ *
+ * RETRYABILITY IS DOCUMENTED HERE, NOT COMPUTED HERE, and no isRetryable helper ships with it. The
+ * daemon never sends `retry_after_s` on this leg (`attachmentReplyError` marshals a closed
+ * `{Code, Message, Retryable}` literal and the field is `*int,omitempty`), so a client cannot learn a
+ * backoff duration from the wire and "after a backoff" is a CLIENT-OWNED POLICY. Policy belongs to the
+ * consumer that acts on it (#861), not to a decode boundary whose job is to say which failure this was.
+ * The flags below are the daemon's own reject table (`false, false, false, true, true`), read off
+ * `internal/relay/v2session_attachment.go` rather than inferred from the code names.
+ */
+export type DaemonErrorOutcome =
+  /** Framing claims are inconsistent — duplicate index, index out of range, `total_chunks` disagreeing
+   *  across chunks. NOT retryable: the receiver discards the whole in-flight stream, so the repair is to
+   *  re-chunk. */
+  | 'attachment-invalid-chunk'
+  /** Assembled bytes or length disagree with the declared `sha256` / `size`. NOT retryable: the repair
+   *  is to re-derive the metadata from the file, never to retry the same bytes against the same claims. */
+  | 'attachment-integrity-failed'
+  /** The WHOLE transfer exceeds the receiver's per-upload byte bound — permanent for that file, and the
+   *  bound is receiver-configured and unpublished, so a client learns it only by being rejected. NOT
+   *  retryable. Distinct from `message-too-long`, which is one oversized envelope. */
+  | 'attachment-too-large'
+  /** The receiver's concurrency bound is hit. Retryable after a backoff, but it clears only when OTHER
+   *  uploads finish — nothing this client does to this transfer advances it. */
+  | 'attachment-too-many-uploads'
+  /** The host write failed. Retryable after a backoff, though the condition may not clear at all. The
+   *  daemon's message for it is static — never a path, never the filesystem error — but that is the
+   *  daemon's promise about its own behaviour, not a property this client relies on: no message crosses. */
+  | 'attachment-storage-failed'
+  /** ONE envelope was oversized — a producer bug on THIS side, not a verdict on the transfer's size, and
+   *  raised by the transport rather than the attachment path. NOT retryable: resending the same envelope
+   *  reproduces it. */
+  | 'message-too-long'
+  /** Everything else, and it covers two causes on purpose: a code outside the six above (including a
+   *  future one this client predates), and a payload that carried no readable `code` at all — absent,
+   *  non-object, or `code` missing / not a string. Both mean the same thing to a consumer, "this client
+   *  declined to classify the failure", and neither is a reason to drop a terminal frame. */
+  | 'unclassified'
+
+/**
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
  * transport layer stays IPC-free. An internal transport result the consumer (#62) maps onto the
  * daemon-event channel.
  *
  * The three debug-bundle kinds (#116) are recognised additively: the `message` / `message_chunk`
- * path is unchanged, and `daemon-error` is deliberately CONTENT-FREE — the daemon's ErrorPayload
- * text (code / message) is never narrowed or surfaced, only "a terminal error arrived." It DOES
- * carry the optional numeric `inReplyTo` — the `Envelope.in_reply_to` routing id already surfaced by
- * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload parsed) so the consumer can
- * correlate the error back to a pending `set_session_settings` request and surface a rejection;
- * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO error content.
+ * path is unchanged, and `daemon-error`'s content-free rule is now SCOPED rather than absolute (#965)
+ * — narrowed for the codes named in DaemonErrorOutcome, still closed for everything else. Exactly ONE
+ * of ErrorPayload's four fields is read, `code`, and it is read as a COMPARAND: matched against
+ * client-owned literals and dropped. No daemon text is narrowed or surfaced; what crosses in its place
+ * is a client-owned `outcome`, which is REQUIRED on the kind so there is no absent state to mishandle.
+ * `message` and the wire `retryable` / `retry_after_s` are still not read at all. It DOES also carry the
+ * optional numeric `inReplyTo` — the `Envelope.in_reply_to` routing id already surfaced by
+ * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload re-parsed for it) so the consumer
+ * can correlate the error back to a pending `set_session_settings` request and surface a rejection;
+ * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO daemon-supplied
+ * error content.
  *
  * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
  * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
@@ -316,7 +370,7 @@ export type InboundDaemonMessage =
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
-  | { kind: 'daemon-error'; inReplyTo?: number }
+  | { kind: 'daemon-error'; inReplyTo?: number; outcome: DaemonErrorOutcome }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
@@ -1818,6 +1872,57 @@ function parseAttachmentStoredPayload(payload: unknown): AttachmentStoredPayload
 }
 
 /**
+ * Map a daemon `error` frame's payload onto a client-owned DaemonErrorOutcome (#965).
+ *
+ * TOTAL BY CONSTRUCTION: it never throws and has no failure return, which INVERTS this module's usual
+ * fail-closed idiom (`throw new WireDecodeError` for a malformed payload of a claimed type, as
+ * parseMessagePayload does) — deliberately, and a later reader should not "fix" it into conformity.
+ * daemonConnection wraps parseInboundMessage in a bare `catch { return }` that drops the frame with no
+ * event and no log, so a throw here would silently kill all four behaviours the `daemon-error` case
+ * drives: the set_session_settings rejection correlation (#269), the create_workspace_folder rejection
+ * correlation (#396), reassembler.fail('daemon-error') for an in-flight debug bundle (#116), and the
+ * modal-answer FIFO rejection (#248). None of the four reads error content — each correlates on
+ * `in_reply_to` and emits a client-minted id — so all four must fire for EVERY `error` envelope, however
+ * mangled its payload. AN ERROR FRAME IS TERMINAL BECAUSE IT ARRIVED, NOT BECAUSE ITS PAYLOAD PARSED.
+ * Throwing would have handed a hostile daemon a one-frame kill switch for those four.
+ *
+ * The `switch` IS the trust boundary. It COMPARES the untrusted string against client-owned constants
+ * and RETURNS a client-owned constant; the daemon's string is never the operand of an index, a join or
+ * a resolve. A `Record`-keyed table is the shape to avoid for exactly that reason — it would make
+ * untrusted text a lookup path, the thing CLAUDE.md forbids. Inline literal comparison mirrors
+ * parseTurnStatePayload's `state` check, this module's idiom for narrowing a closed enum without a cast.
+ *
+ * Nothing is retained from the payload, so `code` needs no length bound: MAX_LOGGED_TYPE_CHARS exists
+ * because the unmodeled branch LOGS a wire-supplied string, and nothing wire-supplied is logged or kept
+ * here. The frame-level MAX_PLAINTEXT_BYTES guard at the top of parseInboundMessage already bounds a
+ * hostile oversized frame before this runs.
+ */
+function narrowDaemonErrorOutcome(payload: unknown): DaemonErrorOutcome {
+  // isRecord rejects null and arrays; a string / number / absent payload lands here too. Reading
+  // `payload.code` off a JSON.parse result is prototype-safe — a `__proto__` key round-trips as an
+  // ordinary OWN data property, and this never ASSIGNS, which is the only real hazard.
+  if (!isRecord(payload)) return 'unclassified'
+  const code = payload.code
+  if (typeof code !== 'string') return 'unclassified'
+  switch (code) {
+    case 'attachment.invalid_chunk':
+      return 'attachment-invalid-chunk'
+    case 'attachment.integrity_failed':
+      return 'attachment-integrity-failed'
+    case 'attachment.too_large':
+      return 'attachment-too-large'
+    case 'attachment.too_many_uploads':
+      return 'attachment-too-many-uploads'
+    case 'attachment.storage_failed':
+      return 'attachment-storage-failed'
+    case 'message.too_long':
+      return 'message-too-long'
+    default:
+      return 'unclassified'
+  }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -2409,23 +2514,36 @@ export function parseInboundMessage(
       })
       return { kind: 'attachment-stored', attachmentStored }
     }
-    case 'error':
+    case 'error': {
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.
-      // CONTENT-FREE — no ErrorPayload field (code / message) is narrowed or surfaced; the reassembler
-      // only needs "a terminal error arrived." It moves from inbound-unmodeled to inbound-decoded(error)
-      // now that it is recognised — a content-free, more-accurate log that applies to ALL `error`
-      // frames, bundle-related or not (intentional; see the #116 spec). The numeric `in_reply_to` is a
-      // routing id, not logged (no new DiagnosticEvent field, so #131's renderer pin is untouched).
+      // Its content-free rule is now SCOPED, not absolute (#965): exactly one ErrorPayload field is
+      // read, `code`, and only as a comparand against client-owned literals — see
+      // narrowDaemonErrorOutcome, which owns the boundary and the argument for why it cannot throw.
+      // `message` and the wire `retryable` / `retry_after_s` are still read by nothing. It moves from
+      // inbound-unmodeled to inbound-decoded(error) now that it is recognised — a content-free,
+      // more-accurate log that applies to ALL `error` frames, bundle-related or not (intentional; see
+      // the #116 spec). The numeric `in_reply_to` is a routing id, not logged (no new DiagnosticEvent
+      // field, so #131's renderer pin is untouched).
+      //
+      // THE LOGGED `code` IS A CLIENT-OWNED LITERAL AND MUST STAY ONE. ADR 0007's allowlist is enforced
+      // over field NAMES, not values, so `code: envelope.payload.code` would typecheck cleanly and ship
+      // daemon-controlled text into a JSON-lines log an operator can send off-box in a debug bundle.
+      // The unit test asserting the record omits the wire code is the deterministic guard for this.
+      const outcome = narrowDaemonErrorOutcome(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'error',
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      // Propagate the ALREADY-decoded Envelope.in_reply_to (#269) — do not re-decode, parse no
-      // ErrorPayload. `undefined` when the frame omits it, which makes the consumer's correlation to a
-      // pending set_session_settings request fail closed. Carries ONLY the numeric id, never error content.
-      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to }
+      // Propagate the ALREADY-decoded Envelope.in_reply_to (#269) — do not re-decode it, and parse no
+      // ErrorPayload for it. `undefined` when the frame omits it, which makes the consumer's correlation
+      // to a pending set_session_settings request fail closed. Carries ONLY the numeric id and the
+      // client-owned outcome, never daemon text. `outcome` is REQUIRED rather than optional so a
+      // mangled payload yields 'unclassified' instead of absence: a consumer has no "field missing"
+      // state to mishandle, and no `if (outcome)` branch that behaves differently for a hostile frame.
+      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to, outcome }
+    }
     default:
       // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it
       // content-free (capped type + size + hash) so an unforeseen kind still leaves a footprint (#130

@@ -185,6 +185,8 @@ fail-close valid traffic the moment they disagree.
 
 ## Related
 
+- [Daemon error outcome](daemon-error-outcome.md) — the reject-code sibling on the same upload leg (#965):
+  the six ways `attachment_chunk` can be answered with `error` instead of this frame's positive terminal.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the producer half this decodes the answer
   to; its "no inbound decode" edge case was scoped to `attachment_chunk` itself and still holds — this
   slice decodes `attachment_stored`, a different frame.

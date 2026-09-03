@@ -170,6 +170,101 @@ export function attachmentStoredReplyFrames(
   }
 }
 
+/**
+ * The six reject codes the upload leg can answer a chunk with (#965). Verified against pyrycode
+ * `internal/protocol/codes.go` on 2026-09-03. `attachment.not_found` and `attachment.stream_aborted`
+ * are absent on purpose: both exist upstream but belong to the RETRIEVAL direction (#687), so a fake
+ * that could emit them here would let a test assert a contract this leg does not have.
+ */
+export type AttachmentRejectCode =
+  | 'attachment.invalid_chunk'
+  | 'attachment.integrity_failed'
+  | 'attachment.too_large'
+  | 'attachment.too_many_uploads'
+  | 'attachment.storage_failed'
+  | 'message.too_long'
+
+/**
+ * The daemon's own reject table, mirrored: the STATIC message and the retryability it publishes for each
+ * code (`internal/relay/v2session_attachment.go`'s `rejectInvalidChunk` … `rejectStorageFailed`, whose
+ * flags are `false, false, false, true, true`). Mirrored rather than inferred from the code names, and
+ * carried so a fixture is a REAL reject instead of a code in an empty shell — which is what makes the
+ * client-side "nothing but the outcome crosses" assertions prove something.
+ *
+ * `message.too_long` is the one entry with no upstream text to mirror: the code is declared in
+ * `codes.go` but has no emit site in the Go tree, so its message here is FAKE-OWNED. It is static and
+ * path-free like the others, which is all any client may assume of it.
+ */
+const ATTACHMENT_REJECTS: Readonly<
+  Record<AttachmentRejectCode, { message: string; retryable: boolean }>
+> = {
+  'attachment.invalid_chunk': { message: 'attachment chunk rejected', retryable: false },
+  'attachment.integrity_failed': { message: 'attachment integrity check failed', retryable: false },
+  'attachment.too_large': { message: 'attachment exceeds the per-upload byte bound', retryable: false },
+  'attachment.too_many_uploads': { message: 'too many uploads in flight', retryable: true },
+  'attachment.storage_failed': { message: 'attachment could not be stored', retryable: true },
+  'message.too_long': { message: 'message exceeds the maximum size', retryable: false }
+}
+
+// Fixed, deterministic framing for the `error` reject attachmentRejectReplyFrames builds (mirrors
+// ATTACHMENT_STORED_ID/TS). Only `in_reply_to` and the payload carry meaning; `id`/`ts` are required by
+// the codec but inspected by nothing, so fixed values keep the fake wall-clock-free.
+const ATTACHMENT_REJECT_ID = 7002
+const ATTACHMENT_REJECT_TS = '2026-01-01T00:00:00Z'
+
+/**
+ * A `buildReplyFrames` builder that REFUSES an attachment upload the way the real daemon does (#965):
+ * ONE `error` envelope correlated to the rejected chunk, and SILENCE for everything else. The sibling
+ * of attachmentStoredReplyFrames above — same shape, opposite terminal.
+ *
+ * The parameter is `rejectedIndex`, not the sibling's `completingIndex`, and the difference is real: a
+ * reject names the chunk that TRIGGERED the condition, which for `too_many_uploads` or `storage_failed`
+ * can be any chunk in the stream rather than the one that closed the set. `in_reply_to` carries that
+ * chunk's envelope id, which is the only correlation handle the consumer (#861) can key on.
+ *
+ * The payload is a faithful `{ code, message, retryable }` — the shape `attachmentReplyError` marshals.
+ * `retry_after_s` is deliberately ABSENT: that field is `*int,omitempty` and the daemon's literal is
+ * closed over three fields, so no attachment reject ever carries it, and a fake that invented one would
+ * let a client learn a backoff duration the wire cannot supply.
+ *
+ * A non-`attachment_chunk` frame, a chunk at another index, and an undecodable frame all yield `[]` —
+ * the fake answers only what it understands, and a decode failure inside it must not masquerade as a
+ * daemon-side crash.
+ *
+ * STATELESS BY CONSTRUCTION, like the sibling: the closure holds one number and one string and no
+ * arrival set, so two transfers interleaving on one session cannot race here and there is nothing to
+ * reset between tests.
+ */
+export function attachmentRejectReplyFrames(
+  rejectedIndex: number,
+  code: AttachmentRejectCode
+): (inboundPlaintext: Uint8Array) => Uint8Array[] {
+  return (inboundPlaintext: Uint8Array): Uint8Array[] => {
+    let envelope: ReturnType<typeof decodeEnvelope>
+    try {
+      envelope = decodeEnvelope(inboundPlaintext)
+    } catch {
+      return [] // not an envelope at all — nothing to answer
+    }
+    if (envelope.type !== 'attachment_chunk') return []
+    const payload = envelope.payload
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return []
+    const { index } = payload as Record<string, unknown>
+    if (index !== rejectedIndex) return []
+    const { message, retryable } = ATTACHMENT_REJECTS[code]
+    return [
+      encodeEnvelope({
+        id: ATTACHMENT_REJECT_ID,
+        type: 'error',
+        ts: ATTACHMENT_REJECT_TS,
+        // The chunk THIS refusal answers — the one that triggered the condition, whatever its index.
+        in_reply_to: envelope.id,
+        payload: { code, message, retryable }
+      })
+    ]
+  }
+}
+
 /** Config for one fake daemon. Test-only; nothing is persisted, no real credential is read. */
 export interface FakeDaemonOptions {
   /** Base forwarder URL, no trailing path (from startFakeRelayForwarder().url). The daemon dials

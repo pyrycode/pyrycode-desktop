@@ -3,7 +3,8 @@ import type { AttachmentUploadEvent, AttachmentUploadFailure } from '../../../..
 import {
   ATTACHMENT_UPLOAD_FAILURE_COPY,
   attachmentUploadOutcomeCopy,
-  formatByteLimit
+  formatByteLimit,
+  uploadProgressPercent
 } from './attachmentUploadCopy'
 
 // #863: the composer's copy for one attach outcome — the whole of AC3, provable by calling a function
@@ -170,5 +171,101 @@ describe('formatByteLimit', () => {
     expect(formatByteLimit(1_000)).toBe('1 kB')
     expect(formatByteLimit(999)).toBe('999 bytes')
     expect(formatByteLimit(0)).toBe('0 bytes')
+  })
+})
+
+// #864: the in-flight sentence. It is the one figure in this module the CLIENT computes rather than
+// selects, which is why it needs a totality proof the other arms do not: `sentChunks`/`totalChunks`
+// arrive off `ipcRenderer.on`, where the declared type is the compile-time half only.
+const progressWith = (sentChunks: number, totalChunks: number): AttachmentUploadEvent => ({
+  type: 'progress',
+  uploadId: 'upload-id',
+  sentChunks,
+  totalChunks
+})
+
+describe('uploadProgressPercent — the computed figure (#864 AC1)', () => {
+  it('reports the chunks on the wire against the plan total, floored', () => {
+    expect(uploadProgressPercent(0, 200)).toBe(0)
+    expect(uploadProgressPercent(1, 200)).toBe(0)
+    expect(uploadProgressPercent(50, 200)).toBe(25)
+    expect(uploadProgressPercent(199, 200)).toBe(99)
+  })
+
+  it('reaches 100 when every chunk is on the wire, and the terminal is still to come', () => {
+    // 100% states that this client has put the whole file out, which is exactly what "how far the
+    // transfer has got" measures. Capping at 99 to reserve the figure for the terminal would make the
+    // reading never arrive at the number it counts towards, and the terminal says the rest.
+    expect(uploadProgressPercent(200, 200)).toBe(100)
+  })
+
+  it('is total against a value that never came from this app', () => {
+    // Nothing validates what crosses the bridge, so every one of these is reachable from a
+    // non-conforming sender and none may render as "NaN%" or as a figure outside the scale.
+    expect(uploadProgressPercent(1, 0)).toBe(0)
+    expect(uploadProgressPercent(1, -5)).toBe(0)
+    expect(uploadProgressPercent(-3, 10)).toBe(0)
+    expect(uploadProgressPercent(500, 10)).toBe(100)
+    expect(uploadProgressPercent(Number.NaN, 10)).toBe(0)
+    expect(uploadProgressPercent(1, Number.NaN)).toBe(0)
+    expect(uploadProgressPercent(Number.POSITIVE_INFINITY, 10)).toBe(0)
+    expect(uploadProgressPercent(1, Number.POSITIVE_INFINITY)).toBe(0)
+  })
+
+  it('rejects a count that is a string, which the global isFinite would have accepted', () => {
+    // `Number.isFinite` does not coerce and the global `isFinite` does: `isFinite('5')` is true, so a
+    // guard written with the global would let a string reach the arithmetic and state a figure derived
+    // from it.
+    //
+    // ASSERTED AS WHOLE-SENTENCE EQUALITY, NEVER AS A SUBSTRING. This test shipped as
+    // `toContain('0%')` against '5'/'10' and detected nothing: the coercing guard states `Uploading…
+    // 50%`, which CONTAINS "0%" and contains no "NaN", so both assertions held under both guards while
+    // the comment told the next reader they were covered. A substring of a percent figure is a
+    // sub-figure of every percent figure that ends in it.
+    const hostile = { type: 'progress', uploadId: 'u', sentChunks: '5', totalChunks: '8' }
+    const sentence = attachmentUploadOutcomeCopy(hostile as unknown as AttachmentUploadEvent)
+    expect(sentence).not.toContain('NaN')
+    expect(sentence).toBe(attachmentUploadOutcomeCopy(progressWith(0, 8)))
+    // ...and the equality above is one this module can FAIL: read as numbers, the very same counts state
+    // a different sentence. Without this line the assertion would still pass against an implementation
+    // that had stopped distinguishing its inputs at all, which is the failure being repaired here.
+    expect(attachmentUploadOutcomeCopy(progressWith(5, 8))).not.toBe(sentence)
+  })
+})
+
+describe('attachmentUploadOutcomeCopy — the progress arm (#864 AC1)', () => {
+  it('states the figure as one sentence that changes, carrying no id', () => {
+    const sentence = attachmentUploadOutcomeCopy(progressWith(50, 200))
+    expect(sentence).toContain('25%')
+    expect(sentence).not.toContain('upload-id')
+    // The counts themselves are not spelled out: what the composer states is how far, not how the
+    // transport is chunked.
+    expect(sentence).not.toContain('200')
+    expect(sentence.trim()).not.toBe('')
+  })
+
+  it('advances as further chunks go out, and each figure is distinct', () => {
+    const early = attachmentUploadOutcomeCopy(progressWith(20, 200))
+    const late = attachmentUploadOutcomeCopy(progressWith(180, 200))
+    expect(early).toContain('10%')
+    expect(late).toContain('90%')
+    expect(early).not.toBe(late)
+  })
+
+  it('says something different from every terminal sentence', () => {
+    // The progress line and the terminal occupy the same slot, so a reader must be able to tell which
+    // one is showing from the text alone.
+    const progress = attachmentUploadOutcomeCopy(progressWith(1, 8))
+    const terminals = [
+      attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'u' }),
+      attachmentUploadOutcomeCopy(failedWith('connection-lost')),
+      attachmentUploadOutcomeCopy({
+        type: 'refused',
+        uploadId: 'u',
+        reason: 'too-large',
+        limitBytes: 23_040_000
+      })
+    ]
+    for (const terminal of terminals) expect(progress).not.toBe(terminal)
   })
 })

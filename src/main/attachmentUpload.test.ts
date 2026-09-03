@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   ATTACHMENT_MAX_UPLOAD_BYTES,
   ATTACHMENT_MAX_UPLOAD_CHUNKS,
+  ATTACHMENT_PROGRESS_MIN_CHUNKS,
   uploadAttachmentBytes,
   uploadAttachmentFile,
   type AttachmentUploadDeps
@@ -331,5 +332,158 @@ describe('uploadAttachmentBytes', () => {
     expect(declared).not.toContain('�')
     expect(Buffer.from(declared, 'utf8').toString('utf8')).toBe(declared)
     expect(long.startsWith(declared)).toBe(true)
+  })
+})
+
+// ================================================================================================
+// #864 — the progress gate. The transfer reports every chunk of every transfer; THIS module decides
+// whether a report is worth an IPC message, against one named chunk threshold. The gate's input is
+// the reported total rather than the file, so these drive it through a fake driver with a one-byte
+// file — what the total is really derived from (the plan's length) is proved one layer down, in
+// daemonConnection.test.ts.
+// ================================================================================================
+
+/** A harness whose fake driver reports the given (sent, total) pairs before it resolves. */
+function reportingHarness(
+  reports: Array<[number, number]>,
+  result: AttachmentTransferResult = { ok: true },
+  after: Array<[number, number]> = []
+): { deps: AttachmentUploadDeps; events: AttachmentUploadEvent[] } {
+  const events: AttachmentUploadEvent[] = []
+  return {
+    events,
+    deps: {
+      upload: async (_input, onProgress) => {
+        for (const [sent, total] of reports) onProgress?.(sent, total)
+        // `after` reports land once the driver has already answered — the shape a driver that ignored
+        // its own settle contract would produce.
+        //
+        // A MACROTASK, AND THAT IS LOAD-BEARING. A `queueMicrotask` here runs BEFORE the awaiting
+        // caller resumes, so these reports would arrive while the transfer is still legitimately in
+        // flight and the test would prove nothing about what happens after the terminal. A timer runs
+        // after the whole microtask chain that emits it.
+        setTimeout(() => {
+          for (const [sent, total] of after) onProgress?.(sent, total)
+        }, 0)
+        return result
+      },
+      emit: (event) => events.push(event)
+    }
+  }
+}
+
+const TINY: Parameters<typeof uploadAttachmentBytes>[0] = {
+  bytes: new Uint8Array([1]),
+  filename: 'tiny.bin',
+  mimeType: 'application/octet-stream'
+}
+
+describe('the progress gate (#864 AC1-AC4)', () => {
+  it('emits nothing at all for a transfer under the chunk threshold', async () => {
+    // AC2. Under the bound the composer stays silent until the terminal, and — because the decision is
+    // made here rather than in the window — the upload costs no IPC for progress at all.
+    const under = ATTACHMENT_PROGRESS_MIN_CHUNKS - 1
+    const { deps, events } = reportingHarness([
+      [1, under],
+      [under, under]
+    ])
+
+    await uploadAttachmentBytes(TINY, deps)
+
+    expect(events.map((event) => event.type)).toEqual(['completed'])
+  })
+
+  it('emits one progress per report at the threshold, carrying both counts', async () => {
+    const total = ATTACHMENT_PROGRESS_MIN_CHUNKS
+    const { deps, events } = reportingHarness([
+      [1, total],
+      [2, total]
+    ])
+
+    await uploadAttachmentBytes(TINY, deps)
+
+    // AC1: the figure advances, and it is the chunks on the wire against the plan's total.
+    expect(events).toEqual([
+      { type: 'progress', uploadId: expect.any(String), sentChunks: 1, totalChunks: total },
+      { type: 'progress', uploadId: expect.any(String), sentChunks: 2, totalChunks: total },
+      { type: 'completed', uploadId: expect.any(String) }
+    ])
+    // One transfer, one id: every event of an upload carries the id its own intent minted.
+    expect(new Set(events.map((event) => event.uploadId)).size).toBe(1)
+  })
+
+  it('ends a reported transfer with exactly one terminal and no progress after it', async () => {
+    // AC3, and the reason this module keeps a flag of its own rather than trusting the transfer's.
+    // `upload` is an INJECTED seam: this module already ships a backstop around it on the stated
+    // grounds that a contract is not a guarantee, and a report arriving after the answer is exactly
+    // the shape that would leave a stale percentage on screen with no terminal left to replace it.
+    const total = ATTACHMENT_PROGRESS_MIN_CHUNKS
+    const { deps, events } = reportingHarness(
+      [[1, total]],
+      { ok: false, outcome: 'connection-lost' },
+      [
+        [2, total],
+        [3, total]
+      ]
+    )
+
+    await uploadAttachmentBytes(TINY, deps)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.map((event) => event.type)).toEqual(['progress', 'failed'])
+    // A connection lost mid-transfer clears the indicator on the same path a completion does: the
+    // terminal is the last thing the window is told either way.
+    expect(events.at(-1)).toMatchObject({ type: 'failed', reason: 'connection-lost' })
+  })
+
+  it('puts no string but the uploadId on a progress event, and no new key', async () => {
+    // AC4 at the emitter rather than at the type: a member that grew a filename would show up here as
+    // a fifth key and as a second string in the leak walk the rest of this file already applies.
+    const total = ATTACHMENT_PROGRESS_MIN_CHUNKS
+    const { deps, events } = reportingHarness([[1, total]])
+
+    await uploadAttachmentBytes(TINY, deps)
+
+    const progress = events.filter((event) => event.type === 'progress')
+    expect(progress).toHaveLength(1)
+    expect(Object.keys(progress[0]).sort()).toEqual([
+      'sentChunks',
+      'totalChunks',
+      'type',
+      'uploadId'
+    ])
+    expect(everyStringEmitted(progress, [])).toEqual(['progress', progress[0].uploadId])
+  })
+
+  it('refuses without reporting, so no progress can precede a refusal', async () => {
+    // AC3's parenthesis: a refused file never starts, so the driver is never called and there is
+    // nothing to report. Proved by the driver never running at all.
+    let driven = false
+    const events: AttachmentUploadEvent[] = []
+    const deps: AttachmentUploadDeps = {
+      upload: async () => {
+        driven = true
+        return { ok: true }
+      },
+      emit: (event) => events.push(event)
+    }
+
+    await uploadAttachmentBytes(
+      { ...TINY, bytes: new Uint8Array(ATTACHMENT_MAX_UPLOAD_BYTES + 1) },
+      deps
+    )
+
+    expect(driven).toBe(false)
+    expect(events.map((event) => event.type)).toEqual(['refused'])
+  })
+})
+
+describe('ATTACHMENT_PROGRESS_MIN_CHUNKS', () => {
+  it('is a chunk count strictly inside this client’s own upload bound', () => {
+    // A threshold at or above the bound would make the feature unreachable: no transfer this client
+    // is willing to attempt could ever clear it.
+    expect(Number.isInteger(ATTACHMENT_PROGRESS_MIN_CHUNKS)).toBe(true)
+    expect(ATTACHMENT_PROGRESS_MIN_CHUNKS).toBeGreaterThan(1)
+    expect(ATTACHMENT_PROGRESS_MIN_CHUNKS).toBeLessThan(ATTACHMENT_MAX_UPLOAD_CHUNKS)
   })
 })

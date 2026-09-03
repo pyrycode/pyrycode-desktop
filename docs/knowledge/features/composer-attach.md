@@ -23,16 +23,21 @@ The other four footer controls each read a store and render one of several state
 - **It takes no `conversationId` and reads no store.** The intent it dispatches names no conversation and
   no file — the picker, the path and the bytes all stay in the background process. `requestAttach` is a
   fire-and-forget call with no argument.
-- **It needs no disabled or in-flight state.** The composition root's `pickerOpen` flag (#862) already
-  drops a second intent while a picker is open, so a double-clicked button is handled below the bridge.
-  Drawing an in-flight state here would both pre-empt [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864)
-  (in-flight progress) and be exactly the placeholder [#811](conversation-shell-composer.md#composer-footer-row-811)
-  forbade.
-- **The renderer cannot correlate a click to an outcome.** `requestAttachmentUpload()` returns `void`, so
-  this window never learns the `uploadId` its own click minted, and the main-side guard is scoped to the
-  *dialog* rather than the transfer — two uploads can be live at once with distinct ids. So the composer
-  states **the latest outcome to arrive**, and cannot state anything narrower; `uploadId` is deliberately
-  unread on the renderer side, since surfacing it would invite a correlation that does not exist.
+- **The button itself needs no disabled or in-flight state.** The composition root's `pickerOpen` flag
+  (#862) already drops a second intent while a picker is open, so a double-clicked button is handled
+  below the bridge. Drawing a state on the *glyph* would be exactly the placeholder
+  [#811](conversation-shell-composer.md#composer-footer-row-811) forbade — see § In-flight progress
+  (#864) below for where the in-flight state actually lives instead: the outcome line beneath the row,
+  not the button.
+- **The renderer cannot correlate a click to an outcome — or to a transfer's progress.** `requestAttachmentUpload()`
+  returns `void`, so this window never learns the `uploadId` its own click minted, and the main-side guard
+  is scoped to the *dialog* rather than the transfer — two uploads can be live at once with distinct ids.
+  So the composer states **the latest event to arrive** (a terminal, or, since #864, an in-flight
+  `progress` report), and cannot state anything narrower; `uploadId` is deliberately unread on the
+  renderer side, since surfacing it would invite a correlation that does not exist. Two concurrently live
+  transfers interleave into this one slot — a shipped property of this ticket, made *visible* by #864's
+  progress line rather than introduced by it; correlating would need the intent to return an id, which is
+  [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890)'s channel change.
 
 ## Two pure views and a container hook, not one component
 
@@ -56,11 +61,13 @@ Composer
   `<div>`/`<span>` maps to `role="generic"` and drops its name. `.composer__send` already names its two
   icon-only variants this way.
 - **`ComposerAttachOutcome({ outcome })`** — `null` when `outcome` is `null` (not an empty element holding
-  the slot — [`ContextUsageReading`](conversation-shell-composer.md)'s exact-empty rule restated), otherwise
-  a `<div className="composer__attach-outcome" role="status">` holding `attachmentUploadOutcomeCopy(outcome)`.
-  A `<div>`, not a `<p>` — this repo ships no margin reset and it is a flex item in the composer column, so
-  a `<p>`'s UA margin would move the message box for no semantic gain (`ComposerErrorChip`'s ruling
-  verbatim).
+  the slot — [`ContextUsageReading`](conversation-shell-composer.md)'s exact-empty rule restated); an
+  `outcome.type === 'progress'` branch renders `<div key="in-flight" className="composer__attach-progress">`
+  with **no live-region role** (#864, see § In-flight progress below); every other (terminal) branch
+  renders `<div key="terminal" className="composer__attach-outcome" role="status">` — both holding
+  `attachmentUploadOutcomeCopy(outcome)`. `<div>`s, not `<p>`s — this repo ships no margin reset and it is
+  a flex item in the composer column, so a `<p>`'s UA margin would move the message box for no semantic
+  gain (`ComposerErrorChip`'s ruling verbatim).
 - **`useAttachmentUpload()`** — `useState<AttachmentUploadEvent | null>(null)` plus one `useEffect`
   returning the bridge's own unsubscribe handle as cleanup, `[]` deps — one live listener per mount, the
   `LogDataSection` / daemon-event-bridge idiom. `requestAttach` clears the held outcome **and then** sends
@@ -68,6 +75,10 @@ Composer
   reports nothing at all, and an event-driven clear would leave a prior refusal or failure on screen for an
   attach the operator abandoned. `window.pyry` is dereferenced only inside the effect and inside
   `requestAttach`, never during render, so every static render of the composer still touches no bridge.
+  One nullable holds both an in-flight report and a terminal (#864) because they are the same value: the
+  listener assigns whatever arrived last, so a terminal replaces a progress line with nothing having to
+  clear it first, and a connection lost mid-transfer clears the figure on exactly the path a completion
+  does.
 
 State lives in `Composer` via this hook, not in a store — [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
 applied as written, with one wrinkle the ADR's pairing precedent didn't carry: a display-lifetime
@@ -95,6 +106,60 @@ of `.composer-status`'s reserved-space guarantee, by design: the element does no
 while there is no outcome, so an absent child costs no flex gap, and it is a sentence rather than a
 13-character reading, so wrapping is the correct behaviour rather than a hazard to bound.
 
+## In-flight progress (#864) — one slot, two branches, and a `key` that only a comment proves
+
+A large upload used to say nothing between the click and the terminal, which for a multi-hundred-chunk
+file reads as a hang. [#864](attachment-upload.md) surfaces the chunk count
+[attachment transfer](attachment-transfer.md) already held, one seam per hop, and lands it here as a
+fourth `AttachmentUploadEvent` member — `{ type: 'progress'; uploadId; sentChunks; totalChunks }` — that
+`ComposerAttachOutcome` renders in the *same slot* the terminal will occupy, never beside it: the hook
+holds one nullable and the latest event wins, so mutual exclusion is a property of the branch, not
+something arbitrated at render time.
+
+**The two `key`s are load-bearing, not decoration.** React reconciles by element type and position, so
+without distinct `key="in-flight"` / `key="terminal"` values the in-flight `<div>` and the terminal
+`<div>` are the same DOM node, and the terminal transition would *add* `role="status"` to an existing
+element while changing its text — the case assistive technology handles least reliably. Distinct keys
+force the terminal to be a fresh insertion carrying its content, byte-for-byte the behaviour #863
+shipped and reasoned about. **No test can see this**: `renderToStaticMarkup` drops keys and the fake e2e
+tier cannot observe a screen-reader announcement, so the property is carried by a code comment naming
+what it's for and nothing else — the honest state of it, not a gap to backfill.
+
+**The in-flight line carries no live-region role, on purpose — the one place this ticket could regress a
+shipped decision.** #863 chose `role="status"` for the terminal because an outcome fires at most once per
+attach. Progress fires per chunk, up to `ATTACHMENT_MAX_UPLOAD_CHUNKS` (512) times for one file, and a
+polite region announcing each one would be worse than the silence it replaces. Of the three ways out — a
+separate non-live element, a coarser emission cadence, or a role that differs while in flight — this
+takes the first: the figure is readable by browsing and announced by nothing.
+
+**Separate classes, not a shared-treatment mix.** `conversation.css` adds `.composer__attach-progress` to
+`.composer__attach-outcome`'s existing rule as a *selector list*, not by widening `.composer__attach-outcome`
+itself or wearing it as a two-class mix the way `.composer__attach` wears `.composer__footer-button`.
+Every shipped assertion on the terminal matches `class="composer__attach-outcome"` as a **whole attribute
+run** — a prepended or appended class on that exact run reddens several assertions while an extractor
+ending in `?? ''` lets one pass vacuously with no red at all, the same class-lift failure mode this repo
+has hit before at the shared `.composer__footer-button` treatment.
+
+**The sentence — `Uploading… N%`, from `uploadProgressPercent` in `attachmentUploadCopy.ts`.** Floored
+and clamped into `[0, 100]`; `100%` means every chunk is on the wire and the host's answer is still
+outstanding, which is exactly what "how far the transfer has got" measures — the terminal is what says
+the file was actually stored. Guarded with `Number.isFinite`, never the global `isFinite` (the global
+coerces, so `isFinite('5')` is `true` and a string count off `ipcRenderer.on` would reach the arithmetic
+instead of resolving to `0`). This is `formatByteLimit`'s precedent, not `event.reason`'s: the figure is
+computed by this client from two client-held counts, so it may be interpolated where a daemon-*selected*
+`reason` may not.
+
+**A `toContain` against a formatted number is a weak assertion by construction — a lesson from this
+ticket's rework leg.** The first version of `uploadProgressPercent`'s string-coercion guard test asserted
+`not.toContain('NaN')` and `toContain('0%')` against `sentChunks: '5'` / `totalChunks: '10'`. The
+*coercing* global `isFinite` states `Uploading… 50%` for those inputs, which contains the substring `0%`
+(from `50%`) and no `NaN` — so both assertions held under either guard, and it was the only test in the
+suite that could have reddened on the swap. Repaired as whole-sentence equality against a genuine `0%`,
+with counts (`'5'`/`'8'` → `62%`) whose coerced reading collides with nothing, plus an anti-vacuity line
+proving the same counts read as numbers produce a different sentence. The general lesson: a formatted
+number's alphabet is small and its values nest as substrings of each other, so `toContain` against one is
+rarely the assertion it looks like — prefer whole-value equality.
+
 ## `attachmentUploadCopy.ts` — the copy is a selection, not a rendering
 
 Every field on `AttachmentUploadEvent` is client-owned by construction ([#862](attachment-upload.md)'s own
@@ -102,9 +167,9 @@ docblock): no member can hold the file's bytes, its host path or its name, `reas
 this repo, and `limitBytes` is a client-owned constant. So there is no daemon text on this path — no
 escaping obligation, no length bound, and no truncation chain of the kind `.composer__model-label` carries
 for a claude-authored label. What's at stake is coverage, and `attachmentUploadOutcomeCopy(event)` closes
-it with an explicit return type and **no `default`** on its `switch` — a fourth member of
-`AttachmentUploadEvent` (#864's progress) trips a compile error rather than falling through to blank, the
-`relayLeg`/`daemonLeg` discipline one directory over.
+it with an explicit return type and **no `default`** on its `switch` — a discipline that has already fired
+for real: #864's `progress` member reached this switch through the compile error rather than a silent
+fallthrough, the `relayLeg`/`daemonLeg` discipline one directory over.
 
 - **`refused`** composes its one sentence from the event's own `limitBytes` via `formatByteLimit`, and
   names the bound as **this app's**, never the host's: the union's docblock is explicit that a file under
@@ -167,13 +232,18 @@ four-rule `.composer__actions-icon` tidy-up note to five for a rule that would a
 
 Renderer tests are static server renders (CLAUDE.md, `renderToStaticMarkup`, no DOM). `ComposerAttach.test.tsx`
 covers the button's exact class run, its accessible name, its `aria-hidden fill="currentColor"` glyph with
-no hex literal anywhere in the markup, and `ComposerAttachOutcome`'s exact-empty absent arm plus its three
-present arms rendering `role="status"` and text equal to the copy module's own output (proving the view
-*selects*, never composes). `attachmentUploadCopy.test.ts` walks `Object.values` of the failure map (every
-value non-empty, no count, no restated member list), drives the three hostile reason strings through the
-`Map` indirection, and exercises `formatByteLimit`'s three unit arms. `ConversationScreen.test.tsx` gained
-mount proofs that the button lands after `.composer__context` (the row's last item) and that a fresh mount
-carries no `.composer__attach-outcome` at all.
+no hex literal anywhere in the markup, and `ComposerAttachOutcome`'s exact-empty absent arm plus its terminal
+arms rendering `role="status"` and text equal to the copy module's own output (proving the view *selects*,
+never composes). Since #864: a `progress` event renders `.composer__attach-progress` carrying the copy
+module's own output, with **no** `role="status"` and no `role="alert"`, and the `composer__attach-outcome`
+class present nowhere in the markup — the whole-attribute-run separation proved at the unit level.
+`attachmentUploadCopy.test.ts` walks `Object.values` of the failure map (every value non-empty, no count, no
+restated member list), drives the three hostile reason strings through the `Map` indirection, exercises
+`formatByteLimit`'s three unit arms, and (#864) `uploadProgressPercent` against a mid-transfer figure, a
+`sent === total` 100% reading, and — per the rework-leg lesson above — whole-sentence equality (not
+`toContain`) for the totality guard's zero/negative/non-finite/string-coercion cases. `ConversationScreen.test.tsx`
+gained mount proofs that the button lands after `.composer__context` (the row's last item) and that a fresh
+mount carries no `.composer__attach-outcome` at all.
 
 `e2e/composer-attach.spec.ts` (fake tier) is the interaction proof the static tier cannot reach. Because
 this tier launches the *built* app, a real click reaches production's `dialog.showOpenDialog` and would
@@ -186,8 +256,17 @@ actually reddens if `margin-left: auto` is dropped — the row's `height: 20px` 
 a click reaches the main process with no native window opening; a cancelled pick leaves nothing on screen
 over a held interval; three pushed outcomes each render their own copy and the latest always wins; a second
 click clears the outcome before a new terminal arrives; and the message box's `y` is restored once the
-outcome clears. No `needs-real-claude` — both halves drive through `app.evaluate` with no live daemon and no
+outcome clears. Since #864, the same drive continues: a `progress` event replaces a terminal line (the
+in-flight element present, `.composer__attach-outcome` count 0 — the "no second indicator" property),
+a second `progress` with a higher figure advances the rendered text, and a `failed`/`connection-lost`
+terminal that follows clears the in-flight element and states its own sentence — with
+`.composer__footer [role="alert"]` staying at count 0 throughout, the shipped invariant this ticket had to
+not disturb. No `needs-real-claude` — every drive goes through `app.evaluate` with no live daemon and no
 live claude.
+
+**What no tier proves:** the remount forced by `ComposerAttachOutcome`'s two distinct `key`s
+(`renderToStaticMarkup` drops keys, and the fake e2e tier cannot observe a screen-reader announcement) —
+see § In-flight progress above. Carried by a code comment, not a test.
 
 ## Security
 
@@ -203,15 +282,28 @@ cannot inject text (every sentence is a module constant), cannot render blank (e
 total `Map` read), and cannot move layout unboundedly (no daemon-length string reaches the DOM on this
 path). See `docs/specs/architecture/863-composer-attach-button.md` for the full nine-finding review.
 
+**#864's review, also PASS**, adds one property specific to `progress`: `totalChunks` discloses the chosen
+file's size to within `ATTACHMENT_CHUNK_DATA_BYTES`, which qualifies but does not break #862's "cannot read
+back what was sent" — see [Attachment upload](attachment-upload.md) for why that disclosure is accepted.
+Nothing renderer-side changed the trust posture: no new channel, no new bridge member, `uploadProgressPercent`
+totalises over `ipcRenderer.on`'s untyped runtime value with `Number.isFinite` rather than trusting the
+declared type. See `docs/specs/architecture/864-attachment-upload-progress.md` § Security review.
+
 ## Related
 
 - [Attachment upload](attachment-upload.md) (#862) — the headless flow this control wires: the picker
-  guard, the size bound, the driver and the two bridge members.
-- [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864) — in-flight progress on the same channel,
-  which is why `attachmentUploadOutcomeCopy`'s `switch` has no `default`: a fourth event member must trip a
-  compile error here, not a silent fallthrough.
+  guard, the size bound, the driver and the two bridge members. Also the wire-contract-level writeup of
+  the `progress` member and its `ATTACHMENT_PROGRESS_MIN_CHUNKS` gate (#864).
+- [Attachment transfer](attachment-transfer.md) (#861) — the send loop that reports `sentChunks` /
+  `totalChunks` upward through the `onProgress` seam #864 added; the source of the count this control
+  renders.
 - [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) — the file row in the message bubble, the
   only other planned evidence that an upload produced anything; until it lands, `ComposerAttachOutcome`'s
   line is the sole evidence on screen.
-- See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026) and
-  `docs/specs/architecture/863-composer-attach-button.md` for the full plan and its security review.
+- [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) — the ticket that would
+  let the renderer learn its own click's `uploadId` and correlate rather than always stating the latest
+  event; not started.
+- See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
+  `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027)
+  and `docs/specs/architecture/864-attachment-upload-progress.md` for the full plans and their security
+  reviews.

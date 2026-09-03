@@ -54,6 +54,7 @@ import type { AttachmentChunkPlanInput } from './transport/attachmentChunkPlan'
 import {
   createAttachmentTransfer,
   type AttachmentTransfer,
+  type AttachmentTransferProgress,
   type AttachmentTransferResult
 } from './transport/attachmentTransfer'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
@@ -464,8 +465,17 @@ export interface DaemonConnection {
    *
    * A transfer that resolves failed is resolved: it is not retried here, and nothing is emitted to
    * the window (this method ships no daemon event; surfacing the outcome is #862's).
+   *
+   * `onProgress` is told after each chunk reaches the wire how far the transfer has got (#864), and it
+   * is OPTIONAL — a caller that only wants the terminal passes nothing and behaves exactly as before.
+   * It is a second parameter rather than a field on `input`, which is the PLAN's input and is spread
+   * onto every chunk payload. Both early exits below return before any transfer exists, so a caller
+   * that never reaches the wire is never told it did.
    */
-  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>
+  uploadAttachment(
+    input: AttachmentChunkPlanInput,
+    onProgress?: AttachmentTransferProgress
+  ): Promise<AttachmentTransferResult>
   /**
    * Ask the host for one stored attachment and stream the answer into a reassembler, settling
    * `consumer` with the whole verified file or one static reason (#996). The `requestDebugBundle`
@@ -2340,7 +2350,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   async function uploadAttachment(
-    input: AttachmentChunkPlanInput
+    input: AttachmentChunkPlanInput,
+    onProgress?: AttachmentTransferProgress
   ): Promise<AttachmentTransferResult> {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): resolve terminally so #862's
     // command never hangs. requestDebugBundle's posture — send's silent no-op is wrong for a call that
@@ -2350,6 +2361,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     try {
       transfer = createAttachmentTransfer(input, {
         sendChunk: sendAttachmentChunk,
+        // Passed straight through, undefined and all: this hop adds no policy of its own, and the
+        // transfer already refuses to report after it settles.
+        onProgress,
         diagnosticLog: deps.diagnosticLog
       })
     } catch {

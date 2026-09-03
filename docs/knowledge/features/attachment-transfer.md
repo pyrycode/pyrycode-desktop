@@ -49,8 +49,11 @@ export type AttachmentTransferResult = { ok: true } | { ok: false; outcome: Atta
 export interface AttachmentTransferDeps {
   sendChunk: (payload: AttachmentChunkPayload) => number   // MAY throw; returns the envelope id sent
   yieldToEventLoop?: () => Promise<void>                    // default: a setImmediate macrotask
+  onProgress?: AttachmentTransferProgress                   // #864 — see below
   diagnosticLog?: DiagnosticLog
 }
+
+export type AttachmentTransferProgress = (sentChunks: number, totalChunks: number) => void
 
 export interface AttachmentTransfer {
   readonly attachmentId: string
@@ -78,6 +81,36 @@ frame; here the send is the driver's own loop, so the seam is the explicit `star
 arrive on socket events, which are macrotasks; a microtask yield would let the whole plan drain before any
 reject could be observed, and "no further chunks go out after a settle" would be unenforceable. This also
 keeps a large file from buffering its whole base64 into the socket in one synchronous turn.
+
+**Reporting how far the transfer has got — `onProgress` (#864).** The plan's `chunks.length` and the
+`sentEnvelopes.size` this module already tracked were both invisible one layer up, which is why a large
+upload looked like a hang in the composer before this ticket. `drive()`'s loop calls a `reportProgress`
+helper after `sentEnvelopes.add(envelopeId)` and before the `yieldToEventLoop` await — after the set has
+grown so the reported count matches what the settle log would report for the same moment, and before the
+yield so no report is ever a chunk behind. `reportProgress` re-reads `settled` itself (the same flag the
+loop checks, not a second rule kept in step with it) and returns without calling `onProgress` if it is
+already true — sound because the check and the call are synchronous with each other, and the only settle
+that can land mid-drive arrives during the loop's `await`, never between these two lines. That single
+flag is the entire mechanism behind "no progress survives the terminal" (AC3 of #864): a report and a
+chunk stop for the same reason.
+
+The call is wrapped in its own `try`/`catch` that drops the caught object unexamined — `drive()` is
+documented never to reject and `onProgress` is the first foreign callback inside its loop, so a consumer
+that throws (a window destroyed between a liveness check and its send, one layer up) must not turn
+`void drive()` into an unhandled main-process rejection. Classify-don't-forward, inherited #62.
+
+`AttachmentTransferProgress` returns `void`, and the loop never `await`s it — a constraint the return
+type enforces rather than a style choice. The `yieldToEventLoop` macrotask between chunks is what creates
+the window in which an inbound reject can be observed; an awaited consumer would let a slow renderer
+stall the send loop and stretch that window arbitrarily, turning a display concern into a transport one.
+
+**Whether a report becomes anything is not this module's decision.** Every chunk of every transfer is
+reported; the threshold that decides whether a small upload is worth an IPC message at all —
+`ATTACHMENT_PROGRESS_MIN_CHUNKS` — lives with the client's other bounds in
+[attachment upload](attachment-upload.md)'s `src/main/attachmentUpload.ts`, one layer up. No
+new log record for it, either: a per-chunk diagnostic line would put up to `ATTACHMENT_MAX_UPLOAD_CHUNKS`
+entries in one upload's debug bundle, and the existing `started` and settle records already carry the
+same two figures (`count`, `bytes`).
 
 **Envelope-id minting stays outside this module.** `sendChunk` *returns* the id it sent under rather than
 minting one, because ids come from `daemonConnection`'s single monotonic counter and `transport/` must not
@@ -114,15 +147,19 @@ would land if a future ticket needs it.
   the second. Membership plus a scan is the whole query — the success reply is looked up by `attachmentId`,
   the rejects by `sentEnvelope` — over a handful of entries at most. Single-writer, the `pendingSettings`
   rationale: every mutation runs to completion inside a synchronous body.
-- **`uploadAttachment(input): Promise<AttachmentTransferResult>`**, added to the `DaemonConnection`
-  interface. `requestDebugBundle`'s posture, not `send`'s silent no-op: resolves `{ ok: false, outcome:
-  'not-connected' }` when `driver === null`, because this call has a caller awaiting a terminal. Otherwise
-  constructs the transfer with a `sendChunk` closure that captures `nextEnvelopeId` *before* the build
-  increments it (the `createWorkspaceFolder` template), **arms before driving** — `activeTransfers.add`
-  then `start()`, so both inbound correlations can find the transfer before chunk 0 goes out — and `await`s
-  the result inside a `try`/`finally` that always removes the entry. Never throws and never rejects out of
-  the module (parity #490, restated for a promise-returning method): a synchronous construction throw is
-  caught and resolves `send-failed`.
+- **`uploadAttachment(input, onProgress?): Promise<AttachmentTransferResult>`**, added to the
+  `DaemonConnection` interface. `requestDebugBundle`'s posture, not `send`'s silent no-op: resolves `{ ok:
+  false, outcome: 'not-connected' }` when `driver === null`, because this call has a caller awaiting a
+  terminal. Otherwise constructs the transfer with a `sendChunk` closure that captures `nextEnvelopeId`
+  *before* the build increments it (the `createWorkspaceFolder` template), **arms before driving** —
+  `activeTransfers.add` then `start()`, so both inbound correlations can find the transfer before chunk 0
+  goes out — and `await`s the result inside a `try`/`finally` that always removes the entry. Never throws
+  and never rejects out of the module (parity #490, restated for a promise-returning method): a
+  synchronous construction throw is caught and resolves `send-failed`.
+  **`onProgress` (#864) is a second parameter, not a field on `input`** — `input` is the plan's own input
+  and is spread onto every chunk payload, so a callback has no business there — and it is passed straight
+  into the transfer's deps with no policy added at this hop: both early exits (the `not-connected` return
+  and the construction-throw backstop) return before any transfer exists, so neither can report progress.
 - **`sendAttachmentChunk(payload)`** — the `sendChunk` seam: captures `nextEnvelopeId`, builds the envelope
   via `buildAttachmentChunk`, advances the counter only on a successful build, sends, and returns the id.
 - **Inbound `attachment-stored` arm** — the only inbound arm in this file that correlates on a **payload
@@ -156,9 +193,9 @@ would land if a future ticket needs it.
 uploadAttachment(input)
   driver === null? ──yes──▶ { ok:false, outcome:'not-connected' }
   │no
-  createAttachmentTransfer(input, { sendChunk: sendAttachmentChunk, diagnosticLog })
+  createAttachmentTransfer(input, { sendChunk: sendAttachmentChunk, onProgress, diagnosticLog })
   activeTransfers.add(transfer)        ◀── ARM
-  transfer.start()                     ◀── DRIVE (loop yields between chunks)
+  transfer.start()                     ◀── DRIVE (loop yields between chunks, reports progress before each yield)
   await transfer.result
   finally: activeTransfers.delete(transfer)
 
@@ -218,6 +255,15 @@ the full findings):
   authenticated session establishes and is accepted, not defended against. The renderer has no path to
   this code in this slice. Unbounded memory on a very large file is real and out of scope — the
   client-side size bound is #862's.
+- **`onProgress` (#864) — the two guards are each synchronous with the action they guard, so there is no
+  gap for a concurrent settle to land in.** `settled` is re-read and `onProgress` called within one loop
+  iteration with no `await` between them. The disclosure this seam ultimately carries — `totalChunks`
+  reveals the chosen file's size to within `ATTACHMENT_CHUNK_DATA_BYTES`, the first field on
+  `AttachmentUploadEvent` derived from the file rather than a client-owned constant — is accepted at the
+  wire-contract layer, not decided here; see [Attachment upload](attachment-upload.md) and
+  `docs/specs/architecture/864-attachment-upload-progress.md` § Security review. This module's own
+  obligation is narrower: never await the callback (a `void` return type makes that unavailable), and
+  never let a throwing consumer escape `drive()`.
 
 ## Testing
 
@@ -245,6 +291,15 @@ when a reject lands is genuinely racy (a real `setImmediate` racing a real `setT
 chunks go out" is asserted one layer down in `attachmentTransfer.test.ts`, where the yield seam is injected
 and the gap is deterministic. The wiring layer asserts only the terminal.
 
+**`onProgress` (#864)**, added to `attachmentTransfer.test.ts`: fires once per chunk with the running
+`sentEnvelopes.size` and the plan's `chunks.length`; does not fire after a settle arrives mid-transfer
+(the existing mid-transfer reject fixture, extended); a throwing `onProgress` neither stops the loop nor
+rejects the transfer, which still delivers its single terminal; a transfer built with no `onProgress`
+behaves exactly as it did before this ticket. One layer up, in `attachmentUpload.test.ts`'s
+`reportingHarness`, the fixture for "no progress survives the terminal" needs `after` reports that land
+once the driver has already answered — see [Attachment upload](attachment-upload.md) § Testing for why
+that fixture has to be a macrotask (`setTimeout`) rather than a microtask (`queueMicrotask`).
+
 ## Edge cases and limitations
 
 - **No per-transfer deadline.** See § Security properties above — a live-but-silent daemon leaves the
@@ -256,6 +311,10 @@ and the gap is deterministic. The wiring layer asserts only the terminal.
   interleave on the wire — the receiver tolerates that, addressing by `attachment_id` + `index`.
 - **A transfer that resolves failed is resolved, not retried, and not reported anywhere by this module** —
   surfacing the outcome to the window is #862's slice.
+- **A withheld terminal leaves progress stuck, never the transfer.** This module's own state settles
+  exactly once regardless of whether the daemon ever answers a fully-sent transfer; what a withheld
+  terminal leaves stuck is the *composer's rendered figure*, one layer up — see
+  [Attachment upload](attachment-upload.md) § Edge cases.
 
 ## Related
 
@@ -284,4 +343,6 @@ and the gap is deterministic. The wiring layer asserts only the terminal.
   spec's § Revisions).
 - [Attachment upload (pick, guard, drive, report)](attachment-upload.md) — [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862),
   the caller: picks the file, guards its size, mints `attachment_id`, and reports the outcome to the
-  window on its own dedicated channel.
+  window on its own dedicated channel. [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864)
+  is the sibling that owns the progress *threshold* (`ATTACHMENT_PROGRESS_MIN_CHUNKS`) and the
+  post-terminal `terminal` guard one layer above this module's `onProgress` seam.

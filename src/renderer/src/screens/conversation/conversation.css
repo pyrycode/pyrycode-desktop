@@ -2099,8 +2099,18 @@
    claude-authored text here for a max-width to bound — unlike .composer__model-label one rule up.
 
    The horizontal inset matches the footer's --space-4 rather than .composer's own padding, so the sentence
-   starts where the row above it starts and where the message box's text starts. */
-.composer__attach-outcome {
+   starts where the row above it starts and where the message box's text starts.
+
+   TWO SELECTORS, ONE BLOCK (#864). The in-flight figure and the terminal sentence are the same voice in
+   the same slot and only one is ever mounted, so they get one treatment. A selector list rather than the
+   shared-treatment MIX the footer buttons wear, because every shipped assertion on the terminal matches
+   `class="composer__attach-outcome"` as a WHOLE attribute run — a second class in that run reddens several
+   of them at once while an extractor ending in `?? ''` lets another pass vacuously. The two classes stay
+   separate for the same reason each footer label class does: an e2e spec locates each bare, and a
+   second wearer would break Playwright's strict mode. The in-flight element also carries no live-region
+   role (see ComposerAttach), which is a markup decision and nothing this rule can express. */
+.composer__attach-outcome,
+.composer__attach-progress {
   padding: 0 var(--space-4);
   color: var(--color-primary);
   font-size: var(--text-body-small-size);

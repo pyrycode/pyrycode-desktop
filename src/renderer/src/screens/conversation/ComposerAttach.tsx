@@ -87,13 +87,39 @@ export function ComposerAttachButton({ onAttach }: { onAttach: () => void }): JS
 }
 
 /**
- * The latest outcome to arrive, stated beneath the footer row.
+ * The latest event to arrive, stated beneath the footer row: an in-flight figure while a large upload
+ * is moving (#864), and the terminal sentence after it.
  *
  * `null` renders NOTHING AT ALL — not an empty element holding the slot — which is the fifth criterion's
  * second half and ContextUsageReading's absent arm restated. The composer column's gap is a flex `gap`, so
  * an absent child costs no space at all.
  *
- * IT IS A LIVE REGION, departing from both of its neighbours, and the departure is the point.
+ * ONE SLOT, NEVER TWO. The two states are branches of one render over one nullable, so "no second
+ * indicator appears beside the outcome" holds by construction rather than by arbitration — there is no
+ * moment at which both could be mounted, and nothing has to decide which wins.
+ *
+ * ⭐ THE TWO `key`s ARE LOAD-BEARING, not decoration, and they are the whole of not regressing #863's
+ * live-region decision. React reconciles by element type and position, so without them the in-flight
+ * <div> and the terminal <div> are the SAME DOM node: the terminal transition would ADD role="status"
+ * to an existing element while changing its text, which is the case assistive technology handles least
+ * reliably. Distinct keys make the terminal a fresh insertion carrying its content — byte-for-byte the
+ * behaviour #863 shipped and reasoned about. renderToStaticMarkup drops keys, so no static test can
+ * see this and only this comment records why they are here.
+ *
+ * THE IN-FLIGHT LINE IS NOT A LIVE REGION, which is the deliberate departure from the terminal below
+ * it. An outcome fires at most once per attach; progress fires per chunk, up to
+ * ATTACHMENT_MAX_UPLOAD_CHUNKS times for one file, and a polite region announcing each one is worse
+ * than the silence this feature replaces. Of the three ways out — a separate non-live element, a
+ * coarser cadence, or a role that differs while in flight — this takes the first, so the figure is
+ * readable by browsing and announced by nothing.
+ *
+ * SEPARATE CLASSES RATHER THAN A SHARED TREATMENT WORN AS A MIX. Every shipped assertion on this
+ * element matches `class="composer__attach-outcome"` as a whole attribute run, and prepending or
+ * appending a class to that run is the change that reddens several of them while another passes
+ * vacuously. conversation.css adds the in-flight class to the existing rule's selector list instead:
+ * one declaration block, no duplicated treatment, no shipped element re-classed.
+ *
+ * THE TERMINAL IS A LIVE REGION, departing from both of its neighbours, and the departure is the point.
  * ComposerErrorChip and ContextUsageReading each decline one with a stated reason — the #279 banner
  * already announces the same fact, and a per-turn cadence would announce a percentage after every turn.
  * Neither reason holds here: until #815 lands a file row in the message bubble this sentence is the ONLY
@@ -116,8 +142,15 @@ export function ComposerAttachOutcome({
   outcome: AttachmentUploadEvent | null
 }): JSX.Element | null {
   if (outcome === null) return null
+  if (outcome.type === 'progress') {
+    return (
+      <div key="in-flight" className="composer__attach-progress">
+        {attachmentUploadOutcomeCopy(outcome)}
+      </div>
+    )
+  }
   return (
-    <div className="composer__attach-outcome" role="status">
+    <div key="terminal" className="composer__attach-outcome" role="status">
       {attachmentUploadOutcomeCopy(outcome)}
     </div>
   )
@@ -136,7 +169,12 @@ export function ComposerAttachOutcome({
  * EXPLICITLY cleared on switch and on unpair: more code and one more clearing arm to get wrong, for no
  * reader outside this component.
  *
- * THE COMPOSER STATES THE LATEST OUTCOME TO ARRIVE, and it cannot state anything narrower.
+ * ONE NULLABLE HOLDS BOTH STATES (#864). In-flight progress and the terminal occupy the same slot
+ * because they are the same value: the listener assigns whatever arrived last, so a terminal replaces a
+ * progress line without anything having to clear it, and a connection lost mid-transfer clears the
+ * figure on exactly the path a completion does. No second piece of state, and nothing to keep in step.
+ *
+ * THE COMPOSER STATES THE LATEST EVENT TO ARRIVE, and it cannot state anything narrower.
  * `requestAttachmentUpload()` returns void, so this window never learns the uploadId its own click
  * minted, and the main-side guard is scoped to the DIALOG rather than to the transfer — two transfers
  * with distinct ids can be live at once. So the listener assigns; it does not merge, queue or correlate.

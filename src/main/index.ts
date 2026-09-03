@@ -551,9 +551,10 @@ app.whenReady().then(() => {
   // unit-testable on either side of this seam.
   //
   // Registered on its OWN channel pair, not on the command/daemon-event channels: the outcome must
-  // carry more than one message per intent (#864 adds progress before the terminal), which an invoke
-  // reply cannot express, and a new DaemonEvent member would be a compile-forced edit in four
-  // renderer bridges that each end their switch in assertNever.
+  // carry more than one message per intent, which an invoke reply cannot express, and a new
+  // DaemonEvent member would be a compile-forced edit in four renderer bridges that each end their
+  // switch in assertNever. That "more than one" is live as of #864 — a transfer over
+  // ATTACHMENT_PROGRESS_MIN_CHUNKS pushes a report per chunk ahead of its terminal.
   //
   // The listener reads NEITHER IPC argument. The renderer names an intent and nothing else, so there
   // is no untrusted request field to validate and no renderer-supplied string can reach a path, a
@@ -583,7 +584,9 @@ app.whenReady().then(() => {
         // Cancelling is a TOTAL no-op: nothing read, nothing sent, no outcome reported (AC1).
         if (choice.canceled || choice.filePaths.length === 0) return
         void uploadAttachmentFile(choice.filePaths[0], {
-          upload: (input) => connection.uploadAttachment(input),
+          // The progress seam is forwarded, never swallowed: the flow module owns the threshold that
+          // decides whether a report becomes a message, and this arrow owns nothing but the join.
+          upload: (input, onProgress) => connection.uploadAttachment(input, onProgress),
           emit: (uploadEvent) => {
             if (sender.isDestroyed()) return
             sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, uploadEvent)

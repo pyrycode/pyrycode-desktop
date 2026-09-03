@@ -4,8 +4,8 @@ import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 import { COMPOSER_ATTACH_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
 import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/conversation/attachmentUploadCopy'
 
-// Fake-stack UI e2e for the COMPOSER FOOTER's attach button (#863) — the interaction proof the static tier
-// cannot reach. vitest runs the `node` environment, so every renderer test here is a renderToStaticMarkup
+// Fake-stack UI e2e for the COMPOSER FOOTER's attach button (#863, extended by #864's in-flight
+// progress) — the interaction proof the static tier cannot reach. vitest runs the `node` environment, so every renderer test here is a renderToStaticMarkup
 // string assertion with no DOM, no effects and no click handlers: the static tier pins the button's shape,
 // the copy map and the outcome's present/absent matrix (ComposerAttach.test.tsx, attachmentUploadCopy.test.ts,
 // and the three mount proofs in ConversationScreen.test.tsx), and only a real window can prove that the
@@ -68,6 +68,29 @@ const FAILED: AttachmentUploadEvent = {
 }
 const COMPLETED: AttachmentUploadEvent = { type: 'completed', uploadId: 'e2e-upload-3' }
 
+// #864's two in-flight reports and the terminal that ends them. `totalChunks` is 200 — a ~9 MB file,
+// comfortably over the background process's ATTACHMENT_PROGRESS_MIN_CHUNKS, which is what a real
+// transfer of this size would report. The two figures are far apart so an advancing line is
+// distinguishable from a stuck one, and the terminal is a `connection-lost` because AC3 asks
+// specifically that a connection lost mid-transfer clears the indicator on the completion's own path.
+const PROGRESS_EARLY: AttachmentUploadEvent = {
+  type: 'progress',
+  uploadId: 'e2e-upload-4',
+  sentChunks: 20,
+  totalChunks: 200
+}
+const PROGRESS_LATE: AttachmentUploadEvent = {
+  type: 'progress',
+  uploadId: 'e2e-upload-4',
+  sentChunks: 180,
+  totalChunks: 200
+}
+const LOST: AttachmentUploadEvent = {
+  type: 'failed',
+  uploadId: 'e2e-upload-4',
+  reason: 'connection-lost'
+}
+
 test('composer footer: the attach button dispatches the intent and states the latest outcome (AC1-AC5)', async ({
   launchPairedApp
 }) => {
@@ -80,6 +103,7 @@ test('composer footer: the attach button dispatches the intent and states the la
   const attach = page.getByRole('button', { name: COMPOSER_ATTACH_LABEL, exact: true })
   const footer = page.locator('.composer__footer')
   const outcome = page.locator('.composer__attach-outcome')
+  const progress = page.locator('.composer__attach-progress')
   const messageBox = page.locator('.composer__row')
 
   await expect(attach).toHaveCount(1)
@@ -205,9 +229,43 @@ test('composer footer: the attach button dispatches the intent and states the la
   // The uploadId reaches no attribute and no text node — it is a discriminator this window cannot use.
   await expect(outcome).not.toContainText(COMPLETED.uploadId)
 
+  // --- #864, AC1 and AC3: an in-flight report takes the slot the terminal was in, ADVANCES as further
+  // chunks go out, and is then replaced by a terminal of its own. Pushed on the same channel through
+  // the same seam, so the composer cannot tell these from a real transfer's reports. ---
+  await push(PROGRESS_EARLY)
+  await expect(progress).toHaveText(attachmentUploadOutcomeCopy(PROGRESS_EARLY), {
+    timeout: OUTCOME_TIMEOUT_MS
+  })
+  // ⭐ AC1's "no second indicator appears beside it": the terminal that was on screen a moment ago is
+  // GONE, not pushed aside. One line in the column, and it is this one.
+  await expect(outcome).toHaveCount(0)
+  await expect(progress).toHaveCount(1)
+  // Not a live region while in flight — a report per chunk would announce two hundred times for one
+  // file. The terminal above and below this block is the polite one; this is deliberately silent.
+  await expect(progress).not.toHaveAttribute('role', 'status')
+  await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
+
+  const earlyText = await progress.textContent()
+  await push(PROGRESS_LATE)
+  await expect(progress).toHaveText(attachmentUploadOutcomeCopy(PROGRESS_LATE), {
+    timeout: OUTCOME_TIMEOUT_MS
+  })
+  // It MOVED. A line that rendered a constant would satisfy every assertion above this one.
+  expect(await progress.textContent()).not.toBe(earlyText)
+
+  // AC3: a connection lost mid-transfer clears the indicator on the same path a completion does — the
+  // terminal simply replaces it, because both are the latest event to arrive.
+  await push(LOST)
+  await expect(outcome).toHaveText(attachmentUploadOutcomeCopy(LOST), {
+    timeout: OUTCOME_TIMEOUT_MS
+  })
+  await expect(progress).toHaveCount(0)
+  await expect(outcome).toHaveAttribute('role', 'status')
+
   // --- AC4's second half: starting a NEW attach clears the one before it. The clear happens on the click
   // and not on an arriving event, which is the only ordering that works: this second pick is cancelled too
-  // and reports nothing at all, so an event-driven clear would leave the completion on screen forever. ---
+  // and reports nothing at all, so an event-driven clear would leave the terminal now on screen — the
+  // connection-lost line pushed just above, since #864's progress block runs before this — there forever. ---
   await attach.click()
   await expect(outcome).toHaveCount(0, { timeout: OUTCOME_TIMEOUT_MS })
 

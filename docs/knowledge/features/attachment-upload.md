@@ -5,11 +5,13 @@ picker in the background process, the choice is guarded on an **open handle** an
 a byte-trimmed filename and a derived `mime_type`, and driven through
 [attachment transfer](attachment-transfer.md)'s (#861) `uploadAttachment` under a `randomUUID` transfer
 id. Exactly one terminal — `completed`, `refused` with the client's own size bound, or `failed` with
-the driver's outcome — is pushed back to the window on a dedicated channel pair. A cancelled picker is
-a total no-op: nothing read, nothing sent, nothing emitted. **Nothing renders here** — this slice ends
-at the bridge; the button and the outcome's appearance are [Composer attach](composer-attach.md) (#863).
+the driver's outcome — is pushed back to the window on a dedicated channel pair, optionally preceded by
+in-flight `progress` events for a large file (#864, below). A cancelled picker is a total no-op:
+nothing read, nothing sent, nothing emitted. **Nothing renders here** — this slice ends at the bridge;
+the button and the outcome's appearance are [Composer attach](composer-attach.md) (#863).
 
 Introduced in [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), split from #685.
+In-flight progress added in [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864).
 
 ## Two files
 
@@ -35,15 +37,38 @@ export type AttachmentUploadEvent =
   | { type: 'refused'; uploadId: string; reason: 'too-large'; limitBytes: number }
   | { type: 'failed'; uploadId: string; reason: AttachmentUploadFailure }
   | { type: 'completed'; uploadId: string }
+  | { type: 'progress'; uploadId: string; sentChunks: number; totalChunks: number }  // #864
 ```
 
 **The outcome takes a dedicated channel, not a `DaemonEvent` member.** The union must carry more than
 one message per intent — [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864) puts
-in-flight progress on it *before* the terminal — which a request/response `invoke` cannot express, and
-a new `DaemonEvent` arm would be a compile-forced edit in the four renderer bridges that each end their
-switch in `assertNever` (`timelineBridge.ts`, `questionBridge.ts`, `modalBridge.ts`,
+in-flight `progress` on it *before* the terminal — which a request/response `invoke` cannot express,
+and a new `DaemonEvent` arm would have been a compile-forced edit in the four renderer bridges that
+each end their switch in `assertNever` (`timelineBridge.ts`, `questionBridge.ts`, `modalBridge.ts`,
 `daemonEventBridge.ts`), pushing this slice over its file boundary. Pushed with `ipcRenderer.on` rather
 than replied with `invoke`, for the same reason.
+
+**`progress` (#864) — the fourth member, and the one qualification #862's containment argument did not
+carry.** `sentChunks` / `totalChunks` are both counts of frames the transport has already put on or
+plans to put on the wire — `totalChunks` is the plan's `total_chunks`
+([attachment chunk envelope](attachment-chunk-envelope.md)), `sentChunks` is
+`sentEnvelopes.size` read off [attachment transfer](attachment-transfer.md) at the moment each chunk
+lands. Zero or more `progress` events precede exactly one terminal; none follows one — see
+[attachment transfer](attachment-transfer.md) for the two independent guards that make that hold, and
+[Composer attach](composer-attach.md) for how the renderer's single nullable makes "no second indicator
+beside the outcome" true by construction rather than by arbitration.
+
+`totalChunks` is the first field on this union derived from the **chosen file** rather than from a
+client-owned constant — it states the file's size to within `ATTACHMENT_CHUNK_DATA_BYTES`, which
+qualifies #862's "a compromised renderer cannot read back what was sent". The resolution is to state
+it, not hide it: at one event per chunk a renderer can already count events and derive the same
+number, so a bare percentage would withhold nothing while being less honest about the cost. Accepted
+on its size — a window that already holds the whole conversation timeline learning the approximate
+size of a file its own user just picked is far inside the blast radius #862 already accepts.
+
+Whether `progress` is emitted at all is decided in the background process against one named chunk
+constant, `ATTACHMENT_PROGRESS_MIN_CHUNKS` (below) — never against a clock, so the decision is the
+same on a fast link and a slow one, and a small upload costs no IPC at all.
 
 **The intent carries no request body**, and that is the design's central security property, not a
 convenience: the renderer sends with no argument, so there is no untrusted request field to validate
@@ -84,10 +109,33 @@ parameter, so the test module graph never touches `electron`.
 ```ts
 export const ATTACHMENT_MAX_UPLOAD_CHUNKS = 512
 export const ATTACHMENT_MAX_UPLOAD_BYTES = ATTACHMENT_MAX_UPLOAD_CHUNKS * ATTACHMENT_CHUNK_DATA_BYTES
+export const ATTACHMENT_PROGRESS_MIN_CHUNKS = 8   // #864 — see below
 
 export function uploadAttachmentFile(path: string, deps: AttachmentUploadDeps): Promise<void>
 export function uploadAttachmentBytes(file: AttachmentUploadFile, deps: AttachmentUploadDeps): Promise<void>
 ```
+
+**The progress gate — `ATTACHMENT_PROGRESS_MIN_CHUNKS = 8` (#864).** Lands beside the size bound
+because it reasons in the same vocabulary and owns the same kind of decision: whether a transfer is
+worth telling the window about, in chunks rather than a clock. Eight chunks is 360000 raw bytes,
+~480000 base64 characters on the wire — about half a second at the 1 MB/s effective uplink
+`ATTACHMENT_MAX_UPLOAD_CHUNKS` already reasons in. Below it a progress line would flash and vanish
+inside one blink, reading as a glitch rather than reassurance — worse than the silence it replaces.
+It is evaluated **here**, in the background process, before any message crosses, which is what makes
+a small upload cost no IPC at all rather than costing some and being filtered in the window.
+
+`driveUpload` closes a `terminal` flag over `onProgress`, set to `true` immediately after
+`deps.upload(...)` resolves and with no `await` before either terminal arm emits — a second guard in a
+different module over different state from the transport's own `settled` check
+([attachment transfer](attachment-transfer.md)), in this module's established classify-don't-forward
+posture rather than as an invented defence: the same function already wraps `deps.upload` in a
+backstop `try`/`catch` on the grounds that "a contract is not a guarantee" for an injected seam. A
+report that arrived after the terminal is exactly the shape that would leave a stale percentage on
+screen with no terminal left to replace it — see AC3 in `docs/specs/architecture/864-*.md`.
+
+`AttachmentUploadDeps.upload` widens to accept an optional second `onProgress` parameter, passed
+straight down into `connection.uploadAttachment` — see [attachment transfer](attachment-transfer.md)
+for the seam it terminates in.
 
 Both entries funnel through one `driveUpload`, so the size guard, the driver call and the exactly-one-
 terminal discipline exist once. Neither ever rejects — #861's `uploadAttachment` already never rejects,
@@ -244,6 +292,19 @@ network volume leaves one promise pending and one handle open). Neither has been
 - **No test for `index.ts`'s wiring or the preload members** — the composition root is Electron-bound
   and untested here by existing convention; the dialog seam it closes is exactly what the injected deps
   make provable one layer down.
+- **The progress gate (#864)** — a fake driver reports arbitrary `(sent, total)` pairs before
+  resolving; a transfer whose total is under `ATTACHMENT_PROGRESS_MIN_CHUNKS` emits no `progress`
+  event at all (AC2); one at or above it emits `progress` then exactly one terminal (AC3); every
+  emitted `progress` event carries exactly its four declared keys, walked positively.
+- **A `queueMicrotask`-seeded "after the terminal" report proves the wrong thing.** The fixture for "no
+  progress survives the terminal" needs reports that land once the driver has already answered. The
+  first draft seeded them with `queueMicrotask`, which runs *before* the awaiting `driveUpload` resumes
+  from its own `await` — so those reports arrived while the transfer was still legitimately in flight,
+  and the test measured the in-flight case while claiming to measure the post-terminal one; it only
+  caught the missing `terminal` guard by accident. `setTimeout(..., 0)` is the fixture that actually
+  runs after the whole microtask chain that emits the terminal, and is what `reportingHarness`'s `after`
+  parameter uses in `attachmentUpload.test.ts`. The general shape: a same-tick microtask callback cannot
+  stand in for "after an async function's caller observed its resolution" — only a macrotask can.
 
 ## Edge cases and limitations
 
@@ -255,6 +316,24 @@ network volume leaves one promise pending and one handle open). Neither has been
   which owns its own teardown net.
 - **`pickerOpen` bounds the dialog, not the upload.** Two files can be mid-transfer at once; only a
   second *dialog* is refused while one is already open.
+- **No per-transfer deadline means a withheld terminal leaves progress stuck at 100%.** A hostile or
+  merely slow daemon that accepts every chunk and never answers leaves the composer reading
+  `Uploading… 100%` indefinitely — the pre-existing no-per-transfer-deadline gap
+  ([attachment transfer](attachment-transfer.md) § Security properties), now visible on screen instead
+  of silent. Not defended here: no such hang has been observed, and inventing a timeout for it would be
+  exactly the unobserved-failure-mode defence this pipeline declines by default (#864 security review).
+- **The emission rate is not paced by the uplink.** `sendAttachmentChunk` calls `sendMessage`, which
+  returns `void` and buffers, and nothing awaits socket drain — so up to `ATTACHMENT_MAX_UPLOAD_CHUNKS`
+  `progress` events (and re-renders of the whole `Composer` subtree) can burst at scheduler cadence
+  rather than spread across the transfer's wire time. Deliberately left uncoarsened: nothing has been
+  observed to strain and the live-region concern that would motivate coarsening is already solved by
+  the non-live element (below). A future ticket that measures real jank owns the fix, which belongs
+  beside the `ATTACHMENT_PROGRESS_MIN_CHUNKS` gate in `driveUpload`'s closure.
+- **Two concurrently live transfers interleave into one composer slot.** The window cannot correlate a
+  click to its own upload's progress — `requestAttachmentUpload()` returns `void` — so a second
+  concurrent attach's reports and terminal interleave with the first's in the same nullable. Shipped
+  property of #863, made visible rather than introduced; correlating would need the intent to return an
+  id, which is #890's channel change, not this ticket's.
 
 ## Related
 
@@ -274,9 +353,11 @@ network volume leaves one promise pending and one handle open). Neither has been
   and a test pins the two equal.
 - `docs/specs/architecture/862-attachment-upload-pick-and-report.md` — the full architecture spec,
   including the security review this doc summarizes.
-- [Composer attach](composer-attach.md) (#863) — the button and the rendered outcome. Landed.
-- [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864) — in-flight progress on the same
-  channel, before the terminal; not started.
+- [Composer attach](composer-attach.md) (#863) — the button and the rendered outcome, including the
+  in-flight line #864 adds to it. Landed.
+- `docs/specs/architecture/864-attachment-upload-progress.md` — the in-flight progress spec, including
+  its security review and the two rework-leg revisions (a vacuous string-coercion test, and a
+  re-render-rate figure reasoned from a clock the send loop does not have).
 - [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) / [#891](https://github.com/pyrycode/pyrycode-desktop/issues/891) (paste) —
   second entries into this flow via `uploadAttachmentFile` / `uploadAttachmentBytes`; neither goes
   through the dialog. Not started.

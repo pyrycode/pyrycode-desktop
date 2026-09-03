@@ -47,11 +47,19 @@ import type { AttachmentChunkPayload } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
 /**
- * The closed set of ways a transfer can fail, as CLIENT-OWNED values. The seven DaemonErrorOutcome
- * members are the daemon's verdicts, already mapped off its untrusted `code` string at the decode
- * boundary (#965); the three below are this client's own. Every inhabitant is a literal written in
- * this repo, so a value of this type provably holds no daemon text — the same trust signal
- * DaemonErrorOutcome carries, extended over the three failures the daemon never gets to state.
+ * The closed set of ways a transfer can fail, as CLIENT-OWNED values. The DaemonErrorOutcome members
+ * are the daemon's verdicts, already mapped off its untrusted `code` string at the decode boundary
+ * (#965); the three below are this client's own. Every inhabitant is a literal written in this repo, so
+ * a value of this type provably holds no daemon text — the same trust signal DaemonErrorOutcome carries,
+ * extended over the three failures the daemon never gets to state.
+ *
+ * IT INHERITS DaemonErrorOutcome WHOLE, which since #999 is the vocabulary of BOTH attachment legs — so
+ * two members (`attachment-not-found`, `attachment-stream-aborted`) answer a `request_attachment` and
+ * cannot terminate an UPLOAD from a conforming daemon. Inheriting whole rather than `Exclude`-ing them
+ * is deliberate: narrowing here reddens daemonConnection's `fail()` call, which hands `inbound.outcome`
+ * straight through, and satisfying that would mean inventing a runtime branch for a frame the wire does
+ * not produce. AttachmentUploadFailure (src/shared/ipc/attachmentUpload.ts) carries the same pair and
+ * the fuller argument.
  */
 export type AttachmentTransferFailure =
   | DaemonErrorOutcome

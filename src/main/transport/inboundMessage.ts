@@ -97,18 +97,33 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * internet-exposed boundary, and CLAUDE.md forbids it becoming a lookup path, a filename or a cache
  * key, so it is compared against these constants and dropped, never carried.
  *
- * The six classified members are the attachment UPLOAD leg's reject codes. `attachment.not_found` and
- * `attachment.stream_aborted` exist upstream but are deliberately absent: both belong to the RETRIEVAL
- * direction (#687) — one answers a fetch that resolved to nothing, the other abandons a download
- * mid-stream — and modelling them here would assert a contract this leg does not have.
+ * THE CLASSIFIED MEMBERS SPAN BOTH ATTACHMENT LEGS, listed upload-first then retrieval, in the same
+ * order the narrower's `switch` cases appear so the two lists diff against each other by eye. The
+ * retrieval pair was absent until #999 because that leg did not exist upstream; it does now
+ * (`pyrycode#2053` streams it, `#2054` emits both codes), so the omission's reason has expired. No count
+ * is given here on purpose — one went stale the moment this pair landed, and a fresh numeral would only
+ * queue up the next staleness. The members below are the list.
+ *
+ * `attachment.not_found` ANSWERS TWO VERBS, not retrieval alone (`pyrycode#2036`): a `request_attachment`
+ * whose id resolves to no file inside the named conversation's directory, and a `send_message` whose
+ * `attachment_ids` names an id that does not resolve under that message's own conversation. One code
+ * rather than two, because the predicate, the retryability, the static message and the client's repair
+ * are identical. THE MERGE IS DELIBERATE AND MUST NOT BE UNDONE HERE: upstream makes the code
+ * indistinguishable across an unknown id, an id whose canonical shape is invalid, and an id resolving
+ * outside the directory — a disclosure decision, not an imprecision, since two codes would turn the
+ * asking verb into a path-existence oracle for a traversal probe. The daemon's message is static, never
+ * echoes the requested id or the resolved path, and where a request names several ids never says WHICH
+ * one failed. There are no sub-cases on the wire, so there are no branches to model for them.
  *
  * RETRYABILITY IS DOCUMENTED HERE, NOT COMPUTED HERE, and no isRetryable helper ships with it. The
- * daemon never sends `retry_after_s` on this leg (`attachmentReplyError` marshals a closed
+ * daemon never sends `retry_after_s` on either leg (`attachmentReplyError` marshals a closed
  * `{Code, Message, Retryable}` literal and the field is `*int,omitempty`), so a client cannot learn a
  * backoff duration from the wire and "after a backoff" is a CLIENT-OWNED POLICY. Policy belongs to the
  * consumer that acts on it (#861), not to a decode boundary whose job is to say which failure this was.
- * The flags below are the daemon's own reject table (`false, false, false, true, true`), read off
- * `internal/relay/v2session_attachment.go` rather than inferred from the code names.
+ * Each member's flag is read off the daemon's own reject table rather than inferred from the code name
+ * — `internal/relay/v2session_attachment.go` for the upload leg, `v2session_attachment_request.go` for
+ * the retrieval one. The flags are stated per member rather than gathered into a tuple here: they now
+ * live in two upstream files, so no single list could be right, and a member is where a reader looks.
  */
 export type DaemonErrorOutcome =
   /** Framing claims are inconsistent — duplicate index, index out of range, `total_chunks` disagreeing
@@ -133,10 +148,24 @@ export type DaemonErrorOutcome =
    *  raised by the transport rather than the attachment path. NOT retryable: resending the same envelope
    *  reproduces it. */
   | 'message-too-long'
-  /** Everything else, and it covers two causes on purpose: a code outside the six above (including a
-   *  future one this client predates), and a payload that carried no readable `code` at all — absent,
-   *  non-object, or `code` missing / not a string. Both mean the same thing to a consumer, "this client
-   *  declined to classify the failure", and neither is a reason to drop a terminal frame. */
+  /** An attachment id did not resolve to a file inside the named conversation's directory — the first
+   *  RETRIEVAL-leg member, and the one that also answers a `send_message` naming an unresolvable id (see
+   *  the header). NOT retryable (`rejectAttachmentNotFound`'s flag is `false`): the repair is to re-list
+   *  the conversation's attachments, never to re-ask for the same id, which reproduces it. Deliberately
+   *  covers every way a request yields no bytes, with no sub-case to branch on. */
+  | 'attachment-not-found'
+  /** The daemon abandoned a retrieval MID-STREAM. Retryable AFTER A BACKOFF (`rejectStreamAborted`'s
+   *  flag is `true`), never immediately — a re-request re-runs the same resolution work. It carries an
+   *  obligation no other member has: on receiving it a client MUST DISCARD everything accumulated for
+   *  that transfer and MUST NOT present the partial bytes as the file. The retrieval leg has no
+   *  completion frame, so this is the stream's ONLY negative signal, and a client that keeps its buffer
+   *  renders a truncated file as a whole one. Enforcing that belongs to the reassembling consumer
+   *  (#995); this boundary can only say which failure occurred. */
+  | 'attachment-stream-aborted'
+  /** Everything else, and it covers two causes on purpose: a code outside the classified set above
+   *  (including a future one this client predates), and a payload that carried no readable `code` at
+   *  all — absent, non-object, or `code` missing / not a string. Both mean the same thing to a consumer,
+   *  "this client declined to classify the failure", and neither is a reason to drop a terminal frame. */
   | 'unclassified'
 
 /**
@@ -2067,6 +2096,10 @@ function narrowDaemonErrorOutcome(payload: unknown): DaemonErrorOutcome {
       return 'attachment-storage-failed'
     case 'message.too_long':
       return 'message-too-long'
+    case 'attachment.not_found':
+      return 'attachment-not-found'
+    case 'attachment.stream_aborted':
+      return 'attachment-stream-aborted'
     default:
       return 'unclassified'
   }

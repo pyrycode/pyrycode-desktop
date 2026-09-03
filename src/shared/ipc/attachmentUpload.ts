@@ -41,12 +41,15 @@ export const ATTACHMENT_UPLOAD_EVENT_CHANNEL = 'pyry:attachment-upload-event' as
  * It is a RE-DECLARATION of `AttachmentTransferFailure` (src/main/transport/attachmentTransfer.ts)
  * widened by one, because shared must not import from src/main. The correspondence is kept by the
  * COMPILER, not by discipline: the main-side module assigns an `AttachmentTransferFailure` straight
- * into `reason`, so a twelfth outcome added upstream fails to typecheck there rather than silently
- * becoming unrepresentable here.
+ * into `reason`, so an outcome added upstream fails to typecheck there rather than silently becoming
+ * unrepresentable here. That check has fired for real — #999's two retrieval codes reached this union
+ * through it, not through anyone remembering to look.
  *
- * The eleven inherited members are documented at their source — the seven daemon-mapped verdicts on
- * `DaemonErrorOutcome` (src/main/transport/inboundMessage.ts) and the four transport-local ones on
- * `AttachmentTransferFailure`. Only the member this slice adds is documented here.
+ * The inherited members are documented at their source — the daemon-mapped verdicts on
+ * `DaemonErrorOutcome` (src/main/transport/inboundMessage.ts) and the transport-local ones on
+ * `AttachmentTransferFailure`. Only the member declared for this channel is documented here. No count is
+ * given: the numbers here went stale the moment the union upstream grew, and the lists below are
+ * self-describing.
  */
 export type AttachmentUploadFailure =
   /** The chosen file could not be read: it does not exist, permission was denied, or it is not a
@@ -54,17 +57,29 @@ export type AttachmentUploadFailure =
    *  on its size — a refusal states a limit the user can act on, this states that the choice itself
    *  did not survive. The underlying errno is DROPPED, never carried: it holds the host path. */
   | 'unreadable'
-  // — the four from AttachmentTransferFailure —
+  // — from AttachmentTransferFailure —
   | 'not-connected'
   | 'connection-lost'
   | 'send-failed'
-  // — the seven from DaemonErrorOutcome —
+  // — from DaemonErrorOutcome, the upload leg's —
   | 'attachment-invalid-chunk'
   | 'attachment-integrity-failed'
   | 'attachment-too-large'
   | 'attachment-too-many-uploads'
   | 'attachment-storage-failed'
   | 'message-too-long'
+  // — from DaemonErrorOutcome, the RETRIEVAL leg's (#999): REPRESENTABLE HERE, BUT NOT REACHABLE FROM A
+  //   CONFORMING DAEMON. Both answer a `request_attachment`, never an `attachment_chunk`, so no upload
+  //   ends this way and no composer copy should be written for them. They are present because this union
+  //   mirrors AttachmentTransferFailure mechanically and DaemonErrorOutcome is now the vocabulary of BOTH
+  //   legs. Not reachable is not the same as impossible: a HOSTILE daemon can put either code in an
+  //   `error` frame correlated to a pending chunk, and the value then does cross this bridge. What
+  //   crosses is still a client-owned literal — no daemon text, no path — so the blast radius is an odd
+  //   reason string. Keeping them representable is deliberate: excluding them would make a value a
+  //   hostile daemon can still cause UNREPRESENTABLE, forcing the main side to coerce it into some other
+  //   outcome and report a failure that did not happen.
+  | 'attachment-not-found'
+  | 'attachment-stream-aborted'
   | 'unclassified'
 
 /**

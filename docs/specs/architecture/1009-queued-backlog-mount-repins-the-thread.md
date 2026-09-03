@@ -256,3 +256,18 @@ function, and the seeded-store path is invisible under server render (zustand v5
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+**2026-09-03 — implementation, no design change.** Both open questions resolved as the plan predicted and the
+design shipped as written; two facts are worth recording against it.
+
+- **The measured gap is 132px, not the ticket's 116px.** The RED run (spec first, production untouched) failed
+  the immediate assertion at `scrollHeight - scrollTop - clientHeight === 132` with the same two-item backlog.
+  #967 measured 116px before #969 redrew the message bubble; the quantity is the mounted region's height, so it
+  tracks whatever a queued row costs at the time. The code comments state the measured value and its provenance
+  rather than the inherited one. The order of magnitude — and therefore the criterion's whole point — is
+  unchanged.
+- **Awaiting the queued rows is a sufficient settle gate**, as argued: the assertion was red before the fix and
+  green after, with no polling and no added wait, which is only possible if the rows and the re-pin land in one
+  commit.

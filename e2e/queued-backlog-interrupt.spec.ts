@@ -24,8 +24,9 @@ import type {
 // every AC and doesn't triple the ~60s real-handshake launch cost.
 //
 // THREE load-bearing facts a naive clone of the template would miss (read from the code, not inferred):
-//   1. queue_state MUST carry conversation_id === SEEDED_ROW.id. QueuedBacklogControl reads
-//      selectBacklogFor(activeConversation.id), and list-open records the clicked SEEDED_ROW as active
+//   1. queue_state MUST carry conversation_id === SEEDED_ROW.id. ConversationScreen reads
+//      selectBacklogFor(activeConversation.id) — the read #1009 hoisted out of the region's own control, so
+//      the routing is unchanged — and list-open records the clicked SEEDED_ROW as active
 //      (PairedShell.tsx), so activeConversation.id === 'seed-conversation'. A snapshot under any other id
 //      lands in the store but is selected by nothing → zero rows render, SILENTLY (the run-config
 //      session-id gate analogue). turn_state has no such gate (timelineBridge drops its conversation_id,

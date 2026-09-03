@@ -41,6 +41,7 @@ import {
 // #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
+import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
@@ -3903,9 +3904,12 @@ describe('ConversationScreen — store binding', () => {
       // The verbatim fallback, through the mounted container: nothing is published, so the label is the
       // session's own model value.
       expect(markup).toContain('>seeded-session-model<')
-      // AC4's inert arm: no second popup announcement and no second anchor in the row.
-      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
-      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(1)
+      // AC4's inert arm: THIS control announces no popup and opens no anchor. The count is 2 rather than
+      // 1 since #682 — the seeded snapshot names a permission mode, and that control's entries are a
+      // client-owned constant, so it is operable here where the model control is not. Both counts moved
+      // together, which is what keeps this an assertion about the model control's inert arm.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
     }
@@ -3943,9 +3947,55 @@ describe('ConversationScreen — store binding', () => {
       expect(markup.indexOf('composer__context')).toBeGreaterThan(effortAt)
       // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
       expect(markup).toContain('>seeded-session-effort<')
-      // AC3's inert arm: a third control in the row adds no third popup announcement and no third anchor.
-      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
-      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(1)
+      // AC3's inert arm: THIS control adds no popup announcement and no anchor. 2 rather than 1 since
+      // #682 for the reason given one test above — the seeded permission mode makes that control, and
+      // only that control, operable here.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // #682: the permission-mode menu's mount site — required, not optional coverage, for the reason the two
+  // tests above state: every assertion in ComposerPermissionModeMenu.test.tsx passes on an UNMOUNTED
+  // component.
+  //
+  // The snapshot seeds all three fields, which is what draws every footer control at once and lets this
+  // test pin the row's FULL order — the one claim no component's own file can make. With no model list
+  // published the model and effort controls render their inert arms while this one is operable (its
+  // entries are a client-owned constant), so the row's popup and anchor counts are exactly 2: the Actions
+  // trigger and this one. That pair of counts is also the mount proof's sharpest half — it can only hold
+  // if this container really read the snapshot.
+  it('mounts the permission-mode control in the footer row, between Actions and the model control (AC1, AC2)', () => {
+    const initial = runConfigStore.getInitialState()
+    const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      snapshot: {
+        model: 'seeded-session-model',
+        effort: 'seeded-session-effort',
+        yolo: false,
+        permissionMode: 'acceptEdits',
+        usedTokens: 168000,
+        windowTokens: 200000
+      }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const permissionAt = markup.indexOf('composer__permission-label')
+      const modelAt = markup.indexOf('composer__model-label')
+      // Figma 110:3494's order, in full: Actions, permission mode, model, effort, then the reading.
+      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      expect(permissionAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
+      expect(modelAt).toBeGreaterThan(permissionAt)
+      expect(markup.indexOf('composer__effort-label')).toBeGreaterThan(modelAt)
+      // The DISPLAY name for the seeded mode, through the mounted container — the camelCase machine value
+      // must not reach the row, which is where this control departs from the effort trigger beside it.
+      expect(markup).toContain(`>${PERMISSION_MODE_LABELS.acceptEdits}<`)
+      expect(markup).not.toContain('>acceptEdits<')
+      // Operable while both neighbours are inert: the Actions trigger's popup and anchor, plus this one's.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
     }
@@ -4124,9 +4174,11 @@ describe('ConversationScreen — store binding', () => {
     // it was never one of the menu popups.) Pinned as a COUNT instead, and
     // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
     // which is the guard #276 wanted.
-    // (The count stays 1 with #988's model menu and #989's effort menu mounted: the bare tree has no
-    // run-config snapshot, so the effective model and effort are both '' and neither control renders
-    // anything at all.)
+    // (The count stays 1 with #988's model menu, #989's effort menu and #682's permission-mode menu
+    // mounted: the bare tree has no run-config snapshot, so the effective model, effort and permission
+    // mode are all '' and none of the three renders anything at all. #682 is the one that would have
+    // broken this had it drawn a placeholder — it is operable whenever a mode is known, so "no mode is
+    // known" is the whole of what keeps it out of the bare tree.)
     expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
     // Adjacency-sensitive on purpose: it pins the class run immediately followed by aria-haspopup.
     expect(markup).toContain(`${ACTIONS_TRIGGER_CLASS_RUN} aria-haspopup="menu"`)

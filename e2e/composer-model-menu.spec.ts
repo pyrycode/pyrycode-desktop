@@ -227,8 +227,12 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // INERT: no popup announced, and the footer still holds exactly one anchor (the Actions menu's). An
   // operable trigger over an empty panel would fail all three. ---
   await expect(label).toHaveText(BASELINE_MODEL.value, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(1)
-  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(1)
+  // TWO rather than one since #682: the Actions menu's, plus the permission-mode control's. That one is
+  // operable the moment a snapshot names a mode — its entries are a client-owned constant, so it has no
+  // list to be waiting for — and this baseline names one. The claim being made here is still THIS
+  // control's inert arm; what changed is that the row is no longer the Actions menu alone.
+  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
+  await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(2)
 
   // --- The list arrives unsolicited (AC1). Exact equality on `value` resolves the session's model to the
   // first published row, so the label becomes that row's DISPLAY NAME — the only string that could

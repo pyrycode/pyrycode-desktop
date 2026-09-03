@@ -54,19 +54,19 @@ type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
 interface ToolResult { isError: boolean; resultSummary: string; resultDetail?: string }
 
 type ThreadItem =
-  | { kind: 'assistantText'; turnId: string; text: string }
+  | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
-  | { kind: 'userText'; text: string }
+  | { kind: 'userText'; text: string; createdAt?: number }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 type ThreadEvent =
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
   | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
-  | { type: 'userText'; text: string }
+  | { type: 'userText'; text: string; createdAt?: number }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
@@ -116,6 +116,28 @@ preserve the field, the same as `input`'s widen. Ships dormant — the sole cons
 [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856), which also owns the decision that
 neither absence nor emptiness draws anything.
 
+**`createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) is a third field-pair widen, on `assistantText`/`userText`
+and their matching event arms** — epoch milliseconds, the moment a bubble first appeared, stamped in the
+renderer from an injected clock rather than carried from the envelope `ts` (the `assistantDelta` IPC arm
+names four fields fail-closed and does not forward it; the timeline is in-memory and cleared on exit and
+pairing end (#757), so nothing replays old messages a fresh clock would mis-stamp). Unlike `input` and
+`resultDetail`, the clock is **not** threaded through `reduceTimeline` as a parameter — the field rides
+the event instead, and the reason is worth stating because it is not the one the ticket's own two
+cascade-count ceilings (55 reducer call sites, 68 event literals) would suggest: **the two timeline
+stores (`timelineStore.ts`, `conversationTimelineStore.ts`) call `reduceTimeline` from production code**,
+so a clock parameter there — optional or not — would stamp every item the stores' own specs assert on
+with `toEqual`, reddening 13 of the 19 fixed expectation sites the ticket fenced. A cascade-count ceiling
+answers "how many call sites move"; it does not answer "are any of them production," which is what
+actually decided the seam here. `translateTimelineEvent`/`subscribeTimeline`
+([conversation timeline store](conversation-timeline-store.md)) and `ComposerSendDeps.now`
+([composer send](composer-send.md)) take the clock instead, both as an **optional trailing parameter with
+no wall-clock default** — an absent
+clock means no stamp, at every seam, which is what keeps all 135 pre-existing `assistantText`/`userText`
+fixture sites compiling and passing unedited. `appendDelta` (below) is the one place the two branches
+diverge: only the fresh-append case takes the incoming stamp, so a coalesced bubble keeps its *first*
+delta's time. Ships dormant — [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) is the
+still-open sibling slice that renders it into the meta row [#969](../codebase/969.md) left empty.
+
 ### The reducer
 
 `reduceTimeline(state, event): TimelineState` is pure and exported — no mutation, fresh state,
@@ -124,12 +146,12 @@ neither absence nor emptiness draws anything.
 
 | event | effect |
 |---|---|
-| `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text; otherwise append fresh. `seq` carried, not consulted — arrival order is authoritative. |
+| `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text, keeping the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt`. `seq` carried, not consulted — arrival order is authoritative. |
 | `toolUse` | append a fresh `toolCall` with `result: null` |
 | `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
 | `turnState` | set `phase`; same reference if unchanged (no-churn) |
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
-| `userText` | append a fresh `userText` item (never coalesced); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
+| `userText` | append a fresh `userText` item, carrying the event's `createdAt` unconditionally (never coalesced, so unlike `assistantDelta` there is no earlier stamp to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
@@ -162,8 +184,13 @@ the only read surface.
 
 ### Internal helpers (unexported)
 
-- `appendDelta(items, turnId, text)` — the tail-check coalesce for `assistantDelta`; always
-  returns a new array (a delta is always a change).
+- `appendDelta(items, turnId, text, createdAt)` — the tail-check coalesce for `assistantDelta`; always
+  returns a new array (a delta is always a change). `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013))
+  is a **required** fourth parameter — module-private with one call site, so there is no cascade to buy
+  off, and requiring it makes forgetting it a compile error at that one site. The grow branch reads
+  `tail.createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
+  carrying the incoming stamp instead would silently re-date a bubble to its most recent fragment); only
+  the fresh-append branch reads the parameter.
 - `fillResult(items, toolUseId, result)` — the `toolResult` correlate-and-fill. Narrows via a
   `.map` callback whose `item.kind === 'toolCall'` guard narrows `item` so the spread
   (`{ ...item, result }`) type-checks with **no cast** — the codebase bans unchecked `as` in
@@ -317,6 +344,14 @@ Nothing imports this module yet.
   through item in a single ticket, since a scalar has no daemon-chosen-keys surface forcing a split.
   `reduceTimeline`'s pre-existing `toolResult` arm and `fillResult` are otherwise unmodified. No render
   — [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) is the still-open sibling slice.
+- **[#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) (shipped)** widened
+  `assistantText`/`userText` and their matching `ThreadEvent` arms with one optional field each,
+  `createdAt` — the third instance of the `input`(#643)/`resultDetail`(#773) field-pair-widen shape,
+  covered in full above (§ Types). No new arm, no new item kind, and `reduceTimeline`'s own signature is
+  untouched — the clock rides the event rather than a reducer parameter, since both timeline stores call
+  `reduceTimeline` from production code and a parameter there would have stamped the items 13 of the
+  ticket's 19 fenced `toEqual` expectations assert on. No render — [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
+  is the still-open sibling slice that fills [#969](../codebase/969.md)'s empty meta-row time slot.
 
 ## Edge cases and limitations
 
@@ -389,9 +424,32 @@ Nothing imports this module yet.
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
   residue) and made this module's store the conversation's single thread surface — `sessionStore`
   itself (and its `messages` slice) is untouched code-wise but its render consumer is gone.
+- **`createdAt` is `undefined` on any `assistantText`/`userText` item whose producer was given no
+  clock** ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)) — this is a legal item, not
+  a defect: every one of the 135 pre-existing fixture sites across 17 test files produces exactly this,
+  since none injects a clock, and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) draws
+  it as the meta row's empty slot. Test presence with `=== undefined`, never `'createdAt' in item` — the
+  reducer assigns the field unconditionally on every arm that carries it, so the key is always present;
+  only its value distinguishes a stamped item from an unstamped one. No seam this field crosses
+  (`translateTimelineEvent`, `subscribeTimeline`, `ComposerSendDeps.now`) defaults to `Date.now` — a
+  defaulting seam would silently stamp events built by a spec that injects no clock, and those are exactly
+  the fixtures `toEqual` asserts hold no defined `createdAt`.
+- **The two production wirings of the clock (`useTimelineBridge`'s `Date.now` argument,
+  `ConversationScreen.tsx`'s `now: Date.now` deps field) are not compile-enforced** — both parameters are
+  optional, which is what keeps every pre-#1013 call site compiling unedited, but it also means a
+  forgotten wiring at either site is silent rather than a type error. Each has its own regression spec
+  pinning the wiring instead (`timelineBridge.test.ts` for the assistant side, `composerSend.test.ts` for
+  the echo). If a wiring is ever found missing in practice, that observed failure — not the theoretical
+  gap — is what would justify a compile-time guard.
 
 ## Related
 
+- [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — added `createdAt` to
+  `assistantText`/`userText`, covered in full above (§ Types, § Configuration and usage). Producers:
+  [conversation timeline store](conversation-timeline-store.md)'s `translateTimelineEvent`/
+  `subscribeTimeline` (assistant side) and [composer send](composer-send.md)'s `ComposerSendDeps.now`
+  (user side). [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — the still-open sibling
+  slice that renders the stamp into [#969](../codebase/969.md)'s empty meta-row time slot.
 - [#286 codebase notes](../codebase/286.md) — added the fifth `ThreadItem` kind, `sessionBoundary`,
   and its `TimelineRow` render row + pure long-form relative-time view-model.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md) — full

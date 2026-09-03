@@ -71,7 +71,10 @@ the assistant row carries none, so the base rule's `flex-start` is already right
 
 **`min-height: var(--text-body-small-line)` is load-bearing, not decorative.** The row holds two
 children today: an empty `<span className="bubble__meta-time" />` reserved for
-[#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) to fill, and the copy control. An empty
+[#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) to fill, and the copy control. #970 split
+into a data slice ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), shipped — gives the
+`assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional `createdAt`) and this
+render slice (#1014, open); #1013 lands no visible change, so the slot stays empty until #1014. An empty
 inline element generates no line box, so without the `min-height` the row would collapse to the glyph's
 12px height rather than the drawn 16px.
 
@@ -211,8 +214,11 @@ computed style — all four `border-radius` corners equal, `padding` 16/20, and 
 
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
   design, the clipboard-permission open question and its resolution, and the security review.
-- [#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) — fills the meta row's timestamp
-  slot, blocked on this ticket.
+- [#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) — the parent ticket this meta row's
+  timestamp slot was reserved for; split into [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)
+  (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional
+  `createdAt`, no visible change) and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
+  (open — the render slice that fills this slot), both blocked on this ticket.
 - [#691](https://github.com/pyrycode/pyrycode-desktop/issues/691) / [#686](https://github.com/pyrycode/pyrycode-desktop/issues/686) —
   the image thumbnail and file row, instances of the same `Message` component whose bubble this ticket
   restyles; their slot contents are unaffected.

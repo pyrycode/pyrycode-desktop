@@ -20,12 +20,23 @@ import type { ThreadEvent } from '../../store/threadTimeline'
  * call sites in `composerSend.test.ts` plus the one container, so requiring the field cost six
  * mechanical test edits and buys a compile error for "forgot to wire it"; at `subscribeTimeline`'s
  * twenty that trade is unavailable, which is why the bridge went the other way.
+ *
+ * `now` (#1013) is the echo's clock — `Date.now` in the container, a constant in tests. It goes the
+ * OPPOSITE way from `dispatchFor` above, and deliberately: requiring it would not merely cost mechanical
+ * edits (this object now has thirteen call sites here, not the six that made `dispatchFor`'s trade cheap)
+ * — it would REDDEN the three existing `toHaveBeenCalledWith({ type: 'userText', text })` assertions, since
+ * every deps literal would then supply a clock and every echo would carry a defined `createdAt` where those
+ * assertions name none. So it is optional, with no `Date.now` fallback: **an absent clock means no stamp**,
+ * the same rule `timelineBridge`'s seams follow, and an unstamped echo is a legal item (#1014 draws it as
+ * the empty meta slot). The cost is that a forgotten wiring is silent rather than a compile error;
+ * `composerSend.test.ts` pins the wired behaviour instead.
  */
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
   newMessageId: () => string
+  now?: () => number
 }
 
 /**
@@ -78,7 +89,12 @@ export function submitMessage(
   // stores is safe for the reason `conversationTimelineStore.ts:268-270` already states:
   // `reduceTimeline` is pure and always builds fresh arrays. Both writes sit outside the `try` above —
   // the guarded-send contract covers `sendCommand` only and must not grow to cover a store write.
-  const echo: ThreadEvent = { type: 'userText', text: trimmed }
+  //
+  // #1013: stamped HERE, at the echo, which is the moment the operator sent the message — and stamped
+  // once, on the single object both writes share, so the flat store and the keyed holder can never record
+  // two different instants for one message. Below both `false` returns, so a refused submit reads no clock
+  // at all. `deps.now?.()` yields `undefined` when no clock was injected, assigned unconditionally.
+  const echo: ThreadEvent = { type: 'userText', text: trimmed, createdAt: deps.now?.() }
   deps.dispatch(echo)
   // The keyed fold, under the conversation this message was SENT TO — it rides the wire as
   // `conversation_id` in the payload above. This is NOT the fallback AC3 bans: that ban is on inventing

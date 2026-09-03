@@ -666,6 +666,52 @@ describe('timelineWriteTarget (#785)', () => {
   })
 })
 
+describe('translateTimelineEvent — the injected clock (#1013)', () => {
+  const delta: DaemonEvent = {
+    type: 'assistantDelta',
+    turnId: 'A',
+    seq: 3,
+    text: 'slice',
+    conversationId: 'conv-1'
+  }
+
+  it('stamps the assistantDelta arm with the injected clock’s exact value', () => {
+    expect(translateTimelineEvent(delta, () => 1_700_000_000_000)).toEqual({
+      type: 'assistantDelta',
+      turnId: 'A',
+      seq: 3,
+      text: 'slice',
+      createdAt: 1_700_000_000_000
+    })
+  })
+
+  it('leaves createdAt undefined when no clock is injected — absent clock means no stamp', () => {
+    const translated = translateTimelineEvent(delta) as { createdAt?: number }
+    expect(translated.createdAt).toBe(undefined)
+  })
+
+  // AC5's fence at the bridge: the clock reaches exactly one arm. `sessionTransition` is the pointed
+  // case — it is the other arm that already carries a time, and it must keep carrying only the wire's.
+  it('stamps no other arm — sessionTransition keeps only its wire occurredAt', () => {
+    const translated = translateTimelineEvent(
+      {
+        type: 'sessionTransition',
+        reason: 'clear',
+        workspaceCwd: '/w',
+        occurredAt: '2026-01-15T12:00:00.000Z',
+        newSessionId: 's-2'
+      },
+      () => 1_700_000_000_000
+    )
+    expect(translated).toEqual({
+      type: 'sessionBoundary',
+      reason: 'clear',
+      workspaceCwd: '/w',
+      occurredAt: '2026-01-15T12:00:00.000Z'
+    })
+  })
+})
+
 describe('subscribeTimeline', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy — the runConfigSnapshot
   // fakeBridge idiom.
@@ -738,6 +784,44 @@ describe('subscribeTimeline', () => {
     const cleanup = subscribeTimeline(bridge.onDaemonEvent, vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
+  })
+
+  // #1013: the clock reaches `translateTimelineEvent` through here. This is the regression guard for the
+  // production wiring itself — `useTimelineBridge` passes `Date.now` as this third argument, and it runs
+  // inside a `useEffect` that never fires under `renderToStaticMarkup`, so this seam is the only place
+  // the threading can be driven.
+  it('#1013: threads an injected clock through to the translated assistantDelta', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch, () => 1_700_000_000_000)
+
+    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
+    expect(dispatch).toHaveBeenCalledWith(
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', createdAt: 1_700_000_000_000 },
+      'conv-1'
+    )
+  })
+
+  it('#1013: reads the clock per event, so each delta carries its own arrival time', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    let tick = 1_700_000_000_000
+    subscribeTimeline(bridge.onDaemonEvent, dispatch, () => (tick += 1_000))
+
+    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'a', conversationId: 'c' })
+    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 1, text: 'b', conversationId: 'c' })
+    const stamps = dispatch.mock.calls.map(([e]) => (e as { createdAt?: number }).createdAt)
+    expect(stamps).toEqual([1_700_000_001_000, 1_700_000_002_000])
+  })
+
+  it('#1013: with no clock injected, dispatches an unstamped event (the standing-fixture guarantee)', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
+    const [dispatched] = dispatch.mock.calls[0] as [{ createdAt?: number }]
+    expect(dispatched.createdAt).toBe(undefined)
   })
 
   it('AC2: two same-turn deltas drive the store to one coalesced assistantText, no React', () => {

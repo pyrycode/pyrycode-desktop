@@ -120,6 +120,65 @@ describe('submitMessage', () => {
     expect(dispatchFor.mock.calls[0][1]).toBe(dispatch.mock.calls[0][0])
   })
 
+  // #1013: the echo is stamped at the moment of send, from an injected clock. The container wires
+  // `now: Date.now`; a spec injects a constant and asserts the exact value, so nothing here reads the
+  // machine's wall clock (AC3).
+  it('#1013: stamps the echo with the injected clock, the same value on both write paths', () => {
+    const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
+    const now = vi.fn(() => 1_700_000_000_000)
+
+    submitMessage('hey there', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor,
+      newMessageId: () => 'echo-3',
+      now
+    })
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'userText',
+      text: 'hey there',
+      createdAt: 1_700_000_000_000
+    })
+    expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
+      type: 'userText',
+      text: 'hey there',
+      createdAt: 1_700_000_000_000
+    })
+    // One echo object, so one read of the clock — the two stores cannot record different instants for
+    // the same message. This is the built-ONCE property, asserted at the clock rather than at identity.
+    expect(now).toHaveBeenCalledTimes(1)
+  })
+
+  it('#1013: leaves the echo unstamped when no clock is injected (the standing-fixture guarantee)', () => {
+    const dispatch = vi.fn()
+
+    submitMessage('hey there', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'echo-4'
+    })
+
+    const [echo] = dispatch.mock.calls[0] as [{ createdAt?: number }]
+    expect(echo.createdAt).toBe(undefined)
+  })
+
+  it('#1013: does not read the clock when the submit is refused', () => {
+    const now = vi.fn(() => 1_700_000_000_000)
+    const deps = {
+      sendCommand: vi.fn(),
+      dispatch: vi.fn(),
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'unused',
+      now
+    }
+    expect(submitMessage('   ', 'conv-1', deps)).toBe(false)
+    expect(submitMessage('hi', null, deps)).toBe(false)
+    expect(now).not.toHaveBeenCalled()
+  })
+
   it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()

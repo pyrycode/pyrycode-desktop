@@ -349,3 +349,26 @@ binding on prior runs (call-site cascade on #29/#75, reject-branch fan-out on #4
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — Open Questions resolved during implementation
+
+All three resolved as the Design section proposed; the design did not change, and this entry exists so
+the resolutions are auditable rather than merely absent.
+
+1. **`sendChunk` returns the envelope id** — implemented as planned. `sendAttachmentChunk` captures
+   `nextEnvelopeId` before the build increments it and returns it, so envelope-id minting stays with
+   `daemonConnection`'s single monotonic counter and `transport/` never reaches into it.
+2. **A `Set` of active transfers, not a single slot** — implemented as planned; the `Map` fallback was
+   not needed. Both correlations read naturally as a scan (`transferForEnvelope` for the rejects, an
+   inline loop over `attachmentId` for the success), and the success loop returns on the first match,
+   so at most one transfer settles per reply even under a caller that violated the id-uniqueness
+   contract.
+3. **A real macrotask yield is required** — confirmed. The default seam is `setImmediate`, and the
+   `daemonConnection` specs exercise it (they inject no yield seam) against a `setTimeout`-based tick,
+   so the production path is covered rather than only the injected one. One consequence surfaced while
+   writing those specs and is recorded in the code: at the wiring layer, *how far* the loop got when a
+   reject lands is genuinely racy (a real `setImmediate` against a real `setTimeout`), so the
+   "no further chunks go out" half of AC3 is asserted one layer down in `attachmentTransfer.test.ts`,
+   where the seam is injected and the gap is deterministic. The wiring layer asserts the terminal.

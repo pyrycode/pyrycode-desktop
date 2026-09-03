@@ -44,6 +44,13 @@ import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
+import { buildAttachmentChunk } from './transport/attachmentChunkEnvelope'
+import type { AttachmentChunkPlanInput } from './transport/attachmentChunkPlan'
+import {
+  createAttachmentTransfer,
+  type AttachmentTransfer,
+  type AttachmentTransferResult
+} from './transport/attachmentTransfer'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import {
   buildQuestionAnswer,
@@ -78,7 +85,8 @@ import {
   type ModalCancelPayload,
   type DequeueMessagePayload,
   type QuestionAnswerPayload,
-  type QuestionRefusedPayload
+  type QuestionRefusedPayload,
+  type AttachmentChunkPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -368,6 +376,29 @@ export interface DaemonConnection {
    * command never hangs. NEVER throws out of the module (parity #490).
    */
   requestDebugBundle(consumer: BundleConsumer): void
+  /**
+   * Upload one file to the daemon as an ordered run of `attachment_chunk` envelopes, and resolve when
+   * the transfer reaches its single terminal (#861). The `requestDebugBundle` posture, not `send`'s
+   * silent no-op: the caller awaits an answer, so a request made while disconnected resolves
+   * `not-connected` rather than hanging. NEVER throws and NEVER REJECTS — every failure, local or
+   * remote, is a value on the resolved result, so a caller that forgets a `catch` cannot produce an
+   * unhandled main-process rejection.
+   *
+   * TWO CORRELATION KEYS, and they are not interchangeable. The success reply is matched on the
+   * payload's `attachment_id`; the rejects are matched on `Envelope.in_reply_to` against the chunk
+   * envelopes this transfer sent. A driver keyed on the envelope id alone would never resolve — see
+   * createAttachmentTransfer's header for why.
+   *
+   * `attachment_id` is CALLER-MINTED and must be unique across concurrently live transfers: two
+   * transfers sharing one id would let a single success reply resolve whichever the scan reaches
+   * first. The id is not a capability (not secret, not unguessable), so uniqueness is the whole
+   * requirement. #862 owns minting it, picking the file, and bounding its size — this method applies
+   * no size bound of its own and holds the whole file plus its base64 for the round trip.
+   *
+   * A transfer that resolves failed is resolved: it is not retried here, and nothing is emitted to
+   * the window (this method ships no daemon event; surfacing the outcome is #862's).
+   */
+  uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>
 }
 
 /**
@@ -469,6 +500,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // inside a synchronous createWorkspaceFolder / onDriverEvent body, no await between a read and a write
   // (the nextEnvelopeId / outstandingAnswers / pendingSettings single-writer rationale).
   const pendingCreateFolders = new Set<number>()
+  // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
+  // files can be attached in one session, and a lone slot would have to abandon the first to admit the
+  // second. Membership plus a scan is the whole query — the success reply is looked up by
+  // `attachmentId`, the rejects by `sentEnvelope` — over a handful of entries at most. Added in
+  // uploadAttachment before the first chunk goes out, removed when the transfer settles, and cleared
+  // by failAttachmentTransfers on every connection-fatal event. Single-writer — every mutation runs to
+  // completion inside a synchronous body (the nextEnvelopeId / pendingSettings rationale).
+  const activeTransfers = new Set<AttachmentTransfer>()
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -500,6 +539,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const abandoned = reassembler
     reassembler = null
     abandoned?.fail('connection-lost')
+  }
+
+  // The connection-teardown net for in-flight attachment transfers (#861) — failBundleStream's twin,
+  // called from the same four sites for the same reason: a teardown re-dials into a FRESH Noise
+  // session with no resume, so the daemon-side transfer dies and no answer to the chunks already sent
+  // will ever arrive. With no per-transfer deadline (deliberate — see createAttachmentTransfer's
+  // header), an unfailed caller would await forever.
+  //
+  // Release-then-fail, like failBundleStream: snapshot and clear the set BEFORE failing, so no
+  // transfer's settle can mutate the set mid-iteration and the module holds no reference to a transfer
+  // it has already abandoned. Idempotent and total — an empty set is a no-op, and a settled transfer's
+  // own `settled` flag absorbs a second fail.
+  //
+  // This is also what makes dial()'s reset of nextEnvelopeId to 2 safe: every live transfer is failed
+  // before ids recycle, so a stale envelope id can never correlate a reject on the reconnected
+  // session (the pendingSettings.clear() rationale, applied to the transfer set).
+  function failAttachmentTransfers(): void {
+    const abandoned = [...activeTransfers]
+    activeTransfers.clear()
+    for (const transfer of abandoned) transfer.fail('connection-lost')
+  }
+
+  /** The reject correlation key: which live transfer, if any, minted this envelope id. */
+  function transferForEnvelope(envelopeId: number): AttachmentTransfer | undefined {
+    for (const transfer of activeTransfers) {
+      if (transfer.sentEnvelope(envelopeId)) return transfer
+    }
+    return undefined
   }
 
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
@@ -584,6 +651,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (pendingCreateFolders.has(inReplyTo)) {
                 pendingCreateFolders.delete(inReplyTo)
                 emitDaemonEvent(sink, { type: 'workspaceFolderRejected' })
+                return
+              }
+              // Attachment-upload rejection correlation (#861), the third member of the same
+              // unique-per-request-envelope-id tier. A reject answers ONE chunk, and every chunk id a
+              // live transfer minted is known here, so a match is unambiguously the reply to that
+              // transfer's chunk — which is why it consumes the frame ENTIRELY, skipping both the
+              // reassembler.fail and the modal-FIFO shift below exactly as its two siblings do.
+              // Order among the three is immaterial: an envelope id is minted once, so at most one of
+              // them can hold it.
+              //
+              // The outcome carried is the CLIENT-OWNED value #965 already mapped off the daemon's
+              // `code` string at the decode boundary. Nothing re-parses that string here — per
+              // CLAUDE.md it must never become a lookup path — and no daemon text reaches the caller.
+              // This settles the transfer; it emits NO DaemonEvent, because the outcome goes back to
+              // uploadAttachment's caller and surfacing it to the window is #862's slice.
+              const rejected = transferForEnvelope(inReplyTo)
+              if (rejected !== undefined) {
+                rejected.fail(inbound.outcome)
                 return
               }
             }
@@ -1282,6 +1367,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               droppedModels: inbound.modelList.dropped_models
             })
             return
+          case 'attachment-stored': {
+            // The upload leg's one POSITIVE terminal (#861), and the ONLY inbound arm here that
+            // correlates on a PAYLOAD field rather than on Envelope.in_reply_to. The reply's
+            // in_reply_to names the chunk WHOSE ARRIVAL COMPLETED the transfer, not the last one sent,
+            // and chunks are index-addressed and may be reassembled in any order — so the envelope id
+            // is unpredictable to the sender and #964 deliberately does not surface it. The
+            // `attachment_id` is the only handle that works, and it is a value THIS CLIENT chose.
+            //
+            // The decoded id is a COMPARAND and nothing else: matched against ids this process minted,
+            // then dropped. It never becomes a lookup path, a filename or a cache key (CLAUDE.md), and
+            // it never reaches a log. `''` cannot reach here — #964's requireNonEmptyString fails the
+            // frame closed — so a truncated or hostile payload cannot match a transfer by decoding to
+            // Go's zero value.
+            //
+            // AT MOST ONE transfer settles per reply: the loop returns on the first match, so even a
+            // caller that violated the id-uniqueness contract cannot have one reply resolve two
+            // transfers. No match — a stale reply, or a daemon naming a transfer this client never
+            // started — is DROPPED: no event, no log, no throw.
+            //
+            // Emits NOTHING. The outcome goes back to uploadAttachment's caller; surfacing it to the
+            // window is #862's slice, and this ticket ships no daemon event at all.
+            for (const transfer of activeTransfers) {
+              if (transfer.attachmentId === inbound.attachmentStored.attachment_id) {
+                transfer.stored()
+                return
+              }
+            }
+            return
+          }
         }
         return
       }
@@ -1297,6 +1411,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // arm's order. Above the classification below, so the emitted bundle failure is identical
         // for every close code and discloses nothing about it.
         failBundleStream()
+        failAttachmentTransfers()
         // The relay socket dropped with a retryable close (#328). This is the single classification
         // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
         // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
@@ -1311,6 +1426,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
         failBundleStream()
+        failAttachmentTransfers()
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -1320,6 +1436,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'error':
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
+        failAttachmentTransfers()
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -1956,6 +2073,71 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  /**
+   * Put one chunk on the wire and return the envelope id it went out under (#861) — the send seam
+   * createAttachmentTransfer drives, and the reason the id is RETURNED rather than minted inside the
+   * transfer: it comes from this module's single monotonic counter, and transport/ must not reach into
+   * it. Capture the id BEFORE the build increments it, so the returned value is the one the daemon
+   * echoes as in_reply_to on a rejecting error (the createWorkspaceFolder template).
+   *
+   * THROWS, unlike every other send here, and that is the contract: the loop turns a throw into a
+   * `send-failed` terminal so the caller learns the transfer stopped. A silent drop would leave it
+   * awaiting an answer to a chunk that never left. The three throwing causes are a null driver, an
+   * over-cap envelope (WireEncodeError), and a driver refusal; the loop classifies without inspecting,
+   * so no caught message can echo the file's base64.
+   *
+   * A null driver here means a teardown already ran, and every teardown path fails its transfers
+   * first, so the `send-failed` this produces loses to the `connection-lost` already delivered. The
+   * throw is the belt to that suspenders — it cannot reach the wire either way.
+   */
+  function sendAttachmentChunk(payload: AttachmentChunkPayload): number {
+    const live = driver
+    if (live === null) throw new Error('not connected')
+    const envelopeId = nextEnvelopeId
+    // The payload is passed through without a fresh literal, unlike the renderer-supplied command
+    // payloads: it is not renderer-supplied at all — planAttachmentChunks built it here in the main
+    // process as a closed nine-field object, so there is no smuggled field for a copy to strip.
+    const bytes = buildAttachmentChunk({ id: envelopeId, ts: now(), payload })
+    nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+    live.sendMessage(bytes)
+    return envelopeId
+  }
+
+  async function uploadAttachment(
+    input: AttachmentChunkPlanInput
+  ): Promise<AttachmentTransferResult> {
+    // Not connected (before start(), mid-bootstrap, bootstrap-failed): resolve terminally so #862's
+    // command never hangs. requestDebugBundle's posture — send's silent no-op is wrong for a call that
+    // owns an awaiting caller.
+    if (driver === null) return { ok: false, outcome: 'not-connected' }
+    let transfer: AttachmentTransfer
+    try {
+      transfer = createAttachmentTransfer(input, {
+        sendChunk: sendAttachmentChunk,
+        diagnosticLog: deps.diagnosticLog
+      })
+    } catch {
+      // planAttachmentChunks is total, so this is a backstop rather than a live branch — but this is
+      // the first async method on the interface, and a synchronous throw escaping it would surface as
+      // an UNHANDLED main-process rejection in a caller that forgot a catch. Every path returns a
+      // value instead (parity #490, restated for a promise-returning method). The caught object is
+      // DROPPED — it could echo the file's bytes.
+      return { ok: false, outcome: 'send-failed' }
+    }
+    // ARM BEFORE DRIVE: record the transfer where both inbound correlations can find it, THEN start
+    // the send. The reverse order would put chunk 0 on the wire before the slot was armed, and a fast
+    // reply would find nothing to resolve (requestDebugBundle's arm-before-send discipline).
+    activeTransfers.add(transfer)
+    try {
+      transfer.start()
+      return await transfer.result
+    } finally {
+      // Always runs: transfer.result never rejects. Removing on settle is what keeps a later reply
+      // naming a finished transfer's id from resolving anything, and bounds the scan to live work.
+      activeTransfers.delete(transfer)
+    }
+  }
+
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
     const gen = ++generation
@@ -1987,6 +2169,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
     // out of onDriverEvent, so #116's net would never fire and the consumer would never settle.
     failBundleStream()
+    failAttachmentTransfers()
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.
@@ -2038,6 +2221,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     cancelModal,
     answerQuestions,
     refuseQuestions,
-    requestDebugBundle
+    requestDebugBundle,
+    uploadAttachment
   }
 }

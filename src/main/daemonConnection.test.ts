@@ -24,7 +24,18 @@ import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { createDebugBundleDownload, type DebugBundleDownload } from './debugBundleDownload'
 import {
+  attachmentStoredReplyFrames,
+  attachmentRejectReplyFrames,
+  type AttachmentRejectCode
+} from './transport/fakeDaemon'
+import type {
+  AttachmentTransferFailure,
+  AttachmentTransferResult
+} from './transport/attachmentTransfer'
+import {
+  ATTACHMENT_CHUNK_DATA_BYTES,
   MAX_PLAINTEXT_BYTES,
+  type AttachmentChunkPayload,
   type SendMessagePayload,
   type CreateConversationPayload,
   type CreateWorkspaceFolderPayload,
@@ -6604,5 +6615,287 @@ describe('createDaemonConnection — model_list stream (#973)', () => {
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — attachment upload drive (#861)', () => {
+  const STRIDE = ATTACHMENT_CHUNK_DATA_BYTES
+
+  /** Three chunks, so "the completing chunk is not the last one sent" is reachable. */
+  const FILE = Uint8Array.from({ length: STRIDE * 2 + 5 }, (_, index) => index % 251)
+
+  const upload = (
+    connection: DaemonConnection,
+    attachmentId = 'att-1'
+  ): Promise<AttachmentTransferResult> =>
+    connection.uploadAttachment({
+      attachment_id: attachmentId,
+      filename: 'notes.txt',
+      mime_type: 'text/plain',
+      bytes: FILE
+    })
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The chunk envelopes the connection put on the wire, decoded. */
+  const chunksSent = (driver: FakeDriver): ReturnType<typeof decodeEnvelope>[] =>
+    driver.sent.map(decodeEnvelope).filter((envelope) => envelope.type === 'attachment_chunk')
+
+  /**
+   * Let the driver's send loop drain. It yields a `setImmediate` macrotask between chunks, so a
+   * `tick()` (one setTimeout) per chunk plus slack is enough for any plan these tests build.
+   */
+  const drain = async (): Promise<void> => {
+    for (let turn = 0; turn < 8; turn++) await tick()
+  }
+
+  /** Answer whatever the daemon would answer for one already-sent chunk, through the shipped fake. */
+  const answer = (
+    driver: FakeDriver,
+    reply: (plaintext: Uint8Array) => Uint8Array[]
+  ): void => {
+    for (const plaintext of driver.sent) {
+      for (const frame of reply(plaintext)) driver.emit({ type: 'message', plaintext: frame })
+    }
+  }
+
+  it('resolves not-connected before the handshake, without sending anything', async () => {
+    const ctx = build()
+
+    await expect(upload(ctx.connection)).resolves.toEqual({
+      ok: false,
+      outcome: 'not-connected'
+    })
+    expect(ctx.drivers).toHaveLength(0)
+  })
+
+  it('puts every chunk on the wire in index order under this connection ids (AC1)', async () => {
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    answer(drivers[0], attachmentStoredReplyFrames(2))
+    await result
+
+    const chunks = chunksSent(drivers[0])
+    expect(chunks).toHaveLength(3)
+    expect(chunks.map((envelope) => (envelope.payload as AttachmentChunkPayload).index)).toEqual([
+      0, 1, 2
+    ])
+    // Ascending envelope ids drawn from the connection's own monotonic counter — no second counter.
+    const ids = chunks.map((envelope) => envelope.id)
+    expect(ids).toEqual([...ids].sort((a, b) => a - b))
+    expect(new Set(ids).size).toBe(3)
+  })
+
+  it('resolves complete on a success reply correlated to a NON-FINAL chunk (AC2)', async () => {
+    // The case an envelope-id-keyed driver fails: the daemon answers the chunk whose ARRIVAL
+    // completed the transfer, and chunks may be reassembled in any order — here index 0 closes the
+    // set, so the reply's in_reply_to names the FIRST envelope sent, not the last.
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    answer(drivers[0], attachmentStoredReplyFrames(0))
+
+    await expect(result).resolves.toEqual({ ok: true })
+  })
+
+  it.each<[AttachmentRejectCode, AttachmentTransferFailure]>([
+    ['attachment.invalid_chunk', 'attachment-invalid-chunk'],
+    ['attachment.integrity_failed', 'attachment-integrity-failed'],
+    ['attachment.too_large', 'attachment-too-large'],
+    ['attachment.too_many_uploads', 'attachment-too-many-uploads'],
+    ['attachment.storage_failed', 'attachment-storage-failed']
+  ])('resolves failed carrying the outcome %s maps to (AC3)', async (code, outcome) => {
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    answer(drivers[0], attachmentRejectReplyFrames(1, code))
+
+    await expect(result).resolves.toEqual({ ok: false, outcome })
+  })
+
+  it('never also reports complete once a reject has settled the transfer (AC3)', async () => {
+    // The "no further chunks go out" half of AC3 is proven deterministically one layer down, in
+    // attachmentTransfer.test.ts, where the yield seam is injected. Here the loop yields a real
+    // setImmediate against a setTimeout-based tick, so how far it got is genuinely racy and asserting
+    // on it would be a flaky test dressed as coverage. What this layer owns is the terminal: the
+    // reject wins, and a later success for the same transfer cannot re-settle it.
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    answer(drivers[0], attachmentRejectReplyFrames(0, 'attachment.too_large'))
+
+    await expect(result).resolves.toEqual({ ok: false, outcome: 'attachment-too-large' })
+    answer(drivers[0], attachmentStoredReplyFrames(0))
+    await expect(result).resolves.toEqual({ ok: false, outcome: 'attachment-too-large' })
+  })
+
+  it('resolves connection-lost when the session goes away mid-transfer (AC3)', async () => {
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    drivers[0].emit({ type: 'terminal', code: 1006, reason: 'socket-drop' })
+
+    await expect(result).resolves.toEqual({ ok: false, outcome: 'connection-lost' })
+  })
+
+  it('resolves connection-lost on a relay-link-down and on a driver error', async () => {
+    const first = await connected()
+    const a = upload(first.connection)
+    await drain()
+    first.drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    await expect(a).resolves.toEqual({ ok: false, outcome: 'connection-lost' })
+
+    const second = await connected()
+    const b = upload(second.connection)
+    await drain()
+    second.drivers[0].emit({ type: 'error', reason: 'transport-decrypt-failed' })
+    await expect(b).resolves.toEqual({ ok: false, outcome: 'connection-lost' })
+  })
+
+  it('resolves connection-lost on a re-dial, so recycled envelope ids cannot mis-correlate', async () => {
+    const { connection, drivers } = await connected()
+
+    const result = upload(connection)
+    await drain()
+    connection.reconnect()
+
+    await expect(result).resolves.toEqual({ ok: false, outcome: 'connection-lost' })
+  })
+
+  it('resolves send-failed when the session refuses a chunk', async () => {
+    const ctx = build({ throwOnSend: true })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    await expect(upload(ctx.connection)).resolves.toEqual({
+      ok: false,
+      outcome: 'send-failed'
+    })
+  })
+
+  it('drops a success naming a transfer it never started', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    const result = upload(connection, 'att-mine')
+    await drain()
+    const before = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: encodeEnvelope({
+        id: 900,
+        type: 'attachment_stored',
+        ts: FIXED_TS,
+        in_reply_to: decodeEnvelope(drivers[0].sent[1]).id,
+        payload: { attachment_id: 'att-someone-elses' }
+      })
+    })
+
+    // Nothing emitted, and the real transfer is still open — proven by resolving it afterwards.
+    expect(emitted(sink).slice(before)).toEqual([])
+    answer(drivers[0], attachmentStoredReplyFrames(1))
+    await expect(result).resolves.toEqual({ ok: true })
+  })
+
+  it('resolves two concurrent transfers each on its own reply', async () => {
+    const { connection, drivers } = await connected()
+
+    const first = upload(connection, 'att-a')
+    await drain()
+    const firstChunkIds = new Set(chunksSent(drivers[0]).map((envelope) => envelope.id))
+    const second = upload(connection, 'att-b')
+    await drain()
+
+    // The success is keyed on the attachment id, so it settles `att-b` even though every envelope
+    // it could name belongs to a transfer that is also live.
+    answer(drivers[0], (plaintext) => {
+      const envelope = decodeEnvelope(plaintext)
+      if (envelope.type !== 'attachment_chunk') return []
+      const payload = envelope.payload as AttachmentChunkPayload
+      return payload.attachment_id === 'att-b' && payload.index === 0
+        ? attachmentStoredReplyFrames(0)(plaintext)
+        : []
+    })
+    await expect(second).resolves.toEqual({ ok: true })
+
+    // The reject is keyed on the envelope id, so it settles only the transfer that minted it.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: encodeEnvelope({
+        id: 901,
+        type: 'error',
+        ts: FIXED_TS,
+        in_reply_to: [...firstChunkIds][0],
+        payload: { code: 'attachment.storage_failed', message: 'nope', retryable: true }
+      })
+    })
+    await expect(first).resolves.toEqual({
+      ok: false,
+      outcome: 'attachment-storage-failed'
+    })
+  })
+
+  it('consumes the correlated reject entirely — no bundle failure, no modal-FIFO shift', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    const bundle: BundleFailReason[] = []
+    connection.requestDebugBundle({
+      complete: () => {},
+      fail: (reason) => void bundle.push(reason)
+    })
+    connection.answerModal({ modal_id: 'modal-1', option_id: 'allow' })
+
+    const result = upload(connection)
+    await drain()
+    const before = emitted(sink).length
+    answer(drivers[0], attachmentRejectReplyFrames(0, 'attachment.invalid_chunk'))
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      outcome: 'attachment-invalid-chunk'
+    })
+    expect(bundle).toEqual([])
+    expect(emitted(sink).slice(before)).toEqual([])
+  })
+
+  it('logs the transfer content-free — no filename, mime type or attachment id in any record', async () => {
+    const captured = captureLog()
+    const ctx = build({ diagnosticLog: captured.log })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    const result = ctx.connection.uploadAttachment({
+      attachment_id: 'att-secret-9f2b',
+      filename: 'quarterly-severance-list.xlsx',
+      mime_type: 'application/vnd.ms-excel',
+      bytes: FILE
+    })
+    await drain()
+    answer(ctx.drivers[0], attachmentStoredReplyFrames(2))
+    await result
+
+    const uploads = captured.records.filter((record) => record.event === 'attachment-upload')
+    expect(uploads.length).toBeGreaterThan(0)
+    for (const record of captured.records) {
+      const line = JSON.stringify(record)
+      expect(line).not.toContain('quarterly-severance-list')
+      expect(line).not.toContain('vnd.ms-excel')
+      expect(line).not.toContain('att-secret-9f2b')
+      expect(line).not.toContain(Buffer.from(FILE.subarray(0, 24)).toString('base64'))
+    }
   })
 })

@@ -467,20 +467,31 @@ The desktop layout's fixed-height row **below** the message box (Figma `110:3494
 child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
 be confused with [Composer status row](#composer-status-row-796), which sits *above* the message box.
 The desktop layout puts five affordances in this row — Actions (#680), permission mode (#682), model and
-effort (#683), this ticket's context-usage reading, and attach (#685) — and at the time #811 shipped, four
-of them were blocked on daemon work that doesn't exist yet. #811 built the row itself and landed the one
-occupant that wasn't blocked; **no placeholder element and no disabled control for the rest**. **#680 is
-the first of the blocked four to land** — it needed no daemon work at all, only the already-shipped
+effort (#683, split into a model half and an effort half by #683's own children), this ticket's
+context-usage reading, and attach (#685) — and at the time #811 shipped, four of them were blocked on
+daemon work that doesn't exist yet. #811 built the row itself and landed the one occupant that wasn't
+blocked; **no placeholder element and no disabled control for the rest**. **#680 is the first of the
+blocked four to land** — it needed no daemon work at all, only the already-shipped
 [options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
-— so two of the row's five slots are occupied today and three (#682, #683, #685) still stay empty:
+— followed by [#988's model menu](composer-model-menu.md), once #974 landed the daemon's published list.
+Three of the row's five slots are occupied today; #682 (permission mode) and #685 (attach) still stay
+empty:
 
 ```
 Composer
 ├── .composer__row              (unchanged — textarea + ComposerSendButton)
 └── .composer__footer           (second child, #811; was the third until #968 retired __hint above)
     ├── ComposerActionsMenu     leading item — opens the shared options panel with sendText (#680)
+    ├── ComposerModelMenu       second item — the session's model, from the same shared panel (#988)
     └── ContextUsageControl     null until a real snapshot has loaded, then <ContextUsageReading/>
 ```
+
+`ComposerModelMenu` inserts itself between Actions and the context reading with no spacer held open for
+\#682's still-unbuilt permission-mode button, which the design places between the two — #682 will insert
+itself there when it lands, per #811's own no-placeholder rule applied a second time. See
+[Composer model menu](composer-model-menu.md) for its three renderings, the CSS extraction it triggered
+on `.composer__actions` (the row's second footer button), and the `.composer-options-anchor` uniqueness
+correction it required.
 
 Through [#968](../codebase/968.md), `.composer`'s first child was `.composer__hint` (#31's not-connected
 caption); it is retired, and `.composer__row` is now `.composer`'s first child.

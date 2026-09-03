@@ -465,7 +465,8 @@ truthiness, since React renders a bare `0` as a text node.
 **The running-model lookup ([§ Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975))
 moves onto these same rows.** `runningPublishedRow` (renamed `publishedRowFor` by
 [#976](https://github.com/pyrycode/pyrycode-desktop/issues/976), which gave it a second caller — see
-§ Run configuration Effort section, daemon-published levels below) joins claude's per-turn announcement
+§ Run configuration Effort section, daemon-published levels below, and exported by
+[#988](composer-model-menu.md) for a third, the composer footer's model menu) joins claude's per-turn announcement
 (`announcedModelStore`) against a published row's `value` by exact equality — not `resolved_model`,
 which the wire contract's join prose excludes and which would give the exactness guard above an
 exception (Haiku's `resolved_model` is a superstring of its own `value`). The lookup stays mostly

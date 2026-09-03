@@ -115,6 +115,60 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
     expect(markup).not.toContain('<p')
   })
 
+  // ==============================================================================================
+  // #864 — the in-flight line. It occupies the SAME SLOT as the terminal (one nullable in the hook,
+  // latest event wins), so what these prove is that the two states are mutually exclusive and that
+  // only one of them is a live region.
+  // ==============================================================================================
+
+  const PROGRESS: AttachmentUploadEvent = {
+    type: 'progress',
+    uploadId: 'u5',
+    sentChunks: 50,
+    totalChunks: 200
+  }
+
+  it('states progress on its own element, carrying the copy module’s figure', () => {
+    const markup = renderToStaticMarkup(<ComposerAttachOutcome outcome={PROGRESS} />)
+    expect(markup).toContain('class="composer__attach-progress"')
+    expect(markup).toContain(attachmentUploadOutcomeCopy(PROGRESS))
+    expect(markup.startsWith('<div')).toBe(true)
+  })
+
+  // ⭐ THE LIVE-REGION DECISION, and the one thing in this slice that could regress a shipped one.
+  // #863 chose role="status" because an outcome fires at most once per attach. Progress fires per
+  // chunk — up to ATTACHMENT_MAX_UPLOAD_CHUNKS times for one file — and a polite live region
+  // announcing each is worse than the silence it replaces. The in-flight line is therefore readable
+  // by browsing and announced by nothing.
+  it('is not a live region while in flight — no status role and no alert role', () => {
+    const markup = renderToStaticMarkup(<ComposerAttachOutcome outcome={PROGRESS} />)
+    expect(markup).not.toContain('role="status"')
+    expect(markup).not.toContain('role="alert"')
+    expect(markup).not.toContain('aria-live')
+  })
+
+  // AC1's second half, as a property of the markup rather than of the hook: the two states cannot both
+  // be on screen, because each render produces exactly one element and it is one or the other.
+  it('never shows a progress line beside a terminal one, in either direction', () => {
+    const inFlight = renderToStaticMarkup(<ComposerAttachOutcome outcome={PROGRESS} />)
+    expect(inFlight).not.toContain('composer__attach-outcome')
+    expect(inFlight.match(/<div/g)).toHaveLength(1)
+
+    const terminal = renderToStaticMarkup(
+      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u6' }} />
+    )
+    expect(terminal).not.toContain('composer__attach-progress')
+    expect(terminal.match(/<div/g)).toHaveLength(1)
+  })
+
+  it('puts the uploadId nowhere in the in-flight markup either', () => {
+    const uploadId = 'b3f1c0de-1111-4000-8000-000000000000'
+    const markup = renderToStaticMarkup(
+      <ComposerAttachOutcome outcome={{ ...PROGRESS, uploadId }} />
+    )
+    expect(markup).not.toContain(uploadId)
+  })
+
   // The uploadId reaches no attribute, no text node and no key. The renderer cannot correlate it to a
   // click anyway (requestAttachmentUpload returns void), so surfacing it could only invite a correlation
   // that does not exist.

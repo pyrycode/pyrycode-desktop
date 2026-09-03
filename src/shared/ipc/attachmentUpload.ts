@@ -83,19 +83,33 @@ export type AttachmentUploadFailure =
   | 'unclassified'
 
 /**
- * The terminal outcomes of one attach intent, discriminated on `type`. Exactly one is pushed per
- * intent that got as far as a chosen file — a CANCELLED picker emits NOTHING at all, which is what
- * makes cancellation a true no-op rather than a fourth outcome the renderer must learn to ignore.
+ * What one attach intent reports, discriminated on `type`. Exactly one TERMINAL — `refused`, `failed`
+ * or `completed` — is pushed per intent that got as far as a chosen file, optionally preceded by any
+ * number of `progress` (#864). A CANCELLED picker emits NOTHING at all, which is what makes
+ * cancellation a true no-op rather than an outcome the renderer must learn to ignore.
  *
  * CONTENT-FREE BY CONSTRUCTION: no member declares a field that can hold the file's bytes, its host
  * path, or its name. `uploadId` is a randomUUID minted per intent and derived from nothing about the
- * file; `reason` is a client-owned literal; `limitBytes` is a client-owned constant. That is what
- * makes "neither the bytes nor the path crosses the bridge" a property of this type rather than a
- * promise about the sender — the same argument PairingStatus makes about the paired-server record.
+ * file; `reason` is a client-owned literal; `limitBytes` is a client-owned constant; the progress
+ * counts are counts of FRAMES. That is what makes "neither the bytes nor the path crosses the bridge"
+ * a property of this type rather than a promise about the sender — the same argument PairingStatus
+ * makes about the paired-server record.
  *
- * ADDITIVE ROOM IS DELIBERATE. #864 adds an in-flight progress member alongside these three, and
- * #890/#891 report their own terminals through the same channel; `uploadId` is what lets a renderer
- * tell two concurrent uploads apart, and what a later progress member correlates on.
+ * ⭐ ONE QUALIFICATION #862'S CONTAINMENT ARGUMENT DID NOT CARRY, added when #864 landed.
+ * #862's property is that a compromised renderer "can make a picker appear; it cannot choose what that
+ * picker opens, and it cannot read back what was sent". `totalChunks` is the first field here derived
+ * from the CHOSEN FILE rather than from a client-owned constant: it states the file's size to within
+ * ATTACHMENT_CHUNK_DATA_BYTES. Shipping a bare percentage instead would withhold nothing — at one
+ * event per chunk a renderer counts the events and derives the same number, so the disclosure is the
+ * emission CADENCE, not the field, and stating it outright is the honest form of it. It is accepted on
+ * its size: a window that already holds the whole conversation timeline learning the approximate size
+ * of a file its own user just picked is far inside the blast radius #862 already accepts. A member
+ * that ever wanted to carry more than a count owes this paragraph a re-read.
+ *
+ * ADDITIVE ROOM IS DELIBERATE. #890/#891 report their own terminals through the same channel;
+ * `uploadId` is what lets a renderer tell two concurrent uploads apart. Nothing in this window can
+ * correlate on it today — `requestAttachmentUpload()` returns void, so a window never learns the id
+ * its own click minted (see useAttachmentUpload).
  */
 export type AttachmentUploadEvent =
   /** This client declined to attempt the file. `limitBytes` is carried so the composer can state the
@@ -106,3 +120,18 @@ export type AttachmentUploadEvent =
   | { type: 'failed'; uploadId: string; reason: AttachmentUploadFailure }
   /** The daemon stored the file. */
   | { type: 'completed'; uploadId: string }
+  /**
+   * The transfer is in flight: `sentChunks` of `totalChunks` chunk envelopes have reached the wire
+   * (#864). NOT a terminal — zero or more of these precede exactly one of the three above, and none
+   * follows one.
+   *
+   * BOTH FIELDS ARE FRAME COUNTS, which is the whole of the content-free argument for this member:
+   * a count cannot hold a byte, a path segment or a name, and the relay observes the same frame count
+   * on the wire in front of it. `sentChunks === totalChunks` means every chunk is out and the host's
+   * answer is still outstanding — the terminal is what says the file was stored.
+   *
+   * WHETHER THIS MEMBER IS EMITTED AT ALL is decided in the background process against one named
+   * chunk threshold (ATTACHMENT_PROGRESS_MIN_CHUNKS, src/main/attachmentUpload.ts), never against a
+   * clock: a small upload costs no IPC at all.
+   */
+  | { type: 'progress'; uploadId: string; sentChunks: number; totalChunks: number }

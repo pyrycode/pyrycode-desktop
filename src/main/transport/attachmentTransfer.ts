@@ -33,6 +33,13 @@
 // barrel (CLAUDE.md "keep the transport out of the window"). It stays IPC-free like the rest of
 // transport/ — daemonConnection owns the IPC boundary, and this slice ships no IPC at all.
 //
+// IT REPORTS THE COUNT UPWARD, AND LOGS NOTHING EXTRA FOR IT (#864). The plan's length and the
+// sentEnvelopes set were both already here and neither was visible above this module, which is why a
+// large upload looked like a hang in the composer. `onProgress` surfaces them and nothing else — no
+// per-chunk log record, because one record per chunk would put up to ATTACHMENT_MAX_UPLOAD_CHUNKS
+// lines in a single upload's debug bundle while the started and settle records already carry the same
+// two figures.
+//
 // CONTENT-FREE LOG. It is the first module in this family that logs anything, and the guarantee is
 // STRUCTURAL: DiagnosticEvent has no field shaped to carry a filename, a path, or payload bytes, so
 // the file's name and contents are unrepresentable in a record. What it writes is a static event
@@ -84,7 +91,19 @@ export type AttachmentTransferResult =
   | { ok: true }
   | { ok: false; outcome: AttachmentTransferFailure }
 
-/** Injected dependencies — the send seam, the yield seam, and the log. */
+/**
+ * How far a transfer has got, reported as it goes (#864): `sentChunks` envelopes of `totalChunks` have
+ * reached the wire. Both are counts of FRAMES — this seam carries nothing about the file, which is
+ * what lets the figure travel all the way to the window.
+ *
+ * IT RETURNS `void` AND THE SEND LOOP NEVER AWAITS IT, and the return type is what keeps that
+ * unavailable rather than merely discouraged. The `yieldToEventLoop` macrotask between chunks exists
+ * so an inbound reject can be observed mid-transfer; awaiting a consumer here would let a slow one
+ * stretch that window arbitrarily and turn a display concern into a transport one.
+ */
+export type AttachmentTransferProgress = (sentChunks: number, totalChunks: number) => void
+
+/** Injected dependencies — the send seam, the yield seam, the progress seam, and the log. */
 export interface AttachmentTransferDeps {
   /**
    * Put ONE chunk on the wire and return the envelope id it went out under. That id is the reject
@@ -101,6 +120,16 @@ export interface AttachmentTransferDeps {
    * out" would be unenforceable. A DI seam like daemonConnection's `now`; tests pin it.
    */
   yieldToEventLoop?: () => Promise<void>
+  /**
+   * Told how far the transfer has got, after each chunk reaches the wire. Optional: the drive is
+   * correct without it, and every caller that predates #864 keeps compiling.
+   *
+   * WHETHER A REPORT BECOMES ANYTHING is not decided here. This module reports every chunk of every
+   * transfer; the threshold that decides whether a small upload is worth saying anything about lives
+   * with the client's other bounds (ATTACHMENT_PROGRESS_MIN_CHUNKS, src/main/attachmentUpload.ts).
+   * Splitting it that way keeps this module free of a display policy it cannot see the consequences of.
+   */
+  onProgress?: AttachmentTransferProgress
   /** The content-free diagnostic log. Optional — absent under test and before the composition root. */
   diagnosticLog?: DiagnosticLog
 }
@@ -177,6 +206,29 @@ export function createAttachmentTransfer(
     deliver(value)
   }
 
+  /**
+   * Say how far the transfer has got (#864), or say nothing because it is over.
+   *
+   * THE SETTLED CHECK IS THE WHOLE OF "no progress survives the terminal", and it is the SAME flag the
+   * send loop re-reads rather than a second rule kept in step with it — a report and a chunk stop for
+   * one reason. It is sound because the check and the call are synchronous with each other: the only
+   * settle that can land mid-drive arrives during the loop's await, never between these two lines.
+   *
+   * The throw is CAUGHT AND DROPPED UNEXAMINED. drive() is documented never to reject and this is the
+   * only foreign callback inside it, so a consumer that throws — a window that went away between the
+   * emitter's liveness check and its send — must not turn `void drive()` into an unhandled
+   * main-process rejection. Nothing about that failure is actionable and its message is not this
+   * module's to read (classify-don't-forward, inherited #62).
+   */
+  function reportProgress(): void {
+    if (settled) return
+    try {
+      deps.onProgress?.(sentEnvelopes.size, chunks.length)
+    } catch {
+      // Dropped: see above.
+    }
+  }
+
   async function drive(): Promise<void> {
     for (const chunk of chunks) {
       // Re-read on every iteration, never cached across the await below: the settle that stops this
@@ -193,6 +245,9 @@ export function createAttachmentTransfer(
         return
       }
       sentEnvelopes.add(envelopeId)
+      // After the set has grown and BEFORE the yield, so the count reported is the one the settle log
+      // would report for the same moment and no report is ever a chunk behind.
+      reportProgress()
       await yieldToEventLoop()
     }
   }

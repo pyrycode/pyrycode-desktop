@@ -415,3 +415,28 @@ is for, which is the honest state of it.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — the three open questions, resolved during implementation
+
+No design changed; recorded so the questions are visibly answered rather than dropped.
+
+1. **The threshold's value** ships as reasoned: `ATTACHMENT_PROGRESS_MIN_CHUNKS = 8`. Nothing in the
+   implementation argued for a different figure, and its test asserts the property that actually
+   matters — an integer strictly inside `ATTACHMENT_MAX_UPLOAD_CHUNKS`, so the feature stays reachable
+   — rather than pinning the number itself, which a later ticket should be free to move.
+2. **The sentence** ships as `Uploading… N%`. Its test asserts it differs from all three terminal
+   sentences, which is the property the shared slot needs: the reader has only the text to tell which
+   state is showing.
+3. **`daemonConnection.test.ts` earned two tests, not one.** The upload block's `connected()` /
+   `answer()` / `drain()` harness made the pass-through test cheap, and writing it surfaced a second
+   worth having: the `not-connected` early return resolves before a transfer exists, so a request made
+   while disconnected reports no progress at all. That arm is only observable at this layer — the flow
+   module sees a resolved result and the transport is never constructed.
+
+One implementation detail worth naming for a later reader: the shared-union change is RED under
+`npm run typecheck` and GREEN under `vitest` from the start, because vitest does not typecheck and the
+positive `Object.keys` walk passes on the object literal at runtime regardless. The typechecker is the
+gate that actually holds `AttachmentUploadEvent`'s shape, which is the same reason
+`attachmentUploadOutcomeCopy`'s missing `default` is load-bearing.

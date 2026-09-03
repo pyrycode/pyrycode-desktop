@@ -84,6 +84,31 @@ const FAILURE_COPY_BY_REASON = new Map<string, string>(
  *  reachable through a non-conforming sender, which is the whole reason the `Map` above exists. */
 const UNREPRESENTABLE_FAILURE_COPY = ATTACHMENT_UPLOAD_FAILURE_COPY.unclassified
 
+/**
+ * How far the transfer has got, as a whole percent (#864).
+ *
+ * TOTAL AGAINST ANY INPUT, and that is not defensive habit — it is the same argument
+ * FAILURE_COPY_BY_REASON's `Map` makes one constant down. These two counts arrive off
+ * `ipcRenderer.on`, where the declared type is the compile-time half only and nothing validates the
+ * value that actually crosses. Against a bare `(sent / total) * 100` a zero total renders "NaN%" out
+ * of the composer, which is a worse answer than any number.
+ *
+ * `Number.isFinite` AND NEVER THE GLOBAL `isFinite`. The global COERCES its argument, so
+ * `isFinite('5')` is `true` and a string count would reach the arithmetic; `Number.isFinite` returns
+ * false for every non-number, which is the totality this boundary needs.
+ *
+ * FLOORED, so the figure only ever understates. 100 means every chunk is on the wire and the host's
+ * answer is still outstanding — which is exactly what "how far the transfer has got" measures, and
+ * the terminal is what says the file was stored. Capping at 99 to reserve the figure would leave the
+ * reading permanently short of the number it counts towards.
+ *
+ * Exported for its own tests; it has no other caller.
+ */
+export function uploadProgressPercent(sentChunks: number, totalChunks: number): number {
+  if (!Number.isFinite(sentChunks) || !Number.isFinite(totalChunks) || totalChunks <= 0) return 0
+  return Math.min(100, Math.max(0, Math.floor((sentChunks / totalChunks) * 100)))
+}
+
 /** The acknowledgement a stored file gets. It exists because #815 has not landed: until a file row
  *  appears in the message bubble, this sentence is the ONLY evidence anywhere that an upload stored
  *  anything, and a silent success would be indistinguishable from a cancelled picker. */
@@ -92,9 +117,14 @@ const COMPLETED_COPY = 'File attached.'
 /**
  * The sentence for one outcome.
  *
- * An explicit return type and NO `default` on the switch, so a fourth member of `AttachmentUploadEvent`
- * (#864 adds in-flight progress) trips TS2366 here rather than falling through to a blank line — the
- * `relayLeg` / `daemonLeg` discipline, one directory over.
+ * An explicit return type and NO `default` on the switch, so a member added to
+ * `AttachmentUploadEvent` trips TS2366 here rather than falling through to a blank line — the
+ * `relayLeg` / `daemonLeg` discipline, one directory over. That check has fired for real: #864's
+ * in-flight `progress` reached this switch through it.
+ *
+ * NOT EVERY ARM IS A TERMINAL any more. `progress` is in-flight and is stated in the same slot the
+ * terminal will occupy, so its sentence has to be distinguishable from all three of them by text
+ * alone — the reader has nothing else to go on.
  *
  * NO ARM INTERPOLATES `reason`. `` `Upload failed: ${reason}` `` compiles and renders a client-owned
  * literal, so it is neither an injection nor a length hazard — but it makes the rendered sentence
@@ -115,6 +145,13 @@ export function attachmentUploadOutcomeCopy(event: AttachmentUploadEvent): strin
       return FAILURE_COPY_BY_REASON.get(event.reason) ?? UNREPRESENTABLE_FAILURE_COPY
     case 'completed':
       return COMPLETED_COPY
+    case 'progress':
+      // THE FIGURE IS THIS CLIENT'S OWN ARITHMETIC over two counts it computed, which is why it may be
+      // interpolated where `reason` may not: the rule one docblock up is about a daemon-SELECTED value
+      // reaching the sentence, and `formatByteLimit`'s use in the `refused` arm is the precedent for a
+      // computed number in one. The chunk counts themselves are not spelled out — what the composer
+      // states is how far, not how the transport happens to be chunked.
+      return `Uploading… ${uploadProgressPercent(event.sentChunks, event.totalChunks)}%`
   }
 }
 

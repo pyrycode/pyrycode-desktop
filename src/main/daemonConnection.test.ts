@@ -6927,6 +6927,44 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
     expect(emitted(sink).slice(before)).toEqual([])
   })
 
+  // #864: the hop itself. The transfer reports and the flow module decides; this proves the middle
+  // passes the figure through unchanged and stops reporting when the daemon's answer settles it.
+  it('forwards the chunk count to a progress listener and stops at the stored answer', async () => {
+    const { connection, drivers } = await connected()
+    const reports: Array<[number, number]> = []
+
+    const result = connection.uploadAttachment(
+      { attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
+      (sent, total) => void reports.push([sent, total])
+    )
+    await drain()
+    // The daemon answers the chunk whose ARRIVAL completed the transfer — index 2 here — which is the
+    // success key this leg correlates on.
+    answer(drivers[0], attachmentStoredReplyFrames(2))
+    await expect(result).resolves.toEqual({ ok: true })
+
+    expect(reports).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3]
+    ])
+  })
+
+  it('reports no progress at all when there is no live session to send on', async () => {
+    // The not-connected early return resolves before a transfer exists, so there is nothing to report
+    // and the composer never shows a line for an upload that never started.
+    const { connection } = build()
+    const reports: number[] = []
+
+    await expect(
+      connection.uploadAttachment(
+        { attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
+        (sent) => void reports.push(sent)
+      )
+    ).resolves.toEqual({ ok: false, outcome: 'not-connected' })
+    expect(reports).toEqual([])
+  })
+
   it('logs the transfer content-free — no filename, mime type or attachment id in any record', async () => {
     const captured = captureLog()
     const ctx = build({ diagnosticLog: captured.log })

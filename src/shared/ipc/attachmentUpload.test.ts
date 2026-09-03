@@ -47,18 +47,51 @@ describe('AttachmentUploadEvent', () => {
     const members: AttachmentUploadEvent[] = [
       { type: 'refused', uploadId: 'u', reason: 'too-large', limitBytes: 1 },
       { type: 'failed', uploadId: 'u', reason: 'unreadable' },
-      { type: 'completed', uploadId: 'u' }
+      { type: 'completed', uploadId: 'u' },
+      // #864's in-flight member. Its two fields are FRAME COUNTS: neither can hold a byte of the
+      // file, a path segment or a name, which is what keeps the union's argument covering every
+      // member after this slice.
+      { type: 'progress', uploadId: 'u', sentChunks: 1, totalChunks: 2 }
     ]
 
     expect(members.map((member) => Object.keys(member).sort())).toEqual([
       ['limitBytes', 'reason', 'type', 'uploadId'],
       ['reason', 'type', 'uploadId'],
-      ['type', 'uploadId']
+      ['type', 'uploadId'],
+      ['sentChunks', 'totalChunks', 'type', 'uploadId']
     ])
   })
 
-  it('discriminates on type across all three members', () => {
-    const seen = new Set<AttachmentUploadEvent['type']>(['refused', 'failed', 'completed'])
-    expect(seen.size).toBe(3)
+  // #864: the two counts are NUMBERS on every member that carries one, walked positively so a member
+  // that later carried a count as a string — the shape `uploadProgressPercent` has to be total
+  // against — would have to be added here to pass.
+  it('carries every count as a number, never as a string', () => {
+    const progress: AttachmentUploadEvent = {
+      type: 'progress',
+      uploadId: 'u',
+      sentChunks: 7,
+      totalChunks: 240
+    }
+    const refused: AttachmentUploadEvent = {
+      type: 'refused',
+      uploadId: 'u',
+      reason: 'too-large',
+      limitBytes: 23_040_000
+    }
+    expect([
+      typeof progress.sentChunks,
+      typeof progress.totalChunks,
+      typeof refused.limitBytes
+    ]).toEqual(['number', 'number', 'number'])
+  })
+
+  it('discriminates on type across all four members', () => {
+    const seen = new Set<AttachmentUploadEvent['type']>([
+      'refused',
+      'failed',
+      'completed',
+      'progress'
+    ])
+    expect(seen.size).toBe(4)
   })
 })

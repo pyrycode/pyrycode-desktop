@@ -33,7 +33,10 @@ import { randomUUID } from 'node:crypto'
 import { ATTACHMENT_CHUNK_DATA_BYTES, ATTACHMENT_FILENAME_MAX_BYTES } from '../shared/wire/types'
 import type { AttachmentUploadEvent } from '../shared/ipc/attachmentUpload'
 import type { AttachmentChunkPlanInput } from './transport/attachmentChunkPlan'
-import type { AttachmentTransferResult } from './transport/attachmentTransfer'
+import type {
+  AttachmentTransferProgress,
+  AttachmentTransferResult
+} from './transport/attachmentTransfer'
 import type { DiagnosticLog } from './diagnosticLog'
 
 /**
@@ -51,6 +54,24 @@ import type { DiagnosticLog } from './diagnosticLog'
  */
 export const ATTACHMENT_MAX_UPLOAD_CHUNKS = 512
 export const ATTACHMENT_MAX_UPLOAD_BYTES = ATTACHMENT_MAX_UPLOAD_CHUNKS * ATTACHMENT_CHUNK_DATA_BYTES
+
+/**
+ * The plan size at which one upload starts saying how far it has got (#864) — the whole of "whether
+ * progress is reported at all", in one constant, expressed in CHUNKS and never in a clock.
+ *
+ * Eight chunks is 360000 raw bytes and ~480000 base64 characters on the wire: about half a second at
+ * the 1 MB/s effective uplink ATTACHMENT_MAX_UPLOAD_CHUNKS above reasons in. Below that a progress
+ * line appears and vanishes inside one blink, which reads as a glitch rather than as reassurance —
+ * worse than the silence it replaces. Above it, a transfer is long enough that silence reads as a
+ * hang, which is the problem the feature exists for.
+ *
+ * A CHUNK COUNT RATHER THAN A DURATION, deliberately, and that is what makes the decision the same on
+ * a fast link and a slow one: a clock would report on a small file over a bad connection and stay
+ * silent on a large one over a good one, which is the opposite of what either user needs. It also
+ * means the decision can be made HERE, in the background process, before any message crosses — so a
+ * small upload costs no IPC at all rather than costing some and being filtered in the window.
+ */
+export const ATTACHMENT_PROGRESS_MIN_CHUNKS = 8
 
 /** The static event name every record from this module carries. */
 const LOG_EVENT = 'attachment-pick'
@@ -82,8 +103,17 @@ const MIME_TYPES = new Map<string, string>([
 
 /** The injected collaborators, all Electron-free so the flow unit-tests without a window. */
 export interface AttachmentUploadDeps {
-  /** #861's send driver — `connection.uploadAttachment`. Documented never to reject. */
-  upload: (input: AttachmentChunkPlanInput) => Promise<AttachmentTransferResult>
+  /**
+   * #861's send driver — `connection.uploadAttachment`. Documented never to reject.
+   *
+   * `onProgress` is handed down to the transfer, which calls it after each chunk reaches the wire
+   * (#864). It is optional on the driver's own signature, so a caller here always passes one and a
+   * driver is free to ignore it.
+   */
+  upload: (
+    input: AttachmentChunkPlanInput,
+    onProgress?: AttachmentTransferProgress
+  ) => Promise<AttachmentTransferResult>
   /** The one path to the window: a `sender`-closed push on ATTACHMENT_UPLOAD_EVENT_CHANNEL. */
   emit: (event: AttachmentUploadEvent) => void
   /** The one content-free logger (#126). Optional: the flow is correct without it. */
@@ -192,7 +222,8 @@ function reportRefused(uploadId: string, bytes: number, deps: AttachmentUploadDe
 }
 
 /**
- * The flow from the size guard on: guard, declare, drive, report exactly one terminal.
+ * The flow from the size guard on: guard, declare, drive, say how far it got, report exactly one
+ * terminal. Progress (#864) is optional and comes first; the terminal is neither.
  *
  * The `reason: result.outcome` assignment is the COMPILE-FORCED check that AttachmentUploadFailure
  * still covers every AttachmentTransferFailure — shared cannot import the transport's union, so a
@@ -210,20 +241,44 @@ async function driveUpload(
 
   deps.diagnosticLog?.event({ event: LOG_EVENT, code: 'started', bytes: file.bytes.length })
 
+  // #864's two guards, both read on every report and neither derived from a clock.
+  //
+  // THE THRESHOLD IS EVALUATED PER REPORT rather than once, because the total is not known until the
+  // driver has built the plan and this module never builds one. It is a comparison of two integers;
+  // what matters is that it is answered here, before anything crosses, so a small upload costs no IPC.
+  //
+  // `terminal` IS A SECOND GUARD OVER THE TRANSFER'S OWN, in a different module and over different
+  // state, and it is this module's established posture rather than an invented defence: the catch
+  // below already backstops `upload`'s documented never-rejects on the explicit grounds that a
+  // contract is not a guarantee for an INJECTED seam. A report arriving after the answer is exactly
+  // the shape that would leave a stale percentage on screen with no terminal left to replace it.
+  let terminal = false
+  const onProgress: AttachmentTransferProgress = (sentChunks, totalChunks) => {
+    if (terminal || totalChunks < ATTACHMENT_PROGRESS_MIN_CHUNKS) return
+    deps.emit({ type: 'progress', uploadId, sentChunks, totalChunks })
+  }
+
   let result: AttachmentTransferResult
   try {
-    result = await deps.upload({
-      attachment_id: uploadId,
-      filename: trimToBytes(file.filename, ATTACHMENT_FILENAME_MAX_BYTES),
-      mime_type: file.mimeType,
-      bytes: file.bytes
-    })
+    result = await deps.upload(
+      {
+        attachment_id: uploadId,
+        filename: trimToBytes(file.filename, ATTACHMENT_FILENAME_MAX_BYTES),
+        mime_type: file.mimeType,
+        bytes: file.bytes
+      },
+      onProgress
+    )
   } catch {
     // uploadAttachment is documented never to reject, so this is a backstop rather than a live
     // branch — but AC4 is that NO path here leaves an unhandled rejection, and a contract is not a
     // guarantee. The caught object is dropped: it could echo the file's base64.
     result = { ok: false, outcome: 'send-failed' }
   }
+
+  // Set before either arm emits and with no await in between, so there is no gap in which a late
+  // report could reach the window between the answer and the terminal that replaces it.
+  terminal = true
 
   if (result.ok) {
     deps.diagnosticLog?.event({ event: LOG_EVENT, code: 'completed' })
@@ -238,7 +293,9 @@ async function driveUpload(
  * Upload the file at `path`, or say why not. The entry for a picked file (#862) and for a dropped
  * one (#890), which resolves its path in the preload and joins here.
  *
- * Exactly one event is emitted per call, and the id it carries is minted here — `randomUUID`, so it
+ * Exactly one TERMINAL is emitted per call — preceded, for a transfer over
+ * ATTACHMENT_PROGRESS_MIN_CHUNKS, by a report per chunk that reached the wire (#864). Every event of
+ * one call carries the same id, and that id is minted here — `randomUUID`, so it
  * is derived from nothing about the file and is unique across concurrently live transfers, which is
  * `uploadAttachment`'s stated precondition rather than something it enforces. Never rejects.
  */

@@ -25,14 +25,23 @@ that region is now empty above this row):
 └── Composer
 ```
 
-**Never returns `null` — the one deliberate departure from every sibling indicator's zero-footprint
-posture (AC2).** `ApiRetryIndicator`/`CompactingIndicator`/`StallIndicator`/`ThinkingIndicator` itself all
-still return `null` at rest; this row's *height* is what must be reserved regardless, so the composer no
-longer moves under the operator's cursor each time the label appears or disappears — the same reasoning
-`ComposerSendButton` (#678) already applies to never returning `null` either. A turning icon beside no
-label is consequently a **legal, expected** render (a live api-retry or compaction still supersedes the
-label per #493/#496 while the raw phase reading keeps the icon turning) and the held height is what makes
-that read as intentional rather than broken.
+**Never returns `null` — the one deliberate departure from `ThinkingIndicator`'s own zero-footprint
+posture (AC2).** `ThinkingIndicator` still returns `null` at rest; this row's *height* is what must be
+reserved regardless, so the composer no longer moves under the operator's cursor each time the label
+appears or disappears — the same reasoning `ComposerSendButton` (#678) already applies to never returning
+`null` either.
+
+**Through #963, a turning icon beside no label was a legal, expected render** — a live api-retry or
+compaction superseded the label (per #493/#496) while the raw phase reading (`isRunning`) kept the icon
+turning regardless, and the held height was what made that read as intentional rather than broken.
+[**#967**](https://github.com/pyrycode/pyrycode-desktop/issues/967) **closed that state as a side effect
+of folding retry, compacting and stall into the label's own union** (see [Thinking / working
+indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+below) rather than by coupling the two gates: the icon still turns on the raw `isRunning`, and whenever
+that holds the label is now non-null in every case (retrying, compacting, stalled, or thinking/working),
+so the icon can no longer turn beside nothing. The converse is still reachable and still intended: a
+stall or a held retry at `idle` shows its label beside a still icon — the folded statuses are not gated
+on a running turn (see below).
 
 **`isRunning: boolean`, not `phase: TurnPhase` — the `ComposerSendButton` precedent, not a new one.** The
 view structurally cannot receive the store enum, so `'idle'` is not representable inside the spinning
@@ -92,15 +101,24 @@ the line either). All three links are required; dropping any one reopens the #64
 exists to close. `text-overflow` needs a block container and the label is a `<span>` — it works because a
 flex item is blockified, the load-bearing detail nearest a future "make it a span again" refactor.
 
-**Scope boundary, held exactly as ticketed.** `ApiRetryIndicator`, `CompactingIndicator`, and
-`StallIndicator` keep their pre-#796 mount site (right after `Timeline`), their bubble treatments, and
-their mutual precedence rule — none of that was reopened. Only `ThinkingIndicator`'s markup moved. One
-second-order consequence: `.conversation__thinking` no longer changes the thread's viewport size when it
-mounts or unmounts, because it now lives inside a row that is *always* mounted — see the **Thread scroll
-pin** edge case below, where `thread-scroll-pin.spec.ts`'s fourth criterion had to be repointed onto the
-stall indicator for exactly this reason. `conversation__thinking` itself is **retained**
-as a class on the label purely as an identity hook (two Electron-launch e2e specs locate it as their
-turn-liveness gate) — it styles nothing any more; that is ordinary BEM, not drift.
+**Scope boundary, held through #796 and reopened by #967.** Through #796, `ApiRetryIndicator`,
+`CompactingIndicator`, and `StallIndicator` kept their pre-#796 mount site (right after `Timeline`),
+their bubble treatments, and their mutual precedence rule — none of that was reopened by #796. #967 is
+what reopened it: those three views, their mount site, their bubbles, and seven CSS rules are gone, and
+the precedence they used to hold via separate DOM adjacency now lives entirely inside
+`workingIndicatorState`'s four-way order — see [Thinking / working
+indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+above for the retirement and the new order.
+
+One second-order consequence that predates #967 and is unaffected by it: `.conversation__thinking` no
+longer changes the thread's viewport size when it mounts or unmounts, because it now lives inside a row
+that is *always* mounted — see the **Thread scroll pin** edge case in [Conversation
+shell](conversation-shell.md#edge-cases-and-limitations), where `thread-scroll-pin.spec.ts`'s fourth
+criterion was repointed by #796 onto the (now also folded) stall indicator, and repointed again by #967
+onto the queued backlog. `conversation__thinking` itself is **retained** as a class on the label purely
+as an identity hook (two Electron-launch e2e specs locate it as their turn-liveness gate, and it is now
+also the one element all five status-row states share) — it styles nothing any more; that is ordinary
+BEM, not drift.
 
 **Test-file vacuity repoint, the same hazard the row's own class-string rename created elsewhere.** Once
 `bubble--thinking` exists nowhere in production, the three pre-existing `ConversationScreen.test.tsx`
@@ -316,6 +334,54 @@ still has no confirmation step, and this ticket makes the control markedly more 
 button replacing a bare de-emphasised text button) — accepted because the consequence is bounded and
 recoverable (re-pair by scanning a QR) and a confirm step on an already-terminal state is pure friction,
 per #167's original rationale.
+
+## Retry, compacting and stall fold into the label (#967)
+
+Operator ruling, 2026-09-02: the three loose statuses that used to float between `Timeline` and the
+queued backlog — #493's API-retry, #496's compaction, #317's stall — go into this row. The design draws
+one row with one label; nothing else sits in this region any more. `ComposerStatusArea` itself is
+**untouched by this ticket** — same `isRunning`/`children`/`trailing` shape, same never-`null` posture,
+same icon gate. What changed is entirely inside `ThinkingIndicator` and the derivations that feed it; see
+[Thinking / working
+indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+above for the full design (the four-way precedence order, the widened `WorkingIndicatorState` union, the
+`ThreadStatus.stalled` field and why it's a field rather than a #650-style wrapper, the label-copy
+derivation, and the retired views' CSS). This section covers only what is specific to the row itself.
+
+**The two facts AC2 pins, both already true of this row's shipped behaviour and neither reopened here.**
+The three folded statuses are **not gated on a running turn** — they render even at `phase: 'idle'`,
+exactly as their retired standalone views did — and the row's height does not move regardless of which of
+the five states the label carries, the same invariant [the row that grows to fit
+it](#actionable-error-button-and-the-row-that-grows-to-fit-it-963) established for the `trailing` slot's
+two occupants. Both hold by
+construction: the label change is colour-only (`.composer-status__label--stalled`) with no type, box, or
+line-height change, and the three early returns in `workingIndicatorState` sit *above*
+`shouldShowThinking`'s running-turn gate rather than behind it.
+
+**The truncation chain gains a new terminus and stays intact.** `.composer-status__activity`'s
+`flex: 1 1 auto; min-width: 0` → `.composer-status__label--tool`'s `overflow: hidden; text-overflow:
+ellipsis; white-space: nowrap` chain (see [Composer status row § the truncation
+bound](#composer-status-row-796) above) was measured against the daemon's tool name; it is unaffected by
+the fold, since the tool name is now scoped to the working/thinking state alone (the three superseding
+states never reach `.composer-status__label--tool`). The retry counter is bounded a different way — two
+guaranteed JS numbers, at most 24 characters each once stringified — rather than by the ellipsis chain, so
+no new measurement was needed for it.
+
+**e2e.** `stall-bundle.spec.ts` and `thread-scroll-pin.spec.ts` both needed re-pointing off the retired
+`.conversation__stall`/`.bubble--stall` classes onto the row's shared label element, discriminating on
+**exact text** rather than visibility — see [Thinking / working indicator § Retired by
+\#967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+above and the **Thread scroll pin** edge case in [Conversation
+shell](conversation-shell.md#edge-cases-and-limitations) for the two-step repair `thread-scroll-pin.spec.ts`
+needed and the pre-existing pin gap it surfaced ([#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009), not fixed here).
+
+Security review PASS (builder self-review) — no IPC channel, no bridge API, no file, no socket, no key
+material, no log call and no async work added; the only untrusted-to-trusted crossing in play
+(`parseApiRetryPayload`'s `requireNumber` narrowing) was already built and confirmed rather than assumed.
+One accepted, unfixed trade named rather than patched: one label slot means a daemon that pins a live
+retry now also suppresses the stall label, where before the two showed on separate surfaces — a loss of
+information, not of function (the icon still turns, the timeline still streams), and inherent to "one
+label, one order" per the 2026-09-02 ruling rather than a defect in it.
 
 ## Message box (#951)
 

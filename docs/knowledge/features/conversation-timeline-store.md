@@ -17,7 +17,7 @@ the coarse `message`/`message_chunk` path imports or is changed by either new fi
 [#214](../codebase/214.md) added a third arm to `translateTimelineEvent`'s owned block, `turnState` —
 the transport slice that finally feeds `phase` a live value. `selectPhase` now has a real upstream
 source; [#215](../codebase/215.md) gave it its first reader, `ConversationScreen`'s `ThinkingIndicator`
-(see [Conversation shell § Thinking indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650)).
+(see [Conversation shell § Thinking indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
 
 [#217](../codebase/217.md) added a fourth arm, `toolUse` — the tool-call enrichment of the same v2
 interactive stream. Unlike the three arms before it, this is the first whose mapping produces a
@@ -133,7 +133,7 @@ through unchanged — the deliberate inverse of `stalled`, since content can arr
 compiler-invisible early-outs (`turnState`'s no-churn guard, `reconnected`'s `nothingLive`
 predicate) gained a matching widened clause, the same shape as `stalled`'s guard in #317.
 `selectLocalSendPending` joins the read surface. See [Conversation shell § Thinking / working
-indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650)
+indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
 for the view-side composition.
 
 [#643](../codebase/643.md) widened the fourth owned arm, `toolUse` ([#217](../codebase/217.md)) — no
@@ -252,7 +252,7 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   than restated. `localSendPending` now reaches that same function as one of the six
   [keyed-holder](conversation-timeline-holder.md) fields the container destructures. See
   [Conversation shell § Thinking / working
-  indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650).
+  indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
 
 ## Edge cases and limitations
 

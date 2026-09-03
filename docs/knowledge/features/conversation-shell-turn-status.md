@@ -1,6 +1,6 @@
 # Conversation shell — turn status surfaces
 
-What the screen shows while a turn is running: the timeline render, the thinking indicator, the background-task panel, and the retry, compacting and stall indicators.
+What the screen shows while a turn is running: the timeline render, the composer status row's single label (thinking/working, retry, compacting, or stalled — folded into one view by #967), and the background-task panel.
 
 Part of [Conversation shell](conversation-shell.md); see that document for what the screen does, its edge cases and its links.
 
@@ -213,21 +213,26 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
-## Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650)
+## Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650, folds in retry, compacting and stall since #967)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
 rather than the `items` list. Through #796 it mounted immediately after `Timeline`; **since
 [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) it mounts as the sole child of
 `ComposerStatusArea`**, the fixed-height row directly above the composer — see [Composer status
-row](conversation-shell-composer.md#composer-status-row-796) below for the row itself:
+row](conversation-shell-composer.md#composer-status-row-796) below for the row itself. **Since
+[#967](https://github.com/pyrycode/pyrycode-desktop/issues/967) this is the row's only occupant, full
+stop** — the region between `Timeline` and the queued backlog, which through #796 still held three loose
+null-at-rest bubble blocks (`ApiRetryIndicator`, `CompactingIndicator`, `StallIndicator`, see below), is
+now empty, and their copy is a wider `state` union on this one view instead:
 
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
 └── ComposerStatusArea         isRunning={isTurnRunning(phase)}
     └── ThinkingIndicator      state={workingIndicatorStateWithLocalSend(
-                                         { phase, apiRetry, compacting }, localSendPending)}
+                                         { phase, apiRetry, compacting, stalled }, localSendPending)}
                                 toolName={openToolName(items)}
+                                retry={apiRetry}
 ```
 
 The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
@@ -246,26 +251,57 @@ tint — both labels are still static, client-owned constants, never `phase` its
 
 **Union input, not `phase` and not a `string` — the label CHOICE stays a type-level guarantee; naming
 the tool is a deliberate, narrow exception to it, since [#649](../codebase/649.md).** The view's `state`
-prop is `state: WorkingIndicatorState | null` (`WorkingIndicatorState = 'thinking' | 'working'`), never
-`phase: TurnPhase` (which would make the illegal `'idle'` branch representable) and never a plain
-`string` (which would reopen the hole the type exists to close). Through #648 this was "no
-daemon-supplied string is rendered by this slice, full stop" — the prop's only inhabitants were two
-client-owned literals and `null`. #649 named the daemon's currently-open tool in the label (per the
-operator's 2026-08-20 decision: the tool row two lines above the indicator already renders the same
-`name` as an escaped inert React child, so the indicator adds no new exposure) and had to reverse that
-guarantee to do it. What survives, narrowed rather than dropped: the **label choice** (`state`) is still
-a closed client-owned union, unwidened; the daemon string rides a second, separately-typed, *required*
-`toolName: string | null` prop; the fixed copy around the name (`toolWorkingCopy`) stays a client-owned
-constant; and the name reaches the DOM only as an auto-escaped text child, never through an HTML sink.
-`state === null` is checked first, so #493's and #496's supersede rules still hide the indicator entirely
-in either phase — an open tool cannot resurrect it. The container does both derivations
-(`workingIndicatorState` and `openToolName`) over values it already holds, not the view. No animation
-shipped (an optional pulse was explicitly non-load-bearing per spec); through #796 the interim treatment
-stayed deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
-dedicated working-indicator node. **#796 is the deferred desktop-design pass this paragraph used to await**
-— the desktop layout's own Figma node (`111:3525`) exists, and consuming it moved the label off the
-daemon-bubble surface into the fixed-height row above the composer and added the one genuinely new piece,
-a turning icon; see [Composer status row](conversation-shell-composer.md#composer-status-row-796) below.
+prop is `state: WorkingIndicatorState | null`, never `phase: TurnPhase` (which would make the illegal
+`'idle'` branch representable) and never a plain `string` (which would reopen the hole the type exists to
+close). Through #648 this was "no daemon-supplied string is rendered by this slice, full stop" — the
+prop's only inhabitants were two client-owned literals and `null`. #649 named the daemon's currently-open
+tool in the label (per the operator's 2026-08-20 decision: the tool row two lines above the indicator
+already renders the same `name` as an escaped inert React child, so the indicator adds no new exposure)
+and had to reverse that guarantee to do it. What survives, narrowed rather than dropped: the **label
+choice** (`state`) is still a closed client-owned union — **widened from two members to five by #967**
+(`'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled'`), and #967's own comment is explicit
+that this is a *different* act from the one #649 refused: every added member is another client-owned
+literal, so the label choice stays a closed set of this file's own constants rather than dissolving into
+the daemon's vocabulary. The daemon's two contributions still ride their own separately-typed, *required*
+props: the tool name on `toolName: string | null` (`toolWorkingCopy` keeps its client-owned copy around
+it, and the name reaches the DOM only as an auto-escaped text child, never through an HTML sink), and —
+new in #967 — the retry counter's two integers on `retry: ApiRetryStatus | null` (no string field, so the
+"this prop structurally cannot carry a daemon string" guarantee `ApiRetryIndicator` used to hold on its
+own is preserved verbatim on the merged view). Both are required for `toolName`'s own recorded reason: an
+optional prop lets the container silently omit it, and nothing in this repo could catch that since every
+container test renders the initial store, so `tsc` is the only available detector and the type must be
+the one that fails.
+
+**The tool name is scoped to the working/thinking state alone — reversed by #967.** Until #967 the
+`state === null` guard was what enforced #493's and #496's supersede rules, and the tool name then won
+over the phase-derived copy: `toolName !== null ? toolWorkingCopy(toolName) : …`, safe only because a
+live retry or compaction made `state` null and the component returned before reaching the label. Now
+that all five states share the one slot, `state === 'retrying'` with a tool still open is *reachable*,
+and the old order would have rendered the tool name where the row must say `API_RETRY_COPY`. So one
+`const toolLabel = (state === 'thinking' || state === 'working') && toolName !== null ?
+toolWorkingCopy(toolName) : null` now drives both the label and the `--tool` modifier — one expression
+rather than two conditions that have to independently agree — and the three superseding states outrank
+it unconditionally. `{ state: 'thinking', toolName: 'Bash' }` stays well-defined rather than illegal (the
+daemon flips to `responding` on the first tool step, so it is a defined edge, not a defended one); an
+open tool during a live retry or compaction is now equally well-defined and renders the state's own copy.
+No animation shipped (an optional pulse was explicitly non-load-bearing per spec); through #796 the
+interim treatment stayed deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`,
+node `16-8`) has no dedicated working-indicator node. **#796 is the deferred desktop-design pass this
+paragraph used to await** — the desktop layout's own Figma node (`111:3525`) exists, and consuming it
+moved the label off the daemon-bubble surface into the fixed-height row above the composer and added the
+one genuinely new piece, a turning icon; see [Composer status
+row](conversation-shell-composer.md#composer-status-row-796) below.
+
+**The label is a single text child in every one of the five states, never constant-plus-span.** That is
+load-bearing for the truncation bound: one text run ellipsizes as one unit, so on overflow the client `…`
+is truncated away and replaced by the ellipsis the truncation itself draws — two runs would render two
+ellipses. `ApiRetryIndicator`'s retired bubble *did* render constant-plus-span (`.api-retry__counter`,
+CSS deleted with it), which is exactly why the counter is interpolated into the label's own string
+instead (`apiRetryLabel`, below) rather than carried in a nested span. The class attribute keeps its
+shipped order and appends at most one modifier: `conversation__thinking composer-status__label`, plus
+` composer-status__label--tool` in the working/thinking state with a name, or
+` composer-status__label--stalled` in the stalled state — mutually exclusive by construction, since
+`toolLabel` is `null` in every superseding state.
 
 **Opens locally on send since [#650](../codebase/650.md), closes robustly.** Through #649 the
 indicator stayed dark from Enter until the daemon's first event — the composer's optimistic echo
@@ -304,20 +340,78 @@ deferred stale-open-`toolCall` risk (cross-referenced against pyrycode #1243), a
 repair it forced.
 
 **Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md), broadened
-in [#648](../codebase/648.md), composed on — not touched — by [#650](../codebase/650.md):**
-`shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
-status.apiRetry === null && !status.compacting` — reusing the same `isTurnRunning` predicate the
-composer's stop variant gates on (`thinking || responding`), rather than the bare `phase ===
-'thinking'` comparison #215 shipped. A separate, new `workingIndicatorState(status)` composes **on top
-of** that gate rather than folding into it: `null` when `!shouldShowThinking(status)`, else `'thinking'`
-when `status.phase === 'thinking'`, else `'working'` (`'idle'` is unreachable in that second branch
-because the gate already excluded it). `shouldShowThinking` itself keeps its name, its `ThreadStatus`
-parameter, its `boolean` return, and both supersede clauses (`apiRetry === null && !compacting`)
-textually untouched — while either is live, the corresponding status below still supersedes this
-indicator, in **either** running phase now, not only `thinking`. #496 extended the same `ThreadStatus`
-record and predicate by exactly one field and one clause — the seam #493 built by name for this ticket,
-not a second parallel gate. See [Api-retry indicator](#api-retry-indicator-493) and [Compacting
-indicator](#compacting-indicator-496) below.
+in [#648](../codebase/648.md), composed on — not touched — by [#650](../codebase/650.md), widened into a
+four-way precedence by [#967](https://github.com/pyrycode/pyrycode-desktop/issues/967).**
+`shouldShowThinking(status)` is unchanged since #496 — `isTurnRunning(status.phase) &&
+status.apiRetry === null && !status.compacting` — and after #967 it answers a **narrower** question than
+its name once implied: not "does anything show", but whether the *working* label specifically shows,
+now that a stall can also occupy the slot. It keeps its name, its `ThreadStatus` parameter, its `boolean`
+return, and both supersede clauses textually untouched, deliberately: they are #493's and #496's standing
+regression evidence, the predicate is exported and independently tested, and — per #650's own comment,
+trued up by #967 — one order living in one function is what keeps the supersede facts from drifting into
+two places. It gains **no** `stalled` clause of its own.
+
+**`workingIndicatorState(status)` is where the four-way order actually lives, since #967:**
+
+| Order | State | Why |
+| --- | --- | --- |
+| 1 | `'retrying'` | a live rising/falling-edge signal — claude is re-attempting a failed API call |
+| 2 | `'compacting'` | the same kind of signal; the two never overlap in practice, retry wins if they do |
+| 3 | `'stalled'` | a one-shot onset with no clearing frame, cleared only by the next turn activity — the two live signals still outrank it, but it is the more useful of two compatible facts (stalled, working) while it lasts |
+| 4 | `'thinking'` / `'working'` | what `shouldShowThinking` + the raw phase decide, tool-named where a tool is open |
+
+```ts
+export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
+  if (status.apiRetry !== null) return 'retrying'
+  if (status.compacting) return 'compacting'
+  if (status.stalled) return 'stalled'
+  if (!shouldShowThinking(status)) return null
+  return status.phase === 'thinking' ? 'thinking' : 'working'
+}
+```
+
+**The first three returns are read *before* `shouldShowThinking`'s running-turn gate, and that ordering
+is AC2, not an implementation detail.** All three folded views rendered off their own scalar alone —
+`StallIndicator({ isStalled })`, `ApiRetryIndicator({ retry })`, `CompactingIndicator({ isCompacting })`
+took no phase at all — so putting the three early returns *behind* the gate would have silently narrowed
+three shipped behaviours to only-while-a-turn-is-running. `thread-scroll-pin.spec.ts` pins this by
+construction: it pushes a stall onto a turn the primer has already returned to `idle` and asserts the
+label still renders. Only the thinking/working label is turn-gated; the three superseding states are not
+and must stay that way.
+
+**`ThreadStatus` takes the fourth field #650 declined to take.** #493 built the record as the seam for
+exactly this — "one field here, one clause below" — and #496 extended it once already:
+
+```ts
+export interface ThreadStatus {
+  phase: TurnPhase
+  apiRetry: ApiRetryStatus | null
+  compacting: boolean
+  stalled: boolean
+}
+```
+
+`stalled` is **required, not optional** — an optional field is precisely the silent-omission hole
+`toolName`'s own comment refuses, and the type is the only detector this repo has here, since every
+container test renders the initial store. The cost of having a detector at all is that every
+`ThreadStatus` literal in `ConversationScreen.test.tsx` gains one token; `tsc` names each one (measured
+at 30 call sites once the fold shipped, not the 32 a `grep -c 'compacting:'` estimate had counted before
+build — the grep matched two prose lines inside `describe` comments that merely mention the field name;
+the compiler's count is the trustworthy one). See § Why the field, not a wrapper, below.
+
+**Why the field, not a wrapper — #650's own comment argued against taking a fourth field, and #967
+departs from that reasoning rather than contradicting it silently.** #650 composed
+`workingIndicatorStateWithLocalSend` *on top of* `workingIndicatorState` instead of adding a field,
+because a field would have broken 19 status literals as pure retyping with not one expectation changed —
+literals that are the standing regression evidence for #493's and #496's supersede rules. Both halves
+were true, and neither carries to a status in the **middle** of the order. The difference is precedence
+position: #650's local-send window is a *lower*-priority fallback, composing on top of a proven gate
+without restating anything. A stall sits *below* retry and compaction and *above* the working label, so a
+wrapper would have had to re-read `apiRetry` and `compacting` itself to choose between `'retrying'`,
+`'compacting'` and `'stalled'` — putting the supersede facts in two places, which is the exact drift
+\#650's comment exists to prevent. So #967 took the field, paid the retype, and kept one record, one
+function, one order; #650's own comment was rewritten in place so it stops arguing against the code
+sitting below it.
 
 **Why broaden rather than add a second indicator.** The daemon emits `turn_state{thinking}` only while
 claude is producing thinking text; the first reply token or the first tool step flips `phase` to
@@ -353,168 +447,81 @@ timeline already shows that call as a permanently pending, dimmed row (#230), so
 what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
 at the current turn's `turnBoundary`.
 
-## Api-retry indicator (#493)
+### Retired by #967: `ApiRetryIndicator` (#493), `CompactingIndicator` (#496), `StallIndicator` (#317)
 
-`ThinkingIndicator`'s twin over a third timeline-store scalar (`apiRetry: ApiRetryStatus | null`),
-`ThinkingIndicator`'s **supersede peer** — a relationship carried entirely by `workingIndicatorState`
-reading `apiRetry`/`compacting`, not by DOM adjacency, so it survived [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796)
-moving `ThinkingIndicator`'s own markup down into the composer status row unchanged. Mounted immediately
-after `Timeline` and before `StallIndicator`:
+Through #796 these three still floated as loose, independently-mounted, null-at-rest bubble blocks
+between `Timeline` and the queued backlog — `ThinkingIndicator`'s supersede peers, a relationship always
+carried by `workingIndicatorState` reading `apiRetry`/`compacting`/`stalled`, never by DOM adjacency,
+which is why #796 could move `ThinkingIndicator`'s own markup down into the composer status row without
+touching them. The design draws one row with one label and nothing else in this region — #967 is the
+follow-up #796's refiner deferred to keep that ticket small, filed and built here. All three views, their
+three mount comments, and seven CSS rules (`.conversation__stall`, `.bubble--stall`,
+`.conversation__api-retry`, `.bubble--api-retry`, `.api-retry__counter`, `.conversation__compacting`,
+`.bubble--compacting`) are gone; their copy constants (`API_RETRY_COPY`, `COMPACTING_COPY`, `STALL_COPY`)
+moved beside `toolWorkingCopy` in the merged view's module, grouped with the fourth and fifth labels
+(`THINKING_COPY`/`WORKING_COPY`) they now compete with for the slot — reviewable as one cluster, the
+reason `composerSend.ts`'s own chip-copy comment gives for living where it does. `STALL_COPY` is newly
+**exported** here — it was the one label of the five still module-private, forcing three separate test
+files to assert its literal instead of the constant.
 
-```
-.conversation
-├── Timeline                   items={useTimelineStore(selectItems)}
-├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
-├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see below
-└── StallIndicator              isStalled={useTimelineStore(selectStalled)}
-                                 (ThinkingIndicator itself moved to the composer status row by #796 — see above)
-```
+**What the reducer still does is unchanged — only which view reads it moved.** The wire mechanics that
+used to be these three components' own explanation now live entirely in [Conversation timeline
+store](conversation-timeline-store.md) and its [internals](conversation-timeline-store-internals.md):
+`api_retry` carries an explicit `active`/`current`/`total` counter with an explicit falling edge and no
+wire-side dedup, held as `ApiRetryStatus | null` and cleared only by that falling edge; `compacting`
+carries `{ active: boolean }` with no counter, held as a plain `boolean`, same falling-edge-only clear;
+`stall` is onset-only with no clearing frame at all, so `reduceTimeline` self-clears `stalled`
+client-side on the next turn-activity event. Turn activity leaves `apiRetry` and `compacting` showing —
+the deliberate inverse of the stall's self-clear — and that asymmetry is exactly what
+`thread-scroll-pin.spec.ts` still exercises end to end (see the **Thread scroll pin** edge case in
+[Conversation shell](conversation-shell.md#edge-cases-and-limitations)).
 
-The daemon emits `api_retry` when claude hits an API error and retries, carrying an explicit
-`active`/`current`/`total` counter ([#492](../codebase/492.md) decodes it into a non-nullary `apiRetry`
-`DaemonEvent`). Unlike `stall`, the frame has an **explicit falling edge** (`active: false`) and no
-wire-side dedup — the rising edge re-fires as the count climbs, and a verbatim repeat is a same-state
-no-op rather than a re-render. `reduceTimeline` holds the live counter as `ApiRetryStatus | null`,
-cleared only by the falling edge — turn activity (`assistantDelta`/`toolUse`/`toolResult`/`turnState`)
-leaves it showing, the deliberate inverse of `stalled`'s self-clear.
+**The retry counter now folds into the label's one text run instead of its own span.**
+`ApiRetryIndicator`'s bubble rendered `API_RETRY_COPY` as a constant with a nested
+`<span className="api-retry__counter">` for the counter; the merged label is a **single text child in
+every state** (see above), so a module-private `apiRetryLabel(retry: ApiRetryStatus | null): string`
+interpolates it into one string instead — `retry === null || retry.total <= 0` returns the bare
+`API_RETRY_COPY` (a degrade, not a defence: the container only ever derives `'retrying'` from
+`apiRetry !== null`, so this arm is unreachable from there, but the type admits it), otherwise
+`` `${API_RETRY_COPY} attempt ${retry.current}/${retry.total}` `` — the same `total > 0` gate the retired
+view used, never `current / total` (`NaN` at `0/0`). Both integers are guaranteed JS numbers, not daemon
+strings: `parseApiRetryPayload` (`src/main/transport/inboundMessage.ts`) narrows them with
+`requireNumber` and throws `WireDecodeError` otherwise, which is also what bounds the interpolation's
+length — a JS number stringifies to at most 24 characters. A module-private `statusRowCopy(state, retry)`
+is the total switch that picks among all five labels, with **no `default`**, so a sixth
+`WorkingIndicatorState` member is a `tsc` error here rather than a silently unlabelled row.
 
-`ApiRetryIndicator({ retry })` is `StallIndicator`'s structural twin: pure, exported, in-file,
-server-rendered from an injected `ApiRetryStatus | null`. `retry === null` → `null` (zero footprint);
-present → a `flex: 0 0 auto` `.conversation__api-retry` wrapper (`.conversation__stall`'s shape) holding
-`<div className="bubble bubble--daemon bubble--api-retry">API error — retrying…</div>`, plus, when
-`retry.total > 0`, a nested `<span className="api-retry__counter"> attempt {current}/{total}</span>`.
-When the counter is unknown (`current`/`total` both `0`) the span is omitted entirely — no `"0/0"` is
-ever rendered, and the count is never computed as a fraction (`current / total` would be `NaN` at
-`0/0`).
+**The stall keeps reading as a problem, but as a colour modifier instead of a bubble role.**
+`.bubble--stall` used to carry `color: var(--color-error)` plus a 4px `border-left` accent bar (the
+connection-banner/rejection-line precedent); the merged label takes only
+`.composer-status__label--stalled { color: var(--color-error) }` — no bar, since a bar was a *bubble*
+idiom and there is no fill behind a bare text run for one to bound. Retry and compaction keep the row's
+own `--color-primary`, the only colour Figma `111:3523` draws; `--color-error` is the only error-role
+token on desktop, so this is within-token — no new token, no literal. Colour-only is also what makes "no
+state can move the row" true by construction: no type, box, or line-height changes, so all five labels
+occupy identical geometry. **The stall's error colour, and whether retry should share it, was drawn
+nowhere in Figma — flagged for Juhana in the PR rather than decided silently; still an open question, not
+resolved by this ticket.**
 
-**Record input, not a boolean — the same AC1 posture as #215/#317, adapted for a counter.** The prop is
-`ApiRetryStatus | null` (two numbers, no string field), never the store's `TimelineState` or the raw
-`ThreadEvent`, so "no daemon-supplied string is ever rendered" stays a type-level guarantee even though
-this view — unlike `StallIndicator` — does render daemon-derived digits.
+**Co-render is gone by construction, not by a new coordination mechanism.** Through #796 all three could
+show at once with `ThinkingIndicator` (mutual exclusion scoped to the working label only, by AC4/AC5 of
+\#493/#496) — separate surfaces conveying independent facts. One label slot cannot hold more than one
+string, so `workingIndicatorState`'s four-way order (above) replaces "may all co-render" with "exactly
+one wins" — a loss of simultaneity, not of any individual fact: a live retry still shows, a stall still
+shows, just never two at once. `shouldShowThinking`'s own docblock used to state the old co-render
+posture twice; both sentences were removed rather than qualified, since #967 made them false at the
+function whose result now actually picks between the four.
 
-**Visually distinct from both siblings.** `.bubble--api-retry` reuses `.bubble--daemon`'s fill/radius
-and diverges to `--color-error` text (the same error role as `.bubble--stall`) but **omits** the left
-accent bar that is `.bubble--stall`'s distinguishing mark — keeping the two problem states separable
-from each other. Through #796 both were also distinct from the muted `.bubble--thinking`; since #796
-retired that class, the comparison point is the composer status row's label instead, which now reads in
-`--color-primary` rather than muted — still a distinct role from either problem state's `--color-error`.
-No new design token.
-
-May still co-render with `StallIndicator` (and, since #496, `CompactingIndicator`) — AC5 scopes mutual
-exclusion to `ThinkingIndicator` only, #317's "distinct facts, adjacent flex rows" posture for stall is
-unchanged. No Figma node (same documented gap as #215/#277/#279/#305/#317); a dedicated degraded-state
-visual remains a Figma-side follow-up for Juhana. See
-[#493 codebase notes](../codebase/493.md) for the full design, patterns established, and open questions.
-
-## Compacting indicator (#496)
-
-`ThinkingIndicator`'s **second** supersede peer, over a fourth timeline-store scalar (`compacting:
-boolean`), mounted immediately after `ApiRetryIndicator` and before `StallIndicator` — through #796 this
-grouped the two thinking-superseders (#493, #496) contiguously below the indicator they occlude; since
-[#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) moved `ThinkingIndicator`'s markup into
-the composer status row, this trio is contiguous below `Timeline` instead, unaffected in every way that
-matters — the supersede relationship lives in `workingIndicatorState`, not DOM position:
-
-```
-.conversation
-├── Timeline                   items={useTimelineStore(selectItems)}
-├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
-├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)}
-└── StallIndicator              isStalled={useTimelineStore(selectStalled)}
-```
-
-The daemon emits `compacting` while claude auto-compacts its context — tens of seconds of total
-silence on the content channel ([#495](../codebase/495.md) decodes it into a non-nullary `compacting`
-`DaemonEvent`, `{ active: boolean }`, no counter). Like `apiRetry`, the frame has an **explicit falling
-edge** and no wire-side dedup, but carries no progress data at all — banner-only. `reduceTimeline` holds
-the live state as a plain `boolean` (not `| null`: there's no counter to discard on clear, so a boolean
-is the honest representation), cleared only by the falling edge — turn activity leaves it showing, the
-same deliberate inverse of `stalled` that `apiRetry` established.
-
-`CompactingIndicator({ isCompacting })` is `StallIndicator`'s structural twin: pure, exported, in-file,
-server-rendered from an injected boolean, not a record — there are no digits to render, so (unlike
-`ApiRetryIndicator`) a boolean prop is sufficient to make "no daemon-supplied string is ever rendered" a
-type-level guarantee. `isCompacting === false` → `null` (zero footprint); `true` → a `flex: 0 0 auto`
-`.conversation__compacting` wrapper (`.conversation__api-retry`'s shape) holding `<div className="bubble
-bubble--daemon bubble--compacting">Compacting the conversation…</div>`. `COMPACTING_COPY` is exported,
-apostrophe-free, ends in U+2026, and is asserted distinct from `'Thinking…'`/`STALL_COPY`/
-`API_RETRY_COPY`.
-
-**Compaction is progress, not a problem — deliberately does not reuse the error role.**
-`.bubble--stall` and `.bubble--api-retry` both use `--color-error` because both signal a degrading
-session; compaction is claude working normally, so `.bubble--compacting` instead uses the muted
-`--color-on-surface-variant` text treatment — through #796 this matched the daemon-bubble surface's own
-`.bubble--thinking` — with a left accent bar in the **primary** role (`--color-primary`,
-`.bubble--stall`'s bar structure with the error role swapped out). Through #796 this completed a four-way
-text-role × left-bar matrix with every cell distinct: thinking (muted/no-bar), stall (error/error-bar),
-api-retry (error/no-bar), compacting (muted/primary-bar). **Since [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796)
-retired `.bubble--thinking`** and moved the working label off the daemon-bubble surface entirely (see
-[Composer status row](conversation-shell-composer.md#composer-status-row-796) above, where the label's own colour also changed, to
-`--color-primary`), this is now a three-way matrix among the indicators that stayed behind: stall
-(error/error-bar), api-retry (error/no-bar), compacting (muted/primary-bar) — `.bubble--compacting`'s own
-rule is untouched, and the muted register it picked still reads correctly on its own terms even though the
-class it was originally matched against is gone. No new design token — the matrix was already saturated
-on both axes with four cells; three leaves headroom for one more before a third visual axis is needed.
-
-May co-render with `ApiRetryIndicator` and `StallIndicator` — AC4 scopes exclusion to `ThinkingIndicator`
-only, the same #493 posture. No Figma node (same documented gap as #215/#277/#279/#305/#317/#493). See
-[#496 codebase notes](../codebase/496.md) for the full design, patterns established, and open questions.
-
-## Stall indicator (#317)
-
-`ThinkingIndicator`'s own twin, over a second timeline-store scalar (`stalled: boolean`); through #796
-mounted immediately after `ThinkingIndicator` in the DOM, now mounted last of the three problem-state
-indicators that stayed behind when [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) moved
-`ThinkingIndicator`'s markup into the composer status row — kept its own bubble treatment and
-null-at-rest posture, which is exactly why `thread-scroll-pin.spec.ts`'s viewport-shrink criterion was
-repointed onto this indicator rather than the one it used to sit beside (see [Composer status
-row](conversation-shell-composer.md#composer-status-row-796) above and the **Thread scroll pin** edge case below):
-
-```
-.conversation
-├── Timeline                   items={useTimelineStore(selectItems)}
-├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)} — #493, see above
-├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see above
-└── StallIndicator              isStalled={useTimelineStore(selectStalled)}
-```
-
-The daemon emits a one-shot `stall` signal when claude goes quiet mid-turn or the screen parser
-degrades ([#315](../codebase/315.md) decodes it into a `stallDetected` `DaemonEvent`, nullary at ship
-time and later widened with `conversationId` by [#732](../codebase/732.md); the id stops at the
-renderer timeline bridge, so this view is unaffected). Because
-the daemon sends onset-only with no "cleared" frame, `reduceTimeline` self-clears the `stalled` scalar
-client-side on the next turn-activity event (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) —
-this view only renders whatever the store currently holds. `StallIndicator({ isStalled })` is
-`ThinkingIndicator`'s structural twin: pure, exported, in-file, server-rendered from an injected
-boolean. `isStalled === false` → `null` (zero footprint); `isStalled === true` → a `flex: 0 0 auto`
-`.conversation__stall` wrapper (`.conversation__thinking`'s shape) holding `<div className="bubble
-bubble--daemon bubble--stall">The turn seems to have stalled…</div>` — the daemon-bubble surface,
-diverging to the error role rather than the muted thinking treatment.
-
-**Boolean input, not the store type — the same AC4 posture as #215.** The prop is `isStalled:
-boolean`, never the store's `TimelineState`, so "no daemon-supplied string is ever rendered" is a
-type-level guarantee, reinforced here by the daemon frame carrying no content to begin with (#315's
-nullary emit) — there is no field to leak even if the type were looser.
-
-**Visually distinct by design (AC4).** `.bubble--stall` reuses `.bubble--daemon`'s fill/radius but
-diverges to `--color-error` — `color: var(--color-error)` plus a leading `border-left: 4px solid
-var(--color-error)` accent (the connection-banner/rejection-line precedents) — so a stall reads as a
-problem state. Through #796 that distinguished it from the muted `.bubble--thinking`; since #796 retired
-that class, the comparison point is the composer status row's own label, which now reads in
-`--color-primary` — still never confusable with `--color-error`. No new design token; `--color-error`
-is the only error-role token on desktop.
-
-Both indicators can show at once (a stall onset arriving mid-`thinking`) — accepted as correct, since
-they occupy adjacent flex rows and convey different facts; no mutual-exclusion coordination was built.
-**[#493](../codebase/493.md) narrowed `ThinkingIndicator`'s own gate to also exclude a live api-retry
-status (see [Api-retry indicator](#api-retry-indicator-493) above), and [#496](../codebase/496.md)
-narrowed it again to exclude a live compaction status (see [Compacting
-indicator](#compacting-indicator-496) above), but both left this stall/thinking co-render posture
-untouched** — AC5/AC4 each scoped mutual exclusion to thinking only, so `StallIndicator`,
-`ApiRetryIndicator`, and `CompactingIndicator` may all show at once. No Figma node (same documented gap
-as #215/#277/#279/#305 — the mobile file draws only the populated steady-state thread, node `16-8`). See
-[#317 codebase notes](../codebase/317.md) for the full design, patterns established, and open
-questions.
+**e2e re-points, not new coverage.** `stall-bundle.spec.ts` swapped its `.conversation__stall` /
+`.bubble--stall` visibility check for one **exact-text** assertion on the row's label
+(`.conversation__thinking`, still the identity hook) plus a class check for
+`composer-status__label--stalled` — exact rather than `toBeVisible`, because the label element is now
+shared by all five states, so mere visibility proves nothing. `thread-scroll-pin.spec.ts` needed two
+separate repairs, covered in the **Thread scroll pin** edge case of [Conversation
+shell](conversation-shell.md#edge-cases-and-limitations): its fourth criterion (chrome mounting shrinks
+the thread's viewport without un-pinning it) moved off the now-empty stall block onto the queued backlog,
+and its stall self-clear assertions switched from `toBeVisible` to exact label text, for the same
+shared-element reason as the stall-bundle repoint.
 
 `Timeline`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md): a compact chip —
 tool name and one-line input summary — replaces the earlier `case 'toolCall': return null` no-op, at

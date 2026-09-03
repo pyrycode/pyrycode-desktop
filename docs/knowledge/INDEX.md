@@ -392,10 +392,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   seam. Containment is structural: the canonical shape `/^[0-9a-f-]{1,64}$/` makes traversal and absolute
   paths unspellable, so there is no filesystem resolution and no symlink-equality check, unlike the
   daemon's own attachment-directory design — the single-principal, nothing-created rationale is recorded
-  in the doc. No consumer wired yet; #814 (save-to-Downloads) and #691 (open-in-viewer) are the two
-  intended callers, and the shape this ships is now a contract they and #687 must honour. Architect
-  self-review PASS, one accepted SHOULD FIX (in-directory symlink redirect, bounded and revisit-conditions
-  named).
+  in the doc. #814 ([attachment save](features/attachment-save.md), landed) and #691 (open-in-viewer,
+  not started) are the two intended callers, and the shape this ships is a contract they and #687 must
+  honour. Architect self-review PASS, one accepted SHOULD FIX (in-directory symlink redirect, bounded
+  and revisit-conditions named).
 - [Attachment filename sanitiser](features/attachment-filename-sanitiser.md) — `sanitizeAttachmentFilename(name)`
   (#819), the rewriting sibling of the pair above: reduces an untrusted, model-chosen attachment file name
   to exactly one safe path component and never refuses, since every input has a safe answer. The one
@@ -404,8 +404,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   map → fixed fallback when nothing survives → leading-dot prefix → Windows-reserved-name prefix), with
   the fallback decided from the *input*'s survival flag rather than the built result, since `'///'` and
   the literal name `'___'` are indistinguishable once built. No length bound and no existence check by
-  design — both deferred to #814, on [save-debug-bundle](features/save-debug-bundle.md)'s exclusive-create
-  precedent. No consumer wired yet. Architect self-review PASS.
+  design — both deferred to [attachment save](features/attachment-save.md) (#814, landed), which reused
+  [save-debug-bundle](features/save-debug-bundle.md)'s exclusive-create precedent (`COPYFILE_EXCL`) and
+  confirmed an over-long name surfaces as `ENAMETOOLONG` rather than needing a bound here. Architect
+  self-review PASS.
 - [Attachment chunk envelope](features/attachment-chunk-envelope.md) — the **producer** half of the daemon's
   attachment wire contract (#860): the new `attachment_chunk` `EnvelopeType` member + `AttachmentChunkPayload`
   (eight always-present fields, no `conversation_id` by design — a security property, not an oversight), the
@@ -606,8 +608,33 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `WIRE_PONG_TIMEOUT_MS`) is the first per-request timer this module owns, injected through the
   `createRelaySupervisor` `timing` seam. `emit` is a per-ask argument rather than a construction
   dependency — a first design draft that closed it in at construction quietly disabled both the
-  concurrency cap and the coalescing, since it forced a driver rebuilt per ask. Ships unwired on the
-  renderer side; #814/#866/#867 are the consumers. Architect self-review PASS.
+  concurrency cap and the coalescing, since it forced a driver rebuilt per ask. Shipped unwired on the
+  renderer side; [attachment save](features/attachment-save.md) (#814) is the first consumer, landed —
+  #866/#867 are the remaining two, not started. Architect self-review PASS.
+- [Attachment save](features/attachment-save.md) — copies an attachment already on this machine out of
+  the app's private attachment directory into the OS Downloads folder, no save dialog, then reveals it
+  there selected (#814, split from #686, the last unwired consumer of
+  [attachment retrieval](features/attachment-retrieval.md) to land). Two new modules mirroring the
+  retrieval leg's shape: `src/shared/ipc/attachmentSave.ts` (a channel pair, not a `DaemonEvent`
+  member, guard shape-only-never-canonicity) and `src/main/attachmentSave.ts` (`electron`-free,
+  resolves via `resolveAttachmentPath` (#818) before any filesystem call, re-runs
+  `sanitizeAttachmentFilename` (#819) main-side on the value the path is built from — `copyIntoDownloads`
+  takes only the sanitised component, never the raw request). No-overwrite is the copy itself —
+  `copyFile(..., COPYFILE_EXCL)` advancing to the next browser-style candidate on `EEXIST`, no
+  `existsSync`, no TOCTOU, and stronger than `saveDebugBundle`'s precedent: a pre-planted symlink under
+  the target name cannot be written through. `reveal` (`shell.showItemInFolder`) is injected and
+  swallows its own failure so a successful save is never reported as failed; `setWindowOpenHandler`'s
+  `file:` block is untouched. Two client-owned failure reasons split on what a consumer can do next
+  (`source-unavailable` is retryable via #996, `save-failed` is not); `copyFile`'s `ENOENT` for a
+  missing *destination* conflates an absent Downloads folder with an absent source, accepted and pinned
+  by a test rather than repaired. Deliberately no concurrency cap (a copy streams kernel-side and
+  accumulates nothing, unlike retrieval's per-transfer memory bound) and no digest re-verification
+  (would need an untrusted expected-digest to cross the bridge). Lessons folded in: `COPYFILE_EXCL`
+  inherits the source's `0o600` mode rather than umask-deriving one; `saveDebugBundle`'s exhaustion
+  `Error` interpolates its `dir` and was deliberately not copied, since this module's AC forbids a path
+  ever reaching a log; a `__proto__` guard fixture must be built with `JSON.parse`, not an object
+  literal, or it's inert. Renderer wiring (#815/#816) not started. Verifier PASS, one NIT (an unreached
+  exported constant, plan-sanctioned). Architect self-review PASS, no MUST FIX.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

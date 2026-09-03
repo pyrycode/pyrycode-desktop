@@ -45,19 +45,45 @@ describe('buildSetSessionSettings', () => {
     expect(decoded).toEqual({ session_id: 'sess-a', model: '' })
   })
 
-  it('carries all four keys with exact values when every optional is present', () => {
+  it('carries all five keys with exact values when every optional is present', () => {
     const payload: SetSessionSettingsPayload = {
       session_id: 'sess-a',
       model: 'opus',
       effort: 'high',
-      yolo: true
+      yolo: true,
+      permission_mode: 'plan'
     }
     const decoded = decodeEnvelope(buildSetSessionSettings({ id: 2, ts: FIXED_TS, payload })).payload
 
     expect(decoded).toEqual(payload)
   })
 
-  it('sends only session_id when all three optionals are omitted', () => {
+  it('carries a lone permission_mode with NO yolo key (#1021)', () => {
+    // The two fields are two spellings of one posture and the daemon refuses a frame carrying both,
+    // checked before the mode's value so the refusal is unconditional. Asserted on the BUILT payload
+    // rather than on the type, because the type permits both and only construction keeps them apart.
+    const payload: SetSessionSettingsPayload = { session_id: 'sess-a', permission_mode: 'acceptEdits' }
+    const decoded = decodeEnvelope(buildSetSessionSettings({ id: 2, ts: FIXED_TS, payload })).payload
+
+    expect(decoded).toEqual({ session_id: 'sess-a', permission_mode: 'acceptEdits' })
+    expect(decoded).not.toHaveProperty('yolo')
+    expect(decoded).not.toHaveProperty('model')
+    expect(decoded).not.toHaveProperty('effort')
+  })
+
+  it('keeps a present empty-string permission_mode — the builder tests presence, not value (#1021)', () => {
+    // The daemon REFUSES permission_mode at '' (unlike model/effort, where '' clears to claude's own
+    // default). That is the daemon's value policy and the builder must not pre-empt it: its contract is
+    // `!== undefined`, so a truthiness test here would be wrong for the same reason it is wrong on
+    // model/yolo — it would collapse the present-vs-omitted distinction the presence contract exists for.
+    const payload: SetSessionSettingsPayload = { session_id: 'sess-a', permission_mode: '' }
+    const decoded = decodeEnvelope(buildSetSessionSettings({ id: 2, ts: FIXED_TS, payload })).payload
+
+    expect(decoded).toHaveProperty('permission_mode', '')
+    expect(decoded).toEqual({ session_id: 'sess-a', permission_mode: '' })
+  })
+
+  it('sends only session_id when all four optionals are omitted', () => {
     const payload: SetSessionSettingsPayload = { session_id: 'sess-a' }
     const decoded = decodeEnvelope(buildSetSessionSettings({ id: 2, ts: FIXED_TS, payload })).payload
 
@@ -65,9 +91,10 @@ describe('buildSetSessionSettings', () => {
     expect(decoded).not.toHaveProperty('model')
     expect(decoded).not.toHaveProperty('effort')
     expect(decoded).not.toHaveProperty('yolo')
+    expect(decoded).not.toHaveProperty('permission_mode')
   })
 
-  it('strips a smuggled extra field — the fresh literal names only the four modeled keys', () => {
+  it('strips a smuggled extra field — the fresh literal names only the five modeled keys', () => {
     // A compromised renderer could smuggle a key past the structural-minimum guard. The builder's
     // fresh, conditionally-keyed literal must bound the wire to exactly the modeled keys.
     const decoded = decodeEnvelope(

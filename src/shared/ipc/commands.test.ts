@@ -676,9 +676,40 @@ describe('isRendererCommand', () => {
       session_id: 'sess-a',
       model: 'opus',
       effort: 'high',
-      yolo: true
+      yolo: true,
+      permission_mode: 'plan'
     }
     expect(isRendererCommand({ type: 'setSessionSettings', payload, changeId: 'change-1' })).toBe(true)
+  })
+
+  it('admits permission_mode only as a string when present (#1021)', () => {
+    const t = 'setSessionSettings'
+    const c = 'change-1'
+    // TYPE, not membership: the guard admits any string, including one outside the daemon's closed five
+    // and including ''. That is deliberate — `validPermissionMode` is the daemon's, a client-side
+    // allowlist would drift from it, and it would defend nothing while the strictly stronger `yolo` arm
+    // sits unguarded beside it. Emptiness is likewise the daemon's call (it refuses '' on this field).
+    expect(
+      isRendererCommand({ type: t, payload: { session_id: 'sess-a', permission_mode: 'plan' }, changeId: c })
+    ).toBe(true)
+    expect(
+      isRendererCommand({ type: t, payload: { session_id: 'sess-a', permission_mode: '' }, changeId: c })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: t,
+        payload: { session_id: 'sess-a', permission_mode: 'bypassPermissions' },
+        changeId: c
+      })
+    ).toBe(true)
+    // A PRESENT optional must be its type; an ABSENT one is accepted ("leave unchanged").
+    expect(
+      isRendererCommand({ type: t, payload: { session_id: 'sess-a', permission_mode: 42 }, changeId: c })
+    ).toBe(false)
+    expect(
+      isRendererCommand({ type: t, payload: { session_id: 'sess-a', permission_mode: null }, changeId: c })
+    ).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { session_id: 'sess-a' }, changeId: c })).toBe(true)
   })
 
   it('rejects a setSessionSettings with a missing/null payload (#263)', () => {

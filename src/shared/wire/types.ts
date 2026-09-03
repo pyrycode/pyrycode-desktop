@@ -294,9 +294,9 @@ export interface SendMessagePayload {
 
 /**
  * Outbound `set_session_settings` payload (client → daemon). Mirrors the daemon's
- * SetSessionSettingsPayload{SessionID string; Model, Effort *string; YOLO *bool} field-for-field
- * (pyrycode #844 wire vocab, #845 handler, both on `main`): changes one session's model / reasoning
- * effort / YOLO.
+ * SetSessionSettingsPayload{SessionID string; Model, Effort, PermissionMode *string; YOLO *bool}
+ * field-for-field (pyrycode #844 wire vocab, #845 handler; `permission_mode` added in pyrycode#1687,
+ * picked up here in #1021): changes one session's model / reasoning effort / permission mode / YOLO.
  *
  * The optional `?` fields mirror the daemon's `*T ...,omitempty` nil-pointer omission and carry a
  * PRESENCE CONTRACT: an ABSENT key means "leave unchanged"; a key PRESENT at its zero value (`''` /
@@ -305,6 +305,11 @@ export interface SendMessagePayload {
  * `omitempty`, so this type merely PERMITS absence; the contract is ENFORCED by the builder
  * (setSessionSettingsEnvelope.ts), which assigns a key only when its field `!== undefined`. `session_id`
  * is the addressing key (matches the daemon's Pool.UpdateSettings id), never a secret — always required.
+ *
+ * `permission_mode` and `yolo` are TWO SPELLINGS OF ONE POSTURE, and the daemon refuses a frame carrying
+ * BOTH as malformed — checked before the mode's value, so that refusal is unconditional. This type
+ * permits both (it is a structural mirror, not a policy); keeping them off one frame is the job of the
+ * single-key literal each caller builds (`buildSettingsPayload`, #1021).
  */
 export interface SetSessionSettingsPayload {
   session_id: string
@@ -314,6 +319,21 @@ export interface SetSessionSettingsPayload {
   effort?: string
   /** *bool omitempty — absent = leave unchanged; false = permissions enforced (never omitted-as-false). */
   yolo?: boolean
+  /**
+   * *string omitempty (pyrycode#1687) — absent = leave unchanged. UNLIKE `model`/`effort`, a present
+   * `''` is REFUSED rather than meaning "claude's own default": the default posture is itself a nameable
+   * mode, so an explicit `''` names nothing. The daemon accepts a closed FIVE — `default`, `acceptEdits`,
+   * `plan`, `auto`, `dontAsk` — at `validPermissionMode`; `bypassPermissions` is refused HERE on purpose,
+   * so the escalation keeps exactly one spelling on the wire (`yolo: true`). Note the read half is WIDER:
+   * `SessionSettingsPayload.permission_mode` (#1020) additionally reports `bypassPermissions`, so a
+   * value observed there is not necessarily one this field will accept back.
+   *
+   * A lone `permission_mode` CAN move a session out of bypass — the pool sets
+   * `merged.YOLO = (mode == "bypassPermissions")` on any present mode — and can never move one INTO it,
+   * because the value that would do so is the refused one. No client-side allowlist mirrors any of this:
+   * every refusal replies with the same fixed constant, so the client cannot tell them apart anyway.
+   */
+  permission_mode?: string
 }
 
 /**

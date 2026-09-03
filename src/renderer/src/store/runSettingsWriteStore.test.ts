@@ -348,9 +348,99 @@ describe('selectEffectiveSettings composition', () => {
     expect(effective.yolo).toBe(false) // false override held, not fallen-through to the base
   })
 
-  it('falls to empty-string / empty-string / false when the snapshot is null', () => {
+  it('falls to empty-string / empty-string / false / empty-string when the snapshot is null', () => {
     const state: RunSettingsWriteState = { pending: new Map(), confirmed: {}, error: null }
-    expect(selectEffectiveSettings(null, state)).toEqual({ model: '', effort: '', yolo: false })
+    expect(selectEffectiveSettings(null, state)).toEqual({
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: ''
+    })
+  })
+
+  it('RETURNS permissionMode composed pending > confirmed > base — not merely tolerates it (#1021)', () => {
+    // The compiler forces a `case`, not a returned FIELD: a case that assigns a local and never threads
+    // it into the return object would satisfy assertNever while leaving the overlay silently dead. These
+    // three readings are what separate a returned field from a swallowed one.
+    const base: RunConfigSnapshot = { ...snap, permissionMode: 'default' }
+
+    const overlaid: RunSettingsWriteState = {
+      pending: new Map([['c1', { field: 'permissionMode', value: 'plan' }]]),
+      confirmed: { permissionMode: 'acceptEdits' },
+      error: null
+    }
+    expect(selectEffectiveSettings(base, overlaid).permissionMode).toBe('plan')
+
+    const confirmedOnly: RunSettingsWriteState = {
+      pending: new Map(),
+      confirmed: { permissionMode: 'acceptEdits' },
+      error: null
+    }
+    expect(selectEffectiveSettings(base, confirmedOnly).permissionMode).toBe('acceptEdits')
+
+    const neither: RunSettingsWriteState = { pending: new Map(), confirmed: {}, error: null }
+    expect(selectEffectiveSettings(base, neither).permissionMode).toBe('default')
+  })
+})
+
+describe('permissionMode round-trip (#1021)', () => {
+  it('overlays optimistically, then commits the SENT value on the correlated confirm', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'permissionMode', value: 'plan' })
+    })
+    // Optimistic: pending beats the snapshot base before any reply.
+    expect(selectEffectiveSettings(snap, store.getState()).permissionMode).toBe('plan')
+
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c1' })
+    const s = store.getState()
+    expect(s.pending.size).toBe(0)
+    expect(s.confirmed.permissionMode).toBe('plan')
+    // The overlay is gone but the value survives as the client-confirmed override.
+    expect(selectEffectiveSettings(snap, s).permissionMode).toBe('plan')
+  })
+
+  it('rolls back to the snapshot base on rejection and reports the field through selectError', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'permissionMode', value: 'dontAsk' })
+    })
+    store.getState().dispatch({ type: 'settingsRejected', changeId: 'c1' })
+    const s = store.getState()
+
+    // Deleting the pending marker IS the rollback — the effective value falls back through.
+    expect(s.pending.size).toBe(0)
+    expect(s.confirmed.permissionMode).toBeUndefined()
+    expect(selectEffectiveSettings(snap, s).permissionMode).toBe(snap.permissionMode)
+    expect(selectError(s)).toBe('permissionMode')
+  })
+
+  it('holds a value outside the daemon closed five verbatim — the store normalises nothing', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'permissionMode', value: 'bypassPermissions' })
+    })
+    expect(selectEffectiveSettings(snap, store.getState()).permissionMode).toBe('bypassPermissions')
+    // No mapping onto the yolo bit anywhere on the write path (AC3).
+    expect(selectEffectiveSettings(snap, store.getState()).yolo).toBe(snap.yolo)
+  })
+
+  it('is cleared by reconnected along with every other pending field (#539 covers it for free)', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'permissionMode', value: 'plan' })
+    })
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(store.getState().pending.size).toBe(0)
+    expect(selectEffectiveSettings(snap, store.getState()).permissionMode).toBe(snap.permissionMode)
   })
 })
 
@@ -370,8 +460,27 @@ describe('selectPendingFields', () => {
     expect(selectPendingFields(store.getState())).toEqual({
       model: true,
       effort: false,
-      yolo: true
+      yolo: true,
+      permissionMode: false
     })
+  })
+
+  it('returns an in-flight flag for permissionMode, set and cleared like its siblings (#1021)', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'permissionMode', value: 'plan' })
+    })
+    expect(selectPendingFields(store.getState())).toEqual({
+      model: false,
+      effort: false,
+      yolo: false,
+      permissionMode: true
+    })
+
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c1' })
+    expect(selectPendingFields(store.getState()).permissionMode).toBe(false)
   })
 
   it('clears a field flag once its change resolves', () => {

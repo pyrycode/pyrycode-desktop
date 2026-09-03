@@ -1,6 +1,6 @@
 # Run configuration write store
 
-The renderer's **pending-write state machine** for a Model / Effort / YOLO change: it holds a requested
+The renderer's **pending-write state machine** for a Model / Effort / Permission-mode / YOLO change: it holds a requested
 change optimistically, then settles it to the daemon's confirmed result or rolls it back on rejection —
 the state the interactive Run configuration controls ([#257](../codebase/257.md)) dispatch onto and read
 back.
@@ -15,7 +15,7 @@ surface of its own — #257 is now its live consumer, the same posture `sessionI
 
 ## What it does
 
-Lets a caller dispatch a per-field settings change (`{field: 'model'|'effort'|'yolo', value}`), reflects
+Lets a caller dispatch a per-field settings change (`{field: 'model'|'effort'|'yolo'|'permissionMode', value}`), reflects
 it immediately in the store's derived view, and resolves it — commit or roll back — when the matching
 correlated daemon reply arrives. A confirm/reject whose correlation id matches no pending change is a
 fail-closed no-op: it never commits or rolls back the wrong change, and two outstanding changes are told
@@ -37,6 +37,7 @@ export type SettingsChange =
   | { field: 'model'; value: string }
   | { field: 'effort'; value: string }
   | { field: 'yolo'; value: boolean }
+  | { field: 'permissionMode'; value: string }   // #1021 — plain string, no union, no allowlist
 
 export type RunSettingsWriteEvent =
   | { type: 'changeDispatched'; changeId: string; change: SettingsChange }
@@ -45,9 +46,9 @@ export type RunSettingsWriteEvent =
   | { type: 'reconnected' }                           // from the connected wire edge ([#539](../codebase/539.md))
 
 export interface RunSettingsWriteState {
-  pending: ReadonlyMap<string, SettingsChange>                    // changeId → requested change
-  confirmed: { model?: string; effort?: string; yolo?: boolean }  // sparse client-confirmed overrides
-  error: SettingsChange['field'] | null                           // last-rejected field, or null
+  pending: ReadonlyMap<string, SettingsChange>   // changeId → requested change
+  confirmed: { model?: string; effort?: string; yolo?: boolean; permissionMode?: string }  // sparse client-confirmed overrides
+  error: SettingsChange['field'] | null          // last-rejected field, or null
 }
 
 createRunSettingsWriteStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
@@ -59,7 +60,7 @@ An **adjacent, dedicated store** — not a `runConfigStore` facet — for the sa
 [`sessionIdStore`](session-id-store.md) (#259): (a) its inbound subscription must be **App-level
 always-listening** (a confirm/reject reply can arrive after the sheet closes, whereas `runConfigStore`'s
 subscriber is sheet-scoped); (b) its state (pending changes + client-confirmed overrides + last error) is
-orthogonal to the snapshot's `{model, effort, yolo, usedTokens, windowTokens}` shape. Unlike
+orthogonal to the snapshot's `{model, effort, yolo, permissionMode, usedTokens, windowTokens}` shape. Unlike
 `sessionIdStore`'s named setters, this is a **reducer** (`dispatch` over the sealed event union) because
 every one of its four transitions reads prior state: three (dispatch / confirm / reject) are
 **correlated** — a confirm or reject is a no-op without a matching pending record — and the fourth,
@@ -88,7 +89,11 @@ coupling, not the count.
   rejection is still true after a reconnect, and a confirmed override is still what the daemon has. Same-
   reference no-op when `pending` is already empty — load-bearing, not cosmetic, because #257's container
   selects the **whole raw state** (`RunConfigSections.tsx:327`) as its zustand selector, so this is what
-  keeps a reconnect with nothing in flight from re-rendering the sheet.
+  keeps a reconnect with nothing in flight from re-rendering the sheet. A new `SettingsChange` arm never
+  needs hand-wiring here (#1021 confirmed this for `permissionMode`): the arm lives *inside* the `pending`
+  Map, which this reducer replaces wholesale, so the field is cleared for free. Contrast `confirmed` and
+  `error`, which are per-field and would need an explicit new case if a future arm needed clearing on
+  reconnect too.
 
 There is no explicit "roll back" mutation: **clearing the pending marker *is* the rollback**, because the
 effective view falls through to the confirmed override or the snapshot base — `reconnected` is a fourth
@@ -101,7 +106,7 @@ object, so zustand skips the notify.
 function selectEffectiveSettings(
   snapshot: RunConfigSnapshot | null,
   s: RunSettingsWriteState
-): Pick<RunConfigSnapshot, 'model' | 'effort' | 'yolo'>
+): Pick<RunConfigSnapshot, 'model' | 'effort' | 'yolo' | 'permissionMode'>
 ```
 
 Composes the displayed value per field, precedence high to low:
@@ -109,13 +114,34 @@ Composes the displayed value per field, precedence high to low:
 1. the **last-inserted** `pending` entry for that field, if any (optimistic; `Map` insertion order gives
    last-write-wins for rapid same-field changes);
 2. else `confirmed[field]`, if set;
-3. else the snapshot base (`snapshot?.model ?? ''`, `?? ''`, `?? false`).
+3. else the snapshot base (`snapshot?.model ?? ''`, `?? ''`, `?? false`, `snapshot?.permissionMode ?? ''`).
 
 `??` falls through only on `undefined`, so an empty-string / `false` value at any layer is held verbatim
 — never coerced (the `runConfigStore` no-coercion posture). `selectError(s)` and
-`selectPendingFields(s): {model; effort; yolo}` (booleans) round out the read surface for the sheet's
-in-flight UI state — `selectPendingFields` shipped with #256 but had no production consumer until
-[#558](../codebase/558.md) rendered it as `aria-busy` on the owning control.
+`selectPendingFields(s): {model; effort; yolo; permissionMode}` (booleans) round out the read surface for
+the sheet's in-flight UI state — `selectPendingFields` shipped with #256 but had no production consumer
+until [#558](../codebase/558.md) rendered it as `aria-busy` on the owning control.
+
+**The trap in widening either selector: the compiler forces a `case`, not a returned field.** Both
+selectors iterate `s.pending.values()` through a per-field `switch` into local variables, then compose
+those locals into the returned object as a second step. Adding a union arm and satisfying `assertNever`
+only requires the `switch` to gain a `case` — nothing forces that case's value to actually reach the
+return statement. A `case` that assigns its local and never threads it into the object below compiles
+clean, keeps every existing test green, and leaves the new field's optimistic overlay (and its in-flight
+flag) silently dead — a change that looks applied in the store and never reaches a reader. #1021 named
+this explicitly and widened both return types by hand; a store spec that only asserts "the field exists on
+the return type" cannot catch the dead-case failure — it has to assert the actual composed *value* across
+pending/confirmed/base layers (`runSettingsWriteStore.test.ts`'s `'plan'`/`'acceptEdits'`/`'default'`
+composition test is what pins it). Any future field on `SettingsChange` inherits the same trap.
+
+**Consumer note for a future field, generalized from #1021's `permissionMode`:** `selectEffectiveSettings`
+composes a client-owned pending/confirmed value **over a daemon-authored snapshot base**. If the daemon's
+read-side vocabulary for a field is ever wider than what the write side accepts back (true today:
+`permissionMode`'s snapshot can legitimately be `bypassPermissions`, a value `set_session_settings`
+refuses — see [session settings send](session-settings-send.md)), the composed effective value can be one
+a submit would be rejected for. A consumer must not offer the currently-displayed value straight back as a
+submittable option without filtering it first. #682's permission-mode control is the first place this
+applies.
 
 ### The data path (`src/renderer/src/store/runSettingsWriteBridge.ts`)
 
@@ -144,7 +170,13 @@ submitSettingsChange(deps, change: SettingsChange): void
 
 `buildSettingsPayload(sessionId, change)` builds a **fresh literal** — `session_id` plus the single
 changed key — via a per-field `switch`, so the omitempty presence contract (absent key = leave unchanged)
-is honored by construction; only the changed field is ever present.
+is honored by construction; only the changed field is ever present. This single-key shape is also what
+keeps `permission_mode` and `yolo` off one frame (#1021): the daemon refuses a frame carrying both as
+malformed, and a `switch` returning one literal per `case` cannot emit both, so nothing has to check for
+it. This `switch` is also the one place the store's camelCase `permissionMode` becomes the wire's
+snake_case `permission_mode` — the value crosses **verbatim**, no allowlist, no normalisation, no repair,
+no mapping onto the `yolo` bit (see [session settings send](session-settings-send.md) for why an allowlist
+here would be a false boundary).
 
 ### The React binding — `RunSettingsWriteData` (same file)
 
@@ -240,6 +272,11 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   `submitSettingsChange` sends.
 - [#259 codebase notes](../codebase/259.md) — the structural precedent for an App-level always-listening
   holder, extended here from a single setter to a three-arm reducer.
+- **#1021** — added `permissionMode` as `SettingsChange`'s fourth arm: the wire/guard/builder half in
+  [session settings send](session-settings-send.md), and here the union arm, `applyConfirmed`, both
+  hand-widened selector return types (the compiler-forces-a-`case`-not-a-field trap, § above), and
+  `buildSettingsPayload`'s camelCase→snake_case translation. No consumer is built by this ticket; the
+  control that submits a mode is #682. Split from #682.
 - [#539 codebase notes](../codebase/539.md) — the `reconnected` arm: clears every stranded `pending`
   entry on the `connected` (re)handshake edge, preserving `confirmed`/`error`, so a change abandoned by
   main's re-dial correlation reset can no longer shadow a later confirmed change. Split from

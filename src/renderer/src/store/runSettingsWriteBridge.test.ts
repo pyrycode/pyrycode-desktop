@@ -210,6 +210,41 @@ describe('submitSettingsChange', () => {
     expect(command.payload).not.toHaveProperty('model')
     expect(command.payload).not.toHaveProperty('effort')
   })
+
+  it('builds a permissionMode payload carrying session_id + permission_mode and NO yolo key (#1021)', () => {
+    // The camelCase→snake_case spelling change happens HERE and nowhere else: the store's union arm is
+    // `permissionMode` (the #1020 renderer/IPC spelling) and the wire key is `permission_mode`.
+    const { sendCommand, run } = makeDeps({ field: 'permissionMode', value: 'plan' })
+    run()
+    const command = sendCommand.mock.calls[0][0]
+    if (command.type !== 'setSessionSettings') throw new Error('unreachable')
+    expect(command.payload).toEqual({ session_id: 'sess-1', permission_mode: 'plan' })
+    // The daemon refuses a frame carrying both as malformed; the single-key literal keeps them apart.
+    expect(command.payload).not.toHaveProperty('yolo')
+    expect(command.payload).not.toHaveProperty('model')
+    expect(command.payload).not.toHaveProperty('effort')
+  })
+
+  it('submits a permission mode VERBATIM — no allowlist, no repair, no mapping onto yolo (#1021)', () => {
+    // `bypassPermissions` is refused by the daemon on this field (the escalation keeps one spelling,
+    // `yolo: true`). The write path still submits it unchanged: policy is the daemon's, and a client-side
+    // allowlist would drift from `validPermissionMode` while defending nothing.
+    const { sendCommand, dispatch, run } = makeDeps({
+      field: 'permissionMode',
+      value: 'bypassPermissions'
+    })
+    run()
+    const command = sendCommand.mock.calls[0][0]
+    if (command.type !== 'setSessionSettings') throw new Error('unreachable')
+    expect(command.payload).toEqual({ session_id: 'sess-1', permission_mode: 'bypassPermissions' })
+    expect(command.payload).not.toHaveProperty('yolo')
+    // The optimistic record carries the same unmapped value.
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'changeDispatched',
+      changeId: 'minted-id',
+      change: { field: 'permissionMode', value: 'bypassPermissions' }
+    })
+  })
 })
 
 describe('RunSettingsWriteData (container)', () => {

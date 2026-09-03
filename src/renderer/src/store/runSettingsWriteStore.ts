@@ -27,11 +27,19 @@ import { useStore } from 'zustand'
 import type { RunConfigSnapshot } from './runConfigStore'
 
 /** The per-field intent the user requests. Discriminated on `field` so `value` is exact per field
- *  (a `string` for model/effort, a `boolean` for yolo) — never a widened `string | boolean`. */
+ *  (a `string` for model/effort/permissionMode, a `boolean` for yolo) — never a widened
+ *  `string | boolean`.
+ *
+ *  `permissionMode` (#1021) is spelled camelCase here and snake_case `permission_mode` on the wire, the
+ *  same seam every sibling crosses; the one translation lives in `buildSettingsPayload`. It is a plain
+ *  `string` with NO union and NO allowlist — the #1020 read half's posture, kept deliberately: the
+ *  daemon's `validPermissionMode` is the authority, it refuses `bypassPermissions` on this field (that
+ *  escalation keeps one spelling, `yolo: true`), and nothing on this path maps between the two. */
 export type SettingsChange =
   | { field: 'model'; value: string }
   | { field: 'effort'; value: string }
   | { field: 'yolo'; value: boolean }
+  | { field: 'permissionMode'; value: string }
 
 /** The store's sealed event set on `type`. Three are change-scoped and keyed by the renderer-minted
  *  `changeId` correlation key: the outgoing user action (`changeDispatched`) plus the two incoming
@@ -63,7 +71,7 @@ export type RunSettingsWriteEvent =
  */
 export interface RunSettingsWriteState {
   pending: ReadonlyMap<string, SettingsChange>
-  confirmed: { model?: string; effort?: string; yolo?: boolean }
+  confirmed: { model?: string; effort?: string; yolo?: boolean; permissionMode?: string }
   error: SettingsChange['field'] | null
 }
 
@@ -85,7 +93,9 @@ function assertNever(x: never): never {
 
 /** Commit the value the pending change requested into the sparse confirmed overrides. A per-field
  *  switch (not a computed `[change.field]: change.value`) so each arm narrows `value` to the exact
- *  field type — the string/boolean split stays type-safe, and a new field is a compile error. */
+ *  field type — the string/boolean split stays type-safe, and a new field is a compile error. The
+ *  literal-key form is also what keeps a computed write off this object entirely, so no key here is ever
+ *  taken from a string that came in over the wire. */
 function applyConfirmed(
   confirmed: RunSettingsWriteState['confirmed'],
   change: SettingsChange
@@ -97,6 +107,8 @@ function applyConfirmed(
       return { ...confirmed, effort: change.value }
     case 'yolo':
       return { ...confirmed, yolo: change.value }
+    case 'permissionMode':
+      return { ...confirmed, permissionMode: change.value }
     default:
       return assertNever(change)
   }
@@ -200,15 +212,26 @@ export function useRunSettingsWriteStore<T>(selector: (s: RunSettingsWriteStore)
  * The single pass over `pending` keeps the LAST matching entry per field, so `Map` insertion order
  * gives last-write-wins for rapid same-field changes. `??` falls through only on `undefined`, so an
  * empty-string / `false` value at any layer is held verbatim (never coerced); a `null` snapshot falls
- * to `'' / '' / false` (the runConfigStore "not loaded" base).
+ * to `'' / '' / false / ''` (the runConfigStore "not loaded" base).
+ *
+ * The return type is widened BY HAND alongside each new field, and that is load-bearing rather than
+ * bookkeeping: the compiler forces a `case`, NOT a returned field. A `case` that assigns its local and
+ * never threads it into the object below would satisfy `assertNever` while leaving the overlay silently
+ * dead — a change that looks applied in the store and never reaches a reader.
+ *
+ * CONSUMER NOTE (#682): `permissionMode` composes a client-owned pending/confirmed value over a
+ * DAEMON-AUTHORED snapshot base, and the read half reports six modes where the write half accepts five.
+ * The composed value can legitimately be `bypassPermissions`, which a write would be refused for. A
+ * control must not offer the currently-displayed value straight back as a submittable option.
  */
 export function selectEffectiveSettings(
   snapshot: RunConfigSnapshot | null,
   s: RunSettingsWriteState
-): Pick<RunConfigSnapshot, 'model' | 'effort' | 'yolo'> {
+): Pick<RunConfigSnapshot, 'model' | 'effort' | 'yolo' | 'permissionMode'> {
   let model: string | undefined
   let effort: string | undefined
   let yolo: boolean | undefined
+  let permissionMode: string | undefined
   for (const change of s.pending.values()) {
     switch (change.field) {
       case 'model':
@@ -220,6 +243,9 @@ export function selectEffectiveSettings(
       case 'yolo':
         yolo = change.value
         break
+      case 'permissionMode':
+        permissionMode = change.value
+        break
       default:
         assertNever(change)
     }
@@ -227,22 +253,27 @@ export function selectEffectiveSettings(
   return {
     model: model ?? s.confirmed.model ?? snapshot?.model ?? '',
     effort: effort ?? s.confirmed.effort ?? snapshot?.effort ?? '',
-    yolo: yolo ?? s.confirmed.yolo ?? snapshot?.yolo ?? false
+    yolo: yolo ?? s.confirmed.yolo ?? snapshot?.yolo ?? false,
+    permissionMode: permissionMode ?? s.confirmed.permissionMode ?? snapshot?.permissionMode ?? ''
   }
 }
 
 /** The last-rejected field (for #257's error copy), or `null` when there is no standing rejection. */
 export const selectError = (s: RunSettingsWriteState): SettingsChange['field'] | null => s.error
 
-/** Per-field in-flight flags so #257 can show a pending state and disable a field mid-change. */
+/** Per-field in-flight flags so #257 can show a pending state and disable a field mid-change. The
+ *  return type is widened by hand per field for selectEffectiveSettings' reason: a `case` that sets its
+ *  local without the object below gaining the key compiles clean and flags nothing. */
 export function selectPendingFields(s: RunSettingsWriteState): {
   model: boolean
   effort: boolean
   yolo: boolean
+  permissionMode: boolean
 } {
   let model = false
   let effort = false
   let yolo = false
+  let permissionMode = false
   for (const change of s.pending.values()) {
     switch (change.field) {
       case 'model':
@@ -254,9 +285,12 @@ export function selectPendingFields(s: RunSettingsWriteState): {
       case 'yolo':
         yolo = true
         break
+      case 'permissionMode':
+        permissionMode = true
+        break
       default:
         assertNever(change)
     }
   }
-  return { model, effort, yolo }
+  return { model, effort, yolo, permissionMode }
 }

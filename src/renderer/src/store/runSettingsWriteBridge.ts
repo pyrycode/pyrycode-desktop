@@ -85,6 +85,15 @@ export interface SubmitSettingsChangeDeps {
  * SINGLE changed key. A per-field switch narrows `value` to the right type per arm, and only the
  * changed field is present — so the omitempty presence contract (absent = leave unchanged) is honored
  * by construction, and the main-side builder (#263) has nothing extra to drop.
+ *
+ * The single-key shape is also what keeps `permission_mode` and `yolo` off one frame (#1021), which the
+ * daemon refuses as malformed since they are two spellings of one posture. Nothing enforces that here
+ * because nothing has to: a switch returning one literal per arm cannot emit both. Nothing may be added
+ * that would.
+ *
+ * This is also the ONE place the camelCase renderer/IPC spelling (`permissionMode`, the #1020 seam)
+ * becomes the snake_case wire key (`permission_mode`). The value crosses VERBATIM — no allowlist, no
+ * normalisation, no repair, and no mapping onto the `yolo` bit; `validPermissionMode` is the daemon's.
  */
 function buildSettingsPayload(sessionId: string, change: SettingsChange): SetSessionSettingsPayload {
   switch (change.field) {
@@ -94,6 +103,8 @@ function buildSettingsPayload(sessionId: string, change: SettingsChange): SetSes
       return { session_id: sessionId, effort: change.value }
     case 'yolo':
       return { session_id: sessionId, yolo: change.value }
+    case 'permissionMode':
+      return { session_id: sessionId, permission_mode: change.value }
     default:
       return assertNever(change)
   }

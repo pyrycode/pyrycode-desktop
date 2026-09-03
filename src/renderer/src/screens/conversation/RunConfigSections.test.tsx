@@ -587,7 +587,7 @@ describe('RunConfigView — Effort segments from the published levels (#976)', (
           {...base}
           {...each}
           errorField="effort"
-          pending={{ model: false, effort: true, yolo: false }}
+          pending={{ model: false, effort: true, yolo: false, permissionMode: false }}
         />
       )
       const wrapper = tagWithClass(markup, 'run-config__effort')
@@ -797,7 +797,7 @@ describe('RunConfigView — error surface (#257 AC4)', () => {
 // role="alert" rejection line out of the busy subtree (an aria-busy ancestor would suppress it).
 describe('RunConfigView — pending marker (#558)', () => {
   const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
-  const NONE = { model: false, effort: false, yolo: false } as const
+  const NONE = { model: false, effort: false, yolo: false, permissionMode: false } as const
 
   it('marks the model group only, when a model change is in flight (AC1/AC3)', () => {
     const markup = renderToStaticMarkup(<RunConfigView {...base} pending={{ ...NONE, model: true }} />)
@@ -837,7 +837,7 @@ describe('RunConfigView — pending marker (#558)', () => {
     // controls are marked and the untouched one is not. A single `pendingField | null` prop — the
     // errorField shape — could not express this.
     const markup = renderToStaticMarkup(
-      <RunConfigView {...base} pending={{ model: true, effort: false, yolo: true }} />
+      <RunConfigView {...base} pending={{ model: true, effort: false, yolo: true, permissionMode: false }} />
     )
     expect(markup.match(/aria-busy="true"/g)?.length).toBe(2)
     expect(tagWithClass(markup, 'run-config__model-list')).toContain('aria-busy="true"')
@@ -863,7 +863,7 @@ describe('RunConfigView — pending marker (#558)', () => {
         model="opus[1m]"
         models={PUBLISHED}
         onChange={(): void => undefined}
-        pending={{ model: true, effort: true, yolo: true }}
+        pending={{ model: true, effort: true, yolo: true, permissionMode: false }}
       />
     )
     expect(markup).toContain('role="button"')
@@ -880,7 +880,7 @@ describe('RunConfigView — pending marker (#558)', () => {
         effort="high"
         yolo={true}
         models={PUBLISHED}
-        pending={{ model: true, effort: true, yolo: true }}
+        pending={{ model: true, effort: true, yolo: true, permissionMode: false }}
       />
     )
     expect(markup.match(/aria-label="Current model"/g)?.length).toBe(1)

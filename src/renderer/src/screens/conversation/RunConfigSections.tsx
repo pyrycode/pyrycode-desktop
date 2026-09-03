@@ -123,10 +123,14 @@ const EFFORT_LEVELS_FIELD = 'effort_levels'
 // is derived from the rejected FIELD, not daemon text. Apostrophe-free by design: renderToStaticMarkup
 // escapes ' → &#x27; (the #188/#279 lesson), so keeping the strings clean keeps them readable. This map
 // is the single source of the copy; each section reads its own key. The em-dash is not escaped.
+// `permissionMode` (#1021) is required by the total Record and RENDERS NOWHERE in this sheet, which
+// draws an error line only for its three sections and keeps the YOLO toggle as the sole way in and out
+// of bypass. It is type-satisfying, not a feature; #682's control is what will surface it.
 const RUN_CONFIG_ERROR_COPY: Record<SettingsChange['field'], string> = {
   model: 'Could not change the model — try again.',
   effort: 'Could not change the effort — try again.',
-  yolo: 'Could not change auto-accept — try again.'
+  yolo: 'Could not change auto-accept — try again.',
+  permissionMode: 'Could not change the permission mode — try again.'
 }
 
 // One field's rejection line — a role="alert" live region so a screen reader announces the failure on

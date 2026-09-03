@@ -52,6 +52,7 @@ import {
 } from './composerSend'
 import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
+import { ComposerEffortMenu } from './ComposerEffortMenu'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
@@ -2678,10 +2679,18 @@ function Composer({
           #988: the model menu (Figma 115:3683), immediately right of Actions and NOT at the design's x=135
           — #682's button is sequenced behind it, and a spacer held open for a control that does not exist
           is the same placeholder. It takes `conversationId` and reads its own four store slices, so a
-          snapshot tick re-renders this leaf rather than the textarea beside it. */}
+          snapshot tick re-renders this leaf rather than the textarea beside it.
+
+          #989: the effort menu (Figma 115:3688), the row's LAST control before the reading and likewise
+          not at the design's x=197 — #682 inserts itself between Actions and the model menu when it
+          lands, and no spacer is emitted for it here either. Same shape as the model menu beside it and
+          the same four store slices, but its label is the session's effort VALUE rather than a looked-up
+          name: claude publishes these levels byte-identical to what it accepts, so there is nothing to
+          relabel. Both controls render nothing at all until a run-config snapshot has arrived. */}
       <div className="composer__footer">
         <ComposerActionsMenu onCommand={sendText} />
         <ComposerModelMenu conversationId={activeConversationId} />
+        <ComposerEffortMenu conversationId={activeConversationId} />
         <ContextUsageControl />
       </div>
     </div>

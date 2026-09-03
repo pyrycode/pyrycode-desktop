@@ -24,9 +24,12 @@ export const ATTACHMENT_UPLOAD_EVENT_CHANNEL = 'pyry:attachment-upload-event'  /
 
 export type AttachmentUploadFailure =
   | 'unreadable'                    // added by this slice
-  | 'not-connected' | 'connection-lost' | 'send-failed'                 // AttachmentTransferFailure's four
+  | 'not-connected' | 'connection-lost' | 'send-failed'                 // AttachmentTransferFailure's own three
   | 'attachment-invalid-chunk' | 'attachment-integrity-failed' | 'attachment-too-large'
-  | 'attachment-too-many-uploads' | 'attachment-storage-failed' | 'message-too-long' | 'unclassified'
+  | 'attachment-too-many-uploads' | 'attachment-storage-failed' | 'message-too-long'  // DaemonErrorOutcome, upload leg
+  | 'attachment-not-found' | 'attachment-stream-aborted'                // DaemonErrorOutcome, retrieval leg (#999) —
+                                                                          // representable, not reachable from a conforming daemon
+  | 'unclassified'
 
 export type AttachmentUploadEvent =
   | { type: 'refused'; uploadId: string; reason: 'too-large'; limitBytes: number }
@@ -51,10 +54,19 @@ will widen the intent to carry a dropped path, and *that* widening owes a reques
 left value-free today so the obligation is visible when it arrives.
 
 **`AttachmentUploadFailure` is a re-declaration, checked by the compiler, not by discipline.** Shared
-cannot import `AttachmentTransferFailure` from `src/main/transport/`, so the eleven inherited literals
-are restated. `driveUpload`'s `reason: result.outcome` assignment (below) is what makes drift a compile
-error: a twelfth outcome added upstream fails to typecheck there rather than silently becoming
-unrepresentable here.
+cannot import `AttachmentTransferFailure` from `src/main/transport/`, so its inherited literals are
+restated. `driveUpload`'s `reason: result.outcome` assignment (below) is what makes drift a compile
+error: an outcome added upstream fails to typecheck there rather than silently becoming unrepresentable
+here — and that check has already fired for real, not just in theory. [#999](daemon-error-outcome.md)
+widened `DaemonErrorOutcome` with the retrieval leg's two codes and reddened `driveUpload` until this
+union grew by the same two; the fix widens rather than `Exclude`s them, because a hostile daemon can
+still put either code on a forged `error` frame correlated to a pending upload chunk (see
+[Attachment transfer](attachment-transfer.md) and [Daemon error outcome § Security
+review](daemon-error-outcome.md#security-review)), and excluding them would make a value a hostile
+daemon can cause **unrepresentable**, forcing the main side to coerce it into some other outcome and
+report a failure that never happened. The two are documented above as representable on this union but
+not reachable from a *conforming* daemon — no upload ends this way, and no composer copy should be
+written for them.
 
 **`uploadId` is the minted `attachment_id`**, one value under one name on the bridge —
 `randomUUID()`, never derived from the filename, the path, or the bytes, which is what makes it safe

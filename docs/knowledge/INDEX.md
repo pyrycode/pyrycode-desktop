@@ -443,7 +443,12 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `narrowDaemonErrorOutcome` reads exactly one `ErrorPayload` field, `code`, as a comparand in an explicit
   `switch`, mapping the attachment upload leg's six reject codes (`attachment.invalid_chunk` /
   `.integrity_failed` / `.too_large` / `.too_many_uploads` / `.storage_failed` / `message.too_long`) onto a
-  new client-owned `DaemonErrorOutcome` union whose every member is a source literal, plus a catch-all
+  new client-owned `DaemonErrorOutcome` union. Extended by #999 with the retrieval leg's two
+  (`attachment.not_found` / `.stream_aborted`, dormant until #995 consumes them), once that leg existed
+  upstream — the widening reddened `src/main/attachmentUpload.ts` and was absorbed by widening
+  `AttachmentUploadFailure` by the same two rather than `Exclude`-ing them from
+  `AttachmentTransferFailure`, since a hostile daemon can still cause the value. Every member is a source
+  literal, plus a catch-all
   `'unclassified'` for anything else or an unparseable payload. `outcome` is **required** on the widened
   `daemon-error` kind, not optional, and the narrower is **total** — never throws, no failure return — the
   file's one deliberate exception to its own throw-on-malformed-payload idiom, because

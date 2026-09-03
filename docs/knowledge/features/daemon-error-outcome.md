@@ -1,27 +1,34 @@
 # Daemon error outcome — narrowing `daemon-error` onto client-owned reject codes
 
-The **reject** half of the attachment upload leg's wire contract — the counterpart to
-[Attachment-stored wire types](attachment-stored-wire-types.md)'s positive terminal. Where that
-document is the one `attachment_stored` success reply, this one is the six ways an `error` envelope can
-terminate the same transfer, each mapped onto a client-owned value at the decode boundary.
+The **reject** half of the attachment wire contract, upload leg and retrieval leg both — the counterpart
+to [Attachment-stored wire types](attachment-stored-wire-types.md)'s positive terminal. `DaemonErrorOutcome`
+is the closed vocabulary an `error` envelope's `code` narrows onto at the decode boundary, one member per
+way either leg's transfer can terminate.
 
 Introduced in [#965](https://github.com/pyrycode/pyrycode-desktop/issues/965), split from #961, unblocked
 by [Attachment-stored wire types](attachment-stored-wire-types.md) (#964, which built the fake daemon's
-chunk-answering scaffolding this ticket extends). SSOT re-verified 2026-09-03 in `pyrycode`:
-`internal/protocol/codes.go` (`CodeAttachmentInvalidChunk` … `CodeAttachmentStorageFailed`,
-`CodeMessageTooLong`) and the emit table at `internal/relay/v2session_attachment.go`
-(`attachmentReplyError` marshals a closed `{Code, Message, Retryable}` literal; the `rejectInvalidChunk`
-… `rejectStorageFailed` retryable flags are `false, false, false, true, true`, read off that table rather
-than inferred from the code names).
+chunk-answering scaffolding). Extended in [#999](https://github.com/pyrycode/pyrycode-desktop/issues/999)
+with the retrieval leg's two codes, once that leg existed upstream (`pyrycode#2053` streams it, `#2054`
+emits both codes) and the request/decode halves had landed on this side
+([Request-attachment envelope](request-attachment-envelope.md) #993,
+[Attachment chunk retrieval decode](attachment-chunk-retrieval-decode.md) #998). SSOT re-verified
+2026-09-03 in `pyrycode`: `internal/protocol/codes.go` (`CodeAttachmentInvalidChunk` …
+`CodeAttachmentStorageFailed`, `CodeMessageTooLong`, `CodeAttachmentNotFound`,
+`CodeAttachmentStreamAborted`) and the emit tables at `internal/relay/v2session_attachment.go` (upload
+leg — `attachmentReplyError` marshals a closed `{Code, Message, Retryable}` literal; `rejectInvalidChunk`
+… `rejectStorageFailed` are `false, false, false, true, true`) and
+`internal/relay/v2session_attachment_request.go` (retrieval leg — `rejectAttachmentNotFound` = `false`,
+`rejectStreamAborted` = `true`). Both tables are read off directly, never inferred from the code names.
 
 ## What it does
 
 `ErrorPayload` (`src/shared/wire/types.ts`) has been modelled since [#116](../codebase/116.md) but never
 read — `parseInboundMessage`'s `error` arm has always returned `{ kind: 'daemon-error', inReplyTo }` and
-nothing else, a deliberate, absolute invariant. The attachment upload leg is the first caller that
-genuinely needs the code: its six reject codes mean six different things to a client, and "something
-failed" is not a reason anyone can act on. So the invariant becomes **scoped** rather than absolute —
-narrowed for the codes this leg names, still closed for everything else.
+nothing else, a deliberate, absolute invariant. The attachment upload leg was the first caller that
+genuinely needed the code, and the retrieval leg (#999) followed once it existed upstream: eight reject
+codes across the two legs mean eight different things to a client, and "something failed" is not a
+reason anyone can act on. So the invariant is **scoped** rather than absolute — narrowed for the codes
+either leg names, still closed for everything else.
 
 | Wire code | `DaemonErrorOutcome` | Retryable | What it means to a client |
 |---|---|---|---|
@@ -31,12 +38,20 @@ narrowed for the codes this leg names, still closed for everything else.
 | `attachment.too_many_uploads` | `attachment-too-many-uploads` | after a backoff | The receiver's concurrency bound is hit; clears only when *other* uploads finish. |
 | `attachment.storage_failed` | `attachment-storage-failed` | after a backoff | The host write failed. Static daemon message, never a path or filesystem error; the condition may not clear at all. |
 | `message.too_long` | `message-too-long` | no | **One envelope** was oversized — a producer bug on this side, raised by the transport rather than the attachment path. |
+| `attachment.not_found` | `attachment-not-found` | no | The id resolved to no file inside the named conversation's directory. Answers **two verbs** (`pyrycode#2036`): a `request_attachment` naming an unknown id, and a `send_message` whose `attachment_ids` names one that doesn't resolve under that message's own conversation. Repair by re-listing the conversation's attachments, never by re-asking the same id. |
+| `attachment.stream_aborted` | `attachment-stream-aborted` | after a backoff | The daemon abandoned a retrieval **mid-stream**. A re-request re-runs the same resolution work, so never immediately. Carries an obligation no other member has: the client MUST discard everything accumulated for that transfer and MUST NOT present the partial bytes as the file — the retrieval leg has no completion frame, so this is the stream's only negative signal. |
 | anything else, or an unparseable payload | `unclassified` | — | This client declined to classify the failure. |
 
-`attachment.not_found` and `attachment.stream_aborted` exist upstream but are **deliberately absent** —
-both belong to the retrieval direction (#687), not this upload leg, and modelling them here would assert
-a contract this leg does not have. The per-upload byte bound and the concurrency bound are
-receiver-configured and unpublished: a client learns them only by being rejected.
+**`attachment.not_found`'s merge across ids and failure modes is deliberate and not to be undone
+client-side.** Upstream makes the code indistinguishable across an unknown id, an id whose canonical
+shape is invalid, and an id resolving outside the directory — a disclosure decision, not an imprecision:
+two codes would turn the asking verb into a path-existence oracle for a traversal probe. The message is
+static, never echoes the requested id or the resolved path, and where a request names several ids it
+never says which one failed. There is nothing on the wire to branch on, so the classifier models one
+member and no sub-cases.
+
+The per-upload byte bound and the concurrency bound are receiver-configured and unpublished: a client
+learns them only by being rejected.
 
 **`message.too_long` has no known upstream emit site.** `CodeMessageTooLong` is declared in
 `codes.go` but nothing in the Go tree sends it (checked 2026-09-03) — the mapping does not depend on
@@ -55,19 +70,27 @@ export type DaemonErrorOutcome =
   | 'attachment-too-many-uploads'
   | 'attachment-storage-failed'
   | 'message-too-long'
+  | 'attachment-not-found'        // retrieval leg, #999
+  | 'attachment-stream-aborted'   // retrieval leg, #999
   | 'unclassified'
 ```
 
 Every inhabitant is a literal written in this file, so the type itself is the trust signal: a value of
 this type provably holds no daemon text. `ErrorPayload.code` is untrusted text from an internet-exposed
 boundary, and per `CLAUDE.md` it may never become a lookup path, a filename or a cache key — so it is
-compared against these constants and dropped, never carried.
+compared against these constants and dropped, never carried. The type's own header docblock gives no
+running count of members on purpose — a numeral goes stale the moment the vocabulary grows again, so the
+member list is the count.
 
 **Retryability is documented on each member's docblock, not computed.** No `isRetryable` helper ships.
-`retry_after_s` is never sent on this leg (`attachmentReplyError`'s literal is closed over three fields;
-the field is `*int,omitempty`), so a client cannot learn a backoff duration from the wire — "after a
-backoff" is **client-owned policy**, and policy belongs to the consumer that acts on it (#861), not to a
-decode boundary whose whole job is to say *which* failure this was.
+`retry_after_s` is never sent on either leg (`attachmentReplyError`'s literal is closed over three
+fields; the field is `*int,omitempty`), so a client cannot learn a backoff duration from the wire —
+"after a backoff" is **client-owned policy**, and policy belongs to the consumer that acts on it (#861
+for the upload leg, #995 for the retrieval one), not to a decode boundary whose whole job is to say
+*which* failure this was. A test (added #999) proves the point directly: the fixture for
+`attachment.not_found` hardcodes a `retryable: true` flag that contradicts the daemon's published
+`false`, and the classifier still narrows it to `'attachment-not-found'` with no flag on the result —
+retryability is never read off the wire, only documented.
 
 ### `narrowDaemonErrorOutcome` — total, never throws
 
@@ -77,7 +100,10 @@ function narrowDaemonErrorOutcome(payload: unknown): DaemonErrorOutcome
 
 - non-record payload (`null`, string, number, array) → `'unclassified'`
 - record with a missing or non-string `code` → `'unclassified'`
-- record with a string `code` → an explicit `switch` over the six literals, `default: 'unclassified'`
+- record with a string `code` → an explicit `switch` over the eight literals (both legs), `default:
+  'unclassified'`. Comparison is exact literal equality, never a prefix or a case-insensitive match — a
+  near-miss test (#999) feeds case variants, a trailing space, and a dot removed and asserts all land on
+  `'unclassified'`.
 
 The `switch` **compares** the untrusted string against client-owned constants and **returns** a
 client-owned constant; the daemon's string is never the operand of an index, a join, or a resolve. A
@@ -175,6 +201,15 @@ export function attachmentRejectReplyFrames(
 ): (inboundPlaintext: Uint8Array) => Uint8Array[]
 ```
 
+**Upload-leg only, deliberately, even after #999 widened `DaemonErrorOutcome` to both legs.**
+`AttachmentRejectCode` was not widened to the retrieval pair: this builder answers an inbound
+`attachment_chunk`, correlating to the chunk that triggered the condition, while a retrieval reject
+answers a `request_attachment` instead — widening the union would let the fake emit codes the real
+daemon never sends on the upload leg. #999's tests build their `attachment.not_found` /
+`attachment.stream_aborted` fixtures with the block's own local `encodeReject` helper, not through this
+fake. No retrieval-shaped reply builder exists either; nothing consumes the two outcomes until #995, and
+a builder with no consumer is speculative infrastructure.
+
 The sibling of [`attachmentStoredReplyFrames`](fake-daemon.md#attachment-upload-scaffolding-964) —
 same `buildReplyFrames` shape, opposite terminal. Answers the `attachment_chunk` at `rejectedIndex` with
 one `error` envelope whose `in_reply_to` is that chunk's envelope id and whose payload is a faithful
@@ -197,16 +232,23 @@ set, so interleaved transfers cannot race and there is nothing to reset between 
 
 `src/main/transport/inboundMessage.test.ts`:
 
-- Each of the six codes decodes to its own outcome, and a spurious `retry_after_s` on the fixture (no real
-  reject sends one) does not leak — every assertion is an exact `toEqual`, so a leaked field reddens.
-- The six outcomes are pairwise distinct, asserted as a set size rather than a list of literals (a list
-  would only restate the mapping the code already states).
-- An unrecognised code (`server.binary_offline`) and every malformed-payload shape — `null`, a string, an
+- Each of the eight codes decodes to its own outcome, and a spurious `retry_after_s` on the fixture (no
+  real reject sends one) does not leak — every assertion is an exact `toEqual`, so a leaked field reddens.
+  The two retrieval-leg fixtures are built with the block's own local `encodeReject` helper, same as the
+  six upload-leg ones, not through `fakeDaemon.ts` (see § The fake daemon's reject answer).
+- The eight outcomes are pairwise distinct, asserted as a set size (`new Set(outcomes).size ===
+  LEG.length`) rather than a list of literals (a list would only restate the mapping the code already
+  states) — the assertion self-adjusted when #999 grew the table from six rows to eight; only the `it`
+  name needed a manual update.
+- An unrecognised code (`server.binary_offline`, `session.not_found`, `protocol.malformed` — real
+  upstream codes outside the classified eight) and every malformed-payload shape — `null`, a string, an
   array, a record with no `code`, a record with a non-string `code` — land on `'unclassified'`, asserted as
   neither a throw nor `null`, with `in_reply_to` still crossing (the property the four correlations depend
   on). A separate test pins that an envelope with **no `payload` key at all** is rejected upstream by
   `decodeEnvelope`, not reached by this arm at all — the split noted in § A malformed payload must stay
   terminal.
+- A near-miss set (case variants, a trailing space, a dot removed off a real code) all land on
+  `'unclassified'` too, pinning that the comparison is literal equality, never a prefix or a normalise.
 - **Prototype safety, and why the fixture had to be rebuilt once.** `{ __proto__: { code: … } }` as an
   object **literal** is the prototype-*setter* form — it creates no own property, so `encodeEnvelope`'s
   `JSON.stringify` would emit `"payload":{}` and the test would silently duplicate the plain-`{}` case one
@@ -252,14 +294,36 @@ typechecking cleanly under ADR 0007's name-only allowlist) is closed by the dete
 not by prose alone — belt-and-suspenders means different fabric: the stochastic "keep the literal" rule
 gets a deterministic test as its safety net.
 
+**#999's review (also PASS) raised one SHOULD FIX, addressed by wording rather than by code:** the
+retrieval pair's widening reaches `AttachmentUploadFailure` on the renderer side of the `contextBridge`.
+"Not reachable on this leg" is a claim about a *conforming* daemon — a hostile one can put either code in
+an `error` frame whose `in_reply_to` correlates to a pending upload chunk, and `transferForEnvelope` will
+still hand it to that transfer's `fail()`. What crosses remains a client-owned literal (no daemon text,
+no path), so the fix was documentation, not a runtime check: the member comment on the shared union says
+*not reachable from a conforming daemon*, not *not reachable*, so a later reader doesn't treat
+unreachability as an invariant to build on.
+
 ## Edge cases and limitations
 
-- **`attachment.not_found` / `attachment.stream_aborted` are not modelled here.** Both exist upstream but
-  belong to the retrieval direction (#687); a client asking after them on this leg gets `'unclassified'`.
-- **`outcome` now has a reader.** [Attachment transfer](attachment-transfer.md) (#861, landed) added a
-  fifth check inside `case 'daemon-error':`'s `if (inReplyTo !== undefined)` block — `transferForEnvelope`,
-  after `pendingSettings` and `pendingCreateFolders` — that reads `inbound.outcome` and passes it straight
-  to the matching transfer's `fail()`, unmodified. Nothing re-parses or re-classifies it downstream.
+- **The two retrieval-leg outcomes are dormant on this side of the decode boundary.** `outcome` has one
+  reader today, [Attachment transfer](attachment-transfer.md)'s `transferForEnvelope` (#861), and it
+  answers only the upload leg's `attachment_chunk` correlations — a `request_attachment` has no consumer
+  yet. #999 ships the two members and their classification; #995 is the consumer that acts on them,
+  including honouring `attachment-stream-aborted`'s discard-the-partial-transfer obligation, which this
+  decode boundary can state but not enforce (there is no reassembler here to discard from).
+- **The widening reached the renderer through a type, not through anyone wiring a new arm.**
+  `DaemonErrorOutcome` sits inside `AttachmentTransferFailure` (main-only) which `AttachmentUploadFailure`
+  re-declares on the shared IPC side (`src/shared/ipc/attachmentUpload.ts`) — see
+  [Attachment upload](attachment-upload.md). Widening this type alone reddened
+  `src/main/attachmentUpload.ts`'s `reason: result.outcome` assignment, the compile-forced check that
+  union's docblock exists to be; the fix was to widen `AttachmentUploadFailure` by the same two literals
+  rather than to `Exclude` them from `AttachmentTransferFailure`, documented there as representable on the
+  upload leg but not reachable from a conforming daemon.
+- **`outcome` has a reader on the upload leg.** [Attachment transfer](attachment-transfer.md) (#861,
+  landed) added a check inside `case 'daemon-error':`'s `if (inReplyTo !== undefined)` block —
+  `transferForEnvelope`, after `pendingSettings` and `pendingCreateFolders` — that reads `inbound.outcome`
+  and passes it straight to the matching transfer's `fail()`, unmodified. Nothing re-parses or
+  re-classifies it downstream.
 - **No length bound on `code`.** Deliberate — a cap would imply the value is retained somewhere, which is
   the impression to avoid; nothing is copied, concatenated, or kept past the `switch`.
 
@@ -268,6 +332,13 @@ gets a deterministic test as its safety net.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the positive-terminal sibling on the
   same upload leg (#964); together they are the whole `attachment_chunk` reply space.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the producer half both replies answer.
+- [Request-attachment envelope](request-attachment-envelope.md) (#993) and
+  [Attachment chunk retrieval decode](attachment-chunk-retrieval-decode.md) (#998) — the retrieval leg's
+  request and chunk-decode halves that made #999's two codes worth classifying; #995 (not yet built) is
+  the consumer that acts on them.
+- [Attachment upload](attachment-upload.md) — `AttachmentUploadFailure`, the shared-IPC re-declaration
+  this type's widening propagates through, including the two retrieval codes it carries but cannot reach
+  from a conforming daemon.
 - [Inbound message decode](inbound-message-decode.md) / [contract](inbound-message-decode-contract.md) /
   [internals](inbound-message-decode-internals.md) / [limits](inbound-message-decode-limits.md) — the
   boundary `daemon-error` lives in; `parseTurnStatePayload`'s closed-enum idiom this narrower reuses;

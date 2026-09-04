@@ -174,16 +174,33 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   on frequency, relevance and cost (`selectBacklogFor` returns the same reference, or the shared
   `EMPTY_BACKLOG`, for every conversation but the open one, so `Object.is` short-circuits and nothing
   re-renders for a snapshot elsewhere). Their own shrink — `ComposerErrorSlotControl`'s ~8px button growth,
-  `ComposerSlot`'s question panel — is still a known, uncovered latency gap: the flag stays correct through
-  it (no scroll event fires), so the next screen render still re-pins, same as the queued backlog did before
-  #1009. Closing either means the same choice this ticket faced: hoist the read, or a `ResizeObserver` over
-  the whole region, covering every occupant at once. Deliberately not built here — out of scope, per the
-  ticket.
+  `ComposerSlot`'s question panel — was a known, uncovered latency gap at #1009: the flag stayed correct
+  through it (no scroll event fires), so the next screen render still re-pinned, same as the queued backlog
+  did before #1009. **[#1049](https://github.com/pyrycode/pyrycode-desktop/issues/1049) closed both as a free
+  consequence of a mechanism built for a different case, not as its own deliverable:** its `ResizeObserver`
+  watches `.conversation__thread` itself alongside every direct-child row, and both occupants' shrink is
+  exactly a change to the container's own border box, so the observation fires and the shared write re-pins.
+  Neither has a criterion of its own and neither was #1049's target — they are recorded here because the
+  inventory above needs to stay true, not because either was measured.
 
   `overflow-anchor` stays unset — closed as indifferent by #601, confirmed on an observed e2e run rather
   than reasoned about, but that ruling covered only the screen-render cases #601 tested. **[#1046](https://github.com/pyrycode/pyrycode-desktop/issues/1046) found it decisive, not
   indifferent, for the one case those tests couldn't reach:** a growth that involves no React render
-  anywhere. **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
+  anywhere. A thumbnail resolving **above** a bottom-resting reader is exactly that case, and anchoring
+  already holds it. Growth **below** the reader — a thumbnail resolving in their own last row — is the one
+  direction anchoring is indifferent to, left open by #1046 and closed by
+  **[#1049](https://github.com/pyrycode/pyrycode-desktop/issues/1049)**: the same `ResizeObserver` above (the
+  container and each direct-child row) re-runs the pin's one guarded write, `reassertPinnedToBottom`, on the
+  row's own resize. The write is idempotent and the flag is the only hinge, so a scrolled-up reader is
+  untouched and a picture-above reader sees the write as a no-op — anchoring has already moved `scrollTop` by
+  the time resize observations are delivered. One trap surfaced only under measurement: a thumbnail settles
+  in more than the two layout steps `useThreadScrollPin`'s docblock names — the `<img>` mount's 12px margin
+  lands first, the decoded picture's 160px a frame or more later — and the pin's own re-pin on the first step
+  queued a scroll event that `onScroll` read, against the second step's growth, as the operator scrolling
+  away. The fix is `pinnedOffset`: the write records the offset it produced, only when it actually moved it,
+  and `onScroll` declines to re-measure through exactly that one echo, clearing the record on every event so
+  it can never outlive one. Measured at 172px short (`scrollHeight` 2028 → 2200) with no fix, 0 with it.
+  **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
   mechanism with no second one: `useThreadScrollPin` now also returns `followBottom`, a single
   `following.current = true` re-arm, wired as a required `onMessageSent` prop on `Composer` and invoked
   inside `handleSubmit`'s existing `if (sent)` branch — so a submit that sends nothing (not connected,

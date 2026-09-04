@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ATTACHMENT_PASTE_SOURCE,
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
   MAX_UPLOAD_PATH_LENGTH,
+  isAttachmentPasteRequest,
   isAttachmentUploadRequest,
   type AttachmentUploadEvent
 } from './attachmentUpload'
@@ -48,6 +50,12 @@ describe('AttachmentUploadEvent', () => {
     // The type annotation is what makes the walk meaningful — an extra key would not typecheck.
     const members: AttachmentUploadEvent[] = [
       { type: 'refused', uploadId: 'u', reason: 'too-large', limitBytes: 1 },
+      // #1032's refusal, and the KEY LIST BELOW IS ITS WHOLE POINT: `limitBytes` is ABSENT rather than
+      // optional, because a clipboard that held no image has no limit to state. That absence is what
+      // reddens `attachmentUploadOutcomeCopy` until its `refused` arm branches on `reason` — widening
+      // the shipped member's `reason` in place would have typechecked and then rendered the too-large
+      // sentence, limit figure and all, for a paste that found nothing.
+      { type: 'refused', uploadId: 'u', reason: 'no-image' },
       { type: 'failed', uploadId: 'u', reason: 'unreadable' },
       { type: 'completed', uploadId: 'u' },
       // #864's in-flight member. Its two fields are FRAME COUNTS: neither can hold a byte of the
@@ -58,6 +66,7 @@ describe('AttachmentUploadEvent', () => {
 
     expect(members.map((member) => Object.keys(member).sort())).toEqual([
       ['limitBytes', 'reason', 'type', 'uploadId'],
+      ['reason', 'type', 'uploadId'],
       ['reason', 'type', 'uploadId'],
       ['type', 'uploadId'],
       ['sentChunks', 'totalChunks', 'type', 'uploadId']
@@ -87,14 +96,31 @@ describe('AttachmentUploadEvent', () => {
     ]).toEqual(['number', 'number', 'number'])
   })
 
-  it('discriminates on type across all four members', () => {
-    const seen = new Set<AttachmentUploadEvent['type']>([
+  // ⭐ THIS TEST USED TO BE NAMED `discriminates on type across all four members`, AND THAT NAME WAS THE
+  // TRAP #1032 WALKED INTO. It counted `type` strings in a Set, so a SECOND member sharing an existing
+  // `type` — which is exactly the shape a no-image refusal takes — left it green while its own name went
+  // stale and the union it claimed to cover had grown. AC4's proof has to be extended deliberately, so
+  // the reason axis below is COMPILER-FORCED rather than counted: a third refusal reason fails to
+  // typecheck here, the mechanism ATTACHMENT_UPLOAD_FAILURE_COPY's Record already uses one directory over.
+  it('discriminates on type, and within refused on reason, across every member', () => {
+    const types = new Set<AttachmentUploadEvent['type']>([
       'refused',
       'failed',
       'completed',
       'progress'
     ])
-    expect(seen.size).toBe(4)
+    expect(types.size).toBe(4)
+
+    const refusalReasons: Record<
+      Extract<AttachmentUploadEvent, { type: 'refused' }>['reason'],
+      true
+    > = {
+      'too-large': true,
+      'no-image': true
+    }
+    // Two DISTINCT reasons under one type, which is what makes `type` alone insufficient — and is why
+    // the composer's switch has to branch twice to reach a sentence.
+    expect(Object.keys(refusalReasons).sort()).toEqual(['no-image', 'too-large'])
   })
 })
 
@@ -160,5 +186,86 @@ describe('isAttachmentUploadRequest', () => {
     expect(isAttachmentUploadRequest(JSON.parse('{"__proto__": {"path": "/x"}, "path": ""}'))).toBe(
       false
     )
+  })
+})
+
+// #1032: the THIRD entry's guard. The channel now carries three asks — argument-free is the picker, a
+// path is a drop, and this one is a paste. Presence alone can no longer tell them apart, so this ask
+// names itself with a client-owned literal and the guard compares against it.
+describe('isAttachmentPasteRequest', () => {
+  it('accepts the well-formed ask', () => {
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(true)
+  })
+
+  it('accepts an ask carrying extra keys, which are never read', () => {
+    // The sibling guard's posture restated, and it costs even less here: nothing downstream reads ANY
+    // field off this ask — `uploadClipboardImage` takes no argument from it — so a smuggled field
+    // reaches nothing at all.
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, path: '/etc/passwd' })).toBe(
+      true
+    )
+  })
+
+  it('rejects everything that is not an object naming this exact source', () => {
+    // Table-driven so the rejected set is readable as a set. The near-misses matter most: a source that
+    // is a different literal, one that is a prefix, and one that is not a string at all are the three
+    // shapes a renderer would produce by accident or on purpose.
+    const rejected: unknown[] = [
+      null,
+      undefined,
+      'clipboard-image',
+      42,
+      true,
+      [],
+      ['clipboard-image'],
+      {},
+      { source: null },
+      { source: 42 },
+      { source: '' },
+      { source: 'clipboard' },
+      { source: 'clipboard-image-x' },
+      { source: ['clipboard-image'] },
+      { source: { source: 'clipboard-image' } },
+      { sources: 'clipboard-image' }
+    ]
+    expect(rejected.map(isAttachmentPasteRequest)).toEqual(rejected.map(() => false))
+  })
+
+  it('rejects a __proto__-carrying literal and alters no prototype reading it', () => {
+    // BUILT WITH JSON.parse, NEVER AS AN OBJECT LITERAL: `{ __proto__: {...} }` in source creates no own
+    // key at all — it sets the prototype — so a literal fixture would pass vacuously. JSON.parse
+    // round-trips `__proto__` as an ordinary OWN key, which is the shape a hostile renderer can put on
+    // the wire.
+    const hostile: unknown = JSON.parse('{"__proto__": {"source": "clipboard-image"}}')
+    expect(isAttachmentPasteRequest(hostile)).toBe(false)
+    expect(Object.prototype).not.toHaveProperty('source')
+  })
+})
+
+// ⭐ THE ARM ORDER IS LOAD-BEARING, and this is the assertion that keeps it honest. The main listener
+// tries the path guard FIRST, so an ask carrying a valid path reaches the drop arm exactly as it does
+// today — including one that also carries extra keys, which the shipped guard documents as accepted and
+// never read. Mutual exclusivity is what makes that ordering a documentation choice rather than a
+// behaviour one for every ask an operator can actually produce.
+describe('the two request guards, side by side', () => {
+  it('neither guard accepts the other entry’s ask', () => {
+    expect(isAttachmentUploadRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(false)
+    expect(isAttachmentPasteRequest({ path: '/Users/someone/Pictures/photo.png' })).toBe(false)
+  })
+
+  it('an ask carrying both shapes is a PATH ask, because the path guard runs first', () => {
+    // Stated as a fact about the guards rather than about the listener, since this is where it can be
+    // proved. Both accept it; the ordering in `attachmentUploadListener` is what resolves it, and
+    // resolving it towards the shipped arm is what keeps #890's behaviour byte-for-byte unchanged.
+    const both = { path: '/tmp/a', source: ATTACHMENT_PASTE_SOURCE }
+    expect(isAttachmentUploadRequest(both)).toBe(true)
+    expect(isAttachmentPasteRequest(both)).toBe(true)
+  })
+
+  it('names a source that cannot collide with a path', () => {
+    // The literal is client-owned and is never derived from anything the window sends. A source that
+    // looked like a path would make the two asks confusable at a glance in a log or a review.
+    expect(ATTACHMENT_PASTE_SOURCE).toBe('clipboard-image')
+    expect(ATTACHMENT_PASTE_SOURCE).not.toContain('/')
   })
 })

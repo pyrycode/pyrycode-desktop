@@ -12,8 +12,10 @@ import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabel'
 import {
+  ATTACHMENT_PASTE_SOURCE,
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  type AttachmentPasteRequest,
   type AttachmentUploadEvent,
   type AttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
@@ -213,6 +215,36 @@ const api = {
     }
     if (path === '') return
     const request: AttachmentUploadRequest = { path }
+    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
+  },
+
+  /**
+   * Attach the image on the CLIPBOARD (#1032), entering the same flow the picker and the drop do.
+   * Fire-and-forget; the outcome arrives on the push channel below, from the same driver and the same
+   * exactly-one terminal. #1033's paste keystroke is the only caller.
+   *
+   * ⭐ IT CARRIES NOTHING, AND THAT IS THE WHOLE DESIGN. This is the REVERSE cut from
+   * `dropAttachmentFile` above: a drop had to admit a host path because the OS hands the file to the
+   * WINDOW, but a clipboard is readable from the background process, so the window asks and main reads.
+   * The one field on the wire is a client-owned literal that selects an arm — a renderer cannot vary it
+   * without `isAttachmentPasteRequest` refusing the ask — so no renderer-supplied value reaches a path,
+   * a filename, a byte or the wire on this path at all. The window never sees the image: the outcome
+   * union is content-free by construction, so what comes back is "attached" or "no image", never a
+   * pixel, a dimension or a length.
+   *
+   * THIS IS NOT THE `clipboard-read` PERMISSION, and must never become it. `src/main/index.ts`'s
+   * permission allowlist carries a standing instruction that it must not grow to `clipboard-read` or
+   * `clipboard-sanitized-read`, because reading exfiltrates whatever the user last copied — routinely a
+   * password-manager secret — into the renderer's own address space. Nothing here does that: the
+   * renderer gains no permission, holds no clipboard content, and cannot address the clipboard except
+   * by asking for this one act. A text-flavoured secret yields an empty image and a refusal.
+   *
+   * ipcRenderer does not cross the bridge and ATTACHMENT_UPLOAD_CHANNEL is fixed here, so the renderer
+   * cannot address arbitrary channels. There is nothing to throw and nothing to filter — unlike its
+   * neighbour, this function takes no argument at all.
+   */
+  pasteAttachmentImage: (): void => {
+    const request: AttachmentPasteRequest = { source: ATTACHMENT_PASTE_SOURCE }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 

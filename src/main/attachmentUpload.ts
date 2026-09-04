@@ -1,22 +1,31 @@
-// The attach flow between the file picker and #861's upload driver (#862): guard the chosen file,
-// read it, declare it, drive the upload, and report exactly one terminal to the window. The picker
-// itself is NOT here — the Electron `dialog` call cannot be Electron-free, so it stays at the
-// composition-root edge and hands this module a path, which is what keeps the guard and the drive
-// unit-testable either side of it and makes cancellation provable without a real dialog.
+// The attach flow between an operator's gesture and #861's upload driver (#862): guard the chosen
+// file, read it, declare it, drive the upload, and report exactly one terminal to the window. THREE
+// ENTRIES join it — a picked file (#862), a dropped one (#890), and a pasted image (#1032) — and each
+// converges on one guard and one terminal rather than copying either.
 //
-// MAIN-PROCESS ONLY, and Electron-free: `node:fs/promises`, `node:path` and `node:crypto` only, the
-// saveDebugBundle posture — the Electron-derived input (the path) is a PARAMETER, so the test module
-// graph never touches `electron`. It holds the file's whole bytes, so it must never be re-exported
-// through any renderer barrel (CLAUDE.md "Keep the transport out of the window").
+// NO ELECTRON CALL IS HERE, on purpose and for all three. The `dialog` call, `webUtils`, and
+// `clipboard.readImage()` all stay at the composition-root edge and reach this module as a PARAMETER —
+// a path, or a reader function. That is what keeps the guard and the drive unit-testable either side
+// of them, makes cancellation provable without a real dialog, and lets the no-image branch be tested
+// without touching the operator's real clipboard.
 //
-// THE RENDERER NAMES AN INTENT, NEVER A FILE. Nothing renderer-supplied reaches this module: the path
-// comes from the OS picker, the id from randomUUID, the bound and the mime table from constants
-// written here. That is the containment a renderer compromise runs into — it can make a picker
-// appear; it cannot choose what the picker opens, and it cannot read back what was sent.
+// MAIN-PROCESS ONLY: `node:fs/promises`, `node:path` and `node:crypto` only, the saveDebugBundle
+// posture. It holds the file's whole bytes, so it must never be re-exported through any renderer barrel
+// (CLAUDE.md "Keep the transport out of the window").
 //
-// NEITHER FUNCTION EVER REJECTS. #861's `uploadAttachment` already never rejects, so the `fs` read
-// this slice adds was the last unhandled-main-process-rejection surface on the chain; both entries
-// resolve `void` on every path, which is what licenses the composition root's bare `void` call.
+// WHAT THE WINDOW MAY NAME, ENTRY BY ENTRY — the containment a renderer compromise runs into, and it is
+// narrower than "nothing", which is what this paragraph used to claim for the whole module. The picker
+// entry: an intent and nothing else, so a compromised renderer can make a picker appear but cannot
+// choose what it opens. The paste entry: an intent and nothing else again — the bytes come from the
+// clipboard, read HERE rather than claimed by the window, and the name, the type and the id are all
+// constants or randomUUID. The drop entry alone admits a renderer-supplied value, a host path, and it
+// is a CLAIM rather than a capability: `isAttachmentUploadRequest` shapes it at the boundary and
+// `readChosenFile` refuses anything that is not a regular file. None of the three can read back what
+// was sent.
+//
+// NO ENTRY EVER REJECTS. #861's `uploadAttachment` already never rejects, so the `fs` read and the
+// injected clipboard reader are the only other rejection surfaces on the chain and both are caught;
+// every entry resolves `void` on every path, which is what licenses the composition root's bare `void`.
 //
 // LOG DISCIPLINE. `DiagnosticEvent` has no field shaped to hold a filename or a path, and this module
 // logs only a static event name, a client-owned stage `code`, and the file's `bytes` length — the
@@ -24,7 +33,11 @@
 // and the `uploadId` are all deliberately absent (the last for the reason attachmentTransfer.ts's
 // header records: an id that ever came to be derived from the filename would leak it through a field
 // that looks safe). The caught `fs` error is DROPPED UNEXAMINED — Node's ErrnoException carries
-// `.path`, so classify-don't-forward (inherited #62) is load-bearing here, not stylistic.
+// `.path`, so classify-don't-forward (inherited #62) is load-bearing here, not stylistic, and the
+// caught clipboard-reader error is dropped for the same reason.
+// NOTHING ABOUT THE CLIPBOARD IS LOGGED AT ALL (#1032): the no-image refusal records a static code with
+// NO `bytes` figure, so no length, dimension or flavour of what the operator was holding is written
+// down even in the branch that read it.
 //
 // Imported by relative path: src/main has no @shared alias (tsconfig.node.json).
 import { open } from 'node:fs/promises'
@@ -330,4 +343,88 @@ export async function uploadAttachmentBytes(
   deps: AttachmentUploadDeps
 ): Promise<void> {
   await driveUpload(randomUUID(), file, deps)
+}
+
+/**
+ * The clipboard's image as PNG bytes, or `null` when it holds none (#1032).
+ *
+ * A PARAMETER RATHER THAN A MEMBER OF AttachmentUploadDeps, and that is the header's Electron-free
+ * commitment being kept rather than a style choice: `clipboard.readImage()` is Electron, so the call
+ * stays at the composition root — `uploadAttachmentFile`'s path parameter and `saveDebugBundle`'s
+ * `save` seam, in the same shape — and this module's test graph never loads `electron`. It also keeps
+ * the shared deps object free of a collaborator the other two entries cannot use.
+ */
+export type ClipboardImageReader = () => Uint8Array | null
+
+/** What a pasted image is DECLARED as, always. Not sniffed from the bytes: the background process asks
+ *  the clipboard for PNG and encodes PNG, so the hint is a fact about what it did rather than a guess
+ *  about what it holds. Absent from MIME_TYPES on purpose — nothing here has a filename to look up. */
+export const CLIPBOARD_IMAGE_MIME_TYPE = 'image/png'
+
+/** The client-owned stem every pasted image is named with. The whole display name is minted here, so
+ *  no part of it can come from the clipboard, from the window, or from the host. */
+export const CLIPBOARD_IMAGE_FILENAME_PREFIX = 'clipboard-image'
+
+/**
+ * A display name for one pasted image: the constant stem, a UTC timestamp, and `.png`.
+ *
+ * UTC AND NEVER A LOCAL GETTER. No time zone is pinned anywhere in this repo, so a local stamp would
+ * name the same paste differently on two machines; the one existing formatter in this codebase uses UTC
+ * getters for that reason. `toISOString` with the separators stripped is filename-safe on every
+ * platform, which a raw ISO string is not (`:` is illegal on Windows).
+ *
+ * TWO PASTES INSIDE ONE SECOND MINT THE SAME NAME, and that is accepted: the daemon keys on
+ * `attachment_id`, which is a fresh randomUUID per call, so the collision is cosmetic. Adding the id to
+ * the name would fix nothing and would put a correlator in a string the operator reads.
+ */
+function clipboardImageFilename(): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '')
+  return `${CLIPBOARD_IMAGE_FILENAME_PREFIX}-${stamp}.png`
+}
+
+/**
+ * Upload the image on the clipboard, or say why not. The entry for a pasted image (#1032), which reads
+ * the clipboard in the background process — never in the window — and joins the flow at the size guard.
+ *
+ * THE ASK CARRIES NOTHING, so nothing renderer-supplied reaches this function: the bytes come from the
+ * reader, the id from randomUUID, the name and the declared type from constants written here. That is
+ * a stronger containment than either shipped entry has — the picker's path comes from the OS dialog and
+ * the drop's is a claim main must open to test, while here there is no untrusted value at all.
+ *
+ * THE NO-IMAGE CASE IS A REFUSAL, NOT A FAILURE: nothing was attempted and nothing went wrong. It is
+ * emitted here rather than through `uploadAttachmentBytes` because a terminal that precedes any bytes
+ * has no upload to borrow an id from — and because routing an empty array through the driver is not
+ * merely inelegant: zero bytes PASSES the size guard and would attempt a real upload of an empty file.
+ *
+ * Never rejects, like its two siblings — which is what licenses the composition root's bare `void`.
+ */
+export async function uploadClipboardImage(
+  readClipboardImage: ClipboardImageReader,
+  deps: AttachmentUploadDeps
+): Promise<void> {
+  let bytes: Uint8Array | null
+  try {
+    bytes = readClipboardImage()
+  } catch {
+    // An INJECTED seam, and a contract is not a guarantee for one — driveUpload's catch below makes the
+    // same argument about `upload`. The caught object is dropped unexamined, matching readChosenFile:
+    // it is the only thing on this path that could carry anything about the clipboard. A throw and an
+    // empty clipboard are one fact from the composer's seat, so they report one refusal rather than
+    // minting a union member for a branch a conforming Electron never takes.
+    bytes = null
+  }
+
+  if (bytes === null || bytes.length === 0) {
+    // No `bytes` field: DiagnosticEvent's is optional, so a refusal with nothing to count omits it
+    // rather than reporting a zero that would read as a measurement of the clipboard.
+    deps.diagnosticLog?.event({ event: LOG_EVENT, code: 'no-image' })
+    deps.emit({ type: 'refused', uploadId: randomUUID(), reason: 'no-image' })
+    return
+  }
+
+  await driveUpload(
+    randomUUID(),
+    { bytes, filename: clipboardImageFilename(), mimeType: CLIPBOARD_IMAGE_MIME_TYPE },
+    deps
+  )
 }

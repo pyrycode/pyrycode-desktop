@@ -1,12 +1,13 @@
 // The attachment-upload channel pair between the renderer window and the background process (#862,
-// widened by #890): two channel constants, one optional request shape plus its boundary guard, and one
-// sealed outcome union, imported by both process sides. The renderer either names a bare INTENT ("let
-// me attach a file", and the background process opens the picker and reads the choice) or names a
-// DROPPED PATH. Either way the background process guards, drives #861's upload driver, and pushes back
+// widened by #890 and again by #1032): two channel constants, two optional request shapes each with its
+// boundary guard, and one sealed outcome union, imported by both process sides. The renderer names one
+// of THREE asks — a bare INTENT ("let me attach a file", and the background process opens the picker and
+// reads the choice), a DROPPED PATH, or a PASTE ("attach the image on the clipboard", carrying nothing
+// at all). Whichever it is, the background process guards, drives #861's upload driver, and pushes back
 // exactly one terminal.
 //
-// This module is channel constants + a discriminated union + one pure guard, with no I/O and no state —
-// attachmentBytes.ts's shape. It was constants and a union alone until #890 added the door below.
+// This module is channel constants + a discriminated union + pure guards, with no I/O and no state —
+// attachmentBytes.ts's shape. It was constants and a union alone until #890 added the first door below.
 //
 // TWO CHANNELS, NOT AN INVOKE. The outcome comes back with ipcRenderer.on rather than as an
 // invoke reply because the channel must carry MORE THAN ONE MESSAGE per intent: #864 puts in-flight
@@ -23,6 +24,19 @@
 // argument-free send still means "open the picker" and reaches no request field; a send carrying a
 // request means "upload this path" and is refused outright by isAttachmentUploadRequest below unless it
 // is well-formed. There is still exactly ONE place a path enters main from the window.
+//
+// PRESENCE ALONE NO LONGER TELLS THE ASKS APART (#1032). A pasted image has no path anywhere — it is a
+// bitmap the OS holds — so its ask cannot be a path, and it cannot be argument-free either, because that
+// shape is the picker's and the shipped sender cannot be given a discriminator without changing what a
+// conforming renderer puts on the wire. So the THIRD ask names itself: one client-owned literal, matched
+// against a constant by isAttachmentPasteRequest below, carrying nothing else. It is the NARROWEST of
+// the three — the picker's ask has no field, this one has a field a renderer cannot vary, and only the
+// drop's carries a value main must act on. The reverse cut #862 wanted is available for a paste and is
+// taken: the window asks, and the background process reads the clipboard itself.
+//
+// THE TWO GUARDS ARE TRIED PATH-FIRST in the main listener, and that ordering is load-bearing rather
+// than stylistic: an ask carrying a valid `path` reaches the drop arm exactly as it does today, extra
+// keys included, so nothing an operator can produce changes arm. See src/main/index.ts.
 //
 // WHAT REPLACES "NOTHING CROSSES" IS NOT A WEAKER CLAIM, IT IS A DIFFERENT ONE. The path is resolved in
 // the preload by `webUtils.getPathForFile`, which answers the EMPTY STRING for a File the page
@@ -117,6 +131,55 @@ export function isAttachmentUploadRequest(value: unknown): value is AttachmentUp
 }
 
 /**
+ * The one value a PASTE ask carries (#1032), and it is a name for the entry rather than information
+ * about the image: the bytes are read in the background process, from the clipboard, after this ask
+ * arrives. A renderer cannot vary it — the guard below compares against this constant — so the accepted
+ * set on this shape is exactly one string.
+ *
+ * Deliberately not path-shaped and not empty: it must not be confusable with an
+ * AttachmentUploadRequest at a glance in a review, and an ask of `{}` would be indistinguishable from a
+ * malformed one, which would make the guard BLUNTER rather than sharper by turning "object-shaped but
+ * not a path" into an upload trigger.
+ */
+export const ATTACHMENT_PASTE_SOURCE = 'clipboard-image' as const
+
+/**
+ * What a PASTED image asks for (#1032): the entry's own name, AND NOTHING ELSE — no path, no bytes, no
+ * type, no dimensions. That emptiness is this entry's central security property, and it is stronger
+ * than either sibling's: the drop had to admit a host path because the OS hands a drop to the WINDOW,
+ * whereas a clipboard is readable from the background process, so nothing renderer-supplied reaches a
+ * filename, a byte or the wire on this path at all.
+ *
+ * camelCase and client-internal, like its sibling. Extra keys are accepted and never read — and here
+ * that costs even less, because `uploadClipboardImage` (src/main/attachmentUpload.ts) takes no field off
+ * this object whatsoever; the ask's only job is to select an arm.
+ */
+export interface AttachmentPasteRequest {
+  source: typeof ATTACHMENT_PASTE_SOURCE
+}
+
+/**
+ * The runtime guard for the paste ask at the untrusted renderer→main boundary (#1032), in
+ * isAttachmentUploadRequest's shape above and for its reasons. A failing ask is DROPPED: no clipboard
+ * read, no event. There is no identifier to address an answer to, and nothing an operator can physically
+ * do produces one, so a malformed ask means a compromised renderer and is owed no sentence.
+ *
+ * THE COMPARISON AGAINST A CONSTANT IS THE LOAD-BEARING LINE, the way the empty-string refusal is for
+ * the path guard. A typeof-string check alone would accept any string a renderer invented and leave the
+ * arm selected by something the window controls; matching one client-owned literal is what makes this
+ * ask a selection rather than a value.
+ *
+ * The field read is an `in`-guarded property access on a narrowed `object`, so a hostile ask built with
+ * a `__proto__` key is refused on its own merits: the polluting object has no OWN `source`.
+ */
+export function isAttachmentPasteRequest(value: unknown): value is AttachmentPasteRequest {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('source' in value)) return false
+  const { source } = value as Record<string, unknown>
+  return source === ATTACHMENT_PASTE_SOURCE
+}
+
+/**
  * Why one upload ended without the file being stored, as a closed set of CLIENT-OWNED literals.
  * Every inhabitant is a string written in this repo, so a value of this type provably carries no
  * daemon text, no filesystem error, and nothing derived from the file.
@@ -195,10 +258,32 @@ export type AttachmentUploadFailure =
  * its own click minted (see useAttachmentUpload).
  */
 export type AttachmentUploadEvent =
-  /** This client declined to attempt the file. `limitBytes` is carried so the composer can state the
-   *  limit WITHOUT inventing one — and it is the client's own bound, not the daemon's: a file under
-   *  it may still come back `attachment-too-large`, which is a `failed`, not a `refused`. */
+  /** This client declined to attempt the file ON ITS SIZE. `limitBytes` is carried so the composer can
+   *  state the limit WITHOUT inventing one — and it is the client's own bound, not the daemon's: a file
+   *  under it may still come back `attachment-too-large`, which is a `failed`, not a `refused`.
+   *
+   *  SCOPED TO THIS VARIANT BY #1032, and the scoping is the point rather than housekeeping: `refused`
+   *  now has a second member, and `limitBytes` belongs to this one alone. */
   | { type: 'refused'; uploadId: string; reason: 'too-large'; limitBytes: number }
+  /**
+   * This client declined because there was nothing to attach: the clipboard held no image when the
+   * background process read it (#1032). A REFUSAL, not a failure — nothing was attempted and nothing
+   * went wrong; the operator pasted at a moment when the clipboard held text, or an image that was
+   * gone by the time the ask arrived.
+   *
+   * A SEPARATE MEMBER RATHER THAN A SECOND `reason` ON THE ONE ABOVE, and that shape is forced rather
+   * than chosen. Widening the shipped member's `reason` in place TYPECHECKS — `attachmentUploadCopy`'s
+   * `case 'refused'` arm reads `limitBytes` and never branches on `reason` — and would then have
+   * rendered the too-large sentence, limit figure and all, for a paste that found nothing. Declaring
+   * the variant WITHOUT `limitBytes` is what turns that silent mis-rendering into a compile error, and
+   * absent rather than optional for the same reason: an optional field renders `undefined` into a
+   * sentence instead of refusing to build.
+   *
+   * It carries no figure of its own because there is none to carry. What it deliberately does NOT
+   * carry is anything about the clipboard — not its flavour, not a length, not a dimension — which is
+   * what keeps the union's content-free argument true of this member as well.
+   */
+  | { type: 'refused'; uploadId: string; reason: 'no-image' }
   /** The attempt was made and did not store the file. */
   | { type: 'failed'; uploadId: string; reason: AttachmentUploadFailure }
   /** The daemon stored the file. */

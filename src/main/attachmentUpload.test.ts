@@ -6,8 +6,11 @@ import {
   ATTACHMENT_MAX_UPLOAD_BYTES,
   ATTACHMENT_MAX_UPLOAD_CHUNKS,
   ATTACHMENT_PROGRESS_MIN_CHUNKS,
+  CLIPBOARD_IMAGE_FILENAME_PREFIX,
+  CLIPBOARD_IMAGE_MIME_TYPE,
   uploadAttachmentBytes,
   uploadAttachmentFile,
+  uploadClipboardImage,
   type AttachmentUploadDeps
 } from './attachmentUpload'
 import { ATTACHMENT_CHUNK_DATA_BYTES } from '../shared/wire/types'
@@ -371,6 +374,116 @@ function reportingHarness(
     }
   }
 }
+
+// #1032: the PASTE entry. The clipboard read is a parameter, not a dep, so every branch below runs
+// without touching the operator's real clipboard and this file's module graph still never loads
+// `electron`. The bytes stand in for a PNG — nothing here decodes them, and nothing may.
+describe('uploadClipboardImage', () => {
+  // Edge byte values with a PNG-ish head, to prove they reach the driver verbatim with no transcoding.
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x80, 0xff, 0x7f])
+
+  it('uploads the clipboard image as PNG under a minted name, with one completed terminal', async () => {
+    const { deps, events, uploads } = harness()
+
+    await uploadClipboardImage(() => PNG_BYTES, deps)
+
+    expect(uploads).toHaveLength(1)
+    expect(uploads[0].bytes).toEqual(PNG_BYTES)
+    // The declared type is this client's own constant, never sniffed from the bytes: the background
+    // process asked the clipboard for PNG and that is what it encoded.
+    expect(uploads[0].mime_type).toBe(CLIPBOARD_IMAGE_MIME_TYPE)
+    expect(uploads[0].mime_type).toBe('image/png')
+    // A CLIENT-OWNED PATTERN CARRYING A TIMESTAMP, asserted as a shape rather than as a value: the
+    // stamp is UTC (no TZ is pinned anywhere in this repo, so a local one would read differently on a
+    // machine in another zone) and the prefix is the exported constant.
+    expect(uploads[0].filename).toMatch(
+      new RegExp(`^${CLIPBOARD_IMAGE_FILENAME_PREFIX}-\\d{8}T\\d{6}\\.png$`)
+    )
+    expect(uploads[0].attachment_id).toMatch(UUID_V4)
+    expect(events).toEqual([{ type: 'completed', uploadId: uploads[0].attachment_id }])
+  })
+
+  it('mints a fresh id per paste, so two are distinguishable in flight', async () => {
+    // `uploadAttachment`'s stated precondition. The name may repeat inside one second — the daemon keys
+    // on attachment_id and the name is a display string — but the id may not.
+    const { deps, uploads } = harness()
+
+    await uploadClipboardImage(() => PNG_BYTES, deps)
+    await uploadClipboardImage(() => PNG_BYTES, deps)
+
+    expect(uploads).toHaveLength(2)
+    expect(uploads[0].attachment_id).not.toBe(uploads[1].attachment_id)
+  })
+
+  // ⭐ THE TICKET'S SECOND CRITERION, over all three ways the read can yield no image. Each is a
+  // REFUSAL naming that reason — never a failure, never an error, never a silent no-op — and none of
+  // them starts a transfer.
+  it.each([
+    ['the clipboard holds no image', () => null],
+    // NOT REDUNDANT with the composition root's isEmpty(): they are different fabric on purpose. Zero
+    // bytes PASSES the size guard, so routing an empty array on would attempt a real upload of an empty
+    // file rather than refusing.
+    ['the read yields zero bytes', () => new Uint8Array(0)],
+    // The reader is an INJECTED seam, and a contract is not a guarantee for one — the same argument
+    // driveUpload's catch already makes about `upload`. A throw here must not become an unhandled
+    // main-process rejection, since the composition root calls this with a bare `void`.
+    [
+      'the read itself throws',
+      () => {
+        throw new Error('clipboard unavailable')
+      }
+    ]
+  ])('refuses with no-image when %s, without driving an upload', async (_case, read) => {
+    const { deps, events, uploads } = harness()
+
+    await uploadClipboardImage(read as () => Uint8Array | null, deps)
+
+    expect(uploads).toHaveLength(0)
+    expect(events).toEqual([
+      { type: 'refused', uploadId: expect.any(String), reason: 'no-image' }
+    ])
+    // `limitBytes` is ABSENT, not undefined. That absence is what reddens the composer's switch until
+    // it branches on `reason`, so asserting the key list is asserting the mechanism.
+    expect(Object.keys(events[0]).sort()).toEqual(['reason', 'type', 'uploadId'])
+    expect(events[0].uploadId).toMatch(UUID_V4)
+  })
+
+  it('logs the refusal with a client-owned code and invents no byte figure', async () => {
+    const { deps, records } = harness()
+
+    await uploadClipboardImage(() => null, deps)
+
+    expect(records).toEqual([{ event: 'attachment-pick', code: 'no-image' }])
+    // `bytes` is optional on DiagnosticEvent, so a refusal with nothing to count omits it rather than
+    // reporting a zero that would read as a measurement.
+    expect(records[0]).not.toHaveProperty('bytes')
+  })
+
+  it('lets no clipboard content reach an event or a log record', async () => {
+    // The ticket's fourth criterion at the emitter. A DISTINCTIVE byte run stands in for the image, and
+    // the walk covers every string that crossed on the success path — where the most is emitted.
+    const { deps, events, records } = harness()
+
+    await uploadClipboardImage(() => PNG_BYTES, deps)
+
+    const strings = everyStringEmitted(events, records)
+    // AS AN EXHAUSTIVE LIST, not as a substring search, and that is the difference between a real
+    // assertion and a vacuous one: a `not.toContain(String(bytes.length))` over a short length matches
+    // digits inside the uploadId and would fail or pass by accident. Naming every string that may cross
+    // admits nothing — no base64, no length, no flavour, no dimension, and no minted filename, which is
+    // declared to the daemon rather than reported to the window.
+    expect(strings).toEqual([
+      'completed',
+      events[0].uploadId,
+      'attachment-pick',
+      'started',
+      'attachment-pick',
+      'completed'
+    ])
+    expect(strings).not.toContain(Buffer.from(PNG_BYTES).toString('base64'))
+    expect(strings.some((value) => value.includes(CLIPBOARD_IMAGE_FILENAME_PREFIX))).toBe(false)
+  })
+})
 
 const TINY: Parameters<typeof uploadAttachmentBytes>[0] = {
   bytes: new Uint8Array([1]),

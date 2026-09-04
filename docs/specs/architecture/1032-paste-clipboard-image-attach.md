@@ -308,6 +308,30 @@ with no emitter and no sentence is unverifiable on its own. Every slice of this 
 the ceiling and shipped clean — #890 at 1482 and #862 at 1529, both this channel and this five-file
 shape.
 
+## Revisions
+
+**2026-09-04 — Phase B.** Both open questions resolved with no design change; two test-level details
+differ from what this plan sketched.
+
+1. **Open question 1 — `clipboard.readImage()` / `isEmpty()`.** Confirmed against Electron's shipped
+   typings: `npm run build` typechecks `image.isEmpty()` and `image.toPNG()` as used at the composition
+   root. The zero-length check in `uploadClipboardImage` stays as the deterministic second fabric
+   behind it, and it is covered by its own case in the refusal table test.
+2. **Open question 2 — does the `refused` split redden anything beyond the copy switch?** Observed, not
+   assumed: after the union change and before the copy was written, `npm run typecheck` reported
+   exactly one error — TS2339 on `limitBytes` in `attachmentUploadOutcomeCopy`. Nothing else in the
+   repo reads that field, and `e2e/composer-attach.spec.ts`'s pushed `too-large` refusal is unchanged.
+3. **The union test's second axis is compiler-forced, not counted.** The plan said the stale
+   `all four members` count would be replaced by one that "counts refusal reasons as well as types". It
+   is instead a `Record<Extract<AttachmentUploadEvent, { type: 'refused' }>['reason'], true>`, so a
+   third refusal reason fails to TYPECHECK there rather than being counted correctly by accident — the
+   `ATTACHMENT_UPLOAD_FAILURE_COPY` mechanism, applied to the axis that went stale.
+4. **The main-side leak walk asserts an exhaustive string list, not substring absence.** The first
+   attempt searched each emitted string for `String(bytes.length)`, which matched a digit inside the
+   `uploadId` — a check that fails or passes by accident rather than by fact. Naming every string that
+   may cross (`completed`, the id, and the two log records' fields) admits nothing at all and cannot
+   collide, so it is the stronger form as well as the stable one.
+
 ## Security review
 
 **Verdict:** PASS

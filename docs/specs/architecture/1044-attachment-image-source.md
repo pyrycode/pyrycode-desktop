@@ -360,3 +360,41 @@ that cannot be verified on its own. When the floor and the ceiling disagree, the
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — `toBlob` copies the delivered array
+
+**What changed.** The Design section specifies `createObjectUrl(new Blob([bytes]))` and the module was
+written that way. `npm run typecheck` rejected it: `AttachmentBytesEvent.bytes` is declared `Uint8Array`,
+which TypeScript 5.7 reads as `Uint8Array<ArrayBufferLike>`, and `BlobPart` demands
+`ArrayBufferView<ArrayBuffer>` — it is refusing a `SharedArrayBuffer`-backed view. Shipped as
+`new Blob([new Uint8Array(bytes)])`.
+
+**Why this one.** A SAB-backed view cannot arrive (a SAB is not structured-cloneable across these two
+hops), but nothing in the type says so, and each alternative costs more than one memcpy that runs once
+per attachment per window lifetime: an unchecked `as` is forbidden by the brief; a runtime `instanceof`
+branch would be a failure path for a structurally impossible input and does not narrow the view itself;
+widening `AttachmentBytesEvent.bytes` would edit a shared IPC contract that main and preload also read —
+a third production file, in a file #1045 may also touch — for a renderer-local convenience. The copy is
+`exactBytes`'s own line one process over, and the `Blob` copies these bytes regardless.
+
+**What it does not change.** It is a type narrowing, not a defence and not a re-validation: the bytes are
+still never parsed, sniffed or inspected here, and the "repair belongs in the preload listener" ruling on
+the `contextBridge` hop is untouched. The security review's findings are unaffected.
+
+### 2026-09-04 — Open questions, resolved
+
+1. **Media type** — resolved as designed: no type, with `toBlob` as the named seam. Pinned by a spec
+   asserting `blob.type === ''`, so a later guess has to redden something.
+2. **Cache ceiling** — resolved as designed: none. Every entry has a live holder and a holder is a
+   mounted component, so the bound is the viewport; the ceiling belongs with #1045.
+
+### 2026-09-04 — Actual size
+
+1401 lines total written work against the plan's ~930 estimate (410 production, 611 spec, 380 plan). The
+production and spec files both ran about 45% over, all of it in the documented-decision prose this
+repo's modules carry. Still one production source file, 4 new exported types, 0 consumer call sites, and
+in-family: the five measured attachment slices on this repo landed between 1062 and 1859 lines. The
+ceiling call in `## Sizing` is unchanged — the depth gate and the floor rule both still forbid a split —
+but the overage against the 800-line ceiling is 600 lines, not 130.

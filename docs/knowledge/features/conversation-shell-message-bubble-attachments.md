@@ -156,8 +156,9 @@ container** so all three drawn states stay provable under `renderToStaticMarkup`
   position was the real follow-up this arm's header predicted; [#1046](conversation-shell.md) measured it
   and found Chromium's own scroll anchoring already holds a reader's place against a thumbnail resolving
   **above** them, so nothing changed here or in `useThreadScrollPin`. Growth **below** the reader (their
-  own last row, where anchoring does not apply) is the one case left open, filed as #1049. No control, no
-  tab stop and no handler — there is nothing yet to open.
+  own last row, where anchoring does not apply) was the one case left open, and
+  [#1049](conversation-shell.md) closed it in `useThreadScrollPin`, not here — this file's own arms are
+  unchanged.
 - `ready` → `<button type="button" className="bubble__image-button" onClick={onOpen}>` wrapping the
   unchanged `<img className="bubble__image" src={url} alt={ATTACHMENT_IMAGE_ALT} onError={onDecodeError} />`
   (#869). A real `<button>`, not `role="button"`, so click, Enter and Space all come from the platform

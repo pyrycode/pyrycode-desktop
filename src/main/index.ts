@@ -20,6 +20,7 @@ import { createHostLabelStore } from './hostLabelStore'
 import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
 import { selectRelayPolicy } from './relayPolicy'
+import { selectWindowPresentation, type WindowPresentation } from './windowPresentation'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairHandler } from './unpairHandler'
@@ -79,7 +80,12 @@ import {
 // all live in this background process. See docs/knowledge/decisions/0001. The
 // renderer receives already-typed events over IPC and never sees raw bytes or keys.
 
-function createWindow(): BrowserWindow {
+function createWindow(presentation: WindowPresentation): BrowserWindow {
+  // #1067: the default-tier e2e harness asks a non-packaged build not to show its window, so a run can
+  // no longer steal the operator's focus 49 times and no window can be clicked away from mid-drive. The
+  // decision itself is made once at the composition root and passed in — see selectWindowPresentation,
+  // whose false-first isPackaged gate is what keeps a shipped build out of this branch entirely.
+  const hidden = presentation === 'hidden'
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -95,11 +101,18 @@ function createWindow(): BrowserWindow {
       // typed IPC bridge via contextBridge/ipcRenderer, both of which work in a sandboxed
       // preload — so there is no reason to widen the attack surface by disabling the sandbox.
       sandbox: true,
-      contextIsolation: true
+      contextIsolation: true,
+      // #1067, and INSEPARABLE from the never-shown branch below rather than an independent knob: a
+      // window that is never shown is an occluded window, so hiding it while leaving this at Chromium's
+      // default would earn exactly the renderer stalls the affordance exists to remove. This is the one
+      // lever that keeps the Page Visibility API reporting *visible*, which is what timers, transitions
+      // and Playwright's own rAF-based stability check depend on. `true` is Electron's documented
+      // default, so the shown path — every packaged launch — is unchanged in effect.
+      backgroundThrottling: !hidden
     }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow.show())
+  if (!hidden) mainWindow.on('ready-to-show', () => mainWindow.show())
 
   // Open external links in the OS browser, never in-app, and only for web schemes. A file:
   // URL or a custom protocol-handler URL is dropped, so a hostile link cannot open a local
@@ -348,8 +361,15 @@ app.whenReady().then(() => {
   // waits for the load in the first place. Status is not among the losses: replayStatus() runs at the
   // load. (Recovering the non-status events dropped while no window existed is explicitly out of
   // scope; the seam for it, when a ticket is filed, is replayStatus().)
+  // How every window this app opens presents itself (#1067). Effectful choice made ONCE, here, beside
+  // the other two: false-first on app.isPackaged, so a packaged build never consults the env flag and
+  // always shows its window. Computed at the root rather than inside createWindow so there is exactly
+  // ONE decision site — the dock-reopened window below goes through the same `openWindow`, so it cannot
+  // silently diverge from the first one and leave the harness believing a visible window is hidden.
+  // `process.env` structurally satisfies the `Record<string, string | undefined>` param (no cast).
+  const windowPresentation = selectWindowPresentation({ isPackaged: app.isPackaged, env: process.env })
   const openWindow = (): void => {
-    const window = createWindow()
+    const window = createWindow(windowPresentation)
     live.attach(window)
     // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
     // subscription (#19) is in place before the load-bearing `connected` event (which arrives only

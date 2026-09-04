@@ -128,12 +128,17 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
                                      → announcedModelStore                        [most recent announcement wins]
 
 \#560: useAnnouncedModelStore(selectAnnouncedModel) → RunningModelSection, the sheet's sixth section
+\#1053: useAnnouncedModelStore(selectAnnouncedModel) → ComposerModelMenu, the footer trigger's second layer
 ```
 
 ## Configuration and usage
 
-- **Import surface**, consumed by [#560](../codebase/560.md)'s `RunningModelSection`:
+- **Import surface**, consumed by [#560](../codebase/560.md)'s `RunningModelSection` and, since #1053, by
+  [Composer model menu](composer-model-menu.md)'s `ComposerModelMenu` container:
   `import { useAnnouncedModelStore, selectAnnouncedModel } from '@renderer/store/announcedModelStore'`.
+  The footer trigger reads the same singleton and the same selector, so a `null` vs. `{ model: '' }`
+  distinction at this store still matters even though the footer control itself collapses both to "nothing
+  at this layer" — see that document's `ComposerModelLayers` section.
 - **Mount point:** `src/renderer/src/App.tsx`, `<AnnouncedModelData />` after `<BackgroundTaskRosterData />`.
 - **Single current value, not a per-conversation map.** At ship time `conversation_id` was dropped at the
   #587 emit; [#714](../codebase/714.md) later widened the emit to carry it onward as `conversationId` (the
@@ -144,16 +149,19 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 
 ## Edge cases and limitations
 
-- **Untrusted text, one DOM sink, downstream of this store.** `model` is model-influenced
+- **Untrusted text, two DOM sinks since #1053, downstream of this store.** `model` is model-influenced
   daemon-relayed text, bounded to 256 bytes by the daemon's producer but not sanitised — no
   control-character or terminal-escape stripping anywhere on this path. [#560](../codebase/560.md)'s
-  `RunningModelSection` is the only DOM sink: one JSX text position, never `innerHTML`, an attribute,
-  or a URL. At #560 ship time the resolved name on a lookup hit was a client-owned `MODEL_CATALOG`
-  label, kept out of the same node as the daemon-supplied verbatim text; [#975](../codebase/975.md)
-  deleted that catalog and re-anchored the lookup onto [Model-list store](model-list-store.md)'s
-  published rows, so **both branches are daemon-authored text now** — the provenance changed, the
-  one-JSX-text-position-per-branch property that actually matters did not, and #975's code comment
-  rewrote the now-false "provenances never mix" claim in place rather than leaving it standing.
+  `RunningModelSection` was the only DOM sink through #975: one JSX text position, never `innerHTML`, an
+  attribute, or a URL. At #560 ship time the resolved name on a lookup hit was a client-owned
+  `MODEL_CATALOG` label, kept out of the same node as the daemon-supplied verbatim text;
+  [#975](../codebase/975.md) deleted that catalog and re-anchored the lookup onto [Model-list
+  store](model-list-store.md)'s published rows, so **both branches are daemon-authored text now** — the
+  provenance changed, the one-JSX-text-position-per-branch property that actually matters did not, and
+  #975's code comment rewrote the now-false "provenances never mix" claim in place rather than leaving it
+  standing. [#1053](composer-model-menu.md) added a second, independent sink in `ComposerModelMenu`'s
+  trigger label — same rule (one JSX text position, no attribute, no `title`, no log), and the value never
+  reaches that control's `onSelect` write, which dispatches only a value a published row itself carries.
 - **No dedup of a verbatim repeat, by design.** N daemon frames — including an identical repeat — produce
   N writes and N fresh object identities, so a component selecting `selectAnnouncedModel` re-renders on
   a repeat too. #560 memoises if that ever matters; this store does not pre-empt it.
@@ -172,6 +180,9 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 
 ## Related
 
+- [Composer model menu](composer-model-menu.md) — #1053's second consumer: the footer trigger layers this
+  store's value between a pick made in this client and the run-config snapshot's stored choice, resolving
+  it through the same `publishedRowFor` lookup `RunningModelSection` uses.
 - [#587 codebase notes](../codebase/587.md) — the transport half: `modelAnnounced` decode, the
   `truncated` field, and the `model`-name collision with `runConfigReceived` (and, through
   [#621](../codebase/621.md), `snapshotReceived`).

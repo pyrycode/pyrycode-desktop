@@ -4,6 +4,7 @@ import { useModelListStore, selectModelListFor, type ModelListEntry } from '../.
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
+import { useAnnouncedModelStore, selectAnnouncedModel } from '../../store/announcedModelStore'
 import { publishedRowFor } from './RunConfigSections'
 import { changeSetting } from './runSettingsControls'
 
@@ -45,6 +46,34 @@ export const COMPOSER_MODEL_MENU_LABEL = 'Model'
 const CHEVRON_PATH =
   'M3.59822 0.146303C3.82044 -0.0482491 4.18133 -0.0482491 4.40356 0.146303L7.81689 3.13463C8.03911 3.32918 8.03911 3.64514 7.81689 3.83969C7.59467 4.03424 7.23378 4.03424 7.01156 3.83969L4 1.20311L0.988445 3.83813C0.766222 4.03268 0.405333 4.03268 0.183111 3.83813C-0.0391111 3.64358 -0.0391111 3.32763 0.183111 3.13307L3.59644 0.144747L3.59822 0.146303Z'
 
+/** #1053 — the three layers this control lays over one another, resolved in this order: a
+ *  pending-or-confirmed PICK, then what claude ANNOUNCED for the running turn, then the snapshot's
+ *  STORED choice, then nothing. The ticket settled that ordering and it is not re-litigated here: the
+ *  announcement carries no ordering information relative to a pick (announcedModelStore holds one record
+ *  with no sequence and no timestamp), so ranking it above a CONFIRMED pick would let a stale
+ *  announcement beat the pick at the moment the daemon confirms — making a confirm and a rejection look
+ *  identical.
+ *
+ *  '' MEANS "NOTHING AT THIS LAYER", uniformly across all three. That is this control's existing posture
+ *  rather than a new decision: it already drew nothing for an unset session model. It is also what lets
+ *  the container collapse `AnnouncedModel | null` to a string — AC4 names "no announcement" and "an
+ *  announcement whose model is the empty string" in one clause, because no rendering here could tell
+ *  them apart. The store's null-vs-'' distinction stays intact where it was established and where the
+ *  run-configuration sheet reads it. */
+export interface ComposerModelLayers {
+  /** The pick made in this client: the pending optimistic value over the client-confirmed one. */
+  picked: string
+  /** claude's own identifier for the running turn, held verbatim. */
+  announced: string
+  /** The snapshot's stored explicit choice — '' on a session running the daemon's inherited default. */
+  stored: string
+}
+
+/** The first layer with something to show, or '' when none has anything. */
+function firstShown(...values: readonly string[]): string {
+  return values.find((value) => value !== '') ?? ''
+}
+
 /** What the trigger shows and what the menu offers.
  *
  *  `options` EMPTY is AC4's inert arm and is a different thing from a menu with rows: it never reaches
@@ -64,24 +93,32 @@ export interface ComposerModelMenuModel {
  *
  * THREE RENDERINGS:
  *
- *   model === ''                        → null      the session's model is not known; draw nothing
- *   model, no usable rows               → no options   AC4's inert label
- *   model and rows                      → the menu
+ *   no layer has anything               → null      nothing is known about the model; draw nothing
+ *   something to show, no usable rows   → no options   AC4's inert label
+ *   something to show and rows          → the menu
  *
- * The first is not in the ACs and is a decision this slice takes. It is reachable in the app's ordinary
- * startup window: the run-config snapshot arrives on the `connected` edge through RunConfigLiveData, and
- * until it does selectEffectiveSettings resolves `model` to '' (its final fallback). Every other
- * rendering would draw an empty gap where a label belongs. ContextUsageControl takes exactly this posture
- * for its own unavailable reading, and #811's no-placeholder rule points the same way. It invents no
- * name for '' — the daemon's held-verbatim "inherited default" — it just says nothing about it.
+ * The first is not in #988's ACs and was a decision that slice took; #1053's AC4 is now its criterion,
+ * widened from "the session's model is unset" to "no layer has anything". It stays reachable in the app's
+ * ordinary startup window — the run-config snapshot arrives on a turn end, and until then
+ * selectEffectiveSettings resolves `model` to '' — but a session on the daemon's INHERITED DEFAULT sits
+ * there permanently, which is what #1053 exists to answer. Every other rendering would draw an empty gap
+ * where a label belongs. ContextUsageControl takes exactly this posture for its own unavailable reading,
+ * and #811's no-placeholder rule points the same way. It invents no name for '' — the daemon's
+ * held-verbatim "inherited default" — it just says nothing about it.
  *
- * THE LABEL IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor: the
- * same string and the same rule EffortSection joins, and NOT RunningModelSection's announced identifier,
- * which is a different identifier for a different question. `row ? row.display_name : model` rather than
- * `row?.display_name ?? model`, so a matched row publishing an EMPTY display name stays a hit — the `??`
- * form would print the value instead and quietly re-decide what a match means.
+ * TWO STRINGS COME OUT OF THE LAYERS AND THEY ARE NOT THE SAME STRING. The LABEL is the first layer with
+ * something to show; the MARKING is the SESSION's model, which is the pick over the stored choice and
+ * NEVER the announcement (#1053 AC5) — the daemon is set to what the session says, not to what claude
+ * reported running. They collapse to one answer whenever a pick is in force and differ exactly in the
+ * state this ticket exists for, so they are two lookups rather than one.
  *
- * A MISS IS ORDINARY, not an error: the model value renders verbatim, RunningModelSection's posture. No
+ * BOTH resolve by exact equality on `value` through publishedRowFor — the one home of the rule, which
+ * #988 exported and which RunningModelSection joins the announced identifier by. `row ? row.display_name
+ * : shown` rather than `row?.display_name ?? shown`, so a matched row publishing an EMPTY display name
+ * stays a hit — the `??` form would print the value instead and quietly re-decide what a match means.
+ *
+ * A MISS IS ORDINARY, not an error: the value renders verbatim, RunningModelSection's posture. It is also
+ * the COMMON case for an announcement, which claude reports at least as specific as what it was given. No
  * substring, prefix, case fold or trim is applied anywhere on this path, here or in publishedRowFor.
  *
  * The entries are EXACTLY the published rows, in the daemon's order — nothing deduped, dropped,
@@ -92,13 +129,18 @@ export interface ComposerModelMenuModel {
  */
 export function composerModelMenuModel(
   models: ModelListEntry | null | undefined,
-  model: string
+  layers: ComposerModelLayers
 ): ComposerModelMenuModel | null {
-  if (model === '') return null
-  const row = publishedRowFor(models, model)
+  const shown = firstShown(layers.picked, layers.announced, layers.stored)
+  if (shown === '') return null
+  const row = publishedRowFor(models, shown)
+  // The SESSION's model, which is the only thing a row may be marked current by. Exact equality stays the
+  // whole rule here too: a daemon that published a row whose `value` is '' would have that row marked on
+  // an inherited-default session, which is the lookup answering honestly rather than a case to guard.
+  const sessionRow = publishedRowFor(models, firstShown(layers.picked, layers.stored))
   return {
-    label: row ? row.display_name : model,
-    currentId: row ? row.value : null,
+    label: row ? row.display_name : shown,
+    currentId: sessionRow ? sessionRow.value : null,
     options: (models?.models ?? []).map((published) => ({
       id: published.value,
       label: published.display_name
@@ -111,9 +153,14 @@ export function composerModelMenuModel(
  * arms server-render directly under the repo's `node` vitest environment. Every prop is REQUIRED, the "a
  * view that cannot answer is a bug" rule (ConversationScreen.tsx:2033).
  *
- * SECURITY — this is a render boundary for claude-authored text. `display_name` and `value` crossed the
- * subprocess trust boundary and DECODED IS NOT SANITIZED (modelListStore's header): #972 made the SHAPE
- * trusted and nothing more, and the daemon bounds without sanitizing. Each reaches exactly one JSX TEXT
+ * SECURITY — this is a render boundary for claude-authored text. `display_name`, `value` and, since
+ * #1053, the ANNOUNCED identifier crossed the subprocess trust boundary and DECODED IS NOT SANITIZED
+ * (modelListStore's and announcedModelStore's headers): #972 made the SHAPE trusted and nothing more, and
+ * the daemon bounds (256 bytes for the announcement) without sanitizing. The announcement is a REPORT,
+ * NEVER A CONTROL INPUT: the only thing this file branches on is whether it is '', its only other use is
+ * as a lookup ARGUMENT to publishedRowFor (a `find` with `===` over an array, never a plain-object
+ * index), and `onSelect` still dispatches only a value a published ROW carries — a hostile daemon cannot
+ * make this control send a string it did not itself publish. Each reaches exactly one JSX TEXT
  * position, where React escapes it — never dangerouslySetInnerHTML, never an attribute, a URL, a
  * filename, a cache key, a lookup path or a log. `value` reaches four non-sink places, all the panel's:
  * `key={option.id}` (React's own keyed reconciliation, a Map internally), a string comparison against
@@ -126,15 +173,15 @@ export function composerModelMenuModel(
  * and an unbounded name here would push the context reading out of a row with a hard 20px height.
  */
 export function ComposerModelMenuView({
-  model,
+  layers,
   models,
   onSelect
 }: {
-  model: string
+  layers: ComposerModelLayers
   models: ModelListEntry | null
   onSelect: (value: string) => void
 }): JSX.Element | null {
-  const menu = composerModelMenuModel(models, model)
+  const menu = composerModelMenuModel(models, layers)
   if (menu === null) return null
 
   // AC4. Not `options={[]}` through the shared menu, which would advertise a popup and open an empty
@@ -184,9 +231,11 @@ export function ComposerModelMenuView({
 }
 
 /**
- * The store-bound container — RunConfigSections' recipe minus the announced model, in a leaf so a
- * snapshot tick re-renders this control rather than the textarea and the send button beside it
- * (ContextUsageControl's stated reason for being a container at all).
+ * The store-bound container — RunConfigSections' recipe, in a leaf so a snapshot tick re-renders this
+ * control rather than the textarea and the send button beside it (ContextUsageControl's stated reason for
+ * being a container at all). It read every store that recipe reads EXCEPT the announced model until
+ * #1053; now it reads that one too, and each announcement writes a fresh object identity, so an
+ * announcement re-renders this leaf and nothing else in the composer.
  *
  * `conversationId` arrives as a PROP rather than as a fifth store read, the settled house idiom
  * (RunConfigSections, ComposerSlot, BackgroundTaskPanel): Composer already subscribes to
@@ -208,6 +257,12 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
   // selector: it returns a fresh object every call, which defeats Object.is and re-renders on every store
   // tick — the composition runs in the render body instead (RunConfigSections.tsx:660-663).
   const writeState = useRunSettingsWriteStore((s) => s)
+  // #1053 — the app-lifetime announcement, the same value the run-configuration sheet's Running model
+  // section reads. It is DAEMON-scoped rather than conversation-scoped (translateModelAnnounced drops the
+  // conversation id deliberately, and exitActiveConversation.ts records that), so a second conversation
+  // with no pick and no stored choice shows this one. Accepted: the sheet already reads the same app-wide
+  // value under the same conditions, and scoping the store is a store-plus-bridge change of its own.
+  const announced = useAnnouncedModelStore(selectAnnouncedModel)
   // A useMemo-stable selector per id — a fresh closure each render would churn the subscription. A null
   // conversation selects nothing THROUGH THE SAME PATH, with no invented key and no second branch
   // downstream, and `null` is a stable reference.
@@ -217,15 +272,25 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
   )
   const models = useModelListStore(selectModels)
 
-  // The pending optimistic overlay > the client-confirmed override > the snapshot base. This composition
-  // is also what moves the label to the picked value at once and what reverts it when the store drops the
-  // pending record on a rejection — there is no local state here, and there must not be: a second copy of
-  // the displayed value could disagree with the sheet's.
-  const effective = selectEffectiveSettings(snapshot, writeState)
+  // THE PICK ALONE: the pending optimistic overlay over the client-confirmed override, with NO daemon
+  // base under it — which is what a null snapshot means to selectEffectiveSettings, by its own documented
+  // fallback to ''. Passing null rather than walking `pending` here is deliberate: that walk has one home,
+  // and publishedRowFor's docblock is this file's own record of what a second copy of a rule costs. This
+  // composition is also what moves the label to the picked value at once and what reverts it when the
+  // store drops the pending record on a rejection — there is no local state here, and there must not be:
+  // a second copy of the displayed value could disagree with the sheet's.
+  const picked = selectEffectiveSettings(null, writeState).model
 
   return (
     <ComposerModelMenuView
-      model={effective.model}
+      // #1053's four layers, `null` and a '' announcement collapsing to the same "nothing at this layer"
+      // (AC4 names them as one clause). `truncated` is deliberately NOT read: this surface reports no cut
+      // and clips every long name by CSS, and the sheet stays the full reading.
+      layers={{
+        picked,
+        announced: announced?.model ?? '',
+        stored: snapshot?.model ?? ''
+      }}
       models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does

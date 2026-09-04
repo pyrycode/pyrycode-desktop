@@ -23,21 +23,50 @@ now the row's **third** item, not its second.
 
 ## `composerModelMenuModel`, one pure function deciding all three renderings
 
-`ComposerModelMenu.tsx` exports a pure `composerModelMenuModel(models, model): ComposerModelMenuModel | null`
-that turns the two inputs into everything the view needs (`label`, `options`, `currentId`), so every rule
-below is unit-testable as data rather than only through markup — the same property `COMPOSER_ACTIONS`
-buys `ComposerActionsMenu`, adapted to entries that are the daemon's rather than the client's. A static
-render can never open the panel, so without this extraction the entries would only be assertable
-indirectly.
+`ComposerModelMenu.tsx` exports a pure
+`composerModelMenuModel(models, layers: ComposerModelLayers): ComposerModelMenuModel | null` that turns
+the inputs into everything the view needs (`label`, `options`, `currentId`), so every rule below is
+unit-testable as data rather than only through markup — the same property `COMPOSER_ACTIONS` buys
+`ComposerActionsMenu`, adapted to entries that are the daemon's rather than the client's. A static render
+can never open the panel, so without this extraction the entries would only be assertable indirectly.
+
+**`ComposerModelLayers` (#1053)** replaced a single `model: string` parameter with three, resolved in this
+fixed order — a pending-or-confirmed **pick** made in this client, then what claude **announced** for the
+running turn, then the snapshot's **stored** explicit choice:
+
+```ts
+export interface ComposerModelLayers {
+  picked: string      // pending optimistic over client-confirmed; '' = no pick in force
+  announced: string    // claude's identifier for the running turn; '' = none, or a degenerate one
+  stored: string       // the run-config snapshot's stored choice; '' = the daemon's inherited default
+}
+```
+
+`''` means "nothing at this layer", uniformly across all three — this control's existing posture (it
+already drew nothing for an unset session model) rather than a new decision, and it is what lets the
+container collapse `AnnouncedModel | null` from `announcedModelStore` to a plain string: a `null`
+announcement and a `{ model: '' }` one both read as "nothing here", which is the only distinction this
+surface could draw anyway. The store's own `null`-vs-`''` contract stays intact where it is established —
+[Announced-model store](announced-model-store.md) and the run-configuration sheet still read it.
+
+**The announcement is ranked below a pick and above the stored choice, deliberately not above a
+confirmed pick.** `announcedModelStore` holds one record with no sequence or timestamp, so it carries no
+information about whether it is older or newer than a pick — ranking it above a *confirmed* pick would
+let a stale pre-pick announcement beat the pick the instant the daemon confirms it, making a confirm and
+a rejection render identically. The ordering is a client-side judgment call, not something the daemon's
+frames can settle.
 
 | Input | Rendering |
 |---|---|
-| `model === ''` (no run-config snapshot has arrived, or the session is on the daemon's inherited default) | `null` — nothing in the row |
-| `model !== ''`, and `models` is `null` or `models.models` is empty | an inert `<span>`: the label, no chevron, no role, no tabindex, no handler, no `.composer-options-anchor` |
-| `model !== ''` and rows are present | `ComposerOptionsMenu` with the rows as options |
+| no layer has anything (`picked === announced === stored === ''`) | `null` — nothing in the row |
+| something to show, and `models` is `null` or `models.models` is empty | an inert `<span>`: the label, no chevron, no role, no tabindex, no handler, no `.composer-options-anchor` |
+| something to show and rows are present | `ComposerOptionsMenu` with the rows as options |
 
-The first rendering is not in the ACs; it is this ticket's own decision, taken because it is otherwise
-reachable in the app's ordinary startup window (see § Turn-end dependency below). `ContextUsageControl`
+The first rendering is not in #988's ACs; it was that ticket's own decision, taken because it is otherwise
+reachable in the app's ordinary startup window (see § Turn-end dependency below), and #1053's AC4 widened
+its criterion from "the session's model is unset" to "no layer has anything" without changing its shape —
+a session on the daemon's inherited default with no announcement yet sits in this state permanently, which
+is the state #1053 exists to get the control out of once an announcement arrives. `ContextUsageControl`
 takes the identical posture for its own unavailable reading, and #811's no-placeholder rule points the
 same way — rendering nothing invents no name for the daemon's own held-verbatim `''` ("inherited
 default").
@@ -49,13 +78,24 @@ and drawing it over an element that opens nothing is the visual half of the clai
 that draws it (`composer__footer-button`) carries no `cursor: pointer`, so the inert arm doesn't lie about
 being clickable either — see § CSS extraction.
 
-**The label:** `row ? row.display_name : model`, mirroring `RunningModelSection`'s expression exactly
-rather than `row?.display_name ?? model`, which would treat a matched row's empty `display_name` as a
-miss. The match is `publishedRowFor(models, model)` — the one exported home for the rule, now exported for
-this, its third caller (`RunConfigSections.tsx`, docblock updated to name it). The input is the **session's**
-model, `EffortSection`'s reading, not `RunningModelSection`'s announced-per-turn one — a distinction that
-doc's own text calls out as the easy mistake to make. A miss is ordinary, not an error: the model value
-renders verbatim.
+**The label:** `row ? row.display_name : shown`, where `shown` is the first non-empty layer
+(picked → announced → stored), mirroring `RunningModelSection`'s expression exactly rather than
+`row?.display_name ?? shown`, which would treat a matched row's empty `display_name` as a miss. The match
+is `publishedRowFor(models, shown)` — the one exported home for the rule, exported since #988 for its
+third caller (`RunConfigSections.tsx`) and reused by #1053 for a fourth. A miss is ordinary, not an error:
+the value renders verbatim — since #1053, this is also the *common* case for an announcement, which claude
+reports at least as specific an identifier as it was given.
+
+**The marking (`currentId`) is a second, separate lookup (#1053):** `publishedRowFor(models, session)`
+where `session` is the first non-empty of picked and stored — **never** the announcement. The label and
+the marking read different layer-sets on purpose: the label answers "what's shown", the marking answers
+"what would picking do nothing" / "what is the daemon actually set to", and the daemon is set to what the
+session says, never to what claude reported running. The two collapse to the same row whenever a pick is
+in force and differ exactly in the state #1053 exists for (an announcement with no pick and no stored
+choice: the label shows the announcement, nothing is marked current). Exact equality stays the whole rule
+for this lookup too, including its edge case: a daemon publishing a row whose `value` is `''` would have
+that row marked current on an inherited-default session with no pick — the lookup answering honestly,
+not a case this code guards against.
 
 **The options:** `entry.models.map((row) => ({ id: row.value, label: row.display_name }))`, exactly the
 published rows, in the daemon's order — nothing deduped, dropped, reordered or synthesized, per AC2. `id`
@@ -64,10 +104,10 @@ is the row's `value`, so `onSelect(id)` submits it with no lookup. Two rows may 
 `aria-current`, accepted rather than fixed, since AC2's "exactly the published rows" outranks a tidier
 list.
 
-**The marking:** `currentId={row ? row.value : null}` — the value the label matched on, not the raw
-`model` string. This is the panel's first consumer to pass a non-null `currentId` (`ComposerActionsMenu`
-passes `null`: "a list of actions, not a choice"). A miss marks nothing, through the panel's existing
-no-special-case branch.
+This is the panel's first consumer to pass a non-null `currentId` (`ComposerActionsMenu` passes `null`:
+"a list of actions, not a choice"). A miss marks nothing, through the panel's existing no-special-case
+branch. See above for what `currentId` resolves against since #1053 (the session layers, never the
+announcement).
 
 ## The write
 
@@ -159,29 +199,41 @@ accident of a fixture's launch state is the wrong thing to leave in place.
 ## Security
 
 `display_name` and `value` are claude-authored text that crossed the subprocess trust boundary, bounded
-by the daemon but not sanitized (see [Model-list store](model-list-store.md)). Each reaches exactly one
-JSX text position (React's default escaping); `value` additionally reaches `key={option.id}` (React's own
-keyed reconciliation — a `Map` internally, not a plain-object index), a string comparison against
-`currentId`, and the `onSelect` pass-through into the write payload — no attribute, URL, filename, cache
-key, lookup path or log line, on any branch. The panel's `aria-label` is a client-owned constant
-(`COMPOSER_MODEL_MENU_LABEL = 'Model'`) naming the panel, never the trigger's visible text — unlike
-`ComposerActionsMenu`, this trigger cannot use its own label as `aria-label`, since that label is
-daemon-authored and `aria-label` is an attribute sink CLAUDE.md's daemon-text ruling forbids outright. The
-trigger itself carries no `aria-label` at all, so its accessible name stays its visible (auto-escaped)
-text.
+by the daemon but not sanitized (see [Model-list store](model-list-store.md)). Since #1053, the
+**announced** identifier crosses the same boundary and is bounded the same way, by
+[Announced-model store](announced-model-store.md)'s producer (256 bytes) rather than sanitized. Each of
+the three reaches exactly one JSX text position (React's default escaping); `value` additionally reaches
+`key={option.id}` (React's own keyed reconciliation — a `Map` internally, not a plain-object index), a
+string comparison against `currentId`, and the `onSelect` pass-through into the write payload — no
+attribute, URL, filename, cache key, lookup path or log line, on any branch. The announced identifier's
+only other use is as a lookup **argument** to `publishedRowFor` (a `find` with `===` over an array, never
+a plain-object index) — it is a REPORT, never a control input: nothing branches on its content beyond
+`=== ''`, and `onSelect` still dispatches only a value a published row itself carries, never the announced
+string, so a hostile daemon cannot make this control send a value it did not itself publish. The panel's
+`aria-label` is a client-owned constant (`COMPOSER_MODEL_MENU_LABEL = 'Model'`) naming the panel, never the
+trigger's visible text — unlike `ComposerActionsMenu`, this trigger cannot use its own label as
+`aria-label`, since that label is daemon-authored and `aria-label` is an attribute sink CLAUDE.md's
+daemon-text ruling forbids outright. The trigger itself carries no `aria-label` at all, so its accessible
+name stays its visible (auto-escaped) text. No `title` tooltip either, for the same reason — the 120px
+label cap (§ CSS below) still clips a long announced identifier with no fallback surface; the
+run-configuration sheet stays the full reading.
 
 This menu deliberately surfaces neither of `ModelListEntry`'s two truncation reports
-(`truncated_fields`, `droppedModels`) — the run-configuration sheet remains the surface that reports a
-cut list; withholding a report here is a completeness question the sheet already answers, not a leak.
+(`truncated_fields`, `droppedModels`), nor `announcedModelStore`'s own `truncated` cut report — the
+run-configuration sheet remains the surface that reports a cut; withholding a report here is a
+completeness question the sheet already answers, not a leak.
 
-## A follow-up noted, not filed
+## The follow-up this ticket answered
 
-A session on the daemon's inherited default (`model === ''`) has no footer model control at all, even
-once a list has arrived — the run-configuration sheet is the only way in for that state. Every
-alternative collides with a stated rule: an empty label beside a chevron invents a false affordance, and
-client copy naming a model concept is exactly what AC2 forbids. Worth a ticket if the inherited-default
-state turns out to be common in practice; the current behavior is this ticket's explicit decision, not an
-oversight.
+\#988 left a gap, noted but not filed: a session on the daemon's inherited default (`model === ''`) had no
+footer model control at all, even once a list had arrived — the run-configuration sheet was the only way
+in for that state. #1053 closed it by layering in the value held in
+[Announced-model store](announced-model-store.md) — what claude announced for the running turn (see
+§ `ComposerModelLayers` above) — rather than by inventing an
+empty-label affordance or client copy naming a model concept — both of which #988's own reasoning had
+already ruled out. The gap is closed for the state it was filed from; it reopens only if the daemon stops
+announcing (an app-lifetime `announcedModelStore` clear followed by no new turn), which is already covered
+by AC4's "nothing at any layer" rendering.
 
 ## Testing
 
@@ -212,6 +264,26 @@ reading the same stores:
 There is no vitest detector for stylesheet declarations; the CSS extraction above is proven by the
 class-run assertions plus review, the standing ruling for this stylesheet.
 
+**#1053's layering** moved the nine existing `composerModelMenuModel` call sites in
+`ComposerModelMenu.test.tsx` onto a `stored(...)` helper that builds a `ComposerModelLayers` record with
+the other two layers empty, so every rule #988 shipped keeps asserting exactly what it asserted; the
+`view` helper's six call sites needed no edit, since it builds the same record internally. New cases cover
+the announcement resolving to a label with no pick and no stored choice, the announcement outranking a
+stored choice that names a *different* row (label and `currentId` diverge — the pair a single-string
+model couldn't represent), a pick outranking both, and the all-empty-layers `null` case.
+
+A new e2e spec, `e2e/composer-model-announced.spec.ts`, drives the ordering directly rather than
+extending `composer-model-menu.spec.ts` (whose drive is ordered around *not* having an announcement, and
+whose fresh-launch `toHaveCount(0)` assertion needs to stay true). One launch, one continuous drive:
+`model_announced` pushed unsolicited before any snapshot exists shows the control with no turn-end dance
+needed at all — proof the announcement alone is sufficient, unlike every other snapshot-dependent control
+on this row (see § Turn-end dependency). `model_list` then resolves it to a display name; a `turn_state`
+thinking → idle pair brings in a *different* stored choice without moving the label off the announcement;
+and a picked third row moves the label at once and reverts to the announcement (not to the stored choice)
+on a withheld-reply, correlated-`error`-frame rejection — the same optimistic-overlay idiom above, now
+also proving where a reverted pick lands when an announcement is present.
+
 See [PR #1018](https://github.com/pyrycode/pyrycode-desktop/pull/1018) and
-`docs/specs/architecture/988-composer-model-menu.md` for the full plan, its security review, and its
-`## Revisions` entry recording the `composerModelMenuModel` extraction and the 120px measurement.
+`docs/specs/architecture/988-composer-model-menu.md` for #988's full plan, its security review, and its
+`## Revisions` entry recording the `composerModelMenuModel` extraction and the 120px measurement. See
+`docs/specs/architecture/1053-footer-model-announced-layer.md` for #1053's plan and security review.

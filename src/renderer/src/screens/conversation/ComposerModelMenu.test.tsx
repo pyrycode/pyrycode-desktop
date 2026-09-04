@@ -5,7 +5,8 @@ import type { ModelListEntry } from '../../store/modelListStore'
 import {
   ComposerModelMenuView,
   COMPOSER_MODEL_MENU_LABEL,
-  composerModelMenuModel
+  composerModelMenuModel,
+  type ComposerModelLayers
 } from './ComposerModelMenu'
 import { ComposerOptionsPanel } from './ComposerOptionsPanel'
 
@@ -44,6 +45,19 @@ const EMPTY: ModelListEntry = { models: [], droppedModels: 0 }
 
 const noop = (): void => {}
 
+// #1053 — the three layers, with the ones a case is not exercising left EMPTY, which is this control's
+// "nothing at this layer". Every layered case below names only the layers it is about, so a fourth layer
+// would not silently change what any of them asserts.
+function layers(over: Partial<ComposerModelLayers> = {}): ComposerModelLayers {
+  return { picked: '', announced: '', stored: '', ...over }
+}
+
+// The snapshot's stored choice ALONE — the single input #988's rules were written against, so every
+// assertion it pinned still reads as the sentence it was written as.
+function stored(model: string): ComposerModelLayers {
+  return layers({ stored: model })
+}
+
 // ComposerOptionsPanel.test.tsx:59-61 verbatim — count ROWS, so the panel div cannot inflate the count
 // and a current row still counts exactly once.
 function rowCount(markup: string): number {
@@ -63,16 +77,21 @@ function triggerInner(markup: string): string {
   )
 }
 
+/** The stored-choice-only render — #988's shape, kept so every view assertion it wrote is untouched. */
 function view(models: ModelListEntry | null, model: string): string {
+  return viewLayers(models, stored(model))
+}
+
+function viewLayers(models: ModelListEntry | null, over: ComposerModelLayers): string {
   return renderToStaticMarkup(
-    <ComposerModelMenuView models={models} model={model} onSelect={noop} />
+    <ComposerModelMenuView models={models} layers={over} onSelect={noop} />
   )
 }
 
 describe('composerModelMenuModel', () => {
   // AC1's whole match rule, as data: exact equality on `value`, and the display name of the row it hit.
   it('labels the trigger with the matched row display name and marks that row (AC1, AC2)', () => {
-    expect(composerModelMenuModel(LIST, 'beta[1m]')).toStrictEqual({
+    expect(composerModelMenuModel(LIST, stored('beta[1m]'))).toStrictEqual({
       label: 'Beta tier',
       currentId: 'beta[1m]',
       options: ROWS.map((r) => ({ id: r.value, label: r.display_name }))
@@ -82,7 +101,7 @@ describe('composerModelMenuModel', () => {
   // The entries are EXACTLY the published rows, one per entry, in the daemon's order — asserted as a
   // derivation over the seeded array, so a fourth row inherits the guard and no model name is typed here.
   it('offers exactly the published rows, in order, id = value and label = display name (AC2)', () => {
-    const menu = composerModelMenuModel(LIST, 'alpha')
+    const menu = composerModelMenuModel(LIST, stored('alpha'))
     expect(menu?.options.map((o) => o.label)).toStrictEqual(ROWS.map((r) => r.display_name))
     expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((r) => r.value))
     expect(menu?.options).toHaveLength(ROWS.length)
@@ -97,7 +116,7 @@ describe('composerModelMenuModel', () => {
     ['a superstring', 'alpha-resolved'],
     ['surrounding whitespace', ' alpha ']
   ])('falls back to the model value verbatim on %s (AC1)', (_why, model) => {
-    const menu = composerModelMenuModel(LIST, model)
+    const menu = composerModelMenuModel(LIST, stored(model))
     expect(menu?.label).toBe(model)
     expect(menu?.currentId).toBeNull()
   })
@@ -107,7 +126,7 @@ describe('composerModelMenuModel', () => {
   // form would silently print the value instead.
   it('keeps an empty published display name rather than falling back to the value', () => {
     const list: ModelListEntry = { models: [row({ value: 'alpha', display_name: '' })], droppedModels: 0 }
-    expect(composerModelMenuModel(list, 'alpha')?.label).toBe('')
+    expect(composerModelMenuModel(list, stored('alpha'))?.label).toBe('')
   })
 
   // AC4's two inputs, kept apart by the store and NOT collapsed here: both yield no options, and the
@@ -117,7 +136,7 @@ describe('composerModelMenuModel', () => {
     ['no frame has arrived', null],
     ['the daemon published an empty list', EMPTY]
   ])('offers nothing but still labels the trigger when %s (AC4)', (_why, models) => {
-    expect(composerModelMenuModel(models as ModelListEntry | null, 'alpha')).toStrictEqual({
+    expect(composerModelMenuModel(models as ModelListEntry | null, stored('alpha'))).toStrictEqual({
       label: 'alpha',
       currentId: null,
       options: []
@@ -128,8 +147,8 @@ describe('composerModelMenuModel', () => {
   // is '' (selectEffectiveSettings' final fallback), and there is no name to draw. ContextUsageControl's
   // posture for its own unavailable reading, and #811's no-placeholder rule.
   it('returns null when the session model is not known', () => {
-    expect(composerModelMenuModel(LIST, '')).toBeNull()
-    expect(composerModelMenuModel(null, '')).toBeNull()
+    expect(composerModelMenuModel(LIST, layers())).toBeNull()
+    expect(composerModelMenuModel(null, layers())).toBeNull()
   })
 
   // Claude may legitimately publish two rows sharing a `value` (RunConfigSections.tsx:303-307). Both are
@@ -140,9 +159,65 @@ describe('composerModelMenuModel', () => {
       models: [row({ value: 'alpha', display_name: 'First' }), row({ value: 'alpha', display_name: 'Second' })],
       droppedModels: 0
     }
-    const menu = composerModelMenuModel(list, 'alpha')
+    const menu = composerModelMenuModel(list, stored('alpha'))
     expect(menu?.options.map((o) => o.label)).toStrictEqual(['First', 'Second'])
     expect(menu?.currentId).toBe('alpha')
+  })
+
+  // #1053 AC1 — the state this ticket exists for: a session on the daemon's inherited default carries no
+  // choice at any client layer, and before this the control drew nothing at all. The announcement joins
+  // the published rows through the SAME rule the session's model joins them by, so a hit shows the row's
+  // display name. Nothing is marked: the session's model is still unset, which is AC5's half of this case.
+  it('labels the trigger with the announced model when nothing was chosen (AC1)', () => {
+    expect(composerModelMenuModel(LIST, layers({ announced: 'gamma' }))).toStrictEqual({
+      label: 'Gamma tier',
+      currentId: null,
+      options: ROWS.map((r) => ({ id: r.value, label: r.display_name }))
+    })
+  })
+
+  // A MISS IS ORDINARY here too, and it is the COMMON case: claude echoes an identifier at least as
+  // specific as the one it was given, so an announced identifier need not appear in any published row.
+  // RunningModelSection's posture, reused rather than re-decided.
+  it('renders an announced model that matches no published row verbatim (AC1)', () => {
+    const menu = composerModelMenuModel(LIST, layers({ announced: 'alpha-resolved' }))
+    expect(menu?.label).toBe('alpha-resolved')
+    expect(menu?.currentId).toBeNull()
+  })
+
+  // AC2 AND AC5 IN ONE ASSERTION, and they are the pair a single-string implementation cannot satisfy:
+  // the LABEL is the announcement (what is actually running) while the MARKED ROW stays the session's
+  // stored choice (what the daemon is set to). Two different questions, two different lookups.
+  it('shows the announcement over a disagreeing stored choice, still marking the stored one (AC2, AC5)', () => {
+    const menu = composerModelMenuModel(LIST, layers({ announced: 'gamma', stored: 'alpha' }))
+    expect(menu?.label).toBe('Gamma tier')
+    expect(menu?.currentId).toBe('alpha')
+  })
+
+  // AC3 — a pick outranks both, and the REVERT is the same rule read backwards: dropping the pending
+  // record (which is what a rejection does) leaves exactly the second case here, so the label returns to
+  // what it showed before the pick. There is no rollback branch to test because there is no rollback
+  // branch: the layering IS the rollback.
+  it('lets a pick outrank the announcement and returns to it when the pick is dropped (AC3)', () => {
+    const picked = layers({ picked: 'beta[1m]', announced: 'gamma', stored: 'alpha' })
+    expect(composerModelMenuModel(LIST, picked)?.label).toBe('Beta tier')
+    expect(composerModelMenuModel(LIST, picked)?.currentId).toBe('beta[1m]')
+    expect(composerModelMenuModel(LIST, { ...picked, picked: '' })?.label).toBe('Gamma tier')
+  })
+
+  // AC4 — nothing at any layer. An announcement whose model is the EMPTY STRING is a real, degenerate
+  // announcement the store holds verbatim rather than collapsing to null; this control cannot draw the
+  // distinction, and AC4 states the equivalence itself. The store's null-vs-'' contract is untouched
+  // where it was established.
+  // AC4's two inputs — no announcement, and an announcement whose model is '' — are ONE input here: the
+  // container collapses both to '' because this control has no rendering that could tell them apart, and
+  // the criterion names them in a single clause. Asserting them as two arms would be two identical cases
+  // in one outcome slot, so the equivalence is stated instead. The `null` half rides through the mounted
+  // container in ConversationScreen.test.tsx, where the store sits at its not-yet-announced default and
+  // the label is still the session's own model.
+  it('draws nothing when no layer has anything to show (AC4)', () => {
+    expect(composerModelMenuModel(LIST, layers({ announced: '' }))).toBeNull()
+    expect(composerModelMenuModel(LIST, layers({ picked: '', announced: '', stored: '' }))).toBeNull()
   })
 })
 
@@ -163,6 +238,17 @@ describe('ComposerModelMenuView', () => {
   it('draws the matched display name in its own bounded element (AC1)', () => {
     const markup = view(LIST, 'gamma')
     expect(markup).toContain('<span class="composer__model-label">Gamma tier</span>')
+  })
+
+  // #1053 — the announced label reaches the SAME bounded element, which is the whole reason a long dated
+  // identifier clips rather than pushing the context reading out of a row with a hard 20px height. This
+  // is the second render surface for claude-authored text, and it is one escaped JSX text position: the
+  // announced string appears in no attribute anywhere in the markup.
+  it('draws an announced model in the same bounded element and in no attribute (AC1)', () => {
+    const announced = 'claude-haiku-4-5-20251001'
+    const markup = viewLayers(LIST, layers({ announced }))
+    expect(markup).toContain(`<span class="composer__model-label">${announced}</span>`)
+    for (const attr of markup.match(/[a-z-]+="[^"]*"/g) ?? []) expect(attr).not.toContain(announced)
   })
 
   // The trigger's accessible name is computed from its contents (no aria-label — see the view), so the
@@ -216,7 +302,7 @@ describe('ComposerModelMenuView', () => {
   // (useState(false)), so the entries are fed to the panel directly — ComposerActionsMenu.test.tsx's
   // idiom. The MARKING is the half that differs from that menu: this is a choice, not a list of actions.
   it('feeds the published rows to the shared panel with the matched row marked (AC2)', () => {
-    const menu = composerModelMenuModel(LIST, 'beta[1m]')
+    const menu = composerModelMenuModel(LIST, stored('beta[1m]'))
     const markup = renderToStaticMarkup(
       <ComposerOptionsPanel
         options={menu?.options ?? []}

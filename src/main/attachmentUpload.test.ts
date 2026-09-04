@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   ATTACHMENT_MAX_UPLOAD_BYTES,
   ATTACHMENT_MAX_UPLOAD_CHUNKS,
@@ -80,6 +80,34 @@ function everyStringEmitted(events: AttachmentUploadEvent[], records: Diagnostic
   return out
 }
 
+/**
+ * The display names the events carry, and every OTHER string they carry, kept apart.
+ *
+ * ⭐ #1038 NARROWS THE EVENT-SIDE WALK BY EXACTLY ONE FIELD, AND NOTHING ELSE. The completed arm now
+ * declares the file's display name, so a blanket "no string contains the basename" walk over events
+ * would be asserting the opposite of what the channel promises. Splitting here rather than relaxing the
+ * checks is what keeps the narrowing auditable: `rest` still gets all three original checks, so a name
+ * that leaked into `uploadId` or into a `reason` still reddens, and `names` is proved separately as a
+ * SINGLE PATH COMPONENT rather than waved through.
+ *
+ * THE LOG SIDE IS NOT SPLIT AND MUST NOT BE. `DiagnosticEvent` gained nothing, so its walk keeps all
+ * three checks over every string — `everyStringEmitted([], records)`, unchanged. The attractive mistake
+ * this helper exists to prevent is relaxing one shared walk and silently narrowing the log's guarantee
+ * along with the event's.
+ */
+function eventStrings(events: AttachmentUploadEvent[]): { names: string[]; rest: string[] } {
+  const names: string[] = []
+  const rest: string[] = []
+  for (const event of events) {
+    for (const [key, field] of Object.entries(event)) {
+      if (typeof field !== 'string') continue
+      if (event.type === 'completed' && key === 'filename') names.push(field)
+      else rest.push(field)
+    }
+  }
+  return { names, rest }
+}
+
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 describe('uploadAttachmentFile', () => {
@@ -96,8 +124,13 @@ describe('uploadAttachmentFile', () => {
     expect(uploads[0].filename).toBe('report.pdf')
     expect(uploads[0].mime_type).toBe('application/pdf')
     expect(uploads[0].attachment_id).toMatch(UUID_V4)
-    // Exactly one event, and it names the same transfer the driver was given.
-    expect(events).toEqual([{ type: 'completed', uploadId: uploads[0].attachment_id }])
+    // Exactly one event, and it names the same transfer the driver was given — and, since #1038, the
+    // same FILE. `filename` is read off the upload rather than repeated as a literal on purpose: that is
+    // the difference between asserting "equal to the name we expected" and asserting "the very value
+    // that rode the wire", and only the second one reddens if the emitter ever grows a second bound.
+    expect(events).toEqual([
+      { type: 'completed', uploadId: uploads[0].attachment_id, filename: uploads[0].filename }
+    ])
   })
 
   it('falls back to application/octet-stream for an unknown extension', async () => {
@@ -202,14 +235,43 @@ describe('uploadAttachmentFile', () => {
     const missing = join(await freshDir(), `${NAME_STEM}-gone.bin`)
     await uploadAttachmentFile(missing, deps)
 
-    const ok = await fileWith(new Uint8Array([1]))
+    // Named with the distinctive stem so the walk below has something meaningful to search for: the
+    // completed terminal is the one event that now legitimately carries it.
+    const ok = await fileWith(new Uint8Array([1]), `${NAME_STEM}.bin`)
     await uploadAttachmentFile(ok, deps)
 
+    // THE LOG SIDE, WHOLE AND UNNARROWED (#1038 AC4). All three checks over every string a record
+    // carries — the basename included. Nothing about this half moved.
     expect(records.length).toBeGreaterThan(0)
-    for (const value of everyStringEmitted(events, records)) {
+    for (const value of everyStringEmitted([], records)) {
       expect(value).not.toContain(NAME_STEM)
       expect(value).not.toContain('/')
       expect(value).not.toContain('\\')
+    }
+
+    // THE EVENT SIDE, NARROWED BY EXACTLY ONE FIELD. Every string but the completed arm's display name
+    // keeps the original three checks, so the uploadIds and the `reason` literals are still walked.
+    const { names, rest } = eventStrings(events)
+    for (const value of rest) {
+      expect(value).not.toContain(NAME_STEM)
+      expect(value).not.toContain('/')
+      expect(value).not.toContain('\\')
+    }
+
+    // And the one narrowed field is proved rather than waved through: it is a SINGLE PATH COMPONENT,
+    // which is the property the code actually guarantees (`basename`, then a trim that cuts only
+    // between code points, so no separator can be introduced).
+    //
+    // ⭐ ASSERTED AS `basename(value) === value`, NOT AS `not.toContain('\\')`. A backslash is a LEGAL
+    // filename character on macOS and Linux, so a file genuinely named `a\b.txt` produces a name
+    // containing one; copying the record side's third check onto this field would assert something the
+    // code does not promise and would redden on a real file. `basename` is the exact claim, and it is
+    // the same function that produced the value one module over.
+    expect(names).toHaveLength(1)
+    expect(names[0]).toBe(`${NAME_STEM}.bin`)
+    for (const value of names) {
+      expect(basename(value)).toBe(value)
+      expect(value).not.toContain('/')
     }
   })
 
@@ -323,7 +385,7 @@ describe('uploadAttachmentBytes', () => {
     // 40 repeats of a 23-character / 30-byte stem is 920 characters and 1200 bytes — over the bound
     // both ways, so the assertion below is only satisfiable by counting bytes, not characters.
     const long = NAME_STEM.repeat(40)
-    const { deps, uploads } = harness()
+    const { deps, events, uploads } = harness()
 
     await uploadAttachmentBytes({ bytes: new Uint8Array([1]), filename: long, mimeType: 'x/y' }, deps)
 
@@ -335,6 +397,13 @@ describe('uploadAttachmentBytes', () => {
     expect(declared).not.toContain('�')
     expect(Buffer.from(declared, 'utf8').toString('utf8')).toBe(declared)
     expect(long.startsWith(declared)).toBe(true)
+
+    // ⭐ #1038's FIRST CRITERION, AND THIS IS THE ONLY CASE THAT CAN PROVE IT. For a short name the
+    // trimmed value and the raw one are the same string, so every other assertion in this file would
+    // pass just as happily against a second, differently-bounded copy. Here they differ by 665
+    // characters: the window is told the value that actually rode the wire, not the file's real name.
+    expect(events).toEqual([{ type: 'completed', uploadId: expect.any(String), filename: declared }])
+    expect(declared).not.toBe(long)
   })
 })
 
@@ -400,7 +469,11 @@ describe('uploadClipboardImage', () => {
       new RegExp(`^${CLIPBOARD_IMAGE_FILENAME_PREFIX}-\\d{8}T\\d{6}\\.png$`)
     )
     expect(uploads[0].attachment_id).toMatch(UUID_V4)
-    expect(events).toEqual([{ type: 'completed', uploadId: uploads[0].attachment_id }])
+    // #1038: the window is told the MINTED name — the same value the wire carries — so a pasted image
+    // is named by this client and by nothing the clipboard held.
+    expect(events).toEqual([
+      { type: 'completed', uploadId: uploads[0].attachment_id, filename: uploads[0].filename }
+    ])
   })
 
   it('mints a fresh id per paste, so two are distinguishable in flight', async () => {
@@ -462,7 +535,7 @@ describe('uploadClipboardImage', () => {
   it('lets no clipboard content reach an event or a log record', async () => {
     // The ticket's fourth criterion at the emitter. A DISTINCTIVE byte run stands in for the image, and
     // the walk covers every string that crossed on the success path — where the most is emitted.
-    const { deps, events, records } = harness()
+    const { deps, events, records, uploads } = harness()
 
     await uploadClipboardImage(() => PNG_BYTES, deps)
 
@@ -470,18 +543,33 @@ describe('uploadClipboardImage', () => {
     // AS AN EXHAUSTIVE LIST, not as a substring search, and that is the difference between a real
     // assertion and a vacuous one: a `not.toContain(String(bytes.length))` over a short length matches
     // digits inside the uploadId and would fail or pass by accident. Naming every string that may cross
-    // admits nothing — no base64, no length, no flavour, no dimension, and no minted filename, which is
-    // declared to the daemon rather than reported to the window.
+    // admits nothing — no base64, no length, no flavour and no dimension.
+    //
+    // ⭐ #1038 ADDS THE MINTED NAME TO THIS LIST, AND IT IS SOURCED FROM `uploads[0]` RATHER THAN
+    // RESTATED. The list is exhaustive, so a new crossing string has to be named here to pass; reading
+    // the expected value off the wire envelope is what makes this line simultaneously the proof that
+    // the window and the daemon were told the SAME name. Two assertions below then settle what that
+    // name may be made of.
     expect(strings).toEqual([
       'completed',
       events[0].uploadId,
+      uploads[0].filename,
       'attachment-pick',
       'started',
       'attachment-pick',
       'completed'
     ])
     expect(strings).not.toContain(Buffer.from(PNG_BYTES).toString('base64'))
-    expect(strings.some((value) => value.includes(CLIPBOARD_IMAGE_FILENAME_PREFIX))).toBe(false)
+    // ⭐ INVERTED BY #1038, FROM AN ABSENCE CHECK TO A PRESENCE ONE, and the inversion is the second
+    // criterion rather than housekeeping: before this slice the minted name reaching the window would
+    // have been the leak; now its ABSENCE would mean some other string was substituted for it.
+    expect(strings.some((value) => value.includes(CLIPBOARD_IMAGE_FILENAME_PREFIX))).toBe(true)
+    // What actually discharges "no clipboard content reaches the window": the name is the client-owned
+    // stem, a UTC stamp and `.png`, matched as a WHOLE-STRING shape. A string of exactly this shape has
+    // no room to carry a byte, a dimension or a flavour of what the operator was holding.
+    expect(uploads[0].filename).toMatch(
+      new RegExp(`^${CLIPBOARD_IMAGE_FILENAME_PREFIX}-\\d{8}T\\d{6}\\.png$`)
+    )
   })
 })
 
@@ -519,7 +607,8 @@ describe('the progress gate (#864 AC1-AC4)', () => {
     expect(events).toEqual([
       { type: 'progress', uploadId: expect.any(String), sentChunks: 1, totalChunks: total },
       { type: 'progress', uploadId: expect.any(String), sentChunks: 2, totalChunks: total },
-      { type: 'completed', uploadId: expect.any(String) }
+      // #1038: the terminal names the file; the in-flight reports before it still do not (AC3).
+      { type: 'completed', uploadId: expect.any(String), filename: TINY.filename }
     ])
     // One transfer, one id: every event of an upload carries the id its own intent minted.
     expect(new Set(events.map((event) => event.uploadId)).size).toBe(1)

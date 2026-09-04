@@ -1,12 +1,21 @@
 // #863: the composer's copy for one attachment-upload outcome — the whole of the third acceptance
 // criterion, in a module with no React and no bridge so it is provable by calling a function.
 //
-// WHAT MAKES THIS A SELECTION RATHER THAN A RENDERING. Every field on AttachmentUploadEvent is
-// client-owned by construction (see the union's own docblock): no member can hold the file's bytes, its
-// host path or its name, `reason` is a literal written in this repo, and `limitBytes` is a client-owned
-// constant. So there is no daemon text on this path — no escaping obligation, no length bound, and no
-// truncation chain of the kind .composer__model-label carries for a claude-authored label. What IS at
-// stake is coverage: every terminal the channel can deliver must produce a sentence.
+// WHAT MAKES THIS A SELECTION RATHER THAN A RENDERING. There is no DAEMON text on this path: `reason`
+// is a literal written in this repo, `limitBytes` is a client-owned constant, and no member of
+// AttachmentUploadEvent can hold the file's bytes or its host path (see the union's own docblock). So
+// this module has no escaping obligation and no truncation chain of the kind .composer__model-label
+// carries for a claude-authored label. What IS at stake is coverage: every terminal the channel can
+// deliver must produce a sentence.
+//
+// ONE MEMBER NOW CARRIES THE FILE'S NAME, AND THIS MODULE STILL DOES NOT READ IT (#1038). The completed
+// terminal names the stored file, which is the first OPERATOR-supplied string the channel delivers —
+// but the `completed` arm below returns a constant, so nothing here interpolates it and the paragraph
+// above stays true of every sentence this module can produce. That is deliberate rather than pending:
+// #1038 ships the supply with no consumer. The first consumer inherits two obligations this module is
+// therefore free of — a LAYOUT bound (a 255-byte name needs the max-width + ellipsis treatment the
+// footer's labels carry, not a raw interpolation) and not assuming the value is non-empty. Its own
+// tests assert the constant stays a constant, so acquiring either obligation is a deliberate change.
 
 import type {
   AttachmentUploadEvent,

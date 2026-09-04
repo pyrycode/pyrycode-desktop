@@ -234,23 +234,50 @@ export type AttachmentUploadFailure =
  * number of `progress` (#864). A CANCELLED picker emits NOTHING at all, which is what makes
  * cancellation a true no-op rather than an outcome the renderer must learn to ignore.
  *
- * CONTENT-FREE BY CONSTRUCTION: no member declares a field that can hold the file's bytes, its host
- * path, or its name. `uploadId` is a randomUUID minted per intent and derived from nothing about the
- * file; `reason` is a client-owned literal; `limitBytes` is a client-owned constant; the progress
- * counts are counts of FRAMES. That is what makes "neither the bytes nor the path crosses the bridge"
- * a property of this type rather than a promise about the sender — the same argument PairingStatus
- * makes about the paired-server record.
+ * NEITHER THE BYTES NOR THE HOST PATH CROSSES, and that is still a property of this TYPE rather than a
+ * promise about the sender — the same argument PairingStatus makes about the paired-server record. No
+ * member declares a field that can hold a file byte or a path. `uploadId` is a randomUUID minted per
+ * intent and derived from nothing about the file; `reason` is a client-owned literal; `limitBytes` is a
+ * client-owned constant; the progress counts are counts of FRAMES.
  *
- * ⭐ ONE QUALIFICATION #862'S CONTAINMENT ARGUMENT DID NOT CARRY, added when #864 landed.
+ * WHAT THIS UNION NO LONGER CLAIMS is that no member can hold the file's NAME. Exactly one does, on the
+ * `completed` arm alone (#1038), and it is documented there. The paragraph below is the qualification
+ * that member owes.
+ *
+ * ⭐ ONE QUALIFICATION #862'S CONTAINMENT ARGUMENT DID NOT CARRY, added when #864 landed and answered
+ * when #1038 landed.
  * #862's property is that a compromised renderer "can make a picker appear; it cannot choose what that
- * picker opens, and it cannot read back what was sent". `totalChunks` is the first field here derived
+ * picker opens, and it cannot read back what was sent". `totalChunks` was the first field here derived
  * from the CHOSEN FILE rather than from a client-owned constant: it states the file's size to within
  * ATTACHMENT_CHUNK_DATA_BYTES. Shipping a bare percentage instead would withhold nothing — at one
  * event per chunk a renderer counts the events and derives the same number, so the disclosure is the
  * emission CADENCE, not the field, and stating it outright is the honest form of it. It is accepted on
  * its size: a window that already holds the whole conversation timeline learning the approximate size
  * of a file its own user just picked is far inside the blast radius #862 already accepts. A member
- * that ever wanted to carry more than a count owes this paragraph a re-read.
+ * that ever wanted to carry more than a count owed this paragraph a re-read.
+ *
+ * ⭐ #1038 IS THAT MEMBER, AND THIS IS THE RE-READ. `completed.filename` is the second field derived
+ * from the chosen file, and unlike `totalChunks` it is not a number — so the size argument above does
+ * not simply extend to it and is not what licenses it. Three things do.
+ *
+ * FIRST, THE DIRECTION. #862's containment governs renderer→main: a compromised window cannot choose
+ * what is opened, cannot name a file, cannot reach the wire. Nothing here moves that — the two guards
+ * above are untouched. What moves is what main tells a window about a transfer that window's own
+ * operator started, which is a DISCLOSURE question, not a validation one.
+ *
+ * SECOND, THE PROVENANCE, WHICH DIFFERS BY ENTRY AND IS WHY THIS IS NOT ONE ARGUMENT BUT TWO. A picked
+ * or dropped file is named `basename(path)` — the operator's own filename, one path component, never a
+ * directory. A PASTED image is named by `clipboardImageFilename` (src/main/attachmentUpload.ts): a
+ * client-owned stem, a UTC stamp and `.png`, so that entry discloses nothing whatsoever about what the
+ * clipboard held. The strongest entry stays exactly as strong as it was.
+ *
+ * THIRD, THE SIZE OF WHAT IS DISCLOSED. A compromised renderer learns what its own operator called a
+ * file that operator just attached, in a window that already holds the entire conversation timeline. No
+ * host path, no directory, no byte. That is the same blast radius #862 accepts and #864 widened once.
+ *
+ * WHY IT IS SUPPLIED AT ALL rather than withheld: the merged save leg cannot be driven without it.
+ * `AttachmentSaveRequest` (attachmentSave.ts) is `{ attachmentId, filename }` and that module's header
+ * states outright that main does not have the name and the renderer does. This is that supply.
  *
  * ADDITIVE ROOM IS DELIBERATE. #890/#891 report their own terminals through the same channel;
  * `uploadId` is what lets a renderer tell two concurrent uploads apart. Nothing in this window can
@@ -286,8 +313,36 @@ export type AttachmentUploadEvent =
   | { type: 'refused'; uploadId: string; reason: 'no-image' }
   /** The attempt was made and did not store the file. */
   | { type: 'failed'; uploadId: string; reason: AttachmentUploadFailure }
-  /** The daemon stored the file. */
-  | { type: 'completed'; uploadId: string }
+  /**
+   * The daemon stored the file, and this is what it is called (#1038).
+   *
+   * `filename` IS THE SAME VALUE THAT RODE THE WIRE — not a second copy of it, and not a differently
+   * bounded one. `driveUpload` (src/main/attachmentUpload.ts) trims the name to
+   * ATTACHMENT_FILENAME_MAX_BYTES ONCE, into a const, and reads that const twice: the chunk envelope's
+   * `filename` and this field. So the window is told what the daemon was told, and the two cannot drift
+   * — a second `trimToBytes` call would agree for a short name and diverge at 255 bytes, which is
+   * exactly where a display name matters.
+   *
+   * DISPLAY TEXT, AND ITS ONWARD USE IS THE SAVE LEG. It is not a path and not a capability: a consumer
+   * hands it back as `AttachmentSaveRequest.filename`, where main treats it as untrusted renderer text
+   * and re-runs `sanitizeAttachmentFilename` on the value it actually builds a path from. That is why
+   * nothing is stripped here — a second sanitiser on this side would be the divergent-checks shape
+   * attachmentBytes.ts already argues against. 255 bytes is well inside MAX_SAVE_FILENAME_LENGTH.
+   *
+   * A SINGLE PATH COMPONENT BY CONSTRUCTION: `basename` returns one, and a trim that cuts only between
+   * code points can introduce no separator. NOT the same as "carries no separator character" — `\` is a
+   * legal filename character on macOS and Linux, so a file genuinely named `a\b.txt` produces a name
+   * containing one, and the save leg rewrites it to `_` regardless.
+   *
+   * REQUIRED, NEVER OPTIONAL, for the reason the `no-image` refusal records above: an optional field
+   * renders `undefined` into a sentence instead of refusing to build, and makes every construction
+   * site's omission silent. Empty is representable and unreachable — `basename` answers '' only for a
+   * path the read guard already refuses — so a consumer should not assume non-empty without checking.
+   *
+   * WHAT IT IS NOT: the only member that carries a name. The three other arms and the in-flight one
+   * carry no string but their own `uploadId` and their client-owned `reason`.
+   */
+  | { type: 'completed'; uploadId: string; filename: string }
   /**
    * The transfer is in flight: `sentChunks` of `totalChunks` chunk envelopes have reached the wire
    * (#864). NOT a terminal — zero or more of these precede exactly one of the three above, and none

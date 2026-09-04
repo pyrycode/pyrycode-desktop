@@ -90,7 +90,7 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
   const arms: Array<[string, AttachmentUploadEvent]> = [
     ['a refusal', { type: 'refused', uploadId: 'u1', reason: 'too-large', limitBytes: 23_040_000 }],
     ['a failure', { type: 'failed', uploadId: 'u2', reason: 'not-connected' }],
-    ['a completion', { type: 'completed', uploadId: 'u3' }],
+    ['a completion', { type: 'completed', uploadId: 'u3', filename: 'report.pdf' }],
     // The retrieval-leg code a conforming daemon never sends for an upload, and a hostile one can. It must
     // not fall through to a blank line.
     ['an unreachable failure', { type: 'failed', uploadId: 'u4', reason: 'attachment-not-found' }]
@@ -115,10 +115,24 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
   // would be a live layout hazard against AC5 for no semantic gain.
   it('is a div, so no UA margin moves the composer', () => {
     const markup = renderToStaticMarkup(
-      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u1' }} />
+      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u1', filename: 'r.pdf' }} />
     )
     expect(markup.startsWith('<div')).toBe(true)
     expect(markup).not.toContain('<p')
+  })
+
+  // ⭐ #1038's supply ships with no consumer, asserted at the VIEW as well as at the copy module —
+  // because these are two separate places a name could be rendered, and only one of them is a function
+  // whose output the other compares against. A name reaching this markup would be #1039's decision,
+  // and it arrives with a layout obligation (a 255-byte name in a fixed-height composer row) that
+  // nothing here discharges yet. The stem is distinctive so a partial interpolation is caught too.
+  it('puts the stored file’s name nowhere in the terminal markup', () => {
+    const filename = 'Raportti-läpivienti-日本語.pdf'
+    const markup = renderToStaticMarkup(
+      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u7', filename }} />
+    )
+    expect(markup).not.toContain(filename)
+    expect(markup).not.toContain('Raportti')
   })
 
   // ==============================================================================================
@@ -161,7 +175,7 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
     expect(inFlight.match(/<div/g)).toHaveLength(1)
 
     const terminal = renderToStaticMarkup(
-      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u6' }} />
+      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u6', filename: 'r.pdf' }} />
     )
     expect(terminal).not.toContain('composer__attach-progress')
     expect(terminal.match(/<div/g)).toHaveLength(1)

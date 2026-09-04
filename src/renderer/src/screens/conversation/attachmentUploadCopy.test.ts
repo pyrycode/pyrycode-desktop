@@ -9,8 +9,10 @@ import {
 
 // #863: the composer's copy for one attach outcome — the whole of AC3, provable by calling a function
 // because the module is pure. Every sentence it can produce is a literal written in this repo; nothing on
-// AttachmentUploadEvent can hold the file's bytes, its host path or its name, so these tests are about
-// COVERAGE and SELECTION, never about escaping.
+// AttachmentUploadEvent can hold the file's bytes or its host path, so these tests are about COVERAGE
+// and SELECTION, never about escaping. Since #1038 the completed terminal does carry the file's NAME —
+// operator-supplied text — and the test below asserts this module still does not put it in a sentence,
+// which is what keeps "every sentence is a literal written in this repo" true rather than aspirational.
 
 // One event of each shape, built here rather than in each test — the discriminator is what varies.
 const failedWith = (reason: AttachmentUploadFailure): AttachmentUploadEvent => ({
@@ -166,10 +168,27 @@ describe('attachmentUploadOutcomeCopy — the three arms (#863 AC3)', () => {
   // AC3's third arm. #815 is not started, so nothing else anywhere is evidence that a file was stored —
   // a silent success would be indistinguishable from a cancelled picker, which reports nothing at all.
   it('acknowledges a completed upload rather than saying nothing', () => {
-    const copy = attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'a' })
+    const copy = attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'a', filename: 'r.pdf' })
     expect(copy.trim()).not.toBe('')
     // It reads as success, not as one of the failure sentences.
     expect(Object.values(ATTACHMENT_UPLOAD_FAILURE_COPY)).not.toContain(copy)
+  })
+
+  // ⭐ #1038 SHIPS THE SUPPLY WITH NO CONSUMER, AND THIS IS WHERE THAT IS A FACT RATHER THAN A NOTE.
+  // The completed terminal now carries the file's display name — the first operator-supplied string
+  // this channel delivers. Naming it in a sentence is a real design decision (#1039's), carrying a
+  // layout obligation this module has never had, so the sentence must stay a CONSTANT until someone
+  // takes that decision deliberately. Asserted as invariance across two wildly different names rather
+  // than as a `not.toContain`, which would pass just as happily on a partial interpolation.
+  it('names no file, so the sentence is the same whatever was stored', () => {
+    const short = attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'a', filename: 'r.pdf' })
+    const awkward = attachmentUploadOutcomeCopy({
+      type: 'completed',
+      uploadId: 'a',
+      filename: 'Raportti-läpivienti-日本語'.repeat(8)
+    })
+    expect(awkward).toBe(short)
+    expect(short).not.toContain('Raportti')
   })
 
   // The uploadId is on every member and is deliberately UNREAD: the renderer cannot correlate it to a
@@ -177,7 +196,9 @@ describe('attachmentUploadOutcomeCopy — the three arms (#863 AC3)', () => {
   // does not exist. It must reach no sentence.
   it('never puts the uploadId in a sentence', () => {
     const id = 'b3f1c0de-0000-4000-8000-000000000000'
-    expect(attachmentUploadOutcomeCopy({ type: 'completed', uploadId: id })).not.toContain(id)
+    expect(
+      attachmentUploadOutcomeCopy({ type: 'completed', uploadId: id, filename: 'r.pdf' })
+    ).not.toContain(id)
     expect(attachmentUploadOutcomeCopy(failedWith('unreadable'))).not.toContain(id)
     expect(
       attachmentUploadOutcomeCopy({
@@ -295,7 +316,7 @@ describe('attachmentUploadOutcomeCopy — the progress arm (#864 AC1)', () => {
     // one is showing from the text alone.
     const progress = attachmentUploadOutcomeCopy(progressWith(1, 8))
     const terminals = [
-      attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'u' }),
+      attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'u', filename: 'r.pdf' }),
       attachmentUploadOutcomeCopy(failedWith('connection-lost')),
       attachmentUploadOutcomeCopy({
         type: 'refused',

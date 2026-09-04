@@ -46,7 +46,7 @@ export type AttachmentUploadFailure =
 export type AttachmentUploadEvent =
   | { type: 'refused'; uploadId: string; reason: 'too-large'; limitBytes: number }
   | { type: 'failed'; uploadId: string; reason: AttachmentUploadFailure }
-  | { type: 'completed'; uploadId: string }
+  | { type: 'completed'; uploadId: string; filename: string }               // #1038
   | { type: 'progress'; uploadId: string; sentChunks: number; totalChunks: number }  // #864
 ```
 
@@ -74,7 +74,37 @@ qualifies #862's "a compromised renderer cannot read back what was sent". The re
 it, not hide it: at one event per chunk a renderer can already count events and derive the same
 number, so a bare percentage would withhold nothing while being less honest about the cost. Accepted
 on its size — a window that already holds the whole conversation timeline learning the approximate
-size of a file its own user just picked is far inside the blast radius #862 already accepts.
+size of a file its own user just picked is far inside the blast radius #862 already accepts. **A
+member that ever wanted to carry more than a count owed this paragraph a re-read** — #1038's
+`completed.filename` is that member, and the re-read is below.
+
+**`completed.filename` (#1038) is not a size, so the argument above does not simply extend to it —
+three things license it instead.** *Direction:* #862's containment governs renderer→main; this field
+moves main→window, telling an operator's own window what main already knows about a transfer that
+operator's own gesture started, which is a disclosure question, not a validation one — the two request
+guards above are untouched. *Provenance, which differs by entry:* the picker and the drop name the
+file `basename(path)` — the operator's own filename, one path component, never a directory — while a
+pasted image is named by `clipboardImageFilename` (`src/main/attachmentUpload.ts`): a client-owned
+stem, a UTC stamp and `.png`, so that entry discloses nothing whatsoever about what the clipboard held.
+*Size of the disclosure:* what a compromised renderer learns is what its own operator called a file
+that operator just attached, in a window that already holds the whole conversation timeline — no host
+path, no directory, no byte. It is supplied at all because the merged save leg cannot be driven
+without it: `AttachmentSaveRequest` (`attachmentSave.ts`) is `{ attachmentId, filename }`, and main
+does not have the name — only the renderer does, from the settled attachment in its own timeline.
+`filename` is the **same** value that rode the wire, not a second, differently-bounded copy: `driveUpload`
+(`src/main/attachmentUpload.ts`) trims the name to `ATTACHMENT_FILENAME_MAX_BYTES` once, into a const,
+and reads that const twice — the chunk envelope and this field — so the two cannot drift the way two
+independent `trimToBytes` calls could at exactly 255 bytes. It is display text whose only onward use is
+the save leg, where main re-runs `sanitizeAttachmentFilename` on the value it actually builds a path
+from, so nothing is stripped here. It is a single path component by construction — `basename` returns
+one and a trim that cuts only between code points introduces no separator — but that is *not* the same
+as "contains no separator character": `\` is a legal filename character on macOS and Linux, so a file
+genuinely named `a\b.txt` yields a name containing one, and the save leg rewrites it to `_` regardless.
+`filename` is required, never optional, for the `no-image` refusal's reason one member up: an optional
+field renders `undefined` into a sentence instead of failing to build. Empty is representable and
+unreachable — `basename` answers `''` only for a path the read guard already refuses — so a consumer
+must not assume non-empty without checking. The diagnostic log is untouched: it stays content-free
+exactly as before, and only the *event*-side leak walk narrows, by this one field.
 
 Whether `progress` is emitted at all is decided in the background process against one named chunk
 constant, `ATTACHMENT_PROGRESS_MIN_CHUNKS` (below) — never against a clock, so the decision is the
@@ -468,18 +498,35 @@ correlating the ask to a real key event) is the stated fallback if that residual
   called and the path absent from every emitted field and log record; every representative
   `AttachmentTransferFailure` row round-trips onto `failed.reason`; two concurrent runs mint distinct
   ids and emit two independent terminals; a >255-byte UTF-8 basename trims to ≤255 bytes and still
-  decodes cleanly; `uploadAttachmentBytes` drives the same guard and terminals without touching disk.
+  decodes cleanly, and the `completed` event's `filename` is asserted **against `uploads[0].filename`**
+  — the value the driver was actually handed — rather than a repeated literal, so a second, divergent
+  `trimToBytes` call would fail this at exactly 255 bytes where a literal comparison would not (#1038);
+  `uploadAttachmentBytes` drives the same guard and terminals without touching disk.
   **The >255-byte trim could not be proven through the path route** — 255 bytes sits at or under every
   host filesystem's own component limit, so no file could be created to exercise it — and is proven at
-  `uploadAttachmentBytes` instead, which both routes share. **(#1032)** `uploadClipboardImage` over the
-  same `harness`: bytes reach the driver verbatim, `mime_type` is `image/png`, `filename` matches the
-  minted pattern, `attachment_id` is a fresh UUID each call, exactly one `completed` is emitted; the three
-  no-image inputs (`null`, zero-length, a throwing reader) each produce exactly one `refused`/`no-image`
-  with no `limitBytes` key and the driver never called. The leak walk (`everyStringEmitted`) is an
-  **exhaustive string list**, not a substring search — the first draft's `not.toContain(String(bytes
-  .length))` matched a digit inside the `uploadId` by accident, so naming every string that may cross
-  (`completed`, the id, the two log records' fields) replaced it, admitting nothing at all and unable to
-  collide.
+  `uploadAttachmentBytes` instead, which both routes share.
+  **The general leak walk (`everyStringEmitted`) is split, not relaxed, since #1038 (`eventStrings`).**
+  Before, one walk ran over events and records together and asserted three checks — no `NAME_STEM`, no
+  `/`, no `\` — against every string either side emitted. Now that `completed` legitimately carries a
+  name, that walk would assert the opposite of what the channel promises, so it splits: the **record**
+  side keeps all three checks over every string, unchanged, since the log stays content-free; the
+  **event** side keeps all three checks over every string *except* `completed.filename`, which is lifted
+  out and proved a **single path component** instead — `basename(filename) === filename` — rather than
+  `not.toContain('\\')`, which a legally-named `a\b.txt` would fail (`\` is a legal filename character on
+  macOS and Linux). A name leaking into `uploadId` or a `reason` still reddens on the event side. **(#1032)**
+  `uploadClipboardImage` over the same `harness`: bytes reach the driver verbatim, `mime_type` is
+  `image/png`, `filename` matches the minted pattern, `attachment_id` is a fresh UUID each call, exactly
+  one `completed` is emitted; the three no-image inputs (`null`, zero-length, a throwing reader) each
+  produce exactly one `refused`/`no-image` with no `limitBytes` key and the driver never called. The
+  paste-side leak walk is an **exhaustive string list**, not a substring search — the first draft's
+  `not.toContain(String(bytes.length))` matched a digit inside the `uploadId` by accident, so naming
+  every string that may cross replaced it, admitting nothing at all and unable to collide.
+  **Inverted by #1038, not merely widened:** the list gains the minted name, sourced from
+  `uploads[0].filename` so the same line proves window-equals-wire; the `CLIPBOARD_IMAGE_FILENAME_PREFIX`
+  check flips from an *absence* assertion (the prefix reaching the window used to be the leak) to a
+  *presence* one, joined by a whole-string match against the minted shape
+  `^clipboard-image-\d{8}T\d{6}\.png$` — a string of exactly that shape has no room for a clipboard byte,
+  a dimension or a flavour, which is AC2's actual proof.
 - **`attachmentUploadCopy.test.ts` (#1032)** — the no-image sentence is non-blank, differs from the
   too-large sentence and from every `ATTACHMENT_UPLOAD_FAILURE_COPY` value, names the clipboard, states no
   byte figure, and doesn't contain the `uploadId`; the too-large arm's shipped assertions stay green,
@@ -554,8 +601,13 @@ correlating the ask to a real key event) is the stated fallback if that residual
   image entry, but `uploadClipboardImage` calls `driveUpload` directly instead — a non-blocking SHOULD FIX
   flagged by #1032's reviewer and not yet fixed. Its docblock (and `AttachmentUploadFile`'s) still name
   #891 as the seam that enters it; nothing does. See § `src/main/attachmentUpload.ts` above.
-- **Two pastes inside one second mint the same display name (#1032).** Cosmetic only — the daemon keys on
-  `attachment_id`, a fresh `randomUUID` per call, never on the filename.
+- **Two pastes inside one second mint the same display name (#1032), and since #1038 the window can see
+  it.** Cosmetic only — the daemon keys on `attachment_id`, a fresh `randomUUID` per call, never on the
+  filename — but a rapid double-paste now surfaces two identically-named completions to a renderer,
+  where before neither carried a name at all.
+- **`completed.filename` ships with no consumer (#1038).** `attachmentUploadCopy.ts`'s `completed` arm
+  still returns a constant; #1039 is the first consumer, and inherits the layout bound and the
+  non-empty assumption named in the `completed` arm's own docblock.
 
 ## Related
 
@@ -591,3 +643,8 @@ correlating the ask to a real key event) is the stated fallback if that residual
   [Composer attach § The paste entry](composer-attach.md#the-paste-entry-1033) (#1033, landed).
   `docs/specs/architecture/1032-paste-clipboard-image-attach.md` and
   `docs/specs/architecture/1033-paste-image-to-attach.md` have the full plans and security reviews.
+- [#1038](https://github.com/pyrycode/pyrycode-desktop/issues/1038) — landed; the `completed` arm gains
+  a required `filename`, the missing supply for [Attachment save](attachment-save.md)'s
+  `AttachmentSaveRequest`. Ships with no consumer — #1039 wires it.
+  `docs/specs/architecture/1038-completed-upload-carries-the-display-name.md` has the full plan and
+  security review.

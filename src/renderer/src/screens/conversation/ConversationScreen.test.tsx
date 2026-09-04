@@ -1702,6 +1702,185 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
   })
 })
 
+// #815: the file row a non-image attachment draws inside the message bubble (Figma `File field` 132:4605,
+// in the bubble at 121:3860) — the outlined document glyph with its extension overlay, and the filename
+// beside it. #1039 supplied the record this reads; until then there was no name to draw.
+//
+// WHAT THIS TIER OWNS: which items get a row, WHERE the row sits among the bubble's children, what the
+// glyph is as an element, and the untrusted-text posture. What it cannot own is AC5 — a long name wrapping
+// in the column beside the icon is layout, and `environment: 'node'` has no DOM and no stylesheet, so a
+// static render cannot tell wrapping from truncation from overflow. That half is
+// e2e/attachment-file-row.spec.ts, which measures boxes.
+describe('Timeline — the attachment file row in the message bubble (#815)', () => {
+  const ROW = 'bubble__file'
+  const NAME_SLOT = 'bubble__file-name'
+  const EXT_SLOT = 'bubble__file-ext'
+  const META = 'bubble__meta'
+
+  // Counts `.bubble__file` itself without also counting `.bubble__file-name` / `-icon` / `-ext`, which all
+  // share the prefix. A bare `match(/bubble__file/g)` would report four rows for one.
+  const rowCount = (markup: string): number =>
+    markup.match(/class="bubble__file"/g)?.length ?? 0
+
+  const withOneFile: ThreadItem[] = [
+    {
+      kind: 'userText',
+      text: 'here is the report',
+      attachments: [{ attachmentId: 'att-1', filename: 'report.pdf' }]
+    }
+  ]
+
+  it('draws the row for a sent message that carries an attachment', () => {
+    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    expect(rowCount(markup)).toBe(1)
+    expect(markup).toContain(`<span class="${NAME_SLOT}">report.pdf</span>`)
+    expect(markup).toContain(`<span class="${EXT_SLOT}" aria-hidden="true">PDF</span>`)
+  })
+
+  it('puts the row AFTER the message text and BEFORE the meta row (AC1)', () => {
+    // The order criterion as a byte string on the near side and an index comparison on the far side. The
+    // byte string is the load-bearing half: it is the user-arm analogue of the assistant pin
+    // interactiveRoundtrip.test.tsx holds (`data-thread-role="assistant"><div class="bubble__markdown">`),
+    // and it is what reddens if the row is ever prepended ahead of the text.
+    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    expect(markup).toContain('data-thread-role="user">here is the report<div class="bubble__file">')
+    expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
+  })
+
+  it('draws one row per attachment, in the order the record carries them', () => {
+    // The drawing shows one file; the record is a list, in upload-completion order. Two rows, stacked on
+    // the same 12px rhythm, is what the sibling-margin mechanism yields with no new construct.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: 'userText',
+            text: 'two of them',
+            attachments: [
+              { attachmentId: 'att-1', filename: 'first.pdf' },
+              { attachmentId: 'att-2', filename: 'second.zip' }
+            ]
+          }
+        ]}
+      />
+    )
+    expect(rowCount(markup)).toBe(2)
+    expect(markup.indexOf('first.pdf')).toBeLessThan(markup.indexOf('second.zip'))
+    // Still ahead of the single meta row, which stays the bubble's last child with two rows above it.
+    expect(markup.indexOf('second.zip')).toBeLessThan(markup.indexOf(META))
+  })
+
+  it('draws an EMPTY overlay, not a fallback word, when the name has no usable extension (AC4)', () => {
+    // The characters themselves are attachmentExtensionLabel.test.ts's; what this tier owns is that the
+    // empty string reaches the slot as an empty element rather than as a placeholder.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: 'userText',
+            text: 'no extension',
+            attachments: [{ attachmentId: 'att-1', filename: 'README' }]
+          }
+        ]}
+      />
+    )
+    expect(markup).toContain(`<span class="${EXT_SLOT}" aria-hidden="true"></span>`)
+    for (const wrong of ['FILE', 'undefined', 'null']) {
+      expect(markup).not.toContain(wrong)
+    }
+    // The name itself still draws in full — only the overlay is empty. Asserted as a COUNT rather than as
+    // an absence in the overlay: `not.toContain('README')` would be unsatisfiable (the name slot holds it
+    // legitimately), and the fact actually worth pinning is that the empty label did not fall back to
+    // spilling the name into the second slot.
+    expect(markup).toContain(`<span class="${NAME_SLOT}">README</span>`)
+    expect(markup.match(/README/g)?.length ?? 0).toBe(1)
+  })
+
+  it('draws the glyph as inline SVG taking its ink from the row, with no remote reference (AC3)', () => {
+    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    expect(markup).toContain('width="45" height="60"')
+    expect(markup).toContain('viewBox="0 0 45 60"')
+    // The drawing is an OUTLINE — `fill="none"` with a stroked path — so the ink arrives through `stroke`.
+    // Filling this path would render a solid document, which is why AC3's literal `fill="currentColor"` is
+    // not what ships; see the plan's § Design source and the component comment.
+    expect(markup).toContain('stroke="currentColor"')
+    expect(markup).toContain('aria-hidden="true"')
+    // Figma's export hands back an https:// asset URL for this glyph. Inlining the path data is what keeps
+    // a privileged renderer from making an outbound request on every message render.
+    expect(markup).not.toContain('figma.com')
+    expect(markup).not.toContain('<img')
+  })
+
+  it('renders the name as escaped children and puts it in NO attribute (AC2)', () => {
+    // The name is the operator's own basename, delivered over IPC — this row is the first DOM sink it has
+    // ever had. It reaches the DOM as React children only: never an attribute, a title, a URL or innerHTML.
+    const hostile = '<b>bold</b>&.svg'
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: 'userText',
+            text: 'careful',
+            attachments: [{ attachmentId: 'att-1', filename: hostile }]
+          }
+        ]}
+      />
+    )
+    expect(markup).toContain('&lt;b&gt;bold&lt;/b&gt;&amp;.svg')
+    expect(markup).not.toContain('<b>bold</b>')
+    // No attribute carries the name — `title=`, `alt=` and `href=` are each an easy accident here, and a
+    // name-derived React `key` is the step that makes `id={filename}` look natural next.
+    for (const sink of ['title="', 'alt="', 'href=', 'data-filename']) {
+      expect(markup).not.toContain(sink)
+    }
+    // The daemon-side storage handle is not display data and stays out of the markup entirely; #816 needs
+    // it in a click handler, not in the DOM.
+    expect(markup).not.toContain('att-1')
+  })
+
+  it('draws NO row for a message with no attachments, or for any other row kind', () => {
+    // AC1's fence, as a COUNT over the whole markup rather than a per-string absence — the shape #969 used
+    // for the same question about the meta row. An assistant bubble can never carry one: `MessagePayload`
+    // has no attachment field and there is no list verb, so the field describes only files this client
+    // minted itself.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          { kind: 'userText', text: 'nothing attached' },
+          { kind: 'assistantText', turnId: 't1', text: 'a reply' },
+          { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' },
+          {
+            kind: 'toolCall',
+            turnId: 't1',
+            toolUseId: 'u1',
+            name: 'Read',
+            inputSummary: 'a file',
+            result: null
+          }
+        ]}
+      />
+    )
+    expect(rowCount(markup)).toBe(0)
+    expect(markup).not.toContain(ROW)
+
+    const queued = renderToStaticMarkup(
+      <QueuedBacklog
+        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
+        onDrop={() => {}}
+      />
+    )
+    expect(queued).not.toContain(ROW)
+
+    // The unmounted MessageBubble residue, whose own assertions pin the message text as the bubble's sole
+    // child. It reuses .bubble--user and so inherits the CSS passively, and gains no row.
+    const residue = renderToStaticMarkup(
+      <MessageThread messages={[{ id: 'm1', type: 'user', text: 'residue' }]} />
+    )
+    expect(residue).toContain('data-message-role="user">residue</div>')
+    expect(residue).not.toContain(ROW)
+  })
+})
+
 // #286/#690: the session-boundary delimiter row, redrawn as the desktop inline separator (Figma node
 // 119-3843): rule / centred label / rule on one line, with no relative time and so no `now` prop.
 // The label's per-reason copy is asserted exactly in sessionBoundaryViewModel.test.ts; here we prove

@@ -338,3 +338,42 @@ ceiling under-sizes UI work rather than that this ticket is oversized.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — AC5 needs no CSS at all; `.bubble__file-name` is not shipped
+
+**What changed.** § Design specified `.bubble__file-name { min-width: 0; overflow-wrap: anywhere }` and
+argued at length that both were required because they address different mechanisms. **That rule is not in
+the implementation.** The filename element gets no CSS of its own; the class remains as a locator.
+
+**What drove it.** Not a review finding — a measurement I ran before committing the code, because the
+ticket's own Technical Note asked for AC5 to be *proved* under a pathological name rather than assumed.
+Four mutations of `conversation.css`, each rebuilt and run against the 184-character space-free name in
+`e2e/attachment-file-row.spec.ts`:
+
+| Mutation | Result |
+|---|---|
+| drop `min-width: 0` | **passes** |
+| drop `overflow-wrap: anywhere` | **passes** |
+| drop both | **passes** |
+| drop `flex: 0 0 auto` from `.bubble__file-icon` | **passes** |
+
+**Why the plan's reasoning was wrong.** It rested on `word-break: break-word` not being the mechanism that
+addresses a flex item's automatic minimum size. `word-break: break-word` behaves as
+`overflow-wrap: anywhere`, and `anywhere` — unlike `break-word` — *does* reduce a box's min-content size.
+So `.bubble`'s inherited declaration already collapses the item's automatic minimum to one character, and
+there is no shrink pressure left for `min-width: 0` to remedy. The ticket predicted AC5 was "probably a new
+rule, not an inherited one"; the measurement says the inherited rule covers it completely.
+
+**The new contract.** AC5 holds by inheritance, and the guard is the deterministic e2e spec rather than a
+duplicated declaration — the different-fabric shape. This also aligns the row with a norm this file has
+recorded five times (#607, #623, #628, #629, #630, at `.bubble__markdown code` and `.bubble__markdown a`):
+*restating a settled inherited value is how it gets lost.* Shipping the plan's rule would have been an
+inert declaration that no test could ever redden.
+
+`flex: 0 0 auto` on `.bubble__file-icon` **is** kept despite measuring inert, and the CSS comment now says
+so honestly instead of claiming it is what makes AC5 true. It stays because it is this file's vocabulary
+for a non-shrinking lead item and because the automatic minimum it duplicates is conditional in a way the
+declaration is not — a `min-width: 0` later copy-pasted onto that rule would remove the floor and let the
+name compress the icon.

@@ -38,7 +38,8 @@ import {
   type TimelineState,
   type TurnPhase,
   type ApiRetryStatus,
-  type UnrecognizedSite
+  type UnrecognizedSite,
+  type MessageAttachment
 } from '../../store/threadTimeline'
 import {
   submitMessage,
@@ -73,6 +74,7 @@ import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
+import { attachmentExtensionLabel } from './attachmentExtensionLabel'
 import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
@@ -751,6 +753,86 @@ function BubbleMeta({
   )
 }
 
+// #815: the file row a non-image attachment draws inside the message bubble (Figma `File field` 132:4605,
+// in the bubble at 121:3860) — the outlined document glyph with its extension overlaid on the lower half,
+// and the filename beside it in body-small --color-inverse-primary. #1039 supplied the record it reads.
+//
+// ONE ROW PER ATTACHMENT, EACH A DIRECT CHILD OF .bubble — no wrapper. That is the shape .bubble dictates
+// rather than a shortcut: the bubble is deliberately not a flex column (its own comment gives the reason —
+// the in-progress cursor is a sibling of the text and a flex column would drop it onto its own line), so
+// the drawing's 12px rhythm is a margin-top on the FOLLOWING sibling, which .bubble__meta already carries.
+// Giving each row the same margin makes text → file → file → meta fall out at 12px with no wrapper, no gap
+// property, and no second rhythm mechanism to keep in step.
+//
+// WRITTEN AFTER THE TEXT AND BEFORE <BubbleMeta>, which is AC1 and also the constraint BubbleMeta's own
+// header names: interactiveRoundtrip.test.tsx pins the byte string `data-thread-role="assistant"><div
+// class="bubble__markdown"><p>`, so nothing may precede the bubble's opening child.
+//
+// THE USER ARM ONLY, and structurally so. An assistant-produced file cannot reach this window at all —
+// `MessagePayload` carries no attachment field and there is no list verb — so `attachments` can only ever
+// describe files this client minted itself. The drawing is an assistant bubble because that is the case it
+// illustrates; the markup is identical either way, and building the assistant mount would be building for a
+// wire change nobody has filed.
+//
+// THE NAME IS UNTRUSTED DISPLAY TEXT AND THIS IS ITS FIRST DOM SINK — until now the composer renders it
+// nowhere on purpose. It reaches the DOM as auto-escaped React CHILDREN only: never an attribute, a title,
+// an alt, a URL or dangerouslySetInnerHTML. Two adjacent invitations are declined deliberately. The React
+// key is the ARRAY INDEX, not the filename (the list is a frozen record written once at send, so index
+// identity is stable — Timeline's own argument — and a name-derived key is the step that makes
+// `id={filename}` look natural next). And `attachmentId` is not rendered at all: it is a host-side storage
+// handle with no display value, which #816 needs in a click handler rather than in markup.
+//
+// NOTHING IS SANITISED, TRIMMED OR NORMALISED HERE, and that is deliberate twice over. The timeline store's
+// contract forbids a second sanitiser on this side as the divergent-checks shape, and
+// `sanitizeAttachmentFilename` already re-runs in main on the value a save actually builds a path from.
+// Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
+// than the tidiness it buys.
+function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
+  return (
+    <div className="bubble__file">
+      <span className="bubble__file-icon">
+        {/* The Figma glyph transcribed inline, following .bubble__copy-icon in this same bubble: sized by
+            its own width/height with a matching viewBox, aria-hidden because the name beside it carries
+            the meaning, and no shared component. Three export artefacts are dropped rather than
+            transcribed — preserveAspectRatio="none" and overflow="visible", which only mean anything for
+            the <img> wrapper Figma generates, and a clipPath whose rect is a full-bleed 45x60 no-op
+            (.bubble__copy-icon dropped its own for the same reason).
+
+            STROKE, NOT FILL — a deliberate, recorded departure from AC3's literal `fill="currentColor"`.
+            The drawing is an OUTLINE: the export is fill="none" with a stroked path, and filling it would
+            render a solid document, contradicting the same ticket's "outlined document glyph". The
+            criterion's substance is met — the ink comes from the row's `color` rather than a hardcoded hex,
+            so a theme change moves it. The ticket already caught this trap once (the layer is named
+            `file-solid-full` and it says take the render, not the name); AC3's `fill=` is that same name
+            leaking one line further.
+
+            INLINED, NEVER REFERENCED. Figma's export hands back an https:// asset URL for this glyph.
+            Shipping it would put a remote subresource in a renderer whose CSP is default-src 'self' — it
+            would fail closed, but it would also be an outbound request to a third party on every render. */}
+        <svg
+          className="bubble__file-glyph"
+          viewBox="0 0 45 60"
+          width="45"
+          height="60"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M7.5 0.5H25.0195C26.7633 0.5 28.4292 1.1438 29.7119 2.30566L29.9629 2.54492L42.4551 15.0254C43.7667 16.3371 44.5 18.1197 44.5 19.9805V52.5C44.5 56.3606 41.3606 59.5 37.5 59.5H7.5C3.63942 59.5 0.5 56.3606 0.5 52.5V7.5C0.5 3.63942 3.63942 0.5 7.5 0.5ZM23.875 17.8125C23.875 19.6472 25.3528 21.125 27.1875 21.125H39.3516L23.875 5.64844V17.8125Z" />
+        </svg>
+        {/* aria-hidden because this restates characters the name already carries — hiding it keeps the
+            row's accessible text exactly the filename, with nothing doubled. An empty label (a name with no
+            usable extension) emits an empty element, the .bubble__meta-time empty-slot precedent: it needs
+            no CSS of its own because the glyph beside it holds the row's height regardless. */}
+        <span className="bubble__file-ext" aria-hidden="true">
+          {attachmentExtensionLabel(attachment.filename)}
+        </span>
+      </span>
+      <span className="bubble__file-name">{attachment.filename}</span>
+    </div>
+  )
+}
+
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
 // over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
@@ -861,6 +943,15 @@ function TimelineRow({
         <div className="message-row message-row--user">
           <div className="bubble bubble--user" data-thread-role="user">
             {item.text}
+            {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
+                header reserved. The read is `=== undefined`, never `'attachments' in item`, which is always
+                true because the reducer assigns the field unconditionally. `[]` is unreachable from the
+                shipped producer (composerSend normalises "nothing pending" to absence at the echo) but is
+                representable, and `.map` draws no rows for it — the same bytes as absence, which is the only
+                reading consistent with the store's "absent means none". */}
+            {item.attachments?.map((attachment, attachmentIndex) => (
+              <BubbleAttachmentRow key={attachmentIndex} attachment={attachment} />
+            ))}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). The copy source is the echo the composer wrote — the text as sent. */}
             <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />

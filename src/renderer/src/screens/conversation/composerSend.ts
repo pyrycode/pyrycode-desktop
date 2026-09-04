@@ -5,7 +5,7 @@
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SendMessagePayload } from '@shared/wire/types'
 import type { ConnectionStatus } from '../../store/sessionStore'
-import type { ThreadEvent } from '../../store/threadTimeline'
+import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
 
 /**
  * The four effects submitMessage performs, injected so the helper stays pure and deterministic in
@@ -30,6 +30,15 @@ import type { ThreadEvent } from '../../store/threadTimeline'
  * the same rule `timelineBridge`'s seams follow, and an unstamped echo is a legal item (#1014 draws it as
  * the empty meta slot). The cost is that a forgotten wiring is silent rather than a compile error;
  * `composerSend.test.ts` pins the wired behaviour instead.
+ *
+ * `takeAttachments` (#1039) is the set of uploads that have completed since the last send — the files
+ * this message is being sent with. It follows `now` in EVERY respect and for the same two reasons:
+ * requiring it would cost thirteen mechanical edits at this file's deps literals (above the ten-call-site
+ * boundary this pipeline splits at) to buy a compile error, and an unwired take means no attachments
+ * rather than a fallback to some other source. It differs from `now` in one way that shapes the rest of
+ * this module: **the take is destructive**. The composer's implementation returns the set AND clears it,
+ * so calling it is what "this send consumed those attachments" means. That is why it is read exactly once,
+ * below both `false` returns — see submitMessage.
  */
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
@@ -37,6 +46,7 @@ export interface ComposerSendDeps {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
   newMessageId: () => string
   now?: () => number
+  takeAttachments?: () => readonly MessageAttachment[]
 }
 
 /**
@@ -94,7 +104,28 @@ export function submitMessage(
   // once, on the single object both writes share, so the flat store and the keyed holder can never record
   // two different instants for one message. Below both `false` returns, so a refused submit reads no clock
   // at all. `deps.now?.()` yields `undefined` when no clock was injected, assigned unconditionally.
-  const echo: ThreadEvent = { type: 'userText', text: trimmed, createdAt: deps.now?.() }
+  //
+  // #1039: the attachments are TAKEN here, and the position of this line is the fourth criterion in full.
+  // The take is destructive — the composer hands back its pending set and clears it in one act — so it
+  // sits below both `false` returns, exactly where the clock is read: a whitespace-only submit and a
+  // submit with no active conversation take nothing, and the operator's attached file survives for the
+  // next send. It is called ONCE, on the single object both writes share, so the two stores cannot record
+  // two different sets for one message; and it is called after the guarded send, so a bridge failure —
+  // which still posts the echo and still returns `true` — still records and still clears. There is no
+  // second call site and no re-read: "taken" and "consumed" are the same event.
+  const taken = deps.takeAttachments?.()
+  const echo: ThreadEvent = {
+    type: 'userText',
+    text: trimmed,
+    createdAt: deps.now?.(),
+    // ⭐ EMPTY NORMALISES TO ABSENT, and this is the ONLY place it happens — which is what lets the
+    // timeline item's contract read "absent means none" with no second meaning to explain. A message sent
+    // with nothing pending must produce the item today's producer already produces, so `[]` may not reach
+    // the store: the take answers an empty array whenever the operator attached nothing, and an unwired
+    // take answers `undefined`. Both land here as `undefined`, assigned unconditionally (the `createdAt`
+    // discipline), which is what the store tests as absence.
+    attachments: taken !== undefined && taken.length > 0 ? taken : undefined
+  }
   deps.dispatch(echo)
   // The keyed fold, under the conversation this message was SENT TO — it rides the wire as
   // `conversation_id` in the payload above. This is NOT the fallback AC3 bans: that ban is on inventing

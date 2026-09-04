@@ -6,12 +6,16 @@ import {
   COMPOSER_DROP_ACTIVE_CLASS,
   ComposerAttachButton,
   ComposerAttachOutcome,
+  NO_PENDING_ATTACHMENTS,
   composerClassName,
   dragCarriesFiles,
+  drainPendingAttachments,
   fileToAttach,
   pasteCarriesImageOnly,
-  reduceFileDropDepth
+  reduceFileDropDepth,
+  reducePendingAttachments
 } from './ComposerAttach'
+import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 
 // #863: the attach control's two pure views. Renderer specs here are static server renders
@@ -337,6 +341,121 @@ describe('pasteCarriesImageOnly', () => {
   it('reads the image arm as a prefix, so a look-alike flavour is not an image', () => {
     expect(pasteCarriesImageOnly(['text/image/png'])).toBe(false)
     expect(pasteCarriesImageOnly(['x-image/png'])).toBe(false)
+  })
+})
+
+// #1039: the pending-attachment accumulator — what an arriving upload event does to the set a send will
+// record. It is a pure function for the reason the four above are, and for one more: this repo's renderer
+// specs are static server renders with no DOM and no `renderHook`, so a rule that lived inside the hook
+// would be reachable by NO tier at all. Nothing renders it, so there is no e2e spec either — these are the
+// whole proof.
+describe('reducePendingAttachments', () => {
+  const completed = (uploadId: string, filename: string): AttachmentUploadEvent => ({
+    type: 'completed',
+    uploadId,
+    filename
+  })
+
+  it('starts from nothing', () => {
+    expect(NO_PENDING_ATTACHMENTS).toEqual([])
+  })
+
+  // AC1's first half. The identifier recorded is the completed terminal's `uploadId`, which is the id the
+  // DAEMON stored the file under (`driveUpload` sends `attachment_id: uploadId`) — that is what makes the
+  // pair usable by the row that draws it and by the save leg, rather than a local correlation key.
+  it('records the daemon’s identifier and the display name of a completed upload', () => {
+    expect(reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-1', 'report.pdf'))).toEqual([
+      { attachmentId: 'u-1', filename: 'report.pdf' }
+    ])
+  })
+
+  // AC1's second half: "one or more", in the order they completed. This is also what the gesture-clear
+  // must not touch — a set that rode `setOutcome(null)` would lose the first file the moment the operator
+  // attached the second, which is exactly this case.
+  it('records two completions in the order they completed', () => {
+    const first = reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-1', 'a.pdf'))
+    const second = reducePendingAttachments(first, completed('u-2', 'b.png'))
+    expect(second).toEqual([
+      { attachmentId: 'u-1', filename: 'a.pdf' },
+      { attachmentId: 'u-2', filename: 'b.png' }
+    ])
+  })
+
+  // ⭐ AC3, asserted as the SAME REFERENCE rather than as an equal array. An upload that was refused, that
+  // failed, or that is still in flight contributes nothing — and returning the set unchanged says so
+  // structurally, where an equal copy would merely happen to agree. Both `refused` members are here: they
+  // share a discriminator and only one carries a limit, so a switch that read `reason` could split them.
+  it('contributes nothing for a refusal, a failure or an in-flight transfer', () => {
+    const pending = reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-1', 'a.pdf'))
+    const quiet: AttachmentUploadEvent[] = [
+      { type: 'refused', uploadId: 'u-2', reason: 'too-large', limitBytes: 23_040_000 },
+      { type: 'refused', uploadId: 'u-3', reason: 'no-image' },
+      { type: 'failed', uploadId: 'u-4', reason: 'connection-lost' },
+      { type: 'failed', uploadId: 'u-5', reason: 'attachment-storage-failed' },
+      { type: 'progress', uploadId: 'u-6', sentChunks: 3, totalChunks: 9 }
+    ]
+    for (const event of quiet) {
+      expect(reducePendingAttachments(pending, event)).toBe(pending)
+    }
+  })
+
+  it('never mutates the set it is handed', () => {
+    const pending = reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-1', 'a.pdf'))
+    const next = reducePendingAttachments(pending, completed('u-2', 'b.png'))
+    expect(next).not.toBe(pending)
+    expect(pending).toHaveLength(1)
+    expect(NO_PENDING_ATTACHMENTS).toHaveLength(0)
+  })
+
+  // The name is recorded VERBATIM — no trim, no fallback, no non-empty guard. Empty is representable and
+  // unreachable (`basename` answers '' only for a path the read guard already refuses), and the two
+  // obligations #1038 deferred — a layout bound and not assuming non-emptiness — belong to the tickets
+  // that DRAW the name (#815, #868). Adding a guard here would be inventing a value the daemon was not told.
+  it('records the name verbatim, the empty and the 255-byte cases included', () => {
+    const long = 'ä'.repeat(127)
+    expect(reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-1', ''))).toEqual([
+      { attachmentId: 'u-1', filename: '' }
+    ])
+    expect(reducePendingAttachments(NO_PENDING_ATTACHMENTS, completed('u-2', long))).toEqual([
+      { attachmentId: 'u-2', filename: long }
+    ])
+  })
+})
+
+// #1039: the take, over a plain `{ current }` holder — a MutableRefObject satisfies it structurally, so
+// this tier walks the rule with no React. What it proves is the fourth criterion's clearing half, which
+// would otherwise live only inside the hook, where no tier in this repo can reach it.
+describe('drainPendingAttachments', () => {
+  const REPORT = { attachmentId: 'u-1', filename: 'report.pdf' }
+
+  it('hands back the pending set and empties the holder in one act', () => {
+    const holder = { current: [REPORT] as readonly MessageAttachment[] }
+    expect(drainPendingAttachments(holder)).toEqual([REPORT])
+    expect(holder.current).toEqual([])
+  })
+
+  // ⭐ AC4's second half: a second message sent with no further uploads records NONE. The first take is
+  // what makes the second one empty, which is the whole of "cleared by a send that actually happened".
+  it('answers empty on a second take with nothing recorded in between', () => {
+    const holder = { current: [REPORT] as readonly MessageAttachment[] }
+    drainPendingAttachments(holder)
+    expect(drainPendingAttachments(holder)).toBe(NO_PENDING_ATTACHMENTS)
+  })
+
+  // Emptied to the SHARED constant, not to a fresh `[]`, so repeated takes stay reference-identical and
+  // `submitMessage` normalises every one of them to an absent field.
+  it('empties to the shared constant', () => {
+    const holder = { current: [REPORT] as readonly MessageAttachment[] }
+    drainPendingAttachments(holder)
+    expect(holder.current).toBe(NO_PENDING_ATTACHMENTS)
+  })
+
+  it('does not mutate the set it handed back', () => {
+    const pending: readonly MessageAttachment[] = [REPORT]
+    const holder = { current: pending }
+    const taken = drainPendingAttachments(holder)
+    expect(taken).toBe(pending)
+    expect(pending).toEqual([REPORT])
   })
 })
 

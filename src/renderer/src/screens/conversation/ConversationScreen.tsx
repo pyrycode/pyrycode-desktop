@@ -2573,7 +2573,18 @@ function Composer({
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
       // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because
       // the moment being recorded IS now: this line is inside the send handler, not the render path.
-      now: Date.now
+      now: Date.now,
+      // #1039: the files this message is being sent with — the uploads that have completed since the last
+      // send. Referenced, not called, exactly like the clock above, and for a sharper reason: this take is
+      // DESTRUCTIVE (the hook clears its pending set in the same act), so calling it here would consume the
+      // operator's attachments on a submit `submitMessage` is about to refuse. That helper reads it once,
+      // below both of its `false` returns, which is what makes "cleared by a send that actually happened,
+      // and only by one" a property of the code rather than of this line.
+      //
+      // Both of `sendText`'s callers reach this — the composer's own submit and ComposerActionsMenu's
+      // picked command — and that is correct: a slash command is a message that was sent, so it records
+      // and consumes what is pending exactly as a typed one does.
+      takeAttachments: attach.takePendingAttachments
     })
     // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
     // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`

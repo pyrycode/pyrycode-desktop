@@ -26,6 +26,35 @@ export type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
  */
 export type UnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
 
+/**
+ * #1039: one file the operator attached to a message they sent, as the timeline records it.
+ *
+ * BOTH HALVES ARE WORTH RECORDING, and they answer different questions. `attachmentId` is the DAEMON's:
+ * `driveUpload` sends `attachment_id: uploadId`, so it is the id the host stored the file under, and it
+ * is what a later retrieval (#868) or save (#816) addresses. `filename` is the display name #1038 put on
+ * the completed terminal — the operator's own `basename` for a picked or dropped file, or
+ * `clipboardImageFilename`'s client-owned stem for a pasted image — which is the only thing a row can
+ * show, since the id names nothing a person recognises.
+ *
+ * THE FIELD NAMES ARE `AttachmentSaveRequest`'s (src/shared/ipc/attachmentSave.ts) so the save leg takes
+ * this record with no remap the day something wires it — but this is a DECLARATION, not an import. The
+ * timeline store imports nothing at all, and pulling an IPC contract into a pure renderer reducer to save
+ * four words would be the wrong trade (the `SessionBoundaryReason` re-declaration's reasoning, applied to
+ * the IPC boundary rather than the wire one). The rename from `uploadId` is deliberate: that name is
+ * about one transfer ATTEMPT, and what a timeline item records is a file the host has stored.
+ *
+ * Untrusted display text under the same plain-text-NEVER-HTML constraint as every other string in this
+ * file, and it is not a path or a capability: a consumer hands `filename` back as
+ * `AttachmentSaveRequest.filename`, where main re-runs `sanitizeAttachmentFilename` on the value it
+ * actually builds a path from. Nothing is stripped, trimmed or defaulted here — a second sanitiser on
+ * this side is the divergent-checks shape `attachmentBytes.ts` argues against, and the empty name is
+ * representable and unreachable (`basename` answers `''` only for a path the read guard already refuses).
+ */
+export interface MessageAttachment {
+  attachmentId: string
+  filename: string
+}
+
 /** The filled-in half of a `toolCall`, correlated to it by `toolUseId`. */
 export interface ToolResult {
   isError: boolean
@@ -85,7 +114,21 @@ export type ThreadItem =
   // #1013: `createdAt` carries the `assistantText` contract above verbatim, with one difference in WHICH
   // moment it names — the optimistic echo, i.e. when the operator pressed send, which for a
   // renderer-sourced item is the only moment there is.
-  | { kind: 'userText'; text: string; createdAt?: number }
+  //
+  // #1039: `attachments` are the files that were attached to THIS message, in the order their uploads
+  // completed — the first thing in this app that associates an attachment with a message, and what #815's
+  // file row and #868's thumbnail draw from. ABSENT means the message carried none — test
+  // `item.attachments === undefined`, never `'attachments' in item`, since the reducer assigns the field
+  // unconditionally. Unlike `input` one arm up, an EMPTY LIST is NOT a distinct fact here: the sole
+  // producer (`composerSend.ts`) normalises "nothing pending" to absence at the echo, so nothing
+  // downstream ever sees `[]` and "absent means none" is the only reading a consumer needs. The store
+  // still owns no opinion — it carries whatever arrived — so a second producer that minted `[]` would
+  // reach the item with it, and what an empty list DRAWS would be that row's decision, not this store's.
+  // Renderer-sourced like the text beside it: these are files this window's own operator attached, never
+  // daemon-supplied content. A file the ASSISTANT produced reaches the window as nothing at all
+  // (`MessagePayload` has no attachment field and there is no list verb), so this field can only ever
+  // describe attachments this client minted itself until that wire change exists.
+  | { kind: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
   // #286: the session-boundary delimiter — a `/clear`, an idle eviction, or a workspace change started a
   // fresh session. A whole marker, never coalesced. Carries the RAW `occurredAt` (formatted at render, the
   // channel-list precedent, so the relative time stays fresh) and the untrusted `workspaceCwd` (rendered as
@@ -170,7 +213,13 @@ export type ThreadEvent =
   // #1013: `createdAt` is the composer's stamp, field-for-field with the `userText` item. Its sole
   // producer (`composerSend.ts`) reads it from an OPTIONAL injected `now`, so an omitted clock leaves it
   // undefined rather than falling back to the wall clock.
-  | { type: 'userText'; text: string; createdAt?: number }
+  //
+  // #1039: `attachments` is field-for-field with the item's, and its sole producer reads it from an
+  // OPTIONAL injected `takeAttachments` on the same terms — an unwired take leaves it undefined rather
+  // than reaching for some other source. It rides the EVENT rather than arriving as a reducer parameter
+  // for `createdAt`'s recorded reason: `reduceTimeline` is called by the two timeline stores, which are
+  // production paths, so a parameter there would have to be threaded through every store-level spec.
+  | { type: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
   // #286: the session boundary. Field-for-field identical to the `sessionBoundary` ThreadItem, so the
   // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
   // discipline), never coalesced.
@@ -480,8 +529,23 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // #1013: `createdAt` is carried onto the item verbatim and UNCONDITIONALLY — the `input` / `resultDetail`
       // discipline, never a conditional spread. Never coalesced, so unlike `appendDelta` there is no earlier
       // stamp to preserve: a user message is whole on arrival and its time is the one the composer stamped.
+      //
+      // #1039: `attachments` is carried the same way and BY REFERENCE — never `[...event.attachments]`,
+      // which on an absent list yields `[]` and silently converts "this message carried none" into "this
+      // message carried an empty set". Sharing the array is safe for the reason the whole echo object is
+      // shared across the two stores: the producer builds it fresh and never mutates it, and this reducer
+      // only ever reads it. Nothing is deduplicated, reordered, bounded or inspected — the recorded order
+      // is the order the uploads completed, and every display decision belongs to #815 / #868.
       return {
-        items: [...state.items, { kind: 'userText', text: event.text, createdAt: event.createdAt }],
+        items: [
+          ...state.items,
+          {
+            kind: 'userText',
+            text: event.text,
+            createdAt: event.createdAt,
+            attachments: event.attachments
+          }
+        ],
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,

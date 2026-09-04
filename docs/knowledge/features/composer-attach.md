@@ -221,268 +221,107 @@ fallthrough, the `relayLeg`/`daemonLeg` discipline one directory over.
   reaches 1, decimal rather than binary — the figure is user-facing and macOS states file sizes the same
   way — printing at most one decimal so a small bound can never read as `0 MB`.
 
-## The drop entry (#890) — a second way in, not a second flow
+## Other ways in
 
-Dragging a file from Finder or Explorer onto `.composer` attaches it through the same
-[attachment-upload](attachment-upload.md) flow the button drives: the same guard, the same driver, the
-same outcome channel, the same terminal, rendered by `ComposerAttachOutcome` above. The only new thing is
-*where the path comes from* — the operating system hands a dropped file to the **window** as a DOM
-`File`, so the path has to be recovered on the window side of the process boundary, in the preload, via
-`webUtils.getPathForFile` (see [Attachment upload § The bridge](attachment-upload.md) for the resolver and
-its containment argument). Renderer code here holds the `File` handle and nothing else — the path never
-reaches this component, a store, or a log.
+Two more gestures attach through this same flow, each on their own page (split out 2026-09-04 to stay
+under the size cap):
 
-**Four pure functions, framework-free, in the `composerSend.ts` / `dropQueuedMessage.ts` idiom** — so the
-static tier can walk every branch of a drag gesture no test in this repo can perform:
+- [The drop entry](composer-attach-drop.md) (#890) — dragging a file from Finder or Explorer onto
+  `.composer`.
+- [The paste entry](composer-attach-paste.md) (#1033) — pasting an image from the OS clipboard onto
+  `.composer__input`.
 
-- **`composerClassName(active: boolean): string`** — `'composer'` when inactive, byte-identical to the
-  literal the three shipped `composerSlot.test.tsx` assertions match as a whole attribute run (two of
-  them `class="composer" hidden=""`), and `` `composer ${COMPOSER_DROP_ACTIVE_CLASS}` `` when active. A
-  branch, not an interpolation with an empty tail, for exactly that reason.
-- **`dragCarriesFiles(types)`** — reads `DataTransfer.types` for `'Files'`, since the files themselves are
-  deliberately unreadable during `dragover`. This is the whole of "interception is scoped to file drags":
-  every downstream effect — the edge, the `preventDefault` that stops a navigation, the attach itself — is
-  gated on it, so text, a URL, or an image dragged out of a web page is left alone and keeps doing exactly
-  what it does today, including text dropped into the textarea. `text/uri-list` is deliberately **not**
-  treated as a file drag — a `file:///…` URL dragged onto the page is `will-navigate`'s coverage
-  (`src/main/index.ts`), not this one's, and widening here would swallow ordinary link drags into the
-  message box.
-- **`reduceFileDropDepth(depth, event)`** — the drag-over state as a depth counter, not a boolean, which
-  is the whole of "it survives the pointer crossing a child element rather than flickering". `dragover`
-  fires continuously and every child fires its own `dragenter`/`dragleave` pair, both bubbling to the
-  composer's handler; a boolean flipped on `dragleave` would clear the instant the pointer crossed from
-  the composer onto the textarea. `'leave'` floors at zero (a stray leave outnumbering enters, from a
-  drag that began over a child); `'settled'` (a drop, or the drag ending) resets outright rather than
-  decrementing, because a drop fires no matching `dragleave` at all.
-- **`fileToAttach(files)`** — the one file, or `null` for zero and for more than one. Generic over the
-  element so the unit tier needs no `File`. **A multi-file drop attaches nothing and says nothing** — a
-  refusal would need a new reason in the shared union plus a branch in `attachmentUploadCopy`'s
-  compiler-forced switch, copy for a feature (multi-file upload) that doesn't exist yet. The daemon's own
-  concurrency bound (`attachment.too_many_uploads`, #861) is why a naive per-file loop would be the wrong
-  first cut; a follow-up ticket owns multi-file support and its messaging together.
+Both reuse `useAttachmentUpload`'s outcome channel and, since #1039, both feed the pending-attachments set
+below through the same listener the button does — see § Pending attachments.
 
-**`useAttachmentUpload()` grew a third member, `dropFile(file: File): void`**, mirroring `requestAttach`
-exactly: it clears the held outcome and calls `window.pyry.dropAttachmentFile(file)`. It stays inside this
-hook rather than being reimplemented at the drop site, because "dropping clears whatever outcome line is
-showing" is the same act `requestAttach` already performs, and a second copy is where the two could drift.
+## Pending attachments (#1039) — what an upload completing means to the message not yet sent
 
-**`useComposerFileDrop({ onFile })`** is the container: a `useState` depth counter (ADR 0006 — ephemeral,
-screen-local, read by nothing else, the same shape `useAttachmentUpload` already uses for the held
-outcome; it resets for free on a conversation switch because `PairedShellView` keys the chat pane on the
-conversation id) plus the four drag handlers `.composer` wears, plus one `useEffect` that mounts a
-**window-level navigation guard**: `preventDefault` on `window`'s `dragover` and `drop`, gated on
-`dragCarriesFiles` so a text or link drag is untouched. This is the only part of the feature not scoped to
-the composer, and it rides this hook (rather than `App.tsx`) so it is mounted wherever the composer is,
-with no second mount point to keep in step. It is **defence in depth**: `will-navigate` in the background
-process already refuses every navigation target but the app's own document, which is why a missed drop is
-a silent no-op today rather than a hijacked window replaced by a rendering of the dropped file. The window
-listener pair lives and dies with the effect, so a remount (including React StrictMode's double-invoke)
-nets exactly one live pair — the `onDaemonEvent` / `useAttachmentUpload` idiom.
+The first thing in this app that associates an attachment with a message. Nothing rendered by this
+control needed to change — the outcome line above is still the only thing on screen — but the composer now
+also *remembers* which uploads have completed since the operator last pressed send, so
+[`submitMessage`](composer-send.md) can record them on the message's own timeline item. See [Thread
+timeline § Types](thread-timeline.md#types) for `MessageAttachment` and the `userText` item/event fields
+this feeds.
 
-**The mount**, in `Composer` (`ConversationScreen.tsx`):
+**It is a pure function for a reason this file's other four are not.** `composerClassName`,
+`dragCarriesFiles`, `reduceFileDropDepth`, `fileToAttach` and `pasteCarriesImageOnly` are pure so the
+static tier can walk gestures nothing in this repo can perform. `reducePendingAttachments` is pure because
+there is no other tier *at all*: nothing renders the pending set, so Playwright has nothing to observe,
+and this repo's renderer specs are static server renders with no DOM and no `renderHook`, so a rule living
+only inside the hook would be reachable by no test anywhere.
 
-```tsx
-<div className={composerClassName(fileDrop.active)} hidden={covered} {...fileDrop.handlers}>
+```ts
+export const NO_PENDING_ATTACHMENTS: readonly MessageAttachment[] = []
+
+export function reducePendingAttachments(
+  pending: readonly MessageAttachment[],
+  event: AttachmentUploadEvent
+): readonly MessageAttachment[]
+
+export function drainPendingAttachments(holder: {
+  current: readonly MessageAttachment[]
+}): readonly MessageAttachment[]
 ```
 
-`className` stays ahead of `hidden` in JSX order — same reason as `composerClassName`'s resting branch:
-the three shipped whole-attribute-run assertions. The drop target is the **whole** `.composer` block, so a
-drop landing on the footer row counts the same as one on the message box. `fileDrop` takes no
-`conversationId` and reads no store, for the attach button's own reason: the intent it dispatches names no
-conversation.
+- **`reducePendingAttachments`** folds one arriving event into the set the next send will record. Only
+  `completed` adds anything — `refused`, `failed` and `progress` each return the **same reference**, not
+  an equal copy, so "an upload that was refused, that failed, or that is still in flight contributes
+  nothing" is structural rather than incidental. The pair recorded is `{ attachmentId: event.uploadId,
+  filename: event.filename }` — the daemon's own id (`driveUpload` sends `attachment_id: uploadId`) and
+  #1038's display name, its first consumer. Order is **completion order**, the only order this window can
+  know: the composer never learns the `uploadId` its own click minted
+  (`requestAttachmentUpload()` returns `void`), so it cannot order by gesture. An explicit return type and
+  **no `default`**, `attachmentUploadOutcomeCopy`'s idiom — a member added to `AttachmentUploadEvent`
+  upstream trips TS2366 here too, and is sufficient (unlike that module's `reason` read) because this
+  switches on the *discriminator*, which only this app's own background process mints, never a value a
+  hostile daemon chooses.
+- **`drainPendingAttachments`** hands the set to a send and empties it, in one act — generic over a
+  `{ current }` holder the way `fileToAttach` is generic over the element, so a `MutableRefObject`
+  satisfies it with no React import. Take-and-clear cannot be split: a reader that didn't empty, or an
+  emptier a caller had to remember to call, would each open a window in which one send's attachments could
+  be recorded twice.
 
-**The channel and the boundary guard** — `AttachmentUploadRequest`, `isAttachmentUploadRequest`, and the
-widened `attachmentUploadListener` arm the path travels through — are documented at
-[Attachment upload § The request body and its guard](attachment-upload.md); this document covers only the
-renderer-visible half.
+**The pending set lives in a `useRef`, not `useState`, because nothing renders it.** The consumers are
+\#815's file row and #868's thumbnail, and both will read the *timeline item* the send records, not this
+hook, so a `useState` would re-render the whole composer on every arriving upload event for a value no
+markup consults. Worse, its batching would open a real drop window: a completion arriving after the last
+commit but before the click would be invisible to the closure the click reads, and a subsequent take would
+then clear it unsent. A ref is written by the listener and read by the send synchronously, so that window
+does not exist. It is still [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
+state in every other respect — ephemeral, screen-local, per-mount — and it resets on a conversation switch
+for the held outcome's own free reason: `PairedShellView` keys the chat pane on the conversation id, so a
+switch rebuilds this component with an empty set.
 
-### Testing the drop entry
+The listener folds beside the existing assign:
 
-`ComposerAttach.test.tsx` (static, extended) covers all four pure functions across their branches,
-including the enter → enter → leave "still active" case and the leave-at-zero floor.
-
-`e2e/composer-file-drop.spec.ts` (fake tier, new) drives a page-context `DataTransfer` carrying a
-page-built `File` onto `.composer`: the drop-target class appears on `dragenter`, survives a child's
-`dragleave`/`dragenter` pair, clears on `dragleave` and on `drop`, never appears for a `text/plain` drag,
-the window stays on the conversation screen after a drop on the composer *and* after one anywhere else in
-the window, and nothing is inserted into the textarea. The join to the existing flow is proven without a
-real path: an outcome is pushed first through `composer-attach.spec.ts`'s shipped `app.evaluate` seam, and
-the drop **clears** it — an effect only `dropFile` produces.
-
-**Two lessons from writing that spec:**
-
-- **An untrusted `DragEvent`'s `preventDefault` leaves no trace in the URL, so "the window did not
-  navigate" is not what to assert.** That assertion holds identically whether the navigation guard is
-  mounted or not, i.e. it's vacuous on its own. What *is* observable is `dispatchEvent`'s own return
-  value: it comes back `false` exactly when `preventDefault` ran. The spec asserts that in both
-  directions — prevented for a file drag, *not* prevented for a text drag — which reddens if the listener
-  is unmounted or its file gate is inverted. The URL check stays alongside as corroboration, labelled as
-  such rather than as the proof.
-- **A drag crossing from the composer onto a child nets to zero, not to a needed second `dragleave`.**
-  Moving the pointer from `.composer` onto its own textarea fires `dragenter` on the child *and*
-  `dragleave` on the parent — both bubble to the same handler, and they are exactly the arithmetic the
-  depth counter exists to get right (net change: 0, state: still active). A first draft of this spec
-  assumed the two enters needed two closing leaves before the state would clear, and asserted a
-  `dragleave` count that never matched what the browser actually dispatches.
-
-**What no tier proves.** A page-built `File` has no path, so this tier cannot carry a real one across; the
-path-carrying leg is proven by the shared guard's unit tests plus #862's existing real-temp-file coverage
-of `uploadAttachmentFile`. The composition-root join and the preload's `dropAttachmentFile` are this
-repo's untested glue, as they are for every other attachment channel. CDP's `Input.dispatchDragEvent` was
-the ticket's named optional route and was **not** attempted: it still cannot back a `File` with a real OS
-path, so it would not have closed the gap it was nominated for.
-
-### Security (drop entry)
-
-PASS, self-reviewed. One property to hold onto: the honest containment claim is *only an operator gesture
-mints a path-backed `File`* (a drop, or a file-system picker — this app renders no `<input type=file>`),
-not "only a drop" — `dropAttachmentFile` is callable by any renderer code holding any `File`, so a
-compromised renderer's marginal capability is forwarding a path-backed `File` it already holds, not naming
-an arbitrary path. Repetition on the drop arm is unbounded by design (`pickerOpen` is scoped to the
-*dialog* and deliberately not consulted here), bounded instead by #862's per-upload byte guard and the
-daemon's own concurrency answer — a self-DoS by a renderer that already holds the command channel, and a
-sixth concern judged not worth a client-side cap in a slice already over its line ceiling. See
-[Attachment upload § Security](attachment-upload.md#security) for the boundary guard's own review.
-
-## The paste entry (#1033) — the third way in, and the opposite mount-point call from the drop
-
-[#1032](attachment-upload.md#the-paste-ask-and-the-refused-split-1032) shipped the entire background
-half headless: the content-free ask (`window.pyry.pasteAttachmentImage()`), the main-side clipboard
-read, the `no-image` refusal and its sentence. #1033 is the keystroke half only — the decision about
-whether a given paste is an attach or ordinary text, and the handler that acts on it. No new component,
-no new store: one pure predicate beside `dragCarriesFiles`, a third member on `useAttachmentUpload`, and
-one JSX prop.
-
-**It mounts on `.composer__input`, not on `.composer` — the opposite call from the drop entry above,
-and deliberately so.** #890 spreads its handlers onto the outer `.composer` div so a drop on the footer
-row counts as much as one on the message box. A `paste` fires on the *focused* element and bubbles, so
-either mount point is reachable — this is a choice about scope, not reachability — but the handler's
-whole job is to suppress a default paste, and the textarea is the only element in the composer that has
-one. Mounting on `.composer` would also intercept a paste made while a footer button holds focus — a
-keystroke with no default to prevent, turned into an upload — so narrower is correct for a handler that
-starts a network transfer. A bare React `onPaste` prop renders no attribute under `renderToStaticMarkup`,
-so `composerSlot.test.tsx`'s whole-run match on `class="composer__input"` stays untouched by construction.
-
-**`pasteCarriesImageOnly(types: readonly string[] | undefined): boolean`** — `dragCarriesFiles`'s sibling
-in `ComposerAttach.tsx`: advertised types in, boolean out, `undefined` tolerated and answering `false`
-(`event.clipboardData` is nullable on the DOM type). Two conjuncts, both required:
-
-- **Advertises an image** — `'Files'` present, or any entry `startsWith('image/')`. The prefix test
-  (not `includes`) keeps a flavour that merely *mentions* an image type, such as `'text/image/png'`, from
-  smuggling itself in.
-- **Advertises no plain text** — `'text/plain'` anywhere in the list forces `false`, whatever else rides
-  alongside. A copied web-page selection routinely carries both an image and text; this conjunct is what
-  keeps that ordinary paste completely untouched, and it is why the static tests table the case rather
-  than asserting it once — a single-conjunct predicate gets exactly this combination wrong.
-
-**The disjunction was resolved by measurement, not left as an open question.** It was not obvious
-up front whether Chromium normalises an OS-clipboard bitmap to the file-item spelling (`'Files'`) or an
-explicit `image/png` entry before handing it to a page. `e2e/composer-paste-image.spec.ts` seeds a real
-bitmap onto the real OS clipboard, drives a **trusted** paste with `webContents.paste()`, and captures
-the advertised list with a page-side probe: **exactly `['Files']`, no `image/png` entry at all**. So the
-`'Files'` arm is what makes the feature work, not defensive breadth — an `image/*`-only predicate would
-have shipped a screenshot paste that silently did nothing. The `image/*` arm stays for the page-image
-spelling a copied web-page image can produce. The one thing `'Files'` additionally admits is a *file*
-copied in Finder or Explorer, out of scope per the ticket: main reads the clipboard, finds no bitmap, and
-answers `no-image` — an honest refusal instead of silence, no path or byte involved either way.
-
-**`text/plain` is a security-shaped bound, but this predicate is not where it is enforced.** A
-password-manager secret is `text/plain`, so it can never take the attach branch through this handler —
-but `contextBridge` exposes `pasteAttachmentImage()` to the whole renderer, so a compromised window calls
-it directly and never runs this predicate at all. The bound that actually holds is main's:
-`clipboard.readImage()` returns a bitmap or nothing, so a text-flavoured secret yields an empty image and
-a `no-image` refusal whatever the ask claims. This predicate is the ergonomic half of the rule; #1032's
-clipboard read is its enforcement.
-
-**`pasteImage(): void`** — the third member of `useAttachmentUpload`, alongside `requestAttach` and
-`dropFile`, performing the identical clear-then-fire act (`setOutcome(null)` then
-`window.pyry.pasteAttachmentImage()`). Reused rather than rebuilt at the gesture site, `dropFile`'s own
-reason for being where it is. **The clear here is for consistency of ownership, not for a stranding it
-prevents** — worth stating because the two members above it clear for a reason that does not arise on
-this path: a cancelled picker and an unresolvable dropped path each report nothing at all, which is what
-strands a previous line, while #1032's clipboard path draws exactly one terminal for every ask,
-`no-image` included. It clears anyway, so all three entries behave identically and the line that appears
-next is unambiguously about the paste just made.
-
-**The handler, in `Composer` (`ConversationScreen.tsx`):**
-
-```tsx
-const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
-  if (!pasteCarriesImageOnly(event.clipboardData?.types)) return
-  event.preventDefault()
-  attach.pasteImage()
-}
+```ts
+window.pyry.onAttachmentUploadEvent((event) => {
+  setOutcome(event)
+  pendingRef.current = reducePendingAttachments(pendingRef.current, event)
+})
 ```
 
-The early return is the whole of "text pastes stay text": a clipboard the predicate declines is not
-consumed, not prevented and not reported, so the default paste runs exactly as it does today.
-`clipboardData` is read for `types` and nothing else — `getAsFile`, `getAsString` and `.files` are never
-touched anywhere in this feature, which is AC3 stated as an absence at the only site that could violate
-it. No new state, no async work, no `AbortSignal`: the ask is fire-and-forget and its terminal arrives on
-the outcome subscription `useAttachmentUpload` already owns.
+and the hook exposes one new member, `takePendingAttachments: () => readonly MessageAttachment[]`, bound
+to this mount's ref via `drainPendingAttachments`.
 
-### Testing the paste entry
+**The pending set does not ride the gesture-clear, and this is the one place a shared clear would be
+wrong.** `requestAttach`, `dropFile` and `pasteImage` each call `setOutcome(null)` on the gesture — about
+the *displayed* line, since a cancelled picker or an unresolvable drop reports nothing at all, and an
+event-driven clear would otherwise strand a stale refusal on screen. A pending set sharing that clear
+would erase the first file the moment the operator attached a second, which is exactly the "one or more"
+the acceptance criteria ask for. The two clears answer different questions and are kept apart on purpose.
 
-`ComposerAttach.test.tsx` gains `describe('pasteCarriesImageOnly')`: every measured image spelling with
-no text (true, as a table), every list carrying `'text/plain'` alongside an image (false, as a table —
-the security bound), every non-image list plus `[]` and `undefined` (false), and the prefix-not-substring
-case (`'text/image/png'`, `'x-image/png'`).
+**What this falsifies, honestly.** § Two pure views above still states the hook's *display* correctly —
+one nullable, latest event wins, and `uploadId` is still unread by everything that renders — but a
+paragraph used to conclude from "the renderer cannot correlate a click to an id" that the listener
+"assigns; it does not merge, queue or correlate," full stop. That conclusion was too broad: a message's
+attachments don't need a click correlated to an id, only the completions that *arrived* since the last
+send, which the events give on their own arrival order. The listener now assigns **and** accumulates; it
+still correlates nothing to a gesture.
 
-`e2e/composer-paste-image.spec.ts` (fake tier, no `real-*` name, no `needs-real-claude`) is the spec that
-pays off what #1032 deliberately left unproven — that the whole paste chain joins — and it is also the
-in-tier proof for the measurement above. One continuous drive, two halves:
-
-1. **The branch matrix, synthetically.** `composer-file-drop.spec.ts`'s shape applied to `paste`: a
-   `DataTransfer` built in page context, a `ClipboardEvent` dispatched on `.composer__input`, and
-   `dispatchEvent(...) === false` read as the only observable proof `preventDefault` ran — an untrusted
-   event performs no default action, so watching the textarea proves nothing. Image-only prevents;
-   image+text does not; text-only does not.
-2. **The whole chain, for real.** A real bitmap seeded onto the real OS clipboard
-   (`app.evaluate`'s `clipboard.writeImage` seam, `message-copy.spec.ts`'s already-accepted
-   clobber-without-restore price for touching it), a trusted paste via `webContents.paste()` against the
-   focused message box, and a terminal rendered in `.composer__attach-outcome` — keystroke → predicate →
-   ask → main's clipboard read → PNG encode → guard → transfer → wire → terminal → composer, joined
-   end to end for the first time. A real **text** clipboard pasted the same way lands its text in the
-   message box and produces no outcome at all.
-
-**The ask is not intercepted in this tier — a real trap the first draft fell into.** It crosses to the
-real main handler, which reads the real OS clipboard, so seeding must happen *before* the first paste
-fires or the synthetic image-only arm earns a terminal from whatever the machine's clipboard happened to
-hold. The spec seeds first, so the synthetic arm now earns a **deterministic** terminal and doubles as
-proof the ask reaches the flow, not merely that `preventDefault` ran.
-
-**Because `attachmentTransfer.ts` has no per-transfer deadline, the fake daemon must answer every
-chunk or the assertion hangs to the suite timeout rather than failing.** `buildReplyFrames` rejects each
-`attachment_chunk` with a real `error` frame correlated via `sentEnvelope`, which `daemonConnection`'s
-`daemon-error` case turns into `failed`/`<reason>`.
-
-**Both arms land in the same single outcome slot, so a second "a sentence is present" assertion would
-pass on the first arm's line** — the `?? ''` vacuous-pass shape this repo has hit before, in a different
-costume. The fake daemon rejects the first upload and every later one with **different** daemon codes
-(`attachment.storage_failed`, then `attachment.too_many_uploads`), so the trusted paste's terminal is a
-fresh observation rather than a stale one, and the expected sentence is derived by calling
-`attachmentUploadOutcomeCopy` rather than typed out. **The fall-through arms additionally assert the
-outcome line is still standing** — a stronger detector than "prevented", since clearing the line on a
-gesture is something only the attach path (`pasteImage`) does; a handler that prevented nothing but asked
-anyway would pass the prevention check and fail this one.
-
-### Security (paste entry)
-
-PASS, self-reviewed. This slice widens no boundary: the one crossing is the already-shipped
-`ATTACHMENT_UPLOAD_CHANNEL` send `pasteAttachmentImage()` performs with no renderer-supplied value, and
-`pasteCarriesImageOnly` is not itself a security control — see above. The handler adds no new capability:
-any renderer script that could synthesise the `ClipboardEvent` this handler consumes could call
-`window.pyry.pasteAttachmentImage()` directly, which is strictly easier. **SHOULD FIX, addressed in the
-diff rather than left open:** the handler and the predicate must log nothing — a `console.log` of `types`
-would put clipboard *shape* in DevTools and any diagnostic bundle, undoing #1032's content-free logging
-posture; the measurement that the type list is `['Files']` lives in the e2e spec's page probe only, never
-in `ComposerAttach.tsx` or `ConversationScreen.tsx`. **Out of scope, per the ticket's explicit
-instruction:** #1032's named residual — a compromised renderer can cause an unprompted upload of whatever
-image the operator is holding — stays open. A confirmation added at this handler would be bypassed by the
-direct `contextBridge` call above, costing an interruption on every legitimate paste for no gain against
-the attacker it would name; this ticket adds no gesture correlation and no permission prompt. See
-`docs/specs/architecture/1033-paste-image-to-attach.md` § Security review for the full findings and the
-Open-Questions-resolved-by-measurement revision.
+**Where the send reads it — `submitMessage` (`composerSend.ts`).** See [Composer send § Attachments taken
+at send](composer-send.md#attachments-taken-at-send-1039) for the read site, why it sits below both of
+`submitMessage`'s early `false` returns, and how an empty take normalises to an absent field on the echo.
 
 ## CSS
 
@@ -563,6 +402,16 @@ live claude.
 (`renderToStaticMarkup` drops keys, and the fake e2e tier cannot observe a screen-reader announcement) —
 see § In-flight progress above. Carried by a code comment, not a test.
 
+**Pending attachments (#1039) are unit-only, by design — see § Pending attachments above for why.**
+`ComposerAttach.test.tsx` walks `reducePendingAttachments` across all four `AttachmentUploadEvent` arms
+(a `completed` appends; `refused`/`failed`/`progress` each return the same reference via `toBe`; two
+completions record in completion order; the input array is never mutated) and `drainPendingAttachments`
+against a plain `{ current }` object (empties the holder; a second take answers the shared empty constant;
+the returned array isn't mutated) — no `File`, no DOM, no React needed for either. The listener's
+assignment line and the ref read at the click are the one gap no tier closes; see [Composer send §
+Attachments taken at send](composer-send.md#attachments-taken-at-send-1039) for the corresponding gap on
+the read side.
+
 ## Security
 
 PASS, with two SHOULD-FIX findings folded into the design above rather than left as later work: the `Map`
@@ -584,6 +433,17 @@ Nothing renderer-side changed the trust posture: no new channel, no new bridge m
 totalises over `ipcRenderer.on`'s untyped runtime value with `Number.isFinite` rather than trusting the
 declared type. See `docs/specs/architecture/864-attachment-upload-progress.md` § Security review.
 
+**#1039's review, also PASS.** No new channel, no new bridge member, no new capability — the pending set
+only reads the two fields the completed terminal already carries. Retention is the property that changed:
+`filename` was consumed once for a sentence and is now held in renderer memory on a timeline item, with no
+sink in this slice (nothing renders, logs, or builds a path from it) and no re-sanitising, since the save
+leg re-runs `sanitizeAttachmentFilename` on the value it actually builds a path from. `attachmentId` is a
+`randomUUID` identifier, not a capability — the daemon authorises retrieval by the Noise session, not by
+knowledge of the id. A hostile daemon can claim `completed` for an upload it never stored, so the timeline
+can record an attachment the host doesn't have; blast radius is one wrong record with nothing drawing it
+in this slice, surfaced visibly wherever #868's retrieval eventually is. See
+`docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` § Security review.
+
 ## Related
 
 - [Attachment upload](attachment-upload.md) (#862) — the headless flow this control wires: the picker
@@ -595,18 +455,24 @@ declared type. See `docs/specs/architecture/864-attachment-upload-progress.md` �
 - [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) — the file row in the message bubble, the
   only other planned evidence that an upload produced anything; until it lands, `ComposerAttachOutcome`'s
   line is the sole evidence on screen.
-- [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) — landed; see § The drop
-  entry above. Widened the shared channel to carry a path but did not add correlation — the renderer still
-  cannot learn its own gesture's `uploadId`, so that remains open for a future ticket.
+- [Composer attach — the drop entry](composer-attach-drop.md) (#890) — landed; drag-and-drop, split to its
+  own page 2026-09-04. Widened the shared channel to carry a path but did not add correlation — the
+  renderer still cannot learn its own gesture's `uploadId`, so that remains open for a future ticket.
 - [#1032](attachment-upload.md#the-paste-ask-and-the-refused-split-1032) (clipboard paste, background
   half) — landed; shipped the content-free ask, the main-side clipboard read, and the `no-image` refusal
   and its sentence this document's copy section covers. Left the keystroke half, and the whole-chain
   proof, to #1033.
-- [#1033](https://github.com/pyrycode/pyrycode-desktop/issues/1033) (clipboard paste, keystroke half) —
-  landed; see § The paste entry above. A third concurrent-upload entry alongside the click and the drop,
-  interleaving into the same one-slot outcome the same way; adds no correlation either.
+- [Composer attach — the paste entry](composer-attach-paste.md) (#1033) — landed; clipboard paste, split to
+  its own page 2026-09-04. A third concurrent-upload entry alongside the click and the drop, interleaving
+  into the same one-slot outcome the same way; adds no correlation either.
+- [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) (pending attachments) — landed; see §
+  Pending attachments above. The first thing in this app that associates an attachment with a message;
+  feeds [Thread timeline](thread-timeline.md#types)'s new `userText.attachments` field via [Composer
+  send](composer-send.md#attachments-taken-at-send-1039). #815 and #868 are its still-open renderers.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),
-  `docs/specs/architecture/890-composer-file-drop.md`, `docs/specs/architecture/1032-paste-clipboard-image-attach.md`
-  and `docs/specs/architecture/1033-paste-image-to-attach.md` for the full plans and their security reviews.
+  `docs/specs/architecture/890-composer-file-drop.md`, `docs/specs/architecture/1032-paste-clipboard-image-attach.md`,
+  `docs/specs/architecture/1033-paste-image-to-attach.md` and
+  `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` for the full plans and their
+  security reviews.

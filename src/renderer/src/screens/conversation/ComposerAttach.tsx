@@ -1,5 +1,6 @@
-import { useEffect, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
+import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 
 // #863: the attach affordance — the renderer half of the flow #862 shipped headless. Two pure views and
@@ -301,8 +302,87 @@ export function ComposerAttachOutcome({
   )
 }
 
+// ================================================================================================
+// #1039 — the PENDING SET. What an upload completing means to the message the operator has not sent
+// yet, as a rule that is neither a view nor a gesture: it is the first thing in this app that
+// associates an attachment with a message.
+//
+// IT IS A PURE FUNCTION FOR A REASON THIS FILE'S FOUR OTHERS DID NOT FACE. Those are pure so the static
+// tier can walk gestures nothing in this repo can perform. This one is pure because there is no other
+// tier AT ALL: nothing renders the pending set, so Playwright has nothing to observe, and this repo's
+// renderer specs are static server renders with no DOM and no `renderHook`, so a rule living inside the
+// hook would be reachable by no test anywhere. The hook below holds the value; this decides it.
+// ================================================================================================
+
+/** The empty pending set, as one shared reference — a send with nothing attached hands back this exact
+ *  array rather than a fresh `[]`, so a caller comparing references sees "unchanged" (the
+ *  `initialTimelineState` idiom). Exported for its own tests. */
+export const NO_PENDING_ATTACHMENTS: readonly MessageAttachment[] = []
+
 /**
- * The container half: the held outcome and the intent that clears it.
+ * Fold one arriving upload event into the set the next send will record.
+ *
+ * A COMPLETION IS THE ONLY THING THAT RECORDS ANYTHING (the third criterion): a refusal, a failure and an
+ * in-flight `progress` each return the set UNCHANGED — the same reference, not an equal copy, so
+ * "contributes nothing" is structural rather than incidental. An upload still moving when the message is
+ * sent is in that set of nothing too: only its terminal can add it, and by then the message is gone.
+ *
+ * THE PAIR IS THE DAEMON'S ID AND THE DISPLAY NAME. `uploadId` is what `driveUpload` sent as
+ * `attachment_id`, so it names the file the HOST stored rather than a local correlation key, and
+ * `filename` is #1038's supply — the first consumer that field has had. Both are carried verbatim: no
+ * trim, no non-empty guard, no dedup by id. See `MessageAttachment`.
+ *
+ * ORDER IS COMPLETION ORDER, which is the only order this window can know. The composer never learns the
+ * `uploadId` its own click minted (`requestAttachmentUpload()` returns void), so it cannot order by
+ * gesture, and it does not need to: what the operator gets is the files that finished uploading before
+ * they pressed send, in the order the host confirmed them.
+ *
+ * An explicit return type and NO `default`, so a member added to `AttachmentUploadEvent` upstream trips
+ * TS2366 here and has to be classified as recording or not recording — `attachmentUploadOutcomeCopy`'s
+ * idiom one module over, and sufficient for the same reason it is not sufficient for that module's
+ * `reason` read: this switches on the DISCRIMINATOR, which our own background process mints, where
+ * `reason` is a value a hostile daemon can choose and therefore needs the `Map`'s runtime totality.
+ */
+export function reducePendingAttachments(
+  pending: readonly MessageAttachment[],
+  event: AttachmentUploadEvent
+): readonly MessageAttachment[] {
+  switch (event.type) {
+    case 'completed':
+      return [...pending, { attachmentId: event.uploadId, filename: event.filename }]
+    case 'refused':
+    case 'failed':
+    case 'progress':
+      return pending
+  }
+}
+
+/**
+ * Hand the pending set to a send and empty it, in ONE act (#1039) — the second half of the fourth
+ * criterion, and the reason it is a function over a holder rather than three lines inside the hook: the
+ * hook is unreachable by every tier this repo has, and "a second message sent with no further uploads
+ * records none" is a rule, not a detail. Generic over the holder in the way `fileToAttach` is generic
+ * over the element — a `MutableRefObject` satisfies `{ current }` structurally, so this tier needs no
+ * React to walk it.
+ *
+ * TAKE AND CLEAR CANNOT BE SPLIT. A reader that did not empty, or an emptier a caller had to remember to
+ * call, would each leave a window in which one send's attachments can be recorded twice. Emptying to the
+ * shared constant rather than to a fresh `[]` keeps a second take reference-identical to the first.
+ *
+ * WHO may call it is the criterion's other half and is NOT decided here: `submitMessage` reads its
+ * `takeAttachments` dep once, below both of its `false` returns, so a blank Enter or a submit with no
+ * active conversation never reaches this and the operator's attached file survives for the next send.
+ */
+export function drainPendingAttachments(holder: {
+  current: readonly MessageAttachment[]
+}): readonly MessageAttachment[] {
+  const taken = holder.current
+  holder.current = NO_PENDING_ATTACHMENTS
+  return taken
+}
+
+/**
+ * The container half: the held outcome, the pending set, and the intent that clears the outcome.
  *
  * EPHEMERAL, SCREEN-LOCAL, READ BY NOTHING ELSE — ADR 0006's `useState` shape, not ADR 0004's module
  * singleton. The one wrinkle the ADR does not cover is that this state has a display-lifetime
@@ -314,24 +394,45 @@ export function ComposerAttachOutcome({
  * EXPLICITLY cleared on switch and on unpair: more code and one more clearing arm to get wrong, for no
  * reader outside this component.
  *
- * ONE NULLABLE HOLDS BOTH STATES (#864). In-flight progress and the terminal occupy the same slot
+ * ONE NULLABLE HOLDS BOTH DISPLAY STATES (#864). In-flight progress and the terminal occupy the same slot
  * because they are the same value: the listener assigns whatever arrived last, so a terminal replaces a
  * progress line without anything having to clear it, and a connection lost mid-transfer clears the
  * figure on exactly the path a completion does. No second piece of state, and nothing to keep in step.
+ * QUALIFIED BY #1039: that nullable is still the whole of what this hook DISPLAYS, but it is no longer
+ * the whole of what this hook holds — the pending set below sits beside it, fed by the same listener and
+ * read by nothing on screen.
  *
- * THE COMPOSER STATES THE LATEST EVENT TO ARRIVE, and it cannot state anything narrower.
- * `requestAttachmentUpload()` returns void, so this window never learns the uploadId its own click
- * minted, and the main-side guard is scoped to the DIALOG rather than to the transfer — two transfers
- * with distinct ids can be live at once. So the listener assigns; it does not merge, queue or correlate.
- * `uploadId` is deliberately unread: surfacing it could only invite a correlation that does not exist.
+ * ⭐ WHAT #1039 FALSIFIES, HONESTLY. The paragraph that stood here said the composer "states the latest
+ * event to arrive, and it cannot state anything narrower", because `requestAttachmentUpload()` returns
+ * void and this window never learns the uploadId its own click minted. THE CLICK-TO-ID HALF IS STILL
+ * TRUE and is still why the displayed line is the latest event and nothing narrower: there is no
+ * correlation from a gesture to an id, and `uploadId` is still unread by everything that renders.
+ * What was wrong was the leap from there to "so the listener cannot accumulate". A message's attachments
+ * do not need a click correlated to an id — they need the completions that ARRIVED since the last send,
+ * in arrival order, which the events give on their own. So the listener now assigns AND accumulates; it
+ * still does not merge, queue, or correlate anything to a gesture.
+ *
+ * THE PENDING SET LIVES IN A REF, NOT IN `useState`, BECAUSE NOTHING RENDERS IT. No view reads it — the
+ * consumers are #815's file row and #868's thumbnail, and both read the timeline ITEM the send records,
+ * not this hook — so state would re-render the whole composer on every arriving upload event for a value
+ * no markup consults. Worse, its batching would open a real drop window: a completion arriving after the
+ * last commit but before the click would be invisible to the closure the click reads, and the take would
+ * then clear it unsent. A ref is written by the listener and read by the send synchronously, so that
+ * window does not exist. It is still ADR 0006 state in every other respect — ephemeral, screen-local,
+ * per-mount — and it resets on a conversation switch for the held outcome's free reason: `PairedShellView`
+ * keys the chat pane on the conversation id, so a switch rebuilds this component with an empty set.
  */
 export function useAttachmentUpload(): {
   outcome: AttachmentUploadEvent | null
   requestAttach: () => void
   dropFile: (file: File) => void
   pasteImage: () => void
+  takePendingAttachments: () => readonly MessageAttachment[]
 } {
   const [outcome, setOutcome] = useState<AttachmentUploadEvent | null>(null)
+  // #1039: the files whose uploads have completed since the last send. See the ref-not-state paragraph
+  // above; `useRef` gives a fresh empty set per mount, which is the whole of the conversation-switch reset.
+  const pendingRef = useRef<readonly MessageAttachment[]>(NO_PENDING_ATTACHMENTS)
 
   useEffect(() => {
     // One subscription per mount; the returned off handle IS the effect cleanup, so a remount nets
@@ -339,7 +440,14 @@ export function useAttachmentUpload(): {
     // rather than passed as `setOutcome` directly: React's setter treats a FUNCTION argument as an
     // updater, so handing it the listener slot would be a latent foot-gun the day this channel carries
     // anything but an object.
-    return window.pyry.onAttachmentUploadEvent((event) => setOutcome(event))
+    return window.pyry.onAttachmentUploadEvent((event) => {
+      setOutcome(event)
+      // #1039: the same event, folded into the pending set by the pure rule above — the display and the
+      // record are two readings of one arrival, taken in one place so they cannot disagree about which
+      // events happened. The assignment is synchronous, so an upload that completes while the operator is
+      // typing is already in the set by the time the send reads it.
+      pendingRef.current = reducePendingAttachments(pendingRef.current, event)
+    })
   }, [])
 
   const requestAttach = (): void => {
@@ -396,7 +504,24 @@ export function useAttachmentUpload(): {
     window.pyry.pasteAttachmentImage()
   }
 
-  return { outcome, requestAttach, dropFile, pasteImage }
+  /**
+   * The send's read of the pending set — the pure `drainPendingAttachments` above, bound to this mount's
+   * ref, which is all this member is.
+   *
+   * ⭐ IT IS NOT THE GESTURE CLEAR, AND THE THREE ENTRIES ABOVE MUST NOT TOUCH THE PENDING SET.
+   * `requestAttach`, `dropFile` and `pasteImage` each call `setOutcome(null)` on the gesture, which is
+   * about the DISPLAYED line: a cancelled picker reports nothing at all, so an event-driven clear would
+   * strand a stale refusal on screen. A pending set that shared that clear would erase the first file the
+   * moment the operator attached a second — which is exactly the "one or more" the first criterion asks
+   * for. The two clears answer different questions and are kept apart on purpose.
+   *
+   * Returns the shared empty constant when nothing is pending, so a send with no attachments hands back
+   * the same reference every time and `submitMessage` normalises it to an absent field.
+   */
+  const takePendingAttachments = (): readonly MessageAttachment[] =>
+    drainPendingAttachments(pendingRef)
+
+  return { outcome, requestAttach, dropFile, pasteImage, takePendingAttachments }
 }
 
 /**

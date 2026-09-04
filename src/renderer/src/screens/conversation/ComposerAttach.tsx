@@ -68,6 +68,57 @@ export function dragCarriesFiles(types: readonly string[] | undefined): boolean 
   return types !== undefined && types.includes('Files')
 }
 
+// ================================================================================================
+// #1033 — the PASTE entry, and the third way into #862's flow. Like the drop before it, everything
+// from the size guard on is already built and is called rather than copied; unlike the drop, even the
+// bridge member and the background-process reader are already built (#1032). What is left is exactly
+// the decision below and the handler that acts on it.
+// ================================================================================================
+
+/**
+ * Whether a paste is an attach or ordinary text, read off `ClipboardEvent.clipboardData.types` — the
+ * advertised flavour list, and the ONLY thing this feature reads about the clipboard in the window.
+ *
+ * ⭐ THE WINDOW NEVER HOLDS A BYTE, and that is what this signature is for rather than a `DataTransfer`.
+ * A paste event can expose the image as a `File`, and reading those bytes here to ship them over IPC is
+ * the one cut this slice must not make (CLAUDE.md "keep the transport out of the window"). `getAsFile`,
+ * `getAsString` and `.files` are therefore never touched anywhere in this file: `pasteAttachmentImage()`
+ * is content-free and #1032's background-process path reads the operator's clipboard itself.
+ *
+ * ⭐ THE IMAGE TEST IS A DISJUNCTION BECAUSE A BITMAP HAS TWO SPELLINGS, AND THE LOAD-BEARING ARM IS
+ * THE ONE THAT LOOKS REDUNDANT. Chromium normalises the OS clipboard before a page sees it, and it is
+ * not self-evident which spelling a bitmap arrives under. MEASURED against a real trusted paste of a
+ * real seeded bitmap (e2e/composer-paste-image.spec.ts drives it with `webContents.paste()`): the list
+ * is exactly `['Files']` — the file-item spelling, with NO `image/png` entry at all. So an `image/*`
+ * test on its own would have matched nothing and a screenshot paste would have silently done nothing,
+ * which is the failure an operator cannot diagnose. `image/*` is kept for the page-image spelling a
+ * copied web-page image can produce, and the e2e asserts this function's own answer for the list a real
+ * paste carried, so the breadth stays evidence rather than defensiveness.
+ *
+ * What the 'Files' arm additionally admits is a FILE copied in Finder or Explorer, which the ticket puts
+ * out of scope. Accepted rather than overlooked: main reads the clipboard, finds no bitmap, and reports
+ * `no-image` — an honest refusal sentence instead of silence, and no path, name or byte is involved on
+ * either side. The prefix test is `startsWith`, not `includes`, so a flavour merely NAMED after an image
+ * cannot smuggle itself in.
+ *
+ * ⭐ THE text/plain CONJUNCT, AND THE LAYER IT IS NOT. Only a clipboard advertising an image and NO
+ * plain text takes the attach branch, so a password-manager secret can never take it — but this
+ * predicate is the ERGONOMIC half of that rule, not its enforcement. `contextBridge` exposes
+ * `pasteAttachmentImage()` to the whole renderer, so a compromised window calls it directly and never
+ * runs this function at all. The bound that actually holds is main's: `clipboard.readImage()` returns a
+ * bitmap or nothing, so a text-flavoured secret yields an empty image and a refusal whatever the window
+ * claims. Do not delete main's check on the strength of this one, and do not "harden" this one — the
+ * residual is #1032's, deliberately left open (see this ticket's plan, § Security review).
+ *
+ * `undefined` is accepted and answers false, `dragCarriesFiles`'s reason exactly: `event.clipboardData`
+ * is nullable on the DOM type, and a paste with no transfer at all is not one this composer wants.
+ */
+export function pasteCarriesImageOnly(types: readonly string[] | undefined): boolean {
+  if (types === undefined) return false
+  if (types.includes('text/plain')) return false
+  return types.some((type) => type === 'Files' || type.startsWith('image/'))
+}
+
 /** What moves the drag-over depth. Sealed on `type`, the repo's convention for an event set: `enter`
  *  and `leave` are the DOM pair, `settled` is a drop or the drag ending. */
 export type FileDropEvent = { type: 'enter' } | { type: 'leave' } | { type: 'settled' }
@@ -278,6 +329,7 @@ export function useAttachmentUpload(): {
   outcome: AttachmentUploadEvent | null
   requestAttach: () => void
   dropFile: (file: File) => void
+  pasteImage: () => void
 } {
   const [outcome, setOutcome] = useState<AttachmentUploadEvent | null>(null)
 
@@ -321,7 +373,30 @@ export function useAttachmentUpload(): {
     window.pyry.dropAttachmentFile(file)
   }
 
-  return { outcome, requestAttach, dropFile }
+  /**
+   * The PASTE entry (#1033), and the third member of the act this hook owns. It lives here for
+   * `dropFile`'s reason: the clear is the SAME ACT the two above perform, so it stays with one owner
+   * instead of being re-implemented at a third gesture site where a copy could drift.
+   *
+   * THE CLEAR IS FOR CONSISTENCY HERE, NOT FOR A STRANDING IT PREVENTS — worth stating, because the
+   * two members above it clear for a reason that does NOT arise on this path. A cancelled picker and an
+   * unresolvable dropped path each report nothing at all, which is what would strand a previous line;
+   * #1032's clipboard path draws exactly one terminal for every ask, `no-image` included, so an
+   * event-driven clear would have worked here. It clears on the gesture anyway, so all three entries
+   * behave identically and the line that appears next is unambiguously about the paste just made.
+   *
+   * IT CARRIES NOTHING, which is the whole reason this slice is small. `pasteAttachmentImage()` takes
+   * no argument: the window names an INTENT and the background process reads the clipboard itself, so
+   * no clipboard content reaches renderer state, a log line, a diagnostic record or the bridge. Nothing
+   * about the image — not a byte, a dimension, a length or a name — is knowable here. `window.pyry` is
+   * dereferenced only in this closure and the two above, never during render.
+   */
+  const pasteImage = (): void => {
+    setOutcome(null)
+    window.pyry.pasteAttachmentImage()
+  }
+
+  return { outcome, requestAttach, dropFile, pasteImage }
 }
 
 /**

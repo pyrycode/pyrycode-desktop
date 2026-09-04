@@ -288,3 +288,42 @@ agrees: every merged slice in this family exceeded 800 lines of builder-written 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — both Open Questions resolved by measurement, and one e2e restructure they forced
+
+**Open question 1 — what Chromium advertises for an OS-clipboard bitmap: `['Files']`, and nothing else.**
+Measured in `e2e/composer-paste-image.spec.ts` by seeding a real bitmap with `clipboard.writeImage` and
+driving a trusted paste, with a capture-phase probe recording the flavour list. There is **no
+`image/png` entry**. The design's disjunction is therefore not defensive breadth — the `'Files'` arm is
+the one that makes the feature work at all, and an `image/*`-only predicate would have shipped a
+screenshot paste that silently did nothing. The `image/*` arm is kept for the page-image spelling. The
+production docblock on `pasteCarriesImageOnly` now states the measurement rather than the open question.
+
+**Open question 2 — `webContents.paste()` does deliver a trusted paste under the Playwright Electron
+fixture.** The fallback the plan reserved was not needed; the chain-joins proof is driven by a gesture
+Chromium performed itself, end to end.
+
+**The e2e drive was restructured, and the reason is a design fact the plan had recorded and the first
+draft still got wrong.** The plan (and the ticket) noted that the ask is *not* intercepted in this tier
+— it crosses to the real main handler, which reads the real OS clipboard. The first draft ran the
+synthetic branch matrix *before* seeding, so the synthetic image-only paste earned a terminal from
+whatever the machine happened to be holding, and the spec's result depended on the operator's clipboard.
+Seeding now happens before any paste can fire. Two consequences worth recording:
+
+- The synthetic image-only arm now earns a **deterministic** terminal, so it proves the ask reaches the
+  flow rather than merely that `preventDefault` ran.
+- Both arms end in the same single slot, so a second "the sentence is present" assertion would have
+  passed on the first arm's line. The fake daemon now rejects the first upload and later ones with
+  **different** daemon codes (`attachment.storage_failed`, then `attachment.too_many_uploads`), making
+  the trusted paste's terminal a fresh observation rather than a stale one. This is the vacuous-pass
+  shape the repo's `?? ''` lesson warns about, in a different costume.
+
+**One assertion was added that the plan did not name:** the fall-through arms assert the outcome line is
+still standing. That is a stronger detector than `prevented === false` — it proves *no ask fired*,
+because clearing the line on the gesture is something only the attach path (`pasteImage`) does. A
+handler that prevented nothing but asked anyway passes the first check and fails this one.
+
+No change to the design itself: the predicate, the hook member, the mount point and the security posture
+are as committed.

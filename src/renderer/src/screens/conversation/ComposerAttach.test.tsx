@@ -9,6 +9,7 @@ import {
   composerClassName,
   dragCarriesFiles,
   fileToAttach,
+  pasteCarriesImageOnly,
   reduceFileDropDepth
 } from './ComposerAttach'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
@@ -264,6 +265,64 @@ describe('reduceFileDropDepth', () => {
     expect([0, 1, 3, 17].map((depth) => reduceFileDropDepth(depth, { type: 'settled' }))).toEqual([
       0, 0, 0, 0
     ])
+  })
+})
+
+// #1033: the PASTE decision, `dragCarriesFiles`'s sibling. The static tier cannot press a key any more
+// than it can drag, so what it pins is every branch of the predicate and
+// e2e/composer-paste-image.spec.ts drives the keystroke through it.
+describe('pasteCarriesImageOnly', () => {
+  // ⭐ THE IMAGE TEST IS A DISJUNCTION, and the two arms are two spellings of the same fact rather than
+  // belt and braces. Chromium normalises the OS clipboard before a page sees it, and a bitmap can
+  // surface as the file-item spelling ('Files') or as an explicit image MIME entry. Shipping only one
+  // risks a screenshot paste that silently does nothing; e2e/composer-paste-image.spec.ts measures which
+  // spelling a real trusted paste actually produces and asserts this predicate answers true for it.
+  it('is true for every spelling of an image with no text alongside', () => {
+    const imageOnly: (readonly string[])[] = [
+      ['Files'],
+      ['image/png'],
+      ['image/png', 'Files'],
+      ['Files', 'text/html'],
+      ['image/jpeg']
+    ]
+    expect(imageOnly.map(pasteCarriesImageOnly)).toEqual(imageOnly.map(() => true))
+  })
+
+  // ⭐ THE SECURITY BOUND, and the reason it is stated as a TABLE rather than as one case: a
+  // password-manager secret is text/plain, so no clipboard advertising it may ever take the attach
+  // branch — whatever else rides alongside, and a copied web-page selection routinely carries both.
+  // Every entry below holds an image AND text, which is exactly the combination a single-conjunct
+  // predicate would get wrong.
+  it('is false whenever plain text rides alongside the image', () => {
+    const withText: (readonly string[])[] = [
+      ['text/plain', 'Files'],
+      ['Files', 'text/plain'],
+      ['text/plain', 'image/png'],
+      ['text/html', 'text/plain', 'Files']
+    ]
+    expect(withText.map(pasteCarriesImageOnly)).toEqual(withText.map(() => false))
+  })
+
+  // AC2's other half: a clipboard with no image is not intercepted at all, so the default paste runs
+  // exactly as it does today. `undefined` is accepted and answers false for `dragCarriesFiles`'s reason
+  // — `event.clipboardData` is nullable on the DOM type.
+  it('is false for every clipboard that advertises no image', () => {
+    const notImages: (readonly string[] | undefined)[] = [
+      ['text/plain'],
+      ['text/html'],
+      ['text/uri-list'],
+      [],
+      undefined
+    ]
+    expect(notImages.map(pasteCarriesImageOnly)).toEqual(notImages.map(() => false))
+  })
+
+  // The image arm matches a PREFIX, not a substring: a flavour that merely mentions an image type
+  // somewhere in its name is not an image, and a text flavour must not be able to smuggle itself in by
+  // being called one.
+  it('reads the image arm as a prefix, so a look-alike flavour is not an image', () => {
+    expect(pasteCarriesImageOnly(['text/image/png'])).toBe(false)
+    expect(pasteCarriesImageOnly(['x-image/png'])).toBe(false)
   })
 })
 

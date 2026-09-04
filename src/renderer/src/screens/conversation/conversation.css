@@ -2057,9 +2057,11 @@
    UNLIKE ITS THREE NEIGHBOURS THIS CLASS IS WORN UNCONDITIONALLY, and the difference is structural rather
    than stylistic: the model and effort triggers each have an inert rendering, because their entries are a
    daemon-published list that can be missing or empty, and that arm wears the shared button class WITHOUT
-   this one. This menu's entries are a client-owned constant, so there is never nothing to offer and never
-   an inert arm — the control either renders operable or does not render at all. Nothing follows for the
-   declaration itself; it is stated so a later reader does not go looking for the missing inert rule. */
+   this one. This menu's vocabulary is client-owned and only ONE entry of it is conditional (#1022 hides
+   `auto` on a model that refuses it), so its list never falls below four: there is never nothing to offer
+   and never an inert arm — the control either renders operable or does not render at all. Nothing follows
+   for the declaration itself; it is stated so a later reader does not go looking for the missing inert
+   rule, and it survived #1022 giving this control a model-list read. */
 .composer__permission {
   cursor: pointer;
 }

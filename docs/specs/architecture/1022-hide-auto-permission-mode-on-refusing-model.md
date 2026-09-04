@@ -379,5 +379,88 @@ makes them so, not with a tick.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — the three Open Questions, resolved during implementation
+
+No design changed; all three resolved as the plan predicted, and each is recorded because the answer is
+evidence rather than a guess.
+
+1. **No shipped assertion moved.** `ConversationScreen.test.tsx` (293 tests) and the three shipped footer
+   e2e drives (`composer-permission-mode-menu`, `composer-effort-menu`, `composer-model-menu`) are green
+   unedited. The reason holds as written: none of them seeds a `model_list` at a point where this control
+   is measured, so no row matches, `auto` stays offered, and the footer's anchor and `aria-haspopup`
+   counts do not move. The shipped permission-mode spec's deliberate `toHaveCount(2)` claim is intact.
+2. **The test helpers took the new inputs as trailing optional parameters**, defaulting to `(null, '')` —
+   the reading that was this control's only one until now. Every shipped `view(mode)` / `panel(mode)` call
+   site therefore reads unchanged *and* becomes evidence for AC2's fail-open rule, since that default is
+   precisely the unknown reading. The seven direct calls to `composerPermissionModeMenuModel` were instead
+   rewritten explicitly as `(null, '', mode)` rather than routed through a helper: at those sites the
+   unknown reading is the thing being asserted, so naming it is worth the noise. Production signatures
+   stayed required, as planned.
+3. **The e2e replacement-frame step landed**, and it grew a second half the plan did not have: the drive
+   now asserts *five* entries **before** any list arrives as well as four after the refusing row and five
+   again after the relenting one. Without the first of those, an implementation hiding `auto`
+   unconditionally would have passed the whole drive. The settle signal for each unsolicited frame is the
+   *model* trigger's label, which renders the matched row's `display_name` — chosen because this control's
+   own visible surface does not change when a list arrives (the trigger keeps naming the session's mode),
+   so the panel's contents would otherwise be the only observable and could not be waited on before being
+   opened.
+
+**The AC5 detector was verified to redden, not merely to pass.** Temporarily changing the mount to
+`conversationId={null}` — the exact silent, fail-open failure AC5 exists to catch — turns the drive red at
+the four-entry assertion (`locator resolved to 5 elements`). The mount was restored and the suite
+re-verified green. Recorded because an undetecting detector is this ticket's specific hazard: the pure
+model function stays green with the mount unwired, so a spec that passed either way would have proven
+nothing.
+
+### 2026-09-04 — the size boundary, measured at merge: an overage, stated rather than cut
+
+**The ticket shipped at ~1050 lines of written work against the 800-line ceiling — a ~30% overage.** The
+§ A5 self-check estimated 785 and passed the boundary; the estimate was wrong, and it was wrong in the
+same direction on every line item. Measured from the two commits (996 insertions, 56 deletions):
+
+| | Estimated | Actual |
+|---|---|---|
+| Plan doc | ~330 | 434 |
+| e2e spec | ~200 | 241 |
+| Unit-test cascade | ~180 | 196 |
+| Production (4 `.ts`/`.tsx` + 1 `.css`) | ~90 | 181 |
+
+Every other line of the table held comfortably: 4 production source files (≤ 5), 10 consumer call sites
+(≤ 10), 5 acceptance criteria (≤ 5), 0 new exported types/interfaces/components/stores, 0 reject branches.
+Only the line count is over.
+
+**No split was possible and none should have been made.** This ticket has exactly one deliverable — the
+menu drops one entry on a refusing model — and the floor rule outranks the ceiling: a slice whose only
+consumer is a sibling in the same family cannot be verified on its own, and every candidate cut here
+(predicate without the mount, mount without the e2e proof) produces exactly that. The mount seam is
+provable only by the e2e case, so separating them would ship an unverifiable half.
+
+**Where the estimate went wrong, for the next sizer.** Production was double the estimate because the
+change is prose-heavy by this repo's standards, not code-heavy: the ~15 lines of actual logic came with
+~130 lines of docblock revision, because the claim being un-said ("no `publishedRowFor` lookup and no
+model-list store read at all") is stated as a load-bearing structural argument in five places, and each
+correction has to preserve the half that stays true. This is the third measured instance in this family
+of the 800-line ceiling under-sizing a footer-control slice, and the second where the binding cost was
+*correcting a merged header's argument* rather than writing new behaviour. The refiner's own estimate
+(~800 lines, 3 production files) was closer on files than on lines, and missed the same thing.
+
+### 2026-09-04 — two prose corrections beyond the ticket's list
+
+The ticket named one stale sentence (`src/shared/wire/types.ts`). A sweep for the falsified claim found it
+restated in five places, of which two were not on the ticket's list and are corrected here because this
+change is what makes them false:
+
+- `src/renderer/src/App.tsx`, `ModelListData`'s comment — "reads each row's `supports_auto_mode` to grey
+  out a mode the running model refuses". Greying is what the operator ruled out.
+- `src/renderer/src/screens/conversation/conversation.css`, the note above `.composer__permission` — one
+  clause of its premise ("entries are a client-owned constant"). The conclusion it supports (no inert arm,
+  so `cursor: pointer` is worn unconditionally) is unchanged and the rule itself was not touched.
+
+The two sibling e2e specs that also say this control "has no list to be waiting for" were left alone, as
+the plan directed: that is an operability claim, and it stays true — the control never waits for a list,
+it fails open without one.
 </content>
 </invoke>

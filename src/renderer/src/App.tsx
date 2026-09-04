@@ -220,8 +220,8 @@ function App(): JSX.Element {
   // ModelListData (#974) is the ELEVENTH headless leaf and the leaf above's structural twin: it lands
   // each unsolicited `modelList` frame into the per-conversation model-list store for the
   // run-configuration sheet's model rows (#975) and effort segments (#976), the input footer's model
-  // and effort menus (#683), and the permission-mode menu (#682), which reads each row's
-  // `supports_auto_mode` to grey out a mode the running model refuses. Both frames ride the SAME
+  // and effort menus (#683), and the permission-mode menu (#682), which since #1022 reads each row's
+  // `supports_auto_mode` to HIDE a mode the running model refuses. Both frames ride the SAME
   // `initialize` control reply — this one inventories the IDENTITIES claude will run as, that one the
   // VERBS the working directory will accept — so the App-level rationale is identical and equally
   // sharpened: a frame arrives for a conversation the operator may NEVER HAVE OPENED and long before

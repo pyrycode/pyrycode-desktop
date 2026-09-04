@@ -176,23 +176,24 @@ read, in a file #1045 may also touch, for a renderer-local convenience. The copy
 line (see [attachment bytes § the exact-buffer copy](attachment-bytes.md#the-exact-buffer-copy-is-load-bearing-not-tidiness)),
 one process over — the `Blob` would copy these bytes regardless.
 
-## The URL is inert until #1045
+## #1045 widened the CSP to make the URL load
 
-`src/renderer/index.html`'s CSP is `default-src 'self'` with no `img-src`, so a `blob:` source does not
-load at all today. That absence is deliberate and repeatedly reaffirmed (ADR `0010` and the specs for
-\#608, #609, #657, #796, #797, #906, #907, #912). Widening it is #1045's, in as many words on that
-ticket, for a reason this module cannot argue with: a security policy is only provable where something
-actually loads, and no tier in this repo can load anything yet. This module minting a URL nothing can
-point at yet is the same staged prerequisite `requestAttachmentBytes` was until this landed — not a
-defect, and not papered over here with a CSP edit that would put two slices in one file for a merge
-conflict bought for nothing.
+`src/renderer/index.html`'s CSP was `default-src 'self'` with no `img-src`, so a `blob:` source did not
+load at all while this module shipped alone. That absence was deliberate and repeatedly reaffirmed (ADR
+`0010` and the specs for \#608, #609, #657, #796, #797, #906, #907, #912) — a security policy is only
+provable where something actually loads, and no tier in this repo could load anything until a consumer
+existed. This module minting a URL nothing could point at yet was the same staged prerequisite
+`requestAttachmentBytes` was until this landed — not a defect, and not papered over here with a CSP edit
+that would have put two slices in one file for a merge conflict bought for nothing.
 
-**#1045 must widen `img-src` only.** A `blob:` URL inherits the creating document's origin, so a blob of
-HTML *navigated to* would run script holding the preload bridge. Three existing guards close that
-independent of the CSP and stay untouched by this module: `will-navigate` confines in-place navigation to
-the app's own document; `setWindowOpenHandler` denies every scheme and externalises only
+[#1045](conversation-shell-message-bubble.md#the-attachment-image-thumbnail-1045) is that consumer, shipped:
+it draws the `<img>`, decides imageness from the untrusted filename, and widened `img-src` — **and only
+`img-src`**, exactly as this module's header called for. A `blob:` URL inherits the creating document's
+origin, so a blob of HTML *navigated to* would run script holding the preload bridge. Three existing guards
+close that independent of the CSP and stayed untouched by both tickets: `will-navigate` confines in-place
+navigation to the app's own document; `setWindowOpenHandler` denies every scheme and externalises only
 `http:`/`https:`; and `object-src 'none'` blocks a blob frame or object. A `frame-src`, `child-src` or
-relaxed `default-src` would reopen the vector `img-src` alone does not.
+relaxed `default-src` would reopen the vector `img-src` alone does not, and #1045 touched none of them.
 
 ## State and concurrency model
 
@@ -270,7 +271,7 @@ to the preload listener.
 - **No media type on the minted URL, by design.** See § above; the seam for one is `toBlob`.
 - **No renderer-side queue and no cap raised here.** A busy thread of images meets `busy` on both legs;
   see § State and concurrency model.
-- **The URL is inert until #1045 widens `img-src`.** See § above.
+- **The URL loads, since #1045 widened `img-src` to `'self' blob:`.** See § above.
 - **The `contextBridge` hop is unobservable from this module's own tests.** #1045's browser-context e2e
   tier is the first end-to-end proof.
 - **No renderer-side cache ceiling.** Every entry has a live holder and a holder is a mounted component,
@@ -298,9 +299,11 @@ them apart would produce a child unverifiable on its own.
   out of.
 - `docs/specs/architecture/1044-attachment-image-source.md` — the full architecture spec, including the
   security review and the two open questions (media type, cache ceiling) this doc resolves as shipped.
-- [#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045) — the thumbnail: draws the `<img>`,
-  widens the CSP's `img-src`, and decides imageness from `MessageAttachment.filename`. Not started as of
-  this writing; the URL this module mints is inert until it lands.
+- [#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045) — the thumbnail. Shipped: draws the
+  `<img>` ([Conversation shell — message bubble § The attachment image
+  thumbnail](conversation-shell-message-bubble.md#the-attachment-image-thumbnail-1045)), decides imageness
+  from `MessageAttachment.filename` with a new client-owned exact-extension helper, and widened the CSP's
+  `img-src` to `'self' blob:` and nothing else.
 - [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the parent ticket this slice split
   from.
 - [#869](attachment-open.md) — the thumbnail's own open-full-size click, and the fetch-then-act shape's

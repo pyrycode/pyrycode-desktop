@@ -1,17 +1,21 @@
 # Attachment upload (pick, guard, drive, report)
 
-The attach affordance's whole flow minus the button: an intent from the window opens the system file
-picker in the background process, the choice is guarded on an **open handle** and read, declared with
-a byte-trimmed filename and a derived `mime_type`, and driven through
-[attachment transfer](attachment-transfer.md)'s (#861) `uploadAttachment` under a `randomUUID` transfer
-id. Exactly one terminal — `completed`, `refused` with the client's own size bound, or `failed` with
-the driver's outcome — is pushed back to the window on a dedicated channel pair, optionally preceded by
-in-flight `progress` events for a large file (#864, below). A cancelled picker is a total no-op:
+The attach affordance's whole flow minus the button: an intent from the window either opens the system
+file picker in the background process or (#890) names a path the window resolved from a dropped file;
+either way, the choice is guarded on an **open handle** and read, declared with a byte-trimmed filename
+and a derived `mime_type`, and driven through [attachment transfer](attachment-transfer.md)'s (#861)
+`uploadAttachment` under a `randomUUID` transfer id. Exactly one terminal — `completed`, `refused` with
+the client's own size bound, or `failed` with the driver's outcome — is pushed back to the window on a
+dedicated channel pair, optionally preceded by in-flight `progress` events for a large file (#864,
+below). A cancelled picker, and a dropped path that fails the boundary guard, are both a total no-op:
 nothing read, nothing sent, nothing emitted. **Nothing renders here** — this slice ends at the bridge;
-the button and the outcome's appearance are [Composer attach](composer-attach.md) (#863).
+the button and the outcome's appearance, and the drop gesture itself, are
+[Composer attach](composer-attach.md) (#863, #890).
 
 Introduced in [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), split from #685.
-In-flight progress added in [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864).
+In-flight progress added in [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864). The
+drag-and-drop entry, and this channel's request body, added in
+[#890](https://github.com/pyrycode/pyrycode-desktop/issues/890).
 
 ## Two files
 
@@ -70,13 +74,57 @@ Whether `progress` is emitted at all is decided in the background process agains
 constant, `ATTACHMENT_PROGRESS_MIN_CHUNKS` (below) — never against a clock, so the decision is the
 same on a fast link and a slow one, and a small upload costs no IPC at all.
 
-**The intent carries no request body**, and that is the design's central security property, not a
-convenience: the renderer sends with no argument, so there is no untrusted request field to validate
-and no renderer-supplied string can reach a host path, a declared filename, or the wire. A fully
-compromised renderer can make a picker appear; it cannot choose what the picker opens, and it cannot
-read back what was sent. [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop)
-will widen the intent to carry a dropped path, and *that* widening owes a request guard — the door is
-left value-free today so the obligation is visible when it arrives.
+**The intent was value-free at first, and the request body it grew stays optional (#890).** #862 shipped
+this channel with the renderer sending no argument at all: no untrusted request field to validate, no
+renderer-supplied string that could reach a host path, a declared filename, or the wire. That door was
+left value-free deliberately, so the obligation would be visible the day something wanted to widen it —
+[#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) is that day. Presence, not
+a discriminator field, tells the two apart: an argument-free send still means *open the picker* and
+reaches no request field, exactly as before; a send carrying a well-formed `AttachmentUploadRequest`
+means *upload this path* and is refused outright by `isAttachmentUploadRequest` unless it passes. There is
+still exactly one place a path enters main from the window — see § The request body and its guard below
+for the full shape.
+
+### The request body and its guard (#890)
+
+```ts
+export const MAX_UPLOAD_PATH_LENGTH = 4096
+export interface AttachmentUploadRequest { path: string }
+export function isAttachmentUploadRequest(value: unknown): value is AttachmentUploadRequest
+```
+
+One field, camelCase (client-internal IPC, not a wire type) — the path of a file the operator **dropped**,
+resolved in the preload by `webUtils.getPathForFile` (see § The bridge below). Extra keys are accepted and
+never read, since nothing downstream rebuilds a value from anything but `path`.
+
+`isAttachmentUploadRequest` is `attachmentBytes.ts`'s `isAttachmentBytesRequest` shape, applied to a path
+instead of a byte identifier: narrow to non-null `object`, `in`-guard the key, `typeof` the value actually
+found, bound the length at `MAX_UPLOAD_PATH_LENGTH` (4096 — `MAX_SAVE_FILENAME_LENGTH`'s figure, and the
+platform ceiling for a path a real drop can produce). **The empty-string refusal is the load-bearing
+line, not the length bound above it**: `webUtils.getPathForFile` answers `''` for a `File` the page
+constructed itself, so this is where "only an operator gesture delivers a path-backed `File`" stops being
+a property the preload merely observes and becomes a refusal main actually performs. The `in`-guarded read
+on a narrowed `object` is what makes a `__proto__`-carrying literal refuse itself — the polluting object
+has no *own* `path`, so the typeof test never sees the prototype's.
+
+**A size bound, not a shape or canonicity one, deliberately** — the single-gate argument stays intact:
+`readChosenFile` (below) remains the sole thing that decides whether a path names a readable regular file,
+and it decides that by *opening* the path, never by inspecting the string. There is no root to confine the
+path to, either: dropping a file from anywhere on the operator's own disk is the whole feature, so a
+prefix check would be the wrong thing to add here, not a redundant one.
+
+**A rejected request makes no filesystem call and emits no event** — the same posture every other
+attachment channel documents. Nothing an operator can physically do produces one: a real drop always
+carries a real path, so an empty or malformed request means a page-constructed `File` or a compromised
+renderer, and neither is owed a sentence in the composer.
+
+**The honest containment claim is narrower than "only a drop is possible", and wider too.**
+`dropAttachmentFile` (§ The bridge) is callable by any renderer code holding any `File`, so the accurate
+property is *only an operator gesture mints a path-backed `File`* — a drop, or a file-system picker (this
+app renders no `<input type=file>`). The marginal capability a compromised renderer gains is forwarding a
+path-backed `File` it already holds from an earlier gesture, not naming an arbitrary path on disk. That
+property holds only while the preload stays the sole resolver and main refuses an empty or non-string path
+outright, which is exactly what this guard is for.
 
 **`AttachmentUploadFailure` is a re-declaration, checked by the compiler, not by discipline.** Shared
 cannot import `AttachmentTransferFailure` from `src/main/transport/`, so its inherited literals are
@@ -206,17 +254,64 @@ classify-don't-forward (inherited #62) is load-bearing here, not stylistic.
 The dialog cannot be Electron-free, so it stays at the composition-root edge, which is what keeps the
 guard and the drive unit-testable either side of it and makes cancellation provable without a real
 dialog: `dialog.showOpenDialog({ properties: ['openFile'] })` → `canceled` or an empty `filePaths` is
-the no-op; otherwise `void uploadAttachmentFile(picked, { upload: connection.uploadAttachment, emit,
-diagnosticLog })`, safe as a bare `void` because the callee never rejects. `ipcMain.on` registers the
-listener; `app.on('will-quit', ...)` removes the exact listener, symmetric with the rest of the app's
-`ipcMain` registrations.
+the no-op; otherwise `void uploadAttachmentFile(picked, deps)`, safe as a bare `void` because the callee
+never rejects. `ipcMain.on` registers the listener; `app.on('will-quit', ...)` removes the exact
+listener, symmetric with the rest of the app's `ipcMain` registrations.
+
+**One listener, two arms, told apart by presence (#890).** `attachmentUploadListener` now reads a second,
+`unknown`-typed parameter — `unknown` because the renderer is untrusted at this boundary regardless of any
+declared type. `request !== undefined` selects the drop arm: `isAttachmentUploadRequest(request)` guards
+it, and a passing request calls `uploadAttachmentFile(request.path, deps)`. `request === undefined`
+selects the picker arm, byte-for-byte what #862 shipped. **`pickerOpen` stays scoped to the dialog**: a
+drop opens no dialog, so the drop arm neither reads nor sets that flag, and two transfers may be live at
+once (one from each arm, or two drops) by this flow's existing design.
+
+**The `deps` object moved to the top of the listener, shared by both arms — a change forced by adding the
+second entry, not a tidy-up.** It used to live inside the picker's own `.then`. Two entries each building
+their own `deps` closure is the shape that lets "one driver, one outcome channel" drift into two: a future
+edit to how progress is forwarded, or which channel an outcome lands on, would have to be made twice and
+could land once. Hoisting it keeps that structural rather than a matter of discipline — `event.sender` is
+still closed in for [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s reason, and the
+`emitDaemonEvent`-style `sender.isDestroyed()` guard is unchanged.
 
 ## Bridge — `src/preload/index.ts`
 
-Two members on the existing `api` literal: `requestAttachmentUpload(): void` (fire-and-forget `send`, no
-argument) and `onAttachmentUploadEvent(listener): () => void` (the `onDaemonEvent` shape — strips the
-raw `IpcRendererEvent`, returns an unsubscribe handle that removes the exact handler). Both are now
-called from [Composer attach](composer-attach.md) (#863), which wires the button and renders the outcome.
+Three members on the existing `api` literal: `requestAttachmentUpload(): void` (fire-and-forget `send`,
+no argument — the picker intent, unchanged), `dropAttachmentFile(file: File): void` (#890, below), and
+`onAttachmentUploadEvent(listener): () => void` (the `onDaemonEvent` shape — strips the raw
+`IpcRendererEvent`, returns an unsubscribe handle that removes the exact handler). All three are called
+from [Composer attach](composer-attach.md) (#863's button and outcome view, #890's drop handler).
+
+**`dropAttachmentFile` (#890) is the one place on the window side that may touch a host path** — the
+deliberate, narrow exception to "the renderer names an intent, main owns the path", and the reason the
+ticket that added it carried `security-sensitive`. It exists because a drop is delivered by the operating
+system to the *window*, as a DOM `File` on the drop event, so there is nowhere else on the window side the
+path can be recovered: Electron 33 (this repo's version) removed `File.path`, and `webUtils.getPathForFile`
+is the sanctioned replacement — available in a sandboxed preload, which this app runs (`sandbox: true`).
+
+```ts
+dropAttachmentFile: (file: File): void => {
+  let path: string
+  try {
+    path = webUtils.getPathForFile(file)
+  } catch {
+    return
+  }
+  if (path === '') return
+  ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, { path })
+}
+```
+
+Two silent ways out, both before anything crosses the bridge: `getPathForFile` **throws** when handed
+something that is not a `File`, so the call is wrapped in a `try` — which stops that throw from crossing
+the bridge as much as it filters non-`File` input — and an empty result (a page-constructed `File`) sends
+nothing. Neither is trusted as the actual defence: the window is untrusted at this boundary regardless of
+the declared parameter type, so `isAttachmentUploadRequest` re-checks on the main side and drops a
+malformed ask there regardless of what the preload let through. The resolved string is a local in this
+function's frame and the function returns `void`, so it reaches no renderer state, no log line, and no
+diagnostic record — the `File` handle is all the window ever holds. `webUtils` itself never crosses the
+bridge, any more than `ipcRenderer` does, and `ATTACHMENT_UPLOAD_CHANNEL` is fixed in the closure so the
+renderer cannot address an arbitrary channel.
 
 ## Data flow
 
@@ -243,6 +338,26 @@ main: ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL) → pickerOpen? ──yes──▶ i
 main → renderer: sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, event)   ── exactly one, or none ──▶
 ```
 
+The drop entry (#890) joins the same diagram one step later, at the listener:
+
+```
+renderer: window.pyry.dropAttachmentFile(file)
+  preload: webUtils.getPathForFile(file)
+    throws (not a File)  ──▶ nothing sent
+    ''  (page-built File) ──▶ nothing sent
+    │a path
+    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, { path })   ── an argument, this time ──▶
+
+main: ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL, (event, request) => …)
+  request !== undefined?
+    │no  → the picker arm, unchanged above
+    │yes
+    isAttachmentUploadRequest(request)?
+      false ──▶ dropped: no filesystem call, no event
+      │true
+      uploadAttachmentFile(request.path, deps)   ── same deps, same driveUpload, same terminal ──▶
+```
+
 ## Error handling
 
 | Failure | Detected at | Reported as |
@@ -253,6 +368,9 @@ main → renderer: sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, event)   ── 
 | Size over the client's own bound | the open handle's stat | `refused` + `limitBytes` |
 | Driver terminal, failed | `await deps.upload(...)` | `failed: <AttachmentUploadFailure>` |
 | Driver terminal, stored | `await deps.upload(...)` | `completed` |
+| Dropped `File` not backed by a path (page-constructed) | preload's empty-string check | nothing — the send never happens |
+| Something other than a `File` handed to `dropAttachmentFile` | preload `try`/`catch` | nothing |
+| Malformed / oversized / non-string / `__proto__` request | `isAttachmentUploadRequest` in main | nothing — no filesystem call, no event |
 
 Every path emits at most one event and both entry functions resolve `void`; neither rejects, so the
 composition root's `void` call cannot leave an unhandled main-process rejection.
@@ -272,11 +390,22 @@ network volume leaves one promise pending and one handle open). Neither has been
 `pickerOpen` flag already clears before either could wedge the affordance. Full findings:
 `docs/specs/architecture/862-attachment-upload-pick-and-report.md` § Security review.
 
+**#890's review, also self-reviewed, PASS.** The one new untrusted→trusted crossing is the request body
+itself, contained by `isAttachmentUploadRequest` above; the plan's initial containment sentence was
+folded in as a SHOULD-FIX (the honest claim is *only an operator gesture mints a path-backed `File`*, not
+"only a drop" — see § The request body and its guard). Repetition on the drop arm is unbounded, stated
+and accepted rather than fixed, since `pickerOpen` scopes to the dialog by design — see the edge-case
+note above. Full findings: `docs/specs/architecture/890-composer-file-drop.md` § Security review.
+
 ## Testing
 
 - **`src/shared/ipc/attachmentUpload.test.ts`** — the two channel constants are distinct from each other
   and from `DAEMON_EVENT_CHANNEL` / `COMMAND_CHANNEL`; the union is value-free beyond the fields listed,
-  a positive walk over `Object.keys` rather than an absence assertion.
+  a positive walk over `Object.keys` rather than an absence assertion. **(#890)** `isAttachmentUploadRequest`
+  accepts a well-formed request and one carrying extra keys; rejects `null`, `undefined`, a string, a
+  number, an array, `{}`, a non-string `path`, an empty `path`, a path one over `MAX_UPLOAD_PATH_LENGTH`,
+  and a `__proto__`-carrying literal built with `JSON.parse` (never as an object literal — a literal
+  `{ __proto__: {...} }` creates no own key at all and would pass the guard vacuously).
 - **`src/main/attachmentUpload.test.ts`** — against real temp files (the `saveDebugBundle.test.ts`
   posture) and a fake `upload` / `emit` / `DiagnosticLog`: a small file uploads with byte-identical
   `bytes`, a basename `filename`, a table-derived `mime_type`, and a `randomUUID`-shaped `attachment_id`;
@@ -289,9 +418,12 @@ network volume leaves one promise pending and one handle open). Neither has been
   **The >255-byte trim could not be proven through the path route** — 255 bytes sits at or under every
   host filesystem's own component limit, so no file could be created to exercise it — and is proven at
   `uploadAttachmentBytes` instead, which both routes share.
-- **No test for `index.ts`'s wiring or the preload members** — the composition root is Electron-bound
-  and untested here by existing convention; the dialog seam it closes is exactly what the injected deps
-  make provable one layer down.
+- **No test for `index.ts`'s wiring or the preload members, `dropAttachmentFile` included (#890)** — the
+  composition root and the preload are Electron-bound and untested here by existing convention; the
+  path-carrying leg is proven instead by the shared guard's unit tests above plus this file's existing
+  real-temp-file coverage of `uploadAttachmentFile`, since a page-built `File` in the e2e tier has no real
+  path to carry across the boundary in the first place. See [Composer attach § Testing the drop
+  entry](composer-attach.md) for what the e2e tier proves about the gesture itself.
 - **The progress gate (#864)** — a fake driver reports arbitrary `(sent, total)` pairs before
   resolving; a transfer whose total is under `ATTACHMENT_PROGRESS_MIN_CHUNKS` emits no `progress`
   event at all (AC2); one at or above it emits `progress` then exactly one terminal (AC3); every
@@ -330,10 +462,18 @@ network volume leaves one promise pending and one handle open). Neither has been
   the non-live element (below). A future ticket that measures real jank owns the fix, which belongs
   beside the `ATTACHMENT_PROGRESS_MIN_CHUNKS` gate in `driveUpload`'s closure.
 - **Two concurrently live transfers interleave into one composer slot.** The window cannot correlate a
-  click to its own upload's progress — `requestAttachmentUpload()` returns `void` — so a second
-  concurrent attach's reports and terminal interleave with the first's in the same nullable. Shipped
-  property of #863, made visible rather than introduced; correlating would need the intent to return an
-  id, which is #890's channel change, not this ticket's.
+  click or a drop to its own upload's progress — neither `requestAttachmentUpload()` nor
+  `dropAttachmentFile()` returns anything — so a second concurrent attach's reports and terminal
+  interleave with the first's in the same nullable. Shipped property of #863, made visible rather than
+  introduced; #890 widened the channel to carry a *path* but did not add correlation, so this remains
+  open for a future ticket to fix by having the intent return an id.
+- **Repetition on the drop arm is unbounded by design (#890).** `pickerOpen` bounds the dialog, not the
+  upload, and the drop arm deliberately neither reads nor sets it — a drop opens no dialog. A compromised
+  renderer holding one path-backed `File` can call `dropAttachmentFile` in a loop and start many
+  concurrent transfers from a single gesture. Bounded by #862's per-upload byte guard and, host-side, by
+  the daemon's own concurrency answer (`attachment.too_many_uploads` → a `failed`); accepted as a
+  self-DoS by a renderer that already holds the command channel, and left for a client-side concurrency
+  cap to join #861's bound rather than being added here.
 
 ## Related
 
@@ -358,6 +498,10 @@ network volume leaves one promise pending and one handle open). Neither has been
 - `docs/specs/architecture/864-attachment-upload-progress.md` — the in-flight progress spec, including
   its security review and the two rework-leg revisions (a vacuous string-coercion test, and a
   re-render-rate figure reasoned from a clock the send loop does not have).
-- [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) / [#891](https://github.com/pyrycode/pyrycode-desktop/issues/891) (paste) —
-  second entries into this flow via `uploadAttachmentFile` / `uploadAttachmentBytes`; neither goes
-  through the dialog. Not started.
+- [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) — landed; the second
+  entry into this flow via `uploadAttachmentFile`, riding this channel's now-optional request body. See
+  § The request body and its guard above, § The bridge's `dropAttachmentFile`, and
+  [Composer attach § The drop entry](composer-attach.md) for the renderer-visible half.
+  `docs/specs/architecture/890-composer-file-drop.md` has the full plan and security review.
+- [#891](https://github.com/pyrycode/pyrycode-desktop/issues/891) (paste) — the other planned second
+  entry, via `uploadAttachmentBytes`; does not go through the dialog either. Not started.

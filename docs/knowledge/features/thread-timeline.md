@@ -160,8 +160,8 @@ Like `createdAt`, the field rides the event rather than a `reduceTimeline` param
 call-sites-are-production reason. Ships live, not dormant: #1039 also wired the sole producer in the same
 commit, so `selectItems` can carry a filled `attachments` list from the day the field exists — #815 (the
 non-image file row) has since shipped its renderer, in [Conversation shell — message bubble § The
-attachment file row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816); #868 (the image
-thumbnail) is still open. See [Composer attach § Pending
+attachment file row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816); #868 (the image
+thumbnail, and #869's click that opens it) has since shipped too. See [Composer attach § Pending
 attachments](composer-attach.md#pending-attachments-1039) for how the composer accumulates the set between
 sends, and [Thread timeline — history](thread-timeline-history.md#configuration-and-usage) for the ticket
 note.
@@ -353,8 +353,8 @@ with the `attachments` field documented above (§ Types).
   `ComposerSendDeps.takeAttachments`, fed by [Composer attach § Pending
   attachments](composer-attach.md#pending-attachments-1039)'s `reducePendingAttachments`. Consumer:
   [Conversation shell — message bubble § The attachment file
-  row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) (#815, shipped). #868 (the image
-  thumbnail) is still open.
+  row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) (#815, shipped). #868 (the image
+  thumbnail, and #869's open-in-viewer click) has since shipped too.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — added `createdAt` to
   `assistantText`/`userText`, covered in full above (§ Types, § Configuration and usage). Producers:
   [conversation timeline store](conversation-timeline-store.md)'s `translateTimelineEvent`/

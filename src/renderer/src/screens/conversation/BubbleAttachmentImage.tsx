@@ -53,7 +53,8 @@ export const ATTACHMENT_IMAGE_UNAVAILABLE = 'Image could not be shown'
 export function AttachmentThumbnail({
   state,
   filename,
-  onDecodeError
+  onDecodeError,
+  onOpen
 }: {
   state: AttachmentThumbnailState
   filename: string
@@ -63,6 +64,11 @@ export function AttachmentThumbnail({
    *  Required rather than optional: the container always supplies one, and an optional handler would be
    *  dead surface that only the static tier — which drops handlers anyway — ever omits. */
   onDecodeError: () => void
+  /** #869 — the reader asked to see this picture in the operating system's viewer. A PROP for the same
+   *  reason `onDecodeError` is one, and the reason this component stayed pure when it was split: what a
+   *  click NEEDS arrives from outside, so all three drawn states remain ordinary static renders.
+   *  Reached only from the `ready` arm, and required for the same reason as above. */
+  onOpen: () => void
 }): JSX.Element | null {
   switch (state.type) {
     case 'pending':
@@ -80,13 +86,29 @@ export function AttachmentThumbnail({
       //
       // `onError` IS AC5's SECOND HALF — bytes that arrive and do not decode because the name lied. It
       // cannot loop: moving off `ready` unmounts the very <img> that raised it.
+      //
+      // ⭐ #869 — A REAL <button>, NOT A role="button" DIV, AND NO keydown HANDLER ANYWHERE. Click,
+      // Enter and Space all come from the platform element; a div would need its own key handling, which
+      // is exactly what the criterion should not cost. `type="button"` because a bare <button> defaults
+      // to submit.
+      //
+      // ITS ACCESSIBLE NAME IS THE WRAPPED <img>'s `alt` — the constant above, unchanged and not
+      // duplicated. No aria-label built from `filename`: that name is untrusted, operator- or
+      // model-chosen text and #815 closed that attribute sink on purpose. A second name here would also
+      // be a second thing to keep in step with the first.
+      //
+      // THE ONLY DRAWN STATE THAT GETS A CONTROL. `pending` draws nothing, so there is nothing to focus
+      // or press; `failed`'s reader wants a RE-FETCH, which is #1044's leg rather than #867's. Neither
+      // gains a control, a tab stop or a handler.
       return (
-        <img
-          className="bubble__image"
-          src={state.url}
-          alt={ATTACHMENT_IMAGE_ALT}
-          onError={onDecodeError}
-        />
+        <button type="button" className="bubble__image-button" onClick={onOpen}>
+          <img
+            className="bubble__image"
+            src={state.url}
+            alt={ATTACHMENT_IMAGE_ALT}
+            onError={onDecodeError}
+          />
+        </button>
       )
     case 'failed':
       // THE NAME IS UNTRUSTED DISPLAY TEXT AND REACHES THE DOM AS AUTO-ESCAPED REACT CHILDREN ONLY —
@@ -144,11 +166,36 @@ export function BubbleAttachmentImage({
     // rather than on the object keeps that true if a reducer ever re-creates the record.
   }, [attachment.attachmentId])
 
+  // ⭐ #869 — ONE ASK, THE IDENTIFIER AND NOTHING ELSE, AND NO LISTENER.
+  //
+  // NO FETCH-THEN-ACT SEQUENCING, although `downloadAttachment`'s header offers the shape to whoever
+  // needs it second. The drawn picture IS the proof the fetch already happened: this component only
+  // reaches `ready` after `attachmentImageSources` drove the retrieval leg to `completed`, and that leg
+  // is the sole writer of the app-private directory `src/main/attachmentOpen.ts` reads. That INVERTS
+  // #816's situation rather than repeating it — the file row is drawn BEFORE any fetch, so its click
+  // needed the sequencing to avoid being a dead control that passes its own test.
+  //
+  // NO PATH IS BUILT, JOINED OR FORWARDED, which is what `AttachmentOpenRequest`'s single field is for:
+  // the background process owns resolution and refuses an identifier that escapes the attachment
+  // directory. The blob URL the `ready` state holds takes no part — it is a capability handle to bytes
+  // in this origin, and the open channel addresses the file by identifier. No conversation id to read
+  // and no store to consult either, unlike the retrieval leg.
+  //
+  // `window.pyry` IS DEREFERENCED INSIDE THE ARROW BODY, the `attachmentDownloadDeps` idiom, so neither
+  // module load nor a static render touches the bridge.
+  //
+  // THE OUTCOME IS NOT SUBSCRIBED TO, and that is a decision. Four failure reasons exist and this slice
+  // presents none of them: there is no designed feedback for a failed open (the ticket's open question,
+  // shared with #816), so a listener would have nothing to do with what it heard. The driver already
+  // records each terminal at its own boundary, so nothing goes unrecorded. There is likewise no
+  // pending, disabled or in-flight flag — the drawing has none, and "the control stays activatable" is
+  // therefore true by construction rather than by a flag nothing resets.
   return (
     <AttachmentThumbnail
       state={state}
       filename={attachment.filename}
       onDecodeError={() => setState({ type: 'failed' })}
+      onOpen={() => window.pyry.openAttachment({ attachmentId: attachment.attachmentId })}
     />
   )
 }

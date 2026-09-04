@@ -13,7 +13,7 @@ escape check. It does not fetch — #996 owns that, and a source file that is no
 (`source-unavailable`), never a trigger to go and get it. The file row this channel is called from has
 since shipped, and [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) wired its click — see
 [Conversation shell — message bubble § The attachment file
-row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) and [Attachment retrieval §
+row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) and [Attachment retrieval §
 the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816). The click asks [attachment
 retrieval](attachment-retrieval.md) (#996) first and this channel only on that fetch's `completed`
 terminal — never this channel directly, since a source-file-not-there answer on every activation is
@@ -295,7 +295,7 @@ slice has no renderer surface, so no Playwright coverage is owed.
 - `docs/specs/architecture/814-save-attachment-to-downloads.md` — the full architecture spec,
   including the security review.
 - [Conversation shell — message bubble § The attachment file
-  row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) — #815 drew it, #816 gave
+  row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) — #815 drew it, #816 gave
   it the click that calls this channel (on the paired fetch's `completed` terminal), both shipped.
 - [Attachment retrieval § the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816) —
   the fetch this channel's ask is sequenced after, and why: the save channel does not fetch, so the

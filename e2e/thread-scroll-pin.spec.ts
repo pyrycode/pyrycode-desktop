@@ -680,7 +680,8 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
 // line), and closing it needs production code this ticket's verify-first instruction rules out. Filed as
 // #1049.
 
-/** `.bubble__image`'s `max-height`, and its `margin-top` (--space-3). Their sum is what a resolving
+/** `.bubble__image`'s `max-height`, and the `margin-top` (--space-3) that #869 moved onto the control
+ *  wrapping it, `.bubble__image-button`. Their sum is what a resolving
  *  thumbnail adds to the thread, and it is the floor every growth assertion below is measured against —
  *  never an exact equality, so a redrawn bubble that grows the picture does not redden a scroll test. */
 const THUMBNAIL_HEIGHT_PX = 160

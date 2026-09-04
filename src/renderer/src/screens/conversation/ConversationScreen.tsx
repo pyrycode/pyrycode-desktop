@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
   type Ref,
@@ -58,6 +59,7 @@ import {
   ComposerAttachButton,
   ComposerAttachOutcome,
   composerClassName,
+  pasteCarriesImageOnly,
   useAttachmentUpload,
   useComposerFileDrop
 } from './ComposerAttach'
@@ -2602,6 +2604,33 @@ function Composer({
     onComplete: setText
   })
 
+  /**
+   * #1033: the PASTE entry into the attach flow, and the third gesture that reaches it.
+   *
+   * ⭐ IT MOUNTS ON THE TEXTAREA, WHICH IS THE OPPOSITE CALL FROM #890's DROP HANDLERS one element up.
+   * Those spread onto `.composer` deliberately, so a drop on the footer row counts as much as one on
+   * the message box. A paste fires on the FOCUSED element and bubbles, so either mount point would
+   * receive it — this is a choice about SCOPE, not reachability. The handler's whole job is to suppress
+   * a default paste, and the textarea is the only element in the composer that has one; mounting on
+   * `.composer` would additionally intercept a paste made while a footer button holds focus, turning a
+   * keystroke with no text destination into a network transfer. Narrower is the right call for a
+   * handler whose effect is to start an upload.
+   *
+   * It adds NO CLASS and changes no class run — an event handler renders no attribute at all, so
+   * composerSlot.test.tsx's whole-run match on `class="composer__input"` is untouched by construction.
+   *
+   * The early return is the whole of "text pastes stay text": a clipboard `pasteCarriesImageOnly`
+   * declines is not consumed, not prevented and not reported, so the default paste runs exactly as it
+   * does today — including the copied web-page selection that carries an image alongside its text.
+   * `clipboardData` is read for `types` and nothing else; the bytes stay in the operator's clipboard
+   * and #1032's background-process path reads them there.
+   */
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (!pasteCarriesImageOnly(event.clipboardData?.types)) return
+    event.preventDefault()
+    attach.pasteImage()
+  }
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // #940: the open type-ahead sees the keystroke FIRST, and reports whether it consumed it. That one
     // line is the whole of "Enter completes, it does not send": on a consumed key the composer returns
@@ -2660,6 +2689,7 @@ function Composer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
         />
         {/* #678: one control, two variants. `isRunning` is derived from `phase` on EVERY render and is
             never a local flag set on click, so a turn that ends on its own returns the button to send with

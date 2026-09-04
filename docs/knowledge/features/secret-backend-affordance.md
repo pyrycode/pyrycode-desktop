@@ -125,4 +125,5 @@ The architect self-review verdict is **PASS** (`security-sensitive` label gate).
 - [Device static keypair](device-keypair.md) / [#43](../codebase/43.md) and [Paired-server store](paired-server-store.md) / [#44](../codebase/44.md) — the two mandatory `secureStore.set` writes on the pair → connect path that this affordance unblocks headless.
 - [#99 codebase notes](../codebase/99.md) — implementation summary, patterns, and lessons.
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the secret-at-rest / fail-closed decision this affordance is scoped against (and deliberately does not weaken on any shipped path).
+- [Window-presentation dev affordance](window-presentation-affordance.md) / [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) — the third instance of this shape (the twin is now a trio), gating whether a non-packaged build shows its window.
 - Consumer chain: [#93](https://github.com/pyrycode/pyrycode-desktop/issues/93) (pair→connected through the UI, sets `PYRY_TEST_SECRET_BACKEND=1`) → [#94](https://github.com/pyrycode/pyrycode-desktop/issues/94) (send/stream).

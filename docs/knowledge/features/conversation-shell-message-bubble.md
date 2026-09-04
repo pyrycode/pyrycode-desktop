@@ -212,7 +212,7 @@ its file-count boundary.
   bubbles, and the thumbnail (still unbuilt — [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868))
   is another instance of the same `Message` component with its `Slot` shown — this ticket restyles the
   bubble around it, not its own contents. The non-image file row this paragraph used to list here has
-  since shipped; see [§ The attachment file row](#the-attachment-file-row-815) below.
+  since shipped; see [§ The attachment file row](#the-attachment-file-row-815-816) below.
 - **`.bubble__markdown`** ([Assistant markdown
   renderer](assistant-markdown-renderer.md)) is unaffected structurally: `.bubble__meta` is appended as
   its *sibling* inside `.bubble`, never as its child, so the markdown container's own flex column and 8px
@@ -220,7 +220,7 @@ its file-count boundary.
 - **`e2e/assistant-whitespace.spec.ts`** reads `.bubble`'s padding at runtime and asserts inequalities
   against it rather than a literal value, so the 14px → 20px change needed no edit there.
 
-### The attachment file row (#815)
+### The attachment file row (#815, #816)
 
 A settled, non-image attachment on a sent message draws as `.bubble__file`: an outlined document glyph
 (45×60, inline `<svg>`, its extension overlaid across the lower half) and the filename beside it, 12px
@@ -286,24 +286,54 @@ alone: nothing in this AC is observable in the static (no-DOM) tier, so if `.bub
 narrowed, that spec is what goes red.
 
 **Untrusted display text, first DOM sink — never sanitised here.** `filename` is IPC-delivered and, until
-this ticket, rendered nowhere at all (asserted by `attachmentUploadCopy.test.ts` and
+\#815, was rendered nowhere at all (asserted by `attachmentUploadCopy.test.ts` and
 `ComposerAttach.test.tsx`). It and the extension label reach the DOM as auto-escaped React children only
 — never an attribute, a `title`, an `alt`, a URL, or `dangerouslySetInnerHTML` — the [daemon-text
 rendering ruling](../../../CLAUDE.md) extended to a name the client itself, not the daemon, produced.
-`attachmentId` (the host-side storage handle #816's download action will need) is deliberately not
-rendered anywhere. The row does **not** sanitise, trim or normalise the name: `sanitizeAttachmentFilename`
-already re-runs in main on the value a save builds a path from, and a second sanitiser here would let what
-the operator *sees* diverge from what a save *writes* — a worse defect than the tidiness bought. Bidi/
-control-character extension spoofing (`report<U+202E>gpj.exe` reading as `report…jpg.exe`) is a live
-possibility but not fixed here — the row is drawn, not wired, so there's no action to mis-trigger yet; it's
-deferred to [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816), which should treat the
-extension overlay as the trustworthy half since its character-class filter drops bidi controls the name
-run doesn't.
+`attachmentId` (the host-side storage handle the download action needs) is deliberately not rendered
+anywhere — it reaches the click closure only. The row does **not** sanitise, trim or normalise the name:
+`sanitizeAttachmentFilename` already re-runs in main on the value a save builds a path from, and a second
+sanitiser here would let what the operator *sees* diverge from what a save *writes* — a worse defect than
+the tidiness bought. Bidi/control-character extension spoofing (`report<U+202E>gpj.exe` reading as
+`report…jpg.exe`) stays a live possibility, mitigated only by the extension overlay's character-class
+filter, which #816 confirmed it must not weaken rather than fixing further — see below.
 
-**Not built:** the row isn't clickable ([#816](https://github.com/pyrycode/pyrycode-desktop/issues/816)),
-image attachments render nothing here yet ([#868](https://github.com/pyrycode/pyrycode-desktop/issues/868)
-owns the thumbnail, same slot), and in-flight/failed attachments stay the composer's own concern
-(`attachmentUploadCopy.ts`) — this row draws a settled attachment only.
+**The row became a control in #816, without redrawing anything.** `<div className="bubble__file">` became
+`<button type="button" className="bubble__file" onClick={…}>` with the same two children unchanged. The
+one visual addition — a `:focus-visible` outline — was forced by AC1 (keyboard activation needs a visible
+focus indicator) and follows `.bubble__copy:focus-visible`'s shipped treatment
+(`outline: 1px solid var(--color-outline)`) rather than inventing one; `.bubble__file:hover` matches
+`.bubble__copy:hover`'s ink-brighten the same way. Six UA resets on `.bubble__file` put the button back
+into #815's measured box: `width: 100%` (a form control's `width: auto` is fit-content, not
+fill-available, even at `display: flex`), `padding: 0`, `border: none`, `background: transparent`,
+`font-family: inherit` (the rule already restated the other three body-small axes but not the family, so
+a button's UA font would otherwise win), and `text-align: left` (undoing the UA `center`, which would
+centre every line of a wrapped name — the AC5 case). `word-break` is inherited and inherits into a
+button, so AC5's measurement (`.bubble`'s `break-word` collapsing the name's automatic minimum size) held
+unchanged, and `e2e/attachment-file-row.spec.ts`'s existing #815 geometry assertions passed with no
+further declaration needed — a plan-time open question resolved by running the spec rather than reasoning
+about UA defaults.
+
+**The accessible name is the button's own text content, deliberately not an `aria-label`.** The extension
+overlay beside the glyph is already `aria-hidden`, so the computed name is exactly the filename, which is
+what AC1 asks for. An `aria-label` would put this untrusted, model-chosen text into an attribute — the
+sink the paragraph above closes on purpose — and there is no visually-hidden utility in this repo to
+prefix a client-owned verb with instead. Neither child takes a `tabIndex`: a real `<button>` rather than a
+`div` with a handler gives keyboard activation (click, Enter, Space) and one tab stop for free.
+
+**Wiring is two asks, not one, and lives in `downloadAttachment.ts`** (new, beside `copyMessageText.ts`,
+same React-free module-helper shape — see [Attachment retrieval § the download
+wiring](attachment-retrieval.md#the-renderer-click-816) for the full design). The button's `onClick` calls
+it directly with the row's own `attachment` record — no prop drilling, `BubbleMeta`'s copy control is the
+in-bubble precedent, and the open conversation id is read outside React from `activeConversationStore`
+rather than threaded down through `Timeline`'s ~30 render sites.
+
+**Not built:** image attachments render nothing here yet
+([#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) owns the thumbnail, same slot), and
+in-flight/failed attachments stay the composer's own concern (`attachmentUploadCopy.ts`) — this row draws
+a settled attachment only. Neither a pending state nor a failure state exists for the download itself
+(#816's Open Question: no Figma node for either, so both need their own ticket) — the row is activatable
+at every instant, with nothing to reset on a failure.
 
 ## Testing
 
@@ -344,6 +374,23 @@ residue) — the same count-not-absence idiom the meta row's own proof used. `e2
 `bubbleTextExactly`**: that fixture is an anchored whole-bubble matcher (six existing callers), and this
 is the first bubble in the suite with a text-bearing child beside the message text.
 
+**#816's own coverage.** `downloadAttachment.test.ts` (new, plain vitest, no React, no DOM) drives the
+helper against fakes for all four injected seams: the ask carries exactly `{ conversationId,
+attachmentId }`; subscribe happens before the ask (an ordering assertion, since a `busy`/`not-connected`
+retrieval can resolve synchronously in main); a `completed` terminal for this attachment asks the save
+channel with `{ attachmentId, filename }` verbatim (a name carrying `../`, a bidi control and a leading
+dot crosses unsanitised, pinning the no-second-sanitiser ruling above); a `failed` terminal saves nothing
+and tears the listener down; an event naming a different attachment is ignored; a second event after the
+terminal is a no-op; no open conversation or an over-length **either** identifier — the conversation id
+included, since `activeConversationStore` holds the daemon's payload verbatim and a hostile daemon
+chooses that string — skips both the subscribe and the ask. `e2e/attachment-file-row.spec.ts` gained a
+second `test()`: three sent messages give three rows with three distinct attachment ids, and clicking,
+`Enter`-ing and `Space`-ing them decodes three `request_attachment` envelopes off the wire, each naming
+its own row's attachment id and nothing else — the round trip is deliberately never driven to completion
+in this tier, since a real save would copy into the runner's actual Downloads folder and open a Finder
+window. The same test also asserts the row is a `<button>`, becomes `document.activeElement` after a
+keyboard interaction, and matches `:focus-visible` with a solid outline.
+
 ## Related
 
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
@@ -356,11 +403,18 @@ is the first bubble in the suite with a text-bearing child beside the message te
 - [#815 architecture spec](../../specs/architecture/815-bubble-attachment-file-row.md) — the non-image
   attachment file row's full design, the AC5 CSS-vs-inherited measurement, and the security review this
   file's § The attachment file row summarizes.
+- [#816 architecture spec](../../specs/architecture/816-attachment-file-row-download-control.md) — the
+  download control's full design, including the two-ask sequencing and the security review's MUST FIX
+  (bounding the conversation id, not only the attachment id, before subscribing).
+- [Attachment retrieval § the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816) and
+  [Attachment save](attachment-save.md) — the two background-process channels this row's click now
+  drives, fetch then save on that fetch's `completed` terminal.
 - [#686](https://github.com/pyrycode/pyrycode-desktop/issues/686) — the parent ticket the attachment slots
   split from: [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) (shipped, this section),
-  [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) (the row's download action, not yet
-  built), and [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) (the image thumbnail, same
-  slot, not yet built) — instances of the same `Message` component whose bubble this ticket restyles.
+  [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) (shipped, the row's download action,
+  covered above), and [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) (the image
+  thumbnail, same slot, not yet built) — instances of the same `Message` component whose bubble this
+  ticket restyles.
 - [#1028](https://github.com/pyrycode/pyrycode-desktop/issues/1028) / [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) —
   the record a sent message's attachments carry on its timeline item, which #815 reads and without which
   it has no name to draw.

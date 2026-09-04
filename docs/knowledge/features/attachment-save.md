@@ -10,10 +10,14 @@ This is the last unwired consumer of [attachment retrieval](attachment-retrieval
 [attachment filename sanitiser](attachment-filename-sanitiser.md) (#819) both named this ticket as
 their first real caller, and both gates are consumed here verbatim, with no second copy and no second
 escape check. It does not fetch — #996 owns that, and a source file that is not there is a failure
-(`source-unavailable`), never a trigger to go and get it. The file row this channel will be called from
-has since shipped, drawn only — [Conversation shell — message bubble § The attachment file
-row](conversation-shell-message-bubble.md#the-attachment-file-row-815) (#815) — but wiring its click to
-this channel is still [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816), not yet started.
+(`source-unavailable`), never a trigger to go and get it. The file row this channel is called from has
+since shipped, and [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) wired its click — see
+[Conversation shell — message bubble § The attachment file
+row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) and [Attachment retrieval §
+the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816). The click asks [attachment
+retrieval](attachment-retrieval.md) (#996) first and this channel only on that fetch's `completed`
+terminal — never this channel directly, since a source-file-not-there answer on every activation is
+exactly the dead control the sequencing exists to avoid.
 
 ## Where the saved name comes from
 
@@ -187,8 +191,11 @@ URL the window supplied.
 
 `src/preload/index.ts` gains `saveAttachment(request)` (fire-and-forget on the fixed channel) and
 `onAttachmentSaveEvent(listener)` (subscription returning an unsubscribe handle, raw
-`IpcRendererEvent` stripped) — `requestAttachment`/`onAttachmentRetrievalEvent`'s shape verbatim. No
-caller is wired yet; the click that calls this is #816.
+`IpcRendererEvent` stripped) — `requestAttachment`/`onAttachmentRetrievalEvent`'s shape verbatim. Its
+caller landed in #816: `downloadAttachment.ts` calls `saveAttachment` only on the paired retrieval ask's
+own `completed` terminal, and takes no subscription on `onAttachmentSaveEvent` — this channel's own
+terminal draws nothing in the thread on either outcome (AC 4), so there is no renderer-side consumer of
+it to build.
 
 ## State and concurrency
 
@@ -288,8 +295,10 @@ slice has no renderer surface, so no Playwright coverage is owed.
 - `docs/specs/architecture/814-save-attachment-to-downloads.md` — the full architecture spec,
   including the security review.
 - [Conversation shell — message bubble § The attachment file
-  row](conversation-shell-message-bubble.md#the-attachment-file-row-815) — #815, shipped (drawn, not
-  wired). [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) gives it the click that calls
-  this channel; still not started.
+  row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) — #815 drew it, #816 gave
+  it the click that calls this channel (on the paired fetch's `completed` terminal), both shipped.
+- [Attachment retrieval § the renderer click (#816)](attachment-retrieval.md#the-renderer-click-816) —
+  the fetch this channel's ask is sequenced after, and why: the save channel does not fetch, so the
+  click asks retrieval first.
 - [Attachment open](attachment-open.md) — #867, landed: open in the OS image viewer, the feature that
   closes the extension-spoofing / quarantine question this one declines.

@@ -104,12 +104,11 @@ can reach the envelope even when the ask carries extra ones (`createConversation
 `requestAttachment(request)` sends on the fixed request channel; `onAttachmentRetrievalEvent(listener)`
 subscribes on the fixed event channel and returns an unsubscribe handle — `requestAttachmentUpload` /
 `onAttachmentUploadEvent`'s shape verbatim, including stripping the raw `IpcRendererEvent` before the
-listener runs. **No caller is wired** — the consumers are [attachment save](attachment-save.md) (#814),
-[attachment bytes](attachment-bytes.md) (#866) and [attachment open](attachment-open.md) (#867), all
-three landed on the background-process side; the renderer clicks that call them are not started. #815
-(the file row itself) has shipped drawn-only — see [Conversation shell — message bubble § The attachment
-file row](conversation-shell-message-bubble.md#the-attachment-file-row-815) — but #816/#868/#869 (its
-click, the thumbnail, and the thumbnail's click) remain open.
+listener runs. **The first caller landed in #816** — see [§ The renderer click
+(#816)](#the-renderer-click-816) below. The three background-process consumers are [attachment
+save](attachment-save.md) (#814), [attachment bytes](attachment-bytes.md) (#866) and [attachment
+open](attachment-open.md) (#867); #816 wires the first of them. #868/#869 (the image thumbnail and its
+own click) remain open, and will want this same request/subscribe pair.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 
@@ -228,6 +227,40 @@ per-ask driver would silently disable both (the bug the first implementation att
 argument, guarded by `isDestroyed()` — a window closed mid-retrieval drops the outcome rather than
 throwing. Cannot route through `live.sink`: its `send` re-supplies `DAEMON_EVENT_CHANNEL` regardless of
 the channel argument given.
+
+## The renderer click (#816)
+
+[#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) gave the [attachment file
+row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) its click, and wired it to
+this driver first — not to [attachment save](attachment-save.md) (#814) directly, because the save
+channel does not fetch and this driver's retrieval leg is the only writer of the directory it copies
+from. `src/renderer/src/screens/conversation/downloadAttachment.ts` (new) subscribes to
+`onAttachmentRetrievalEvent`, **then** calls `requestAttachment({ conversationId, attachmentId })` —
+subscribe-before-ask is load-bearing, since `busy`/`not-connected` are decided synchronously in main and
+the reverse order would be a race by construction. The listener ignores every event not naming this row's
+`attachmentId`, tears itself down on the first one that does, and calls `saveAttachment({ attachmentId,
+filename })` only on that event's own `completed` — never on `failed`, and never a second time. Full
+design, including the fetch/save sequencing rationale, the button and accessible-name shape, and the
+per-activation listener lifetime, is in [Conversation shell — message bubble § The attachment file
+row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816).
+
+**A pre-ask bound on *both* identifiers, not just `attachmentId`.** A malformed ask is dropped by
+`isAttachmentRetrievalRequest` with no terminal at all (§ above), which would leak the renderer's
+subscription forever if taken for an ask the guard was always going to drop. `downloadAttachment.ts`
+therefore refuses to subscribe or ask when either identifier is empty or exceeds
+`MAX_RETRIEVAL_IDENTIFIER_LENGTH`, imported rather than restated. This is a listener-lifetime
+precondition, not a second security gate — `resolveAttachmentPath` stays the sole canonicity check. The
+architect's security review's one MUST FIX against the first draft: `attachmentId` is client-minted, but
+`conversationId` comes from `activeConversationStore`, which holds the daemon's
+`ConversationCreatedPayload` **verbatim** off the wire — checking only the attachment id would leave a
+hostile or buggy daemon able to make every activation's ask fail the guard while the listener still got
+taken, accumulating one leaked `ipcRenderer` listener per click.
+
+**No de-duplication on the renderer side**, deliberately: a second activation of the same row simply
+fetches again, and this driver's own in-flight map (§ 4 above) already collapses a duplicate ask for an
+attachment already being fetched into the live retrieval's single terminal, which every registered
+listener receives — so two clicks on one row yield two save asks and two Downloads copies, accepted as
+\#814's collision suffix to resolve, not this ticket's.
 
 ## Revisions during implementation
 

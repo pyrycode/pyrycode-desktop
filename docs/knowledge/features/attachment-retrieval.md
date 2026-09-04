@@ -105,10 +105,12 @@ can reach the envelope even when the ask carries extra ones (`createConversation
 subscribes on the fixed event channel and returns an unsubscribe handle — `requestAttachmentUpload` /
 `onAttachmentUploadEvent`'s shape verbatim, including stripping the raw `IpcRendererEvent` before the
 listener runs. **The first caller landed in #816** — see [§ The renderer click
-(#816)](#the-renderer-click-816) below. The three background-process consumers are [attachment
+(#816)](#the-renderer-click-816) below — **and the second in #1044** — see [§ The renderer image source
+(#1044)](#the-renderer-image-source-1044) below. The three background-process consumers are [attachment
 save](attachment-save.md) (#814), [attachment bytes](attachment-bytes.md) (#866) and [attachment
-open](attachment-open.md) (#867); #816 wires the first of them. #868/#869 (the image thumbnail and its
-own click) remain open, and will want this same request/subscribe pair.
+open](attachment-open.md) (#867); #816 wires the first of them and #1044 wires the second, by way of
+[attachment bytes](attachment-bytes.md). [#869](attachment-open.md) (the thumbnail's own open-full-size
+click) remains open, and will want this same request/subscribe pair.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 
@@ -262,6 +264,31 @@ attachment already being fetched into the live retrieval's single terminal, whic
 listener receives — so two clicks on one row yield two save asks and two Downloads copies, accepted as
 \#814's collision suffix to resolve, not this ticket's.
 
+## The renderer image source (#1044)
+
+[#1044](https://github.com/pyrycode/pyrycode-desktop/issues/1044) is the second renderer caller of this
+driver, and the first to chain it into [attachment bytes](attachment-bytes.md): full design in
+[Attachment image source](attachment-image-source.md). Where #816's `downloadAttachment.ts` fetches and
+then saves to Downloads, `attachmentImageSource.ts` fetches and then *reads the same file back* over the
+bytes channel, mints a `blob:` URL from what comes back, and answers its own caller with that URL rather
+than with nothing.
+
+The one wrinkle #816 didn't have to handle: **this driver's coalescing reaches every caller of one
+attachment, and #1044's own AC4 depends on that.** Two concurrent asks for the same attachment id from
+this module both go through `awaitTerminal`, subscribing before either asks; the in-flight map here (§ 4
+above) collapses the second `requestAttachment` call into a no-op, so main sends one `request_attachment`
+and pushes one `attachment-chunk`/completion terminal on the window's `webContents` — and both of
+`attachmentImageSource`'s listeners are still registered when it arrives, so both settle from that single
+event. A spec asserting two retrieval events for two asks here would be asserting the wrong thing; the
+[attachment bytes](attachment-bytes.md) leg that follows behaves oppositely (no coalescing, two events),
+which is the asymmetry [attachment image source § two callers](attachment-image-source.md#two-callers-and-the-two-legs-disagree-on-what-that-means)
+is built around.
+
+Same pre-ask bound as #816's click — both `conversationId` and `attachmentId` pass `addressable` before
+either leg is subscribed, `MAX_RETRIEVAL_IDENTIFIER_LENGTH` imported rather than restated — for the
+identical reason: a malformed ask is dropped with no terminal at all, so subscribing first would leak a
+listener with nothing to ever tear it down.
+
 ## Revisions during implementation
 
 **`emit` moved from a construction dependency to a per-ask argument.** The design as first written
@@ -398,3 +425,7 @@ queue rather than taking a single tick.
   to the window for display.
 - [Attachment open](attachment-open.md) — #867, landed: the third consumer, opening a file in the OS
   image viewer.
+- [Attachment image source](attachment-image-source.md) — #1044, landed: the second renderer caller of
+  this driver, chaining its `completed` terminal into [attachment bytes](attachment-bytes.md) and
+  minting a `blob:` URL from what comes back — see [§ The renderer image source
+  (#1044)](#the-renderer-image-source-1044) above.

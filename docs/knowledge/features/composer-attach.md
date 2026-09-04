@@ -241,7 +241,9 @@ control needed to change — the outcome line above is still the only thing on s
 also *remembers* which uploads have completed since the operator last pressed send, so
 [`submitMessage`](composer-send.md) can record them on the message's own timeline item. See [Thread
 timeline § Types](thread-timeline.md#types) for `MessageAttachment` and the `userText` item/event fields
-this feeds.
+this feeds. Since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055), the same ids also
+name the message's attachments on the outbound `send_message` frame — display was the whole of it before;
+now it is also how claude learns which files to read.
 
 **It is a pure function for a reason this file's other four are not.** `composerClassName`,
 `dragCarriesFiles`, `reduceFileDropDepth`, `fileToAttach` and `pasteCarriesImageOnly` are pure so the
@@ -260,7 +262,7 @@ export function reducePendingAttachments(
 
 export function drainPendingAttachments(holder: {
   current: readonly MessageAttachment[]
-}): readonly MessageAttachment[]
+}): PendingAttachmentTake
 ```
 
 - **`reducePendingAttachments`** folds one arriving event into the set the next send will record. Only
@@ -279,7 +281,13 @@ export function drainPendingAttachments(holder: {
   `{ current }` holder the way `fileToAttach` is generic over the element, so a `MutableRefObject`
   satisfies it with no React import. Take-and-clear cannot be split: a reader that didn't empty, or an
   emptier a caller had to remember to call, would each open a window in which one send's attachments could
-  be recorded twice.
+  be recorded twice. Since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) it returns a
+  `PendingAttachmentTake` — `{ attachments, rollback }` — rather than the bare set: `attachments` is the
+  same take as before, and `rollback` restores exactly it to the holder, undoing the drain without
+  splitting it into a peek/consume pair. The type is declared in `composerSend.ts`, its consumer, not
+  here — see [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+  for why the boundary runs that way and why restoring is sound (the caller is synchronous end to end, so
+  nothing can arrive between the take and a rollback for it to clobber).
 
 **The pending set lives in a `useRef`, not `useState`, because nothing renders it.** The consumers are
 \#815's file row (shipped, [Conversation shell — message bubble § The attachment file
@@ -303,7 +311,7 @@ window.pyry.onAttachmentUploadEvent((event) => {
 })
 ```
 
-and the hook exposes one new member, `takePendingAttachments: () => readonly MessageAttachment[]`, bound
+and the hook exposes one new member, `takePendingAttachments: () => PendingAttachmentTake`, bound
 to this mount's ref via `drainPendingAttachments`.
 
 **The pending set does not ride the gesture-clear, and this is the one place a shared clear would be
@@ -321,9 +329,11 @@ attachments don't need a click correlated to an id, only the completions that *a
 send, which the events give on their own arrival order. The listener now assigns **and** accumulates; it
 still correlates nothing to a gesture.
 
-**Where the send reads it — `submitMessage` (`composerSend.ts`).** See [Composer send § Attachments taken
-at send](composer-send.md#attachments-taken-at-send-1039) for the read site, why it sits below both of
-`submitMessage`'s early `false` returns, and how an empty take normalises to an absent field on the echo.
+**Where the send reads it — `submitMessage` (`composerSend.ts`).** See [Composer send §
+10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+for the read site, why it sits below both of `submitMessage`'s early `false` returns, why it now sits
+*above* the guarded send (the ids ride the outbound `send_message` frame since #1055), and how an empty
+or unwired take normalises to an absent field on both the frame and the echo.
 
 ## CSS
 
@@ -404,15 +414,17 @@ live claude.
 (`renderToStaticMarkup` drops keys, and the fake e2e tier cannot observe a screen-reader announcement) —
 see § In-flight progress above. Carried by a code comment, not a test.
 
-**Pending attachments (#1039) are unit-only, by design — see § Pending attachments above for why.**
-`ComposerAttach.test.tsx` walks `reducePendingAttachments` across all four `AttachmentUploadEvent` arms
-(a `completed` appends; `refused`/`failed`/`progress` each return the same reference via `toBe`; two
-completions record in completion order; the input array is never mutated) and `drainPendingAttachments`
-against a plain `{ current }` object (empties the holder; a second take answers the shared empty constant;
-the returned array isn't mutated) — no `File`, no DOM, no React needed for either. The listener's
+**Pending attachments (#1039, reworked #1055) are unit-only, by design — see § Pending attachments above
+for why.** `ComposerAttach.test.tsx` walks `reducePendingAttachments` across all four
+`AttachmentUploadEvent` arms (a `completed` appends; `refused`/`failed`/`progress` each return the same
+reference via `toBe`; two completions record in completion order; the input array is never mutated) and
+`drainPendingAttachments` against a plain `{ current }` object (empties the holder; its `attachments` is
+the shared empty constant on a second take; `rollback` restores exactly the taken set, and a take after a
+rollback yields that same set again) — no `File`, no DOM, no React needed for either. The listener's
 assignment line and the ref read at the click are the one gap no tier closes; see [Composer send §
-Attachments taken at send](composer-send.md#attachments-taken-at-send-1039) for the corresponding gap on
-the read side.
+10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+for the corresponding gap on the read side. The one thing this file's unit tier still cannot prove is
+AC4 — that the named ids actually reach claude — which is [`e2e/real-claude-attachment.spec.ts`](real-claude-liveness-e2e.md)'s job.
 
 ## Security
 

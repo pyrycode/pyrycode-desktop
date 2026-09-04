@@ -93,7 +93,10 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 /**
  * A single typed command from the renderer window to the background process. Sealed
  * discriminated union on `type`. Ten members today: `sendMessage`, whose `payload` reuses the
- * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
+ * wire SendMessagePayload verbatim so no field is remapped between layers — since #1055 that includes
+ * the optional `attachment_ids`, the ids of the uploads this message names, which are routing
+ * identifiers rather than secrets or capabilities (`RequestAttachmentPayload`: "not secret, not
+ * unguessable") and are shape-checked by isAttachmentIdList at this boundary; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * the bare `requestConversations` (#139), which carries NO payload — the daemon returns every
  * conversation; the bare `requestRecentWorkspaces` (#380), which likewise carries NO payload — the
@@ -337,14 +340,57 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 
 function isSendMessagePayload(value: unknown): value is SendMessagePayload {
   if (typeof value !== 'object' || value === null) return false
-  return (
-    'conversation_id' in value &&
-    typeof value.conversation_id === 'string' &&
-    'message_id' in value &&
-    typeof value.message_id === 'string' &&
-    'text' in value &&
-    typeof value.text === 'string'
-  )
+  if (
+    !(
+      'conversation_id' in value &&
+      typeof value.conversation_id === 'string' &&
+      'message_id' in value &&
+      typeof value.message_id === 'string' &&
+      'text' in value &&
+      typeof value.text === 'string'
+    )
+  ) {
+    return false
+  }
+  return 'attachment_ids' in value ? isAttachmentIdList(value.attachment_ids) : true
+}
+
+/**
+ * The `attachment_ids` arm of the guard above (#1055) — this file's SECOND array field, after
+ * `answers`, and it inherits that field's two lessons rather than re-deriving them.
+ *
+ * A PRESENT KEY HOLDING `undefined` IS LEGAL, and it is the ordinary case rather than a curiosity:
+ * `submitMessage` assigns the field unconditionally (the `createdAt` idiom, so `JSON.stringify` drops
+ * it and the wire keeps its three-key form), and structured clone PRESERVES an own property whose
+ * value is `undefined`. A bare `'attachment_ids' in value` rejection would refuse every ordinary send.
+ *
+ * IT ITERATES WITH `for…of`, NEVER `Array.prototype.every` — isAnswerQuestionsPayload's rule, and
+ * load-bearing for the same reason: `every` SKIPS holes, so a sparse array would pass it while
+ * `JSON.stringify` emits `null` for the hole, i.e. a `null` inside a declared `string[]`. Sparse arrays
+ * survive structured clone, so that shape is reachable over IPC rather than theoretical. What it buys
+ * is that a type-lie never reaches `buildSendMessage`'s bare serialization, where the daemon would
+ * refuse the whole frame as `protocol.malformed` and take the operator's message with it.
+ *
+ * NON-EMPTY, BUT NOT CANONICALLY SHAPED, and that split is deliberate. The empty string is refused for
+ * isAttachmentRetrievalRequest's recorded reason — joined onto a directory it names that directory, so
+ * the far side fails silently rather than loudly, and this side declines to ORIGINATE the value. The
+ * lowercase-UUIDv4 check is NOT made here: upstream mandates it on the receiver and enforces it since
+ * pyrycode#2038 (one canonical-shape check answering both the path-component and the prompt-content
+ * hazard), and `RequestAttachmentPayload` already ruled this repo's side of the identical value class
+ * *documented, not validated*. A second, divergent posture on one feature's ids would buy nothing: the
+ * only producer is the window echoing back ids this process minted with `randomUUID`.
+ *
+ * It bounds no COUNT. Upstream's 32-id ceiling is a published contract number rather than a DoS
+ * mitigation, the envelope cap already bounds the frame, and #1055 rules the bound out of scope.
+ * Pure; never throws.
+ */
+function isAttachmentIdList(value: unknown): value is string[] | undefined {
+  if (value === undefined) return true
+  if (!Array.isArray(value)) return false
+  for (const id of value) {
+    if (typeof id !== 'string' || id.length === 0) return false
+  }
+  return true
 }
 
 /** The untrusted renderer→main boundary guard for the answerModal payload (#236) — the modal

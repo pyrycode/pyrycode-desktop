@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
+// #1055: the take's shape is declared with its CONSUMER (composerSend's `takeAttachments` dep), so the
+// pure send helper never names this React module. See PendingAttachmentTake's own docblock.
+import type { PendingAttachmentTake } from './composerSend'
 
 // #863: the attach affordance — the renderer half of the flow #862 shipped headless. Two pure views and
 // one thin container hook, the LogDataSection split: the views are props-in/markup-out and server-render
@@ -358,16 +361,27 @@ export function reducePendingAttachments(
 }
 
 /**
- * Hand the pending set to a send and empty it, in ONE act (#1039) — the second half of the fourth
- * criterion, and the reason it is a function over a holder rather than three lines inside the hook: the
- * hook is unreachable by every tier this repo has, and "a second message sent with no further uploads
- * records none" is a rule, not a detail. Generic over the holder in the way `fileToAttach` is generic
- * over the element — a `MutableRefObject` satisfies `{ current }` structurally, so this tier needs no
- * React to walk it.
+ * Hand the pending set to a send and empty it, in ONE act (#1039) — the second half of that ticket's
+ * fourth criterion, and the reason it is a function over a holder rather than three lines inside the
+ * hook: the hook is unreachable by every tier this repo has, and "a second message sent with no further
+ * uploads records none" is a rule, not a detail. Generic over the holder in the way `fileToAttach` is
+ * generic over the element — a `MutableRefObject` satisfies `{ current }` structurally, so this tier
+ * needs no React to walk it.
  *
  * TAKE AND CLEAR CANNOT BE SPLIT. A reader that did not empty, or an emptier a caller had to remember to
  * call, would each leave a window in which one send's attachments can be recorded twice. Emptying to the
  * shared constant rather than to a fresh `[]` keeps a second take reference-identical to the first.
+ *
+ * ⭐ #1055 GIVES THE ACT AN UNDO, WITHOUT SPLITTING IT. The ids now ride the outbound frame, so the take
+ * has to happen ABOVE the guarded send (the payload literal needs them) — and a send whose bridge throws
+ * named nothing on the wire, so the files must still be attached for the retry. `rollback` is that, and
+ * it is handed back WITH the set precisely so the paragraph above still holds: there is no reader that
+ * does not empty and no emptier to remember, only one act that can be undone. The closure captures this
+ * holder, so a take cannot be restored into a different one.
+ *
+ * RESTORING IS SOUND BECAUSE THE CALLER IS SYNCHRONOUS. `submitMessage` takes, sends and rolls back with
+ * no `await` between them, and the listener that appends to the set runs as a separate task, so nothing
+ * can arrive in the gap for the restore to clobber.
  *
  * WHO may call it is the criterion's other half and is NOT decided here: `submitMessage` reads its
  * `takeAttachments` dep once, below both of its `false` returns, so a blank Enter or a submit with no
@@ -375,10 +389,15 @@ export function reducePendingAttachments(
  */
 export function drainPendingAttachments(holder: {
   current: readonly MessageAttachment[]
-}): readonly MessageAttachment[] {
-  const taken = holder.current
+}): PendingAttachmentTake {
+  const attachments = holder.current
   holder.current = NO_PENDING_ATTACHMENTS
-  return taken
+  return {
+    attachments,
+    rollback: () => {
+      holder.current = attachments
+    }
+  }
 }
 
 /**
@@ -427,7 +446,7 @@ export function useAttachmentUpload(): {
   requestAttach: () => void
   dropFile: (file: File) => void
   pasteImage: () => void
-  takePendingAttachments: () => readonly MessageAttachment[]
+  takePendingAttachments: () => PendingAttachmentTake
 } {
   const [outcome, setOutcome] = useState<AttachmentUploadEvent | null>(null)
   // #1039: the files whose uploads have completed since the last send. See the ref-not-state paragraph
@@ -515,11 +534,11 @@ export function useAttachmentUpload(): {
    * moment the operator attached a second — which is exactly the "one or more" the first criterion asks
    * for. The two clears answer different questions and are kept apart on purpose.
    *
-   * Returns the shared empty constant when nothing is pending, so a send with no attachments hands back
-   * the same reference every time and `submitMessage` normalises it to an absent field.
+   * Its `attachments` is the shared empty constant when nothing is pending, so a send with no
+   * attachments hands back the same reference every time and `submitMessage` normalises it to an absent
+   * field — on the echo since #1039, and on the outbound frame since #1055.
    */
-  const takePendingAttachments = (): readonly MessageAttachment[] =>
-    drainPendingAttachments(pendingRef)
+  const takePendingAttachments = (): PendingAttachmentTake => drainPendingAttachments(pendingRef)
 
   return { outcome, requestAttach, dropFile, pasteImage, takePendingAttachments }
 }

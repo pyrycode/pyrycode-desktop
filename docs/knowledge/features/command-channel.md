@@ -103,6 +103,22 @@ polices. See [Run configuration store § Conversation-keyed since
 2026-08-20](run-config-store.md#conversation-keyed-since-2026-08-20-945946) for the daemon-side
 degradation contract this closes.
 
+[#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) widened the existing `sendMessage`
+member's payload rather than adding a new one: `SendMessagePayload` gained an optional
+`attachment_ids?: string[]`, naming the uploads the message references so the daemon can point claude at
+them (upstream `pyrycode#2036`/`#2038`). `isSendMessagePayload`'s new arm, `isAttachmentIdList`, is the
+file's **third** array-field guard after `answers` (#920) and inherits both of that guard's lessons
+rather than re-deriving them: it iterates with `for…of`, never `Array.prototype.every` (`every` skips
+holes, and a sparse array survives structured clone as a `null`-bearing `string[]`), and it must accept a
+**present key holding `undefined`** — structured clone preserves that own property, and the sender
+(`composerSend.ts`) assigns the field unconditionally so `JSON.stringify` drops it on the frames that
+carry none. Unlike `answerQuestions`'s entries, elements here are checked for non-emptiness only, not full
+shape: the canonical lowercase-UUIDv4 check is a deliberate omission, left to the daemon (the
+`RequestAttachmentPayload` precedent — *documented, not validated* on this side), since the only producer
+is the window echoing back ids this process itself minted with `randomUUID()`. See [Composer send §
+10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+for the sender side.
+
 **Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
 guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
 not prove the *type* forbids one. `src/shared/**/*` is inside `tsconfig.node.json`'s include, so
@@ -254,7 +270,7 @@ sendCommand: (command: RendererCommand): void => {
 
 - **The trust boundary is explicit and single:** `onCommand`, gated by `isRendererCommand`. This is the one place the command half must **not** copy the event half — the renderer is untrusted, so the boundary gets a real runtime guard. The guard is what makes the handler's `RendererCommand` type honest.
 - **The guard-then-rebuild pattern (validate at `isRendererCommand`, rebuild a fresh literal main-side before it touches a builder) depends on a property that is invisible in the code, not in either half by itself: structured clone.** A getter on a payload field that returned a benign value to the guard and a hostile one to the sender would defeat both halves of the net — but by the time `isRendererCommand` runs, the value has already crossed `ipcRenderer.send`/`ipcMain.on`, and structured clone materialises every accessor into a plain data property before it does. No accessor can survive that crossing to observe *which* read it is answering. Noted at [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920), the first command whose fresh-literal rebuild had to go two levels deep (an array of objects, not a flat row) to hold; worth restating wherever a payload-bearing command's security review leans on the pattern, since nothing in this file demonstrates the mechanism.
-- **AC5 (no secret crosses the bridge) is enforced by the type, not by convention.** `RendererCommand` references only `SendMessagePayload` (`conversation_id`, `message_id`, `text`) — no token/key/byte field. `HelloClientPayload` (`token`), `QrPayload` (`token`, `server_static_pubkey`), and `InnerFrameV2` (base64 `data`) are **not** members and must never become members — a developer cannot serialize a secret here because no member has a field to hold one.
+- **AC5 (no secret crosses the bridge) is enforced by the type, not by convention.** `RendererCommand` references only `SendMessagePayload` (`conversation_id`, `message_id`, `text`, and since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) the optional `attachment_ids`) — no token/key/byte field. An `attachment_id` is explicitly not a capability on this wire (routing metadata, not a secret — see the growth-log entry below), so its addition does not weaken this claim. `HelloClientPayload` (`token`), `QrPayload` (`token`, `server_static_pubkey`), and `InnerFrameV2` (base64 `data`) are **not** members and must never become members — a developer cannot serialize a secret here because no member has a field to hold one.
 - **Narrow renderer capability.** The added surface is `sendCommand(RendererCommand)` on one channel; `COMMAND_CHANNEL` is hardcoded, `ipcRenderer` is never exposed, and the renderer cannot reach Node, the socket, or keys (none live there). Worst case for a compromised renderer: it sends well-formed messages **as the already-authenticated user** — inherent to being the client, bounded by the daemon's session auth (Noise + token), not a new hole #17 opens.
 - **No logging of payloads.** The receiver logs at most a fixed string on a dropped command; the preload sender logs nothing. `SendMessagePayload.text` crossing to main is the product (the message to send), not a leak — but must not be logged.
 - **`sandbox: false` in `src/main/index.ts:17`** is a pre-existing scaffold value, out of scope for #17 (which does not touch that file). With `contextIsolation: true` + `nodeIntegration: false` and a shape-validated inbound channel, it is not exploitable as designed via this setting. Route the flip to a dedicated hardening ticket.

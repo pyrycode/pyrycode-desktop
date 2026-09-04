@@ -20,6 +20,30 @@ describe('buildSendMessage', () => {
     expect(envelope.payload).toEqual(PAYLOAD)
   })
 
+  // #1055 — the wire form of a message's attachments, asserted at the layer that actually decides it.
+  // The builder serializes the payload verbatim, so `attachment_ids` is on the wire exactly as the
+  // composer assigned it, in the order the pending set held.
+  it('#1055: carries attachment_ids when the message names some', () => {
+    const withFiles: SendMessagePayload = { ...PAYLOAD, attachment_ids: ['u-1', 'u-2'] }
+
+    const envelope = decodeEnvelope(buildSendMessage({ id: 3, ts: FIXED_TS, payload: withFiles }))
+    expect(envelope.payload).toEqual(withFiles)
+  })
+
+  // ⭐ AC1's absent-key regression case, and the reason the composer needs no conditional key: the
+  // field is assigned `undefined` unconditionally (the `createdAt` idiom) and JSON.stringify drops it,
+  // so the frame keeps its three-key form — never `null`, never `[]`.
+  it('#1055: emits NO attachment_ids key for an undefined value', () => {
+    const noFiles: SendMessagePayload = { ...PAYLOAD, attachment_ids: undefined }
+
+    const envelope = decodeEnvelope(buildSendMessage({ id: 4, ts: FIXED_TS, payload: noFiles }))
+    expect(Object.keys(envelope.payload as object).sort()).toEqual([
+      'conversation_id',
+      'message_id',
+      'text'
+    ])
+  })
+
   it('throws WireEncodeError when the envelope exceeds the plaintext cap', () => {
     const overCap: SendMessagePayload = {
       conversation_id: 'c1',

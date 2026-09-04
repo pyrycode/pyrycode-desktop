@@ -430,7 +430,7 @@ describe('drainPendingAttachments', () => {
 
   it('hands back the pending set and empties the holder in one act', () => {
     const holder = { current: [REPORT] as readonly MessageAttachment[] }
-    expect(drainPendingAttachments(holder)).toEqual([REPORT])
+    expect(drainPendingAttachments(holder).attachments).toEqual([REPORT])
     expect(holder.current).toEqual([])
   })
 
@@ -439,7 +439,26 @@ describe('drainPendingAttachments', () => {
   it('answers empty on a second take with nothing recorded in between', () => {
     const holder = { current: [REPORT] as readonly MessageAttachment[] }
     drainPendingAttachments(holder)
-    expect(drainPendingAttachments(holder)).toBe(NO_PENDING_ATTACHMENTS)
+    expect(drainPendingAttachments(holder).attachments).toBe(NO_PENDING_ATTACHMENTS)
+  })
+
+  // #1055: the undo the take now carries. A send whose bridge throws named nothing on the wire, so the
+  // files must still be attached for the retry — and putting them back is only sound because the whole
+  // take/send/rollback sequence is synchronous, so no arriving upload can be clobbered by the restore.
+  it('#1055: rollback restores exactly the taken set', () => {
+    const pending: readonly MessageAttachment[] = [REPORT]
+    const holder = { current: pending }
+    const take = drainPendingAttachments(holder)
+    expect(holder.current).toBe(NO_PENDING_ATTACHMENTS)
+    take.rollback()
+    expect(holder.current).toBe(pending)
+  })
+
+  // A rolled-back take is a take that never happened: the next send sees the same set again.
+  it('#1055: a take after a rollback answers the same set', () => {
+    const holder = { current: [REPORT] as readonly MessageAttachment[] }
+    drainPendingAttachments(holder).rollback()
+    expect(drainPendingAttachments(holder).attachments).toEqual([REPORT])
   })
 
   // Emptied to the SHARED constant, not to a fresh `[]`, so repeated takes stay reference-identical and
@@ -453,7 +472,7 @@ describe('drainPendingAttachments', () => {
   it('does not mutate the set it handed back', () => {
     const pending: readonly MessageAttachment[] = [REPORT]
     const holder = { current: pending }
-    const taken = drainPendingAttachments(holder)
+    const taken = drainPendingAttachments(holder).attachments
     expect(taken).toBe(pending)
     expect(pending).toEqual([REPORT])
   })

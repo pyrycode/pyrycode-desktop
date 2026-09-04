@@ -31,7 +31,7 @@ export interface ComposerSendDeps {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void   // #756
   newMessageId: () => string
   now?: () => number   // #1013 — optional, no Date.now fallback
-  takeAttachments?: () => readonly MessageAttachment[]   // #1039 — optional, destructive read
+  takeAttachments?: () => PendingAttachmentTake   // #1039, reworked #1055 — optional, destructive read + undo
 }
 
 export function submitMessage(text: string, conversationId: string | null, deps: ComposerSendDeps): boolean
@@ -270,47 +270,85 @@ reach no markup — see [Conversation shell — composer § Actionable-error
 button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) for
 the structural argument and the sentinel test that pins it.
 
-### 10. Attachments taken at send — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039))
+### 10. Attachments named on the outbound frame — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), reworked by [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055))
 
-`ComposerSendDeps` gained a fifth optional field, `takeAttachments?: () => readonly MessageAttachment[]`
-— the files this message is being sent with, i.e. the uploads that completed since the last send. It
-follows `now`'s (§1) trade for the same two reasons: this deps object has thirteen call sites in
+`ComposerSendDeps` carries a fifth optional field, `takeAttachments?: () => PendingAttachmentTake` — the
+files this message is being sent with, i.e. the uploads that completed since the last send. It follows
+`now`'s (§1) trade for the same two reasons: this deps object has thirteen call sites in
 `composerSend.test.ts` (above the ten-call-site boundary this pipeline splits at), so requiring the field
 would cost thirteen mechanical edits to buy a compile error; and an unwired take means no attachments
 rather than a fallback to some other source. It differs from `now` in the one way that decides where it
 sits in `submitMessage`: **the take is destructive.** [Composer attach § Pending
 attachments](composer-attach.md#pending-attachments-1039)'s implementation, `drainPendingAttachments`,
-returns the pending set *and clears it* in one act, so calling `deps.takeAttachments?.()` is what "this
-send consumed those attachments" means — there is no second call site and no re-read.
-
-That destructiveness is why the read sits exactly where the clock read sits — **once, past both of
-`submitMessage`'s early `false` returns**, alongside `deps.now?.()` when the `userText` echo is built:
+removes the pending set from its holder *and* hands back the means to put it back:
 
 ```ts
-const taken = deps.takeAttachments?.()
+export interface PendingAttachmentTake {
+  attachments: readonly MessageAttachment[]
+  rollback: () => void
+}
+```
+
+**#1055 moved the read above the guarded send, and that is what forced the shape above.** The taken ids
+now ride the outbound `SendMessagePayload.attachment_ids`, so they must be known *before* that payload
+literal is built — the read can no longer sit below the send the way `now`'s precedent originally did.
+But a send whose `deps.sendCommand` throws named nothing on the wire, so the files it took must still be
+attached for the retry (the third acceptance criterion); `rollback` is what makes that possible without
+splitting the take into a peek/consume pair, which would reopen the exact double-record window
+`drainPendingAttachments`'s "take and clear cannot be split" rule closes. Handing the undo back *with*
+the take, rather than as a second optional dep, means a caller cannot hold one without the other and
+cannot restore into the wrong holder — the closure captures its own holder.
+
+`submitMessage`'s shape, current as of #1055:
+
+```ts
+const message_id = deps.newMessageId()
+const take = deps.takeAttachments?.()
+const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
+
+const payload: SendMessagePayload = {
+  conversation_id: conversationId,
+  message_id,
+  text: trimmed,
+  attachment_ids: named?.map((attachment) => attachment.attachmentId)
+}
+
+let sent = true
+try {
+  deps.sendCommand(sendMessageCommand(payload))
+} catch (error) {
+  console.error('composer send failed', error)
+  sent = false
+  take?.rollback()
+}
+
 const echo: ThreadEvent = {
   type: 'userText',
   text: trimmed,
   createdAt: deps.now?.(),
-  attachments: taken !== undefined && taken.length > 0 ? taken : undefined
+  attachments: sent ? named : undefined
 }
 ```
 
-A whitespace-only submit and a submit with no active conversation each return `false` before this line, so
-neither takes anything — the operator's attached file survives untouched for the next send (the fourth
-acceptance criterion's "cleared by a send that actually happened, and only by one"). A send-bridge
-failure in step 4 does **not** skip this read: the guarded `sendCommand` call sits above it, so a bridge
-throw still lands here and the echo still posts, still carrying whatever was pending — "optimistic" means
-the echo and its attachments show regardless of the wire outcome, `now`'s own precedent. Read exactly
-once, on the single object both `dispatch` and `dispatchFor` share, so the flat store and the keyed holder
-can never record two different attachment sets for one message — the `now`/`createdAt` discipline restated
-for a list.
+**What survives from the pre-#1055 ordering, verbatim: the take is still read exactly once, and still
+below both of `submitMessage`'s early `false` returns.** A whitespace-only submit and a submit with no
+active conversation each return `false` before `deps.takeAttachments?.()` runs, so neither takes
+anything — the operator's attached file survives untouched for the next send. **What no longer survives:
+"the echo and its attachments show regardless of the wire outcome."** That was true before #1055 because
+attachments were display-only; now that their ids are the very thing the frame names, a throw means the
+frame named nothing, so the echo must record nothing too — recording them while also rolling back would
+duplicate them on the retry. The echo itself still posts on a throw (`sent` only gates `attachments`, not
+the event), and `now`'s "optimistic means show-immediately" still holds for the text.
 
-**Empty normalises to absent here, and only here.** `taken !== undefined && taken.length > 0 ? taken :
-undefined` is the one place a `[]` pending set becomes `undefined` on the wire into `reduceTimeline` — an
-unwired `takeAttachments` and a wired-but-empty one both reach the store the same way, so [Thread
-timeline](thread-timeline.md#types)'s "absent means none" contract has no second meaning to explain and
-`reduceTimeline` never has to decide what an empty list means.
+**One `named` value feeds both the frame and the echo — that is what makes the second acceptance
+criterion structural rather than conventional.** It is normalised by one rule (empty or unwired ⇒
+`undefined`, the same `taken !== undefined && taken.length > 0` test as before #1055) and gated by one
+boolean (`sent`), so the frame and the echo cannot disagree on any path, including the throwing one.
+`SendMessagePayload.attachment_ids` is assigned unconditionally from `named?.map(...)` — the `createdAt`
+idiom this module already runs — so `JSON.stringify` drops the key entirely when `named` is `undefined`;
+a message sent with nothing pending carries **no `attachment_ids` key at all**, never `null` or `[]`. See
+[`SendMessagePayload`](../wire/types.ts) and [command channel](command-channel.md) for the wire type and
+the `isAttachmentIdList` boundary guard that widened alongside it.
 
 Wired at the one production call site, `ConversationScreen.tsx`'s `Composer.sendText`, beside `now:
 Date.now`: `takeAttachments: attach.takePendingAttachments`. `sendText` has two callers — the composer's
@@ -318,7 +356,14 @@ own submit and `ComposerActionsMenu`'s picked slash command — and both reach t
 a picked command is a message that was sent, so it records and consumes the pending set exactly as a typed
 one does. Like `now`, the wiring is **not compile-enforced** (the field is optional); `composerSend.test.ts`
 pins it with its own spec — `takeAttachments` is asserted uncalled for a whitespace-only or null-conversation
-submit, called exactly once on a real send, and its return reaches both write paths as the same reference.
+submit, called exactly once on a real send, its ids named on the frame in the pending set's order, and a
+throwing `sendCommand` both calling `rollback` and leaving the echo without attachments.
+
+**No canonical-shape check on the ids here, by deliberate omission.** Upstream (`pyrycode#2038`) mandates
+and enforces the lowercase-UUIDv4 check on the *receiver*; this client's own posture for the identical
+value class — `RequestAttachmentPayload` — is *documented, not validated*, and the ids this composer
+names were minted by this process's own `randomUUID()` in the first place, never read off the daemon. See
+the architecture spec's Security review for the full argument.
 
 ## Data flow
 
@@ -340,7 +385,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 - **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or the re-pair button](conversation-shell-composer.md#composer-error-chip-797) (#797/#963).
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
-- **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
+- **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone. Since #1055, one thing **is** rolled back on this path: a `takeAttachments` take is undone via its own `rollback()`, and the echo's `attachments` field — unlike its `text` — is withheld, because a frame that never reached the bridge named no ids (§10).
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
 - **DOM interaction is untested.** Only the pure `submitMessage` and `shouldSubmitOnKeyDown` are unit-tested (spies/plain values + a stub id). `onChange`, clear-on-success, and `handleKeyDown`'s own three-statement wiring have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries, and the one carved out by [#512](../codebase/512.md) is that the IME-vs-plain-Enter *decision* no longer has to live in that untested surface.
 - **`auto-grow` on the textarea is unbuilt** (cosmetic, no AC). *(The "single active conversation, `MILESTONE_CONVERSATION_ID`" limitation this bullet used to name was closed by #448, which added the `conversationId` parameter documented above; the rest of this page's narrative sections still describe the pre-#448/#179 shape and are due a fuller pass — flagged here rather than silently left contradicting the current signature.)*
@@ -364,6 +409,12 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   attachments](composer-attach.md#pending-attachments-1039)'s `drainPendingAttachments`, bound to
   `takePendingAttachments` on `useAttachmentUpload`. Consumer: [Thread
   timeline](thread-timeline.md#types)'s `userText.attachments` field.
+- [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) — reworked #1039's take into a
+  `PendingAttachmentTake` (set + `rollback`), moved the read above the guarded send, and named the taken
+  ids on the outbound frame as `SendMessagePayload.attachment_ids` (§10) — the leg that makes an attached
+  file actually reach claude, closed on the daemon side since `pyrycode#2036`/`pyrycode#2038`. Boundary
+  guard: [command channel](command-channel.md)'s `isAttachmentIdList`. Live proof:
+  [real-claude liveness e2e](real-claude-liveness-e2e.md)'s `e2e/real-claude-attachment.spec.ts`.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the **main/transport half** this drives: the `sendMessage` command becomes an encrypted `send_message` envelope on the live Noise relay session. Together #65 + #66 are the two halves of sending a message.
 - [Session store](session-store.md) / [#2](../codebase/2.md) — hosts the `messageSent` action and the `appendUnique` dedupe (added #27) this relies on; #66 closes its "No optimistic send" limitation.
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the screen whose inert `Composer` this wires.

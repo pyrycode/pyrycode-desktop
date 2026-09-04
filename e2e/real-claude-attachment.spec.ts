@@ -28,6 +28,27 @@ import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/convers
 // `skipPermissions` stays at its `true` default (`--dangerously-skip-permissions`), so claude's read of
 // the attached file does not block on a permission modal — this spec proves delivery, not the modal.
 //
+// ⭐ WHY A CURSOR-STAMP TURN RUNS BEFORE THE ATTACH, AND WHY IT IS NOT OPTIONAL. An `attachment_chunk`
+// carries no conversation id BY DESIGN: the bytes land in whatever conversation the authenticated session
+// is already on, which the daemon reads from its follow-active cursor. That cursor is stamped in the relay
+// handler for `send_message`, on the successful-route path — creating a conversation does NOT stamp it. So
+// on a conversation that has never sent a message the cursor is empty, the completing chunk resolves no
+// destination, and the daemon answers `attachment.storage_failed`, which this composer renders as "The
+// host could not store the file." Measured, not deduced: the first live gate run of this spec attached to
+// a freshly-created conversation and died on exactly that sentence, 123 polls deep. Upstream's daemon-side
+// twin rides a prior stamp turn for the identical reason — see pyrycode's
+// docs/specs/architecture/2039-live-attachment-read.md § Sequence step 2, which names this failure as the
+// precondition it exists to satisfy.
+//
+// The stamp turn is drained to QUIESCE (its streaming cursor gone), not merely to a first token, so no
+// turn is in flight across the upload and turn 2's frames cannot interleave with turn 1's. Its reply is
+// then excluded from the assertion by row index — see `assistantText`'s `skip`.
+//
+// That the OPERATOR hits the same wall — attach to a brand-new discussion and the composer blames the host
+// for a flow that cannot succeed — is a real gap, filed as **#1076**. It is deliberately not worked around
+// here: this spec proves delivery, and papering the precondition over inside it would hide the very thing
+// the live run found.
+//
 // Current gate state (which real-claude specs pass/fail) lives in the live e2e runbook —
 // docs/knowledge/features/live-e2e-runbook.md § Current real-claude gate state. This header stays
 // state-free so it never drifts. THE TIER GREW BY ONE: the untracked `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`
@@ -65,14 +86,22 @@ const EXPECTED_COLOUR = /\bred\b/i
 const ASSISTANT_ROW = '[data-thread-role="assistant"]'
 const CURSOR_CHAR = '▎'
 const META_SELECTOR = '.bubble__meta'
+// turn_end appends a turnBoundary that drops the cursor, so its ABSENCE is the per-turn quiesce signal —
+// real-claude.spec.ts's idiom, and the gate between the stamp turn and the upload.
+const CURSOR_SELECTOR = '.bubble__cursor'
 
 // --- Timeouts ----------------------------------------------------------------
 const HANDSHAKE_TIMEOUT_MS = 45_000
 // Attach → picker → chunked upload → the daemon's attachment_stored → the composer's terminal line.
 const UPLOAD_TIMEOUT_MS = 60_000
-// One turn = cold claude (spawn + model load + a tool call that reads the file + the reply).
+// One turn = cold claude (spawn + model load + a tool call that reads the file + the reply). Both turns
+// get the same budget: turn 1 pays the cold spawn, turn 2 pays a `Read` of the attachment.
 const TURN_TIMEOUT_MS = 180_000
-const SPEC_TIMEOUT_MS = 360_000
+// Handshake + stamp turn + upload + attachment turn + headroom, and it must be set here because the
+// config's per-test `timeout` is 300_000 — under the sum below. Generous rather than tight on purpose:
+// the happy path is fast (the whole 13-spec tier ran in ~130s), so this bound is only ever paid by a
+// hang, where a diagnosis is worth more than an early red.
+const SPEC_TIMEOUT_MS = 600_000
 
 /**
  * The assistant rows' text, cursor and meta row stripped, joined. real-claude.spec.ts's
@@ -80,13 +109,20 @@ const SPEC_TIMEOUT_MS = 360_000
  * SAID, not merely that it said something. The strip is the same and for the same reason — the streaming
  * cursor and #1014's timestamp both live INSIDE the row — and it runs on a detached clone, so the live
  * DOM is untouched.
+ *
+ * `skip` drops that many leading assistant rows, which is how the stamp turn's reply is kept out of the
+ * assertion. Without it the poll reads a transcript the attachment played no part in, and a stamp reply
+ * that happened to contain the expected word would green this spec with no attachment delivered at all —
+ * the precise vacuity the header says the assertion exists to refuse. Rows only ever append here, so an
+ * index recorded once the stamp turn has quiesced stays the boundary between the two turns.
  */
-function assistantText(page: Page): Promise<string> {
+function assistantText(page: Page, skip = 0): Promise<string> {
   return page
     .locator(ASSISTANT_ROW)
     .evaluateAll(
-      (els, { cursor, meta }) =>
+      (els, { cursor, meta, skip }) =>
         els
+          .slice(skip)
           .map((el) => {
             const content = document.createElement('div')
             content.append(el.cloneNode(true))
@@ -94,7 +130,7 @@ function assistantText(page: Page): Promise<string> {
             return (content.textContent ?? '').split(cursor).join('')
           })
           .join('\n'),
-      { cursor: CURSOR_CHAR, meta: META_SELECTOR }
+      { cursor: CURSOR_CHAR, meta: META_SELECTOR, skip }
     )
 }
 
@@ -141,6 +177,25 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
       await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
+      // --- The cursor-stamp turn (see the header): one ordinary message, so the daemon's follow-active
+      // cursor names this conversation by the time the upload's completing chunk asks it to. Without it
+      // the upload below is refused with `attachment.storage_failed` and never reaches the send under
+      // test. It asks for nothing about images and nothing about colour, so its reply cannot supply the
+      // word the assertion looks for — and it is excluded by row index regardless. ---
+      await composer.fill('Reply with a single short word.')
+      await sendButton.click()
+      await expect
+        .poll(async () => (await assistantText(page)).trim(), {
+          timeout: TURN_TIMEOUT_MS,
+          message:
+            'the cursor-stamp turn never streamed a reply, so the daemon never routed a message and the upload below would be refused with attachment.storage_failed'
+        })
+        .not.toBe('')
+      // Quiesce before the upload, so no turn is in flight across it.
+      await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+      // The boundary between the two turns, read once the thread is settled.
+      const priorAssistantRows = await page.locator(ASSISTANT_ROW).count()
+
       // --- The picker answers with the real file. `defineProperty` rather than assignment: it succeeds
       // against a data property and an accessor alike, and the app reads `dialog.showOpenDialog` at call
       // time, so the patched property is what it reaches. ---
@@ -173,7 +228,7 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       await sendButton.click()
 
       await expect
-        .poll(() => assistantText(page), {
+        .poll(() => assistantText(page, priorAssistantRows), {
           timeout: TURN_TIMEOUT_MS,
           message:
             'claude never named the attached image colour: either no attachment_ids rode the send_message frame, or the daemon did not name the stored path in the prompt'

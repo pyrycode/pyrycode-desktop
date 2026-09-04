@@ -355,3 +355,50 @@ because 48 of 49 default-tier specs and all 13 real-tier specs route through thi
 gates this ticket regardless of which spec it lands on**, not merely this one. No workaround was attempted
 here: the fix belongs to #1067, whose own analysis places it in `createWindow`'s `show()` — production
 code, and squarely out of this ticket's scope.
+
+### 2026-09-04 — rework leg 2 (real-claude gate FAIL: the upload was refused, not the send)
+
+The production design is unchanged and untouched. One correction, to the e2e drive only, plus one bug
+filed.
+
+**#1067 landed, so the spec finally ran its own body — and failed one step earlier than the assertion it
+exists for.** Leg 1's failure never reached the picker; this one did. `origin/main` was merged into the
+branch, the gate reported `executed: 13, passed: 12, failed: 1`, and the single failure was this spec
+timing out on the composer's outcome line: expected *"File attached."*, received **"The host could not
+store the file."** — 123 polls of a stable value, so a settled refusal rather than a slow upload. That
+sentence is `ATTACHMENT_UPLOAD_FAILURE_COPY`'s `attachment-storage-failed`, i.e. the daemon answered
+`attachment.storage_failed`.
+
+**The cause is a documented precondition this plan did not know about.** An `attachment_chunk` carries no
+conversation id by design: the daemon files a completing upload under its **follow-active cursor**, which
+its `send_message` relay handler stamps on the successful-route path. Creating a conversation does not
+stamp it. This drive created a conversation through the UI and attached immediately, so the cursor was
+empty, the completing chunk resolved no destination, and upstream's `Intake` raised `ErrNoConversation` —
+which the dispatch arm maps to exactly that code. Upstream's own daemon-side twin rides a prior
+cursor-stamp turn for the identical reason and names this failure as the precondition it satisfies
+(pyrycode `docs/specs/architecture/2039-live-attachment-read.md` § Sequence step 2); its package overview
+records the first live run, where claude opened an absolute path outside its cwd with a single `Read` and
+no modal.
+
+**The fix:** the spec now sends one ordinary message and drains it to quiesce (its streaming cursor gone,
+`real-claude.spec.ts`'s idiom) before attaching. Two consequences the design section did not have to
+carry, both local to the spec:
+
+- `assistantText` gained a `skip`, and the assertion reads only the rows after the stamp turn. Without it
+  the poll reads a transcript the attachment played no part in, and a stamp reply that happened to contain
+  the expected word would green the spec with nothing delivered — the same vacuity class as leg 1's
+  unanchored `/red/i`, one layer out. The prompt asks for a single short word and mentions no colour, so
+  both guards point the same way.
+- `SPEC_TIMEOUT_MS` 360s → 600s: the drive is now handshake + two turns + the upload, and the config's
+  per-test 300s is below that sum.
+
+**The operator hits this wall too, and that is a separate ticket.** Attaching to a brand-new discussion —
+a screenshot on the first message of a new chat, which is an ordinary flow — fails with a sentence
+blaming the host for a precondition the client could see. Filed as **#1076** (Inbox) with the three
+candidate remedies; not fixed here, per § Scope Discipline, since it needs production changes outside this
+ticket and the remedy is a UX decision with no design behind it. No workaround was put in the spec either:
+papering the precondition over inside the drive would hide the thing the live run found.
+
+**Still unproven by me: AC4.** The real-claude tier is the dispatcher's to run (§ B2), and its credential
+gate wants a token this agent cannot reach. What this leg can claim is that the refusal has a named cause,
+the fix addresses that cause specifically, and everything machine-checkable is green.

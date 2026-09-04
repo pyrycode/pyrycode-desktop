@@ -10,9 +10,10 @@ This is the last unwired consumer of [attachment retrieval](attachment-retrieval
 [attachment filename sanitiser](attachment-filename-sanitiser.md) (#819) both named this ticket as
 their first real caller, and both gates are consumed here verbatim, with no second copy and no second
 escape check. It does not fetch — #996 owns that, and a source file that is not there is a failure
-(`source-unavailable`), never a trigger to go and get it. The file row that calls this channel is
-[#815](https://github.com/pyrycode/pyrycode-desktop/issues/815)/[#816](https://github.com/pyrycode/pyrycode-desktop/issues/816),
-not yet started.
+(`source-unavailable`), never a trigger to go and get it. The file row this channel will be called from
+has since shipped, drawn only — [Conversation shell — message bubble § The attachment file
+row](conversation-shell-message-bubble.md#the-attachment-file-row-815) (#815) — but wiring its click to
+this channel is still [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816), not yet started.
 
 ## Where the saved name comes from
 
@@ -286,8 +287,9 @@ slice has no renderer surface, so no Playwright coverage is owed.
   the sibling write that established the flat, extension-less on-disk shape this module reads.
 - `docs/specs/architecture/814-save-attachment-to-downloads.md` — the full architecture spec,
   including the security review.
-- [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) /
-  [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) — the file row and its click
-  behaviour, the still-unwired consumers of this channel.
+- [Conversation shell — message bubble § The attachment file
+  row](conversation-shell-message-bubble.md#the-attachment-file-row-815) — #815, shipped (drawn, not
+  wired). [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) gives it the click that calls
+  this channel; still not started.
 - [Attachment open](attachment-open.md) — #867, landed: open in the OS image viewer, the feature that
   closes the extension-spoofing / quarantine question this one declines.

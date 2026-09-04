@@ -159,7 +159,9 @@ would silently mint `[]` and convert "this message carried none" into "this mess
 Like `createdAt`, the field rides the event rather than a `reduceTimeline` parameter, for the same
 call-sites-are-production reason. Ships live, not dormant: #1039 also wired the sole producer in the same
 commit, so `selectItems` can carry a filled `attachments` list from the day the field exists — #815 (the
-file row) and #868 (the image thumbnail) are its still-open renderers. See [Composer attach § Pending
+non-image file row) has since shipped its renderer, in [Conversation shell — message bubble § The
+attachment file row](conversation-shell-message-bubble.md#the-attachment-file-row-815); #868 (the image
+thumbnail) is still open. See [Composer attach § Pending
 attachments](composer-attach.md#pending-attachments-1039) for how the composer accumulates the set between
 sends, and [Thread timeline — history](thread-timeline-history.md#configuration-and-usage) for the ticket
 note.
@@ -336,9 +338,11 @@ with the `attachments` field documented above (§ Types).
   verb), so an inbound direction is unbuildable until a `pyrycode/pyrycode` wire change exists. Recorded
   verbatim, with no non-emptiness guard: an empty `filename` is representable and unreachable (`basename`
   answers `''` only for a path the read guard already refuses), so no guard for it is added where nothing
-  in this module draws it — that obligation, like the layout bound for a long name, passes through to
-  #815 and #868. `SendMessagePayload` gains no matching field in this slice, so the association is local
-  to this client's timeline only and is not sent to the daemon with the message.
+  in this module draws it — that obligation, like the layout bound for a long name, passed through to
+  #815, which took it on: an unbounded name wraps rather than truncates, bounded only by the operator's
+  own filesystem's 255-byte path-component cap. #868 still owes it for the image case. `SendMessagePayload`
+  gains no matching field in this slice, so the association is local to this client's timeline only and is
+  not sent to the daemon with the message.
 
 ## Related
 
@@ -347,8 +351,10 @@ with the `attachments` field documented above (§ Types).
 - [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) — added `attachments` to `userText`,
   covered in full above (§ Types, § Edge cases). Sole producer: [composer send](composer-send.md)'s
   `ComposerSendDeps.takeAttachments`, fed by [Composer attach § Pending
-  attachments](composer-attach.md#pending-attachments-1039)'s `reducePendingAttachments`. Consumers not
-  yet landed: #815 (the file row), #868 (the image thumbnail).
+  attachments](composer-attach.md#pending-attachments-1039)'s `reducePendingAttachments`. Consumer:
+  [Conversation shell — message bubble § The attachment file
+  row](conversation-shell-message-bubble.md#the-attachment-file-row-815) (#815, shipped). #868 (the image
+  thumbnail) is still open.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — added `createdAt` to
   `assistantText`/`userText`, covered in full above (§ Types, § Configuration and usage). Producers:
   [conversation timeline store](conversation-timeline-store.md)'s `translateTimelineEvent`/

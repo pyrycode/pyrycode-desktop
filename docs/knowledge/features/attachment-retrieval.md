@@ -106,8 +106,10 @@ subscribes on the fixed event channel and returns an unsubscribe handle — `req
 `onAttachmentUploadEvent`'s shape verbatim, including stripping the raw `IpcRendererEvent` before the
 listener runs. **No caller is wired** — the consumers are [attachment save](attachment-save.md) (#814),
 [attachment bytes](attachment-bytes.md) (#866) and [attachment open](attachment-open.md) (#867), all
-three landed on the background-process side; the renderer clicks that call them (#815/#816, #868/#869)
-are not started.
+three landed on the background-process side; the renderer clicks that call them are not started. #815
+(the file row itself) has shipped drawn-only — see [Conversation shell — message bubble § The attachment
+file row](conversation-shell-message-bubble.md#the-attachment-file-row-815) — but #816/#868/#869 (its
+click, the thumbnail, and the thumbnail's click) remain open.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 

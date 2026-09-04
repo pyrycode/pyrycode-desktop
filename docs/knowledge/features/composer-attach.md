@@ -282,8 +282,10 @@ export function drainPendingAttachments(holder: {
   be recorded twice.
 
 **The pending set lives in a `useRef`, not `useState`, because nothing renders it.** The consumers are
-\#815's file row and #868's thumbnail, and both will read the *timeline item* the send records, not this
-hook, so a `useState` would re-render the whole composer on every arriving upload event for a value no
+\#815's file row (shipped, [Conversation shell — message bubble § The attachment file
+row](conversation-shell-message-bubble.md#the-attachment-file-row-815)) and #868's still-open thumbnail,
+and both read the *timeline item* the send records, not this hook, so a `useState` would re-render the
+whole composer on every arriving upload event for a value no
 markup consults. Worse, its batching would open a real drop window: a completion arriving after the last
 commit but before the click would be invisible to the closure the click reads, and a subsequent take would
 then clear it unsent. A ref is written by the listener and read by the send synchronously, so that window
@@ -452,9 +454,10 @@ in this slice, surfaced visibly wherever #868's retrieval eventually is. See
 - [Attachment transfer](attachment-transfer.md) (#861) — the send loop that reports `sentChunks` /
   `totalChunks` upward through the `onProgress` seam #864 added; the source of the count this control
   renders.
-- [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) — the file row in the message bubble, the
-  only other planned evidence that an upload produced anything; until it lands, `ComposerAttachOutcome`'s
-  line is the sole evidence on screen.
+- [Conversation shell — message bubble § The attachment file
+  row](conversation-shell-message-bubble.md#the-attachment-file-row-815) (#815) — landed; the file row in
+  the message bubble, the other evidence on screen that an upload produced anything, alongside
+  `ComposerAttachOutcome`'s line.
 - [Composer attach — the drop entry](composer-attach-drop.md) (#890) — landed; drag-and-drop, split to its
   own page 2026-09-04. Widened the shared channel to carry a path but did not add correlation — the
   renderer still cannot learn its own gesture's `uploadId`, so that remains open for a future ticket.
@@ -468,7 +471,8 @@ in this slice, surfaced visibly wherever #868's retrieval eventually is. See
 - [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) (pending attachments) — landed; see §
   Pending attachments above. The first thing in this app that associates an attachment with a message;
   feeds [Thread timeline](thread-timeline.md#types)'s new `userText.attachments` field via [Composer
-  send](composer-send.md#attachments-taken-at-send-1039). #815 and #868 are its still-open renderers.
+  send](composer-send.md#attachments-taken-at-send-1039). #815 (shipped) renders it; #868 (the image
+  thumbnail) is still open.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),

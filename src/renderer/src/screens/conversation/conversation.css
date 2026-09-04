@@ -328,6 +328,107 @@
   color: var(--color-on-secondary-container);
 }
 
+/* #815 — the file row a non-image attachment draws inside the message bubble (Figma `File field` 132:4605,
+   in the bubble at 121:3860): the outlined document glyph, then the filename, 12px apart and both
+   vertically centred. Placed here rather than below the meta row so the file mirrors the DOM order, which
+   is what the margins below encode.
+
+   MARGIN-TOP, NOT A PARENT GAP, and one row per attachment as a DIRECT CHILD of .bubble with no wrapper.
+   .bubble is deliberately not a flex column (see its own rule above: the in-progress cursor is a sibling of
+   the text and a flex column would drop it onto its own line), so the drawing's 12px rhythm is expressed as
+   a margin-top on the FOLLOWING sibling — which .bubble__meta below already carries. Giving each file row
+   the same margin makes text → file → file → meta fall out at 12px with no wrapper element, no gap
+   property, and no second rhythm mechanism to keep in step. A wrapper would need its own margin AND an
+   internal gap: two declarations expressing one number.
+
+   ALL FOUR TYPE AXES ARE RESTATED, and the fourth is the point. .bubble sets title-small EMPHASIZED
+   (14/20/0.1 at weight 600), and body-small differs on every one of size, line-height, tracking and weight,
+   so three of the four are easy to leave inherited by accident.
+
+   THE COLOUR IS --color-inverse-primary, read from the Figma VARIABLE (`Schemes/Inverse Primary`, #32628d)
+   and not from the export, which prints the light-scheme transposition tokens.css:25-33 warns about. The
+   meta row directly below resolves the same variable the same way. Its measured contrast on these fills is
+   the accepted consequence that rule already records; this row inherits that ruling and does not reopen
+   it. The glyph takes the same colour through stroke: currentColor rather than restating it. */
+.bubble__file {
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-inverse-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The glyph's frame, and the positioning context its extension overlay hangs on. 45x60 is a drawn
+   constant with no theme role, so it appears as a literal with this comment rather than inventing a token
+   — the same answer .bubble gives for its own drawn `min(680px, 75%)`.
+
+   flex: 0 0 auto STATES the intent that this item never shrinks; it is not what MAKES AC5 true. Measured:
+   removing it leaves the spec green, because a flex item's automatic minimum size already floors this box
+   at its 45px specified width. It stays for two reasons that survive that measurement — it is this file's
+   vocabulary for a non-shrinking lead item (.bubble__copy, .conversation__workspace-chip-label and four
+   others), and the floor it duplicates is conditional in a way the declaration is not: a later
+   `min-width: 0` copy-pasted onto this rule would remove the automatic minimum and let the name compress
+   the icon, which is exactly the failure AC5 names. display: block is explicit rather than left to a flex
+   item's automatic blockification, and it also removes the inline baseline gap the svg would add. */
+.bubble__file-icon {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+  width: 45px;
+  height: 60px;
+}
+
+.bubble__file-glyph {
+  display: block;
+}
+
+/* The extension overlaid across the glyph's lower half — `PDF` in the drawing. top: 50% IS "top-aligned in
+   the lower half", and it lands 1px above the drawn y=31; that is the same tolerance .bubble__copy records
+   for its own glyph position, and it expresses the intent rather than transcribing a coordinate. The 44px
+   slot is the drawn one (44 of the frame's 45), centred by text-align, so a two- and a four-character label
+   sit on the same axis.
+
+   THE 500 WEIGHT COMES FROM A TOKEN. --text-body-small-weight-emphasized exists for exactly this, and
+   tokens.css forbids a bare font-weight: 500 at a call site. Everything else is inherited from the row, so
+   a label and a name that must read as one type step cannot drift apart. */
+.bubble__file-ext {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 44px;
+  text-align: center;
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
+/* THE FILENAME GETS NO RULE OF ITS OWN, and that omission is AC5's whole answer — measured, not assumed.
+
+   The ticket predicted the opposite: that AC5 was a new rule, because the failure mode is a flex item's
+   AUTOMATIC MINIMUM SIZE and that is not what `word-break` addresses. It asked for the prediction to be
+   proved under a pathological name rather than trusted. It was, and it is wrong. `word-break: break-word`
+   behaves as `overflow-wrap: anywhere`, which — unlike `overflow-wrap: break-word` — DOES reduce a box's
+   min-content size, so .bubble's inherited declaration already collapses this item's automatic minimum to
+   one character and there is no shrink pressure left to remedy. Dropping `min-width: 0`, dropping
+   `overflow-wrap: anywhere`, and dropping both were each run against the 184-character space-free name in
+   e2e/attachment-file-row.spec.ts; all three passed unchanged.
+
+   So restating either here would be an inert declaration, and this file has ruled on that five times over:
+   "restating a settled value is how it gets lost" (#607's precedent, followed by #623, #628, #629 and
+   #630, at .bubble__markdown code and .bubble__markdown a). The row follows it.
+
+   DELIBERATELY NO nowrap / text-overflow either, unlike .conversation__workspace-chip-cwd and
+   .tool-row__summary, which bound an unbounded untrusted string by ellipsis. AC5 forbids that here: the
+   name must wrap in the column beside the icon, never truncate. The unbounded height that follows is
+   accepted — a path component is capped at 255 bytes by every filesystem this app runs on, and the name is
+   the operator's own file on their own machine.
+
+   WHAT GUARDS THIS is e2e/attachment-file-row.spec.ts, which measures boxes: none of it is observable in
+   the static tier, which has no layout at all. If .bubble's word-break is ever removed or narrowed, that
+   spec is what goes red — a deterministic detector rather than a duplicated declaration. */
+
 /* #969 — the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
    132:4435 user): the timestamp #970 fills, then the copy control, 8px apart on a 16px line. Its colour
    is --color-inverse-primary, read from the Figma VARIABLE on both nodes — the export prints #9dcbfc

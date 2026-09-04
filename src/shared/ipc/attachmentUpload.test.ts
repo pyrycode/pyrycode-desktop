@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  MAX_UPLOAD_PATH_LENGTH,
+  isAttachmentUploadRequest,
   type AttachmentUploadEvent
 } from './attachmentUpload'
 import { DAEMON_EVENT_CHANNEL } from './events'
@@ -93,5 +95,70 @@ describe('AttachmentUploadEvent', () => {
       'progress'
     ])
     expect(seen.size).toBe(4)
+  })
+})
+
+// #890: the boundary guard the widened intent owes. The channel carried NO request body until this
+// slice; an argument-free send still means "open the picker", and a send carrying a request means
+// "upload this path". Everything below is the second door's lock.
+describe('isAttachmentUploadRequest', () => {
+  it('accepts a well-formed request', () => {
+    expect(isAttachmentUploadRequest({ path: '/Users/someone/Pictures/photo.png' })).toBe(true)
+  })
+
+  it('accepts a request carrying extra keys, which are never read', () => {
+    // isAttachmentBytesRequest's posture restated: nothing downstream rebuilds a value from this
+    // object's other keys, so a smuggled field reaches nothing. Refusing extras would buy nothing and
+    // would make the guard brittle against a future additive field.
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', filename: 'b', bytes: [1, 2] })).toBe(true)
+  })
+
+  it('rejects everything that is not an object with a usable path', () => {
+    // Table-driven so the rejected set is readable as a set. `null` is the typeof trap the guard's
+    // first line exists for; the array and the empty object are the two shapes that pass a naive
+    // `typeof value === 'object'` and then have no `path` at all.
+    const rejected: unknown[] = [
+      null,
+      undefined,
+      '/tmp/a',
+      42,
+      true,
+      [],
+      ['/tmp/a'],
+      {},
+      { path: null },
+      { path: 42 },
+      { path: ['/tmp/a'] },
+      { path: {} },
+      { pathname: '/tmp/a' }
+    ]
+    expect(rejected.map(isAttachmentUploadRequest)).toEqual(rejected.map(() => false))
+  })
+
+  it('rejects an empty path, which is what a page-constructed File resolves to', () => {
+    // THE LOAD-BEARING CASE. `webUtils.getPathForFile` answers '' for a File the page built itself, so
+    // this line is what turns "only a file the OS delivered is backed by a path" into a refusal main
+    // actually performs, rather than a property the preload merely observes.
+    expect(isAttachmentUploadRequest({ path: '' })).toBe(false)
+  })
+
+  it('bounds the path, accepting the limit and refusing one character past it', () => {
+    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH) })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH + 1) })).toBe(false)
+  })
+
+  it('rejects a __proto__-carrying literal and alters no prototype reading it', () => {
+    // BUILT WITH JSON.parse, NEVER AS AN OBJECT LITERAL: `{ __proto__: {...} }` in source creates no
+    // own key at all — it sets the prototype — so a literal fixture would pass this test vacuously
+    // while proving nothing. JSON.parse round-trips `__proto__` as an ordinary OWN key, which is the
+    // shape a hostile renderer can actually put on the wire.
+    const hostile: unknown = JSON.parse('{"__proto__": {"path": "/etc/passwd"}}')
+    expect(isAttachmentUploadRequest(hostile)).toBe(false)
+    // The polluting object has no OWN `path`, and the guard's `in` test is followed by a typeof on the
+    // value actually found — so nothing inherited from Object.prototype can satisfy it either.
+    expect(Object.prototype).not.toHaveProperty('path')
+    expect(isAttachmentUploadRequest(JSON.parse('{"__proto__": {"path": "/x"}, "path": ""}'))).toBe(
+      false
+    )
   })
 })

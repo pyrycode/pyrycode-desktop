@@ -1776,6 +1776,29 @@
   background: var(--color-surface);
 }
 
+/* #890 — the drop state, while a file is held over the composer. Juhana's ruling of 2026-09-02: the
+   design has no drag-over state drawn for the composer (node 102-4 covers the input's resting appearance
+   only), so an edge change on the tokens already in this file is the treatment until he draws one.
+
+   outline, NOT border, and that is the whole reason this rule reads the way it does. .composer has no
+   resting border — it is padding plus a surface background — so a `border:` in the active state would add
+   2px to the block and reflow the entire conversation column every time a file crossed the composer. The
+   shipped no-reflow precedent is .composer__row:has(.composer__input:focus-visible) further down, which
+   states exactly this trade for the message box's focus ring.
+
+   --color-primary rather than that rule's --color-outline, so the drop edge is not the focus ring's twin:
+   the two can be up at the same moment (a drag over a composer whose textarea holds focus), and drawing
+   them alike would read as one ring thickening rather than as two different states. Both are tokens this
+   stylesheet already uses; no new colour is introduced.
+
+   outline-offset: -1px draws the edge INSIDE the border box. The composer is the conversation column's
+   last child and its bottom padding edge is the window's, where an outward outline is clipped by the
+   viewport — the one place a 1px ring would silently go missing. */
+.composer--drop-target {
+  outline: 1px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
 /* #906 — the covered composer. THIS RULE IS LOAD-BEARING, NOT BELT-AND-BRACES: the UA stylesheet's
    `[hidden] { display: none }` loses to the author-level `display: flex` above regardless of specificity,
    because author rules beat UA rules outright. Without this line the `hidden` attribute ConversationScreen

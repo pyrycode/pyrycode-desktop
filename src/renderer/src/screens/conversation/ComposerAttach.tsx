@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 
@@ -18,6 +18,100 @@ import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 /** The button's accessible name. Client-owned and exported so the e2e spec locates the control by role and
  *  name rather than by class — the sibling footer specs' discipline. */
 export const COMPOSER_ATTACH_LABEL = 'Attach file'
+
+// ================================================================================================
+// #890 — the DROP entry. A second way into #862's flow, not a second flow: everything from the size
+// guard on is already built and is called rather than copied. What follows is only the decision of
+// whether a drag is ours, whether the composer wears the edge, and which file (if any) goes over.
+//
+// The four functions below are PURE and framework-free — the composerSend.ts / dropQueuedMessage.ts
+// idiom — so the static tier can walk every branch of a gesture no test in this repo can perform.
+// `useComposerFileDrop` at the bottom is the thin container over them, and the ONLY part that touches
+// React or the DOM.
+// ================================================================================================
+
+/** The modifier `.composer` wears while a file is held over it. Exported so the e2e spec locates the
+ *  state by the production constant rather than by a literal it could drift from. */
+export const COMPOSER_DROP_ACTIVE_CLASS = 'composer--drop-target'
+
+/**
+ * The composer block's `class` attribute, as one whole run.
+ *
+ * ⭐ THE RESTING BRANCH RETURNS THE BARE LITERAL, and that is load-bearing rather than tidiness: three
+ * shipped assertions in composerSlot.test.tsx match `class="composer"` as a WHOLE ATTRIBUTE RUN, two of
+ * them as `class="composer" hidden=""`. A template literal with an empty tail, an array `join`, or a
+ * modifier written ahead of the block would each redden them — which is why this is a branch and not an
+ * interpolation, and why the active branch appends rather than prepends.
+ */
+export function composerClassName(active: boolean): string {
+  return active ? `composer ${COMPOSER_DROP_ACTIVE_CLASS}` : 'composer'
+}
+
+/**
+ * Whether a drag is carrying files, read off `DataTransfer.types` — the one list a browser exposes
+ * during `dragover`, when the files themselves are deliberately unreadable.
+ *
+ * THIS IS THE WHOLE OF "INTERCEPTION IS SCOPED TO FILE DRAGS". Everything downstream — the edge, the
+ * preventDefault that stops a navigation, the attach itself — is gated on it, so a drag carrying text,
+ * a URL or an image dragged out of a web page is not intercepted at all and keeps doing exactly what it
+ * does today, including text dropped into the textarea.
+ *
+ * `text/uri-list` is NOT treated as ours, deliberately. A `file:///…` URL dragged onto the page would
+ * otherwise navigate, and the answer to that is `will-navigate` in the background process, which
+ * already refuses every target but the app's own document. Widening here would swallow ordinary link
+ * drags into the message box to close a hole that is already closed a layer down.
+ *
+ * `undefined` is accepted and answers false: `event.dataTransfer` is nullable on the DOM type, and a
+ * drag with no transfer at all is not one this composer wants.
+ */
+export function dragCarriesFiles(types: readonly string[] | undefined): boolean {
+  return types !== undefined && types.includes('Files')
+}
+
+/** What moves the drag-over depth. Sealed on `type`, the repo's convention for an event set: `enter`
+ *  and `leave` are the DOM pair, `settled` is a drop or the drag ending. */
+export type FileDropEvent = { type: 'enter' } | { type: 'leave' } | { type: 'settled' }
+
+/**
+ * The drag-over state, as a DEPTH COUNTER rather than a boolean — which is the whole of "it survives the
+ * pointer crossing a child element rather than flickering", and the classic bug here.
+ *
+ * `dragover` fires continuously and every child element fires its own `dragenter`/`dragleave` pair, both
+ * of which bubble to the composer's handler. A boolean flipped on `dragleave` would therefore clear the
+ * state the instant the pointer moved from the composer onto the textarea, and the edge would strobe as
+ * the operator crossed the box, the footer row and each of its five controls.
+ *
+ * `leave` FLOORS AT ZERO rather than going negative: a stray leave is what a missed enter produces (a
+ * drag that began over a child, or one whose enter was lost to a re-render), and an unfloored counter
+ * would sit below zero and never light the composer up again.
+ *
+ * `settled` RESETS OUTRIGHT rather than decrementing, because a drop fires no matching `dragleave` at
+ * all — from a depth of three the decrement would leave the edge painted with no drag in progress.
+ */
+export function reduceFileDropDepth(depth: number, event: FileDropEvent): number {
+  switch (event.type) {
+    case 'enter':
+      return depth + 1
+    case 'leave':
+      return Math.max(0, depth - 1)
+    case 'settled':
+      return 0
+  }
+}
+
+/**
+ * Which file a drop attaches: the one file, or nothing.
+ *
+ * GENERIC OVER THE ELEMENT so the static tier needs no `File` — what is being decided is the COUNT, and
+ * nothing about the file is read to decide it. A drop of more than one file attaches nothing AND SAYS
+ * NOTHING in this slice: a refusal would mean a new reason in the shared union plus a branch in
+ * `attachmentUploadCopy`'s compiler-forced switch, which is copy for a feature that does not exist yet.
+ * The follow-up ticket owns multi-file support and its messaging together; the daemon's concurrency
+ * bound (`attachment.too_many_uploads`, #861) is why a naive loop is the wrong first cut.
+ */
+export function fileToAttach<T>(files: readonly T[]): T | null {
+  return files.length === 1 ? files[0] : null
+}
 
 /** Figma node 115:3655, the single vector inside the `Attachment` frame (115:3654). The export's clip-path
  *  is dropped: its rect is the full viewBox, so it clips nothing. */
@@ -183,6 +277,7 @@ export function ComposerAttachOutcome({
 export function useAttachmentUpload(): {
   outcome: AttachmentUploadEvent | null
   requestAttach: () => void
+  dropFile: (file: File) => void
 } {
   const [outcome, setOutcome] = useState<AttachmentUploadEvent | null>(null)
 
@@ -208,5 +303,113 @@ export function useAttachmentUpload(): {
     window.pyry.requestAttachmentUpload()
   }
 
-  return { outcome, requestAttach }
+  /**
+   * The DROP entry (#890), and the reason it lives in this hook rather than at the drop site: the clear
+   * is the SAME ACT `requestAttach` performs a few lines up, so it stays with one owner instead of being
+   * re-implemented where a second copy could drift. "Dropping clears whatever outcome line is showing"
+   * is that one line, and it must happen on the gesture for the picker's recorded reason — a drop whose
+   * path the preload declines to resolve reports nothing at all, so a clear driven by an arriving event
+   * would strand the previous refusal on screen.
+   *
+   * THE WINDOW HOLDS THE `File` HANDLE AND NOTHING ELSE. The path is recovered inside the preload and
+   * never comes back, so it reaches no state here, no log line and no diagnostic record. `window.pyry`
+   * is dereferenced only here and in the two closures above — never during render — so every static
+   * render of the composer still touches no bridge.
+   */
+  const dropFile = (file: File): void => {
+    setOutcome(null)
+    window.pyry.dropAttachmentFile(file)
+  }
+
+  return { outcome, requestAttach, dropFile }
+}
+
+/**
+ * The drag-over container (#890): the depth counter, the four handlers `.composer` wears, and the
+ * window-level guard that stops a missed drop from navigating.
+ *
+ * ADR 0006 state — ephemeral, screen-local, read by nothing else — the same call `useAttachmentUpload`
+ * makes for the held outcome, and it resets on a conversation switch for the same free reason
+ * (`PairedShellView` keys the chat pane on the conversation id).
+ *
+ * ⭐ THE WINDOW GUARD IS THE ONLY PART OF THIS FEATURE THAT IS NOT SCOPED TO THE COMPOSER, and it rides
+ * this hook rather than `App.tsx` precisely so it is mounted wherever the composer is and no second
+ * mount point has to be kept in step. Its whole job is `preventDefault` on `dragover` and `drop` — a
+ * file dropped ANYWHERE in the window, on the composer or not, otherwise navigates the window to that
+ * file, replacing the app with a rendering of it. It is DEFENCE IN DEPTH: `will-navigate` in the
+ * background process already refuses every target but the app's own document, which is why a missed drop
+ * is a silent no-op today rather than a hijacked window. Both listeners are gated on `dragCarriesFiles`,
+ * so a text or link drag is not intercepted at all.
+ *
+ * `settled` on window `drop` AND on `dragend`: the composer's own `onDrop` covers a drop it receives,
+ * and these cover the two it does not — a drop that lands elsewhere while the edge is painted, and a
+ * drag abandoned outside the window. The reset is idempotent, so the double-fire on a composer drop is
+ * harmless rather than something to arbitrate.
+ */
+export function useComposerFileDrop({ onFile }: { onFile: (file: File) => void }): {
+  active: boolean
+  handlers: {
+    onDragEnter: (event: DragEvent<HTMLElement>) => void
+    onDragOver: (event: DragEvent<HTMLElement>) => void
+    onDragLeave: (event: DragEvent<HTMLElement>) => void
+    onDrop: (event: DragEvent<HTMLElement>) => void
+  }
+} {
+  const [depth, setDepth] = useState(0)
+
+  useEffect(() => {
+    const suppress = (event: globalThis.DragEvent): void => {
+      if (!dragCarriesFiles(event.dataTransfer?.types)) return
+      event.preventDefault()
+    }
+    const settle = (): void => setDepth(0)
+    window.addEventListener('dragover', suppress)
+    window.addEventListener('drop', suppress)
+    window.addEventListener('drop', settle)
+    window.addEventListener('dragend', settle)
+    // The effect cleanup IS the teardown, so a remount nets exactly one live set of listeners — the
+    // onDaemonEvent / useAttachmentUpload idiom, and what keeps a conversation switch from stacking them.
+    return () => {
+      window.removeEventListener('dragover', suppress)
+      window.removeEventListener('drop', suppress)
+      window.removeEventListener('drop', settle)
+      window.removeEventListener('dragend', settle)
+    }
+  }, [])
+
+  /** Every handler below opens with this: a drag that carries no file is left entirely alone — not
+   *  counted, not prevented, not consumed — which is what keeps text dropped into the textarea working. */
+  const isOurs = (event: DragEvent<HTMLElement>): boolean =>
+    dragCarriesFiles(event.dataTransfer?.types)
+
+  return {
+    active: depth > 0,
+    handlers: {
+      onDragEnter: (event) => {
+        if (!isOurs(event)) return
+        event.preventDefault()
+        setDepth((current) => reduceFileDropDepth(current, { type: 'enter' }))
+      },
+      // `dragover` must preventDefault on EVERY tick or the element stops being a drop target and the
+      // browser reverts to its own handling — the one handler here that looks redundant and is not.
+      onDragOver: (event) => {
+        if (!isOurs(event)) return
+        event.preventDefault()
+      },
+      onDragLeave: (event) => {
+        if (!isOurs(event)) return
+        setDepth((current) => reduceFileDropDepth(current, { type: 'leave' }))
+      },
+      onDrop: (event) => {
+        if (!isOurs(event)) return
+        // AC3: nothing navigates and nothing is inserted. This runs whether or not a file is attached
+        // below, so a multi-file drop is still swallowed rather than falling through to the browser.
+        event.preventDefault()
+        setDepth((current) => reduceFileDropDepth(current, { type: 'settled' }))
+        const file = fileToAttach(Array.from(event.dataTransfer.files))
+        if (file === null) return
+        onFile(file)
+      }
+    }
+  }
 }

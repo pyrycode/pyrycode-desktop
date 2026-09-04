@@ -54,7 +54,13 @@ import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
-import { ComposerAttachButton, ComposerAttachOutcome, useAttachmentUpload } from './ComposerAttach'
+import {
+  ComposerAttachButton,
+  ComposerAttachOutcome,
+  composerClassName,
+  useAttachmentUpload,
+  useComposerFileDrop
+} from './ComposerAttach'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
@@ -2533,6 +2539,11 @@ function Composer({
   // keys the chat pane on the conversation id, so a switch rebuilds this component with a fresh outcome.
   // No `window.pyry` dereference happens during render — see the hook.
   const attach = useAttachmentUpload()
+  // #890: the drop entry into that same flow. It takes `attach.dropFile` — the hook's own third member —
+  // rather than a second bridge call of its own, which is what keeps ONE owner of the clear-on-gesture
+  // and one outcome surface for both entries. No `conversationId` and no store read, for the attach
+  // button's reason: the intent it dispatches names no conversation.
+  const fileDrop = useComposerFileDrop({ onFile: attach.dropFile })
 
   // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command
   // takes the identical route a typed message does rather than a parallel one. The gate, the deps object,
@@ -2622,7 +2633,12 @@ function Composer({
     // conversation.css MUST carry `.composer[hidden] { display: none }`: the UA's `[hidden]` rule loses
     // to the author-level `.composer { display: flex }` regardless of specificity, so without it this
     // attribute is a no-op for layout and only the accessibility half works.
-    <div className="composer" hidden={covered}>
+    // #890: the whole block is the drop target, so a drop on the footer row counts as much as one on the
+    // message box. `composerClassName` is a BRANCH rather than an interpolation because the resting run
+    // must stay byte-identical — three shipped assertions in composerSlot.test.tsx match `class="composer"`
+    // as a whole attribute run, two of them as `class="composer" hidden=""` — so `className` also stays
+    // ahead of `hidden` in this list. The spread carries event handlers only and renders no markup.
+    <div className={composerClassName(fileDrop.active)} hidden={covered} {...fileDrop.handlers}>
       {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
           positions against it (`position: relative` in conversation.css) and inherits the clamp's
           --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,

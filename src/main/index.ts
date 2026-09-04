@@ -29,12 +29,13 @@ import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
 import { onCommand } from './receiveCommand'
 import { onDiagnostic } from './receiveDiagnostic'
-import { uploadAttachmentFile } from './attachmentUpload'
+import { uploadAttachmentFile, type AttachmentUploadDeps } from './attachmentUpload'
 import { createAttachmentRetrieval } from './attachmentRetrieval'
 import { ATTACHMENT_DIR_NAME, storeAttachment } from './attachmentStore'
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
-  ATTACHMENT_UPLOAD_EVENT_CHANNEL
+  ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  isAttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
 import {
   ATTACHMENT_RETRIEVAL_CHANNEL,
@@ -556,9 +557,22 @@ app.whenReady().then(() => {
   // switch in assertNever. That "more than one" is live as of #864 — a transfer over
   // ATTACHMENT_PROGRESS_MIN_CHUNKS pushes a report per chunk ahead of its terminal.
   //
-  // The listener reads NEITHER IPC argument. The renderer names an intent and nothing else, so there
-  // is no untrusted request field to validate and no renderer-supplied string can reach a path, a
-  // declared filename, or the wire (#890 will widen this and owes a request guard when it does).
+  // TWO ENTRIES, ONE LISTENER, TOLD APART BY PRESENCE (#890). An argument-free send is #862's bare
+  // intent: the renderer names an intent and nothing else, so that arm still reaches no untrusted
+  // request field and no renderer-supplied string can get near a path, a declared filename or the wire.
+  // A send CARRYING a request is a dropped file, and its path is untrusted at this boundary regardless
+  // of the declared type — `isAttachmentUploadRequest` is the guard the header promised when the door
+  // was left value-free, and a failing ask is DROPPED: no filesystem call, no event, matching every
+  // sibling attachment channel. Nothing an operator can physically do produces one, so there is nothing
+  // to report. Presence rather than a discriminator field, because the shipped picker sender cannot be
+  // given one without changing what a conforming renderer puts on the wire.
+  //
+  // The path is a CLAIM, NOT A CAPABILITY, which is what makes the drop arm safe to have at all: the
+  // background process does not trust that the path names what the window says it does, it OPENS it —
+  // `readChosenFile` refuses anything that is not a regular file (so a dropped FOLDER answers the
+  // `unreadable` this flow already produces) and drops the errno unexamined because it carries the host
+  // path. The containment property lives in the preload: `webUtils.getPathForFile` answers the empty
+  // string for a page-constructed File, so only a file an operator gesture delivered is backed by a path.
   //
   // `event.sender` — the window that asked — is closed into `emit`, so the answer goes back to the
   // asker rather than to a process-lifetime reference that #519 would have to keep current. The
@@ -571,28 +585,50 @@ app.whenReady().then(() => {
   // cleared as soon as it settles — so a double-clicked button cannot stack pickers, while a second
   // file may still be picked while the first uploads (two concurrent transfers, distinct ids).
   //
+  // `pickerOpen` STAYS SCOPED TO THE DIALOG and the drop arm neither reads nor sets it (#890): a drop
+  // opens no dialog, so gating it on that flag would refuse a legitimate second file for a reason that
+  // does not apply to it. Repetition on the drop arm is therefore unbounded here by design — it is
+  // bounded by the per-upload byte guard below and, host-side, by the daemon's own concurrency answer
+  // (`attachment-too-many-uploads`, which arrives as a `failed`). A client-side concurrency cap belongs
+  // with that bound rather than here.
+  //
   // The bare `void` is safe because uploadAttachmentFile never rejects — a property of that module
   // and of connection.uploadAttachment, not of a `.catch()` anyone must remember (AC4).
   let pickerOpen = false
-  const attachmentUploadListener = (event: Electron.IpcMainEvent): void => {
+  const attachmentUploadListener = (event: Electron.IpcMainEvent, request?: unknown): void => {
+    const sender = event.sender
+    // ONE deps object for both entries rather than one per arm: the two must not be able to drift into
+    // reporting on different channels or forwarding progress differently. `sender` — the window that
+    // asked — is closed in, and the isDestroyed() guard is emitDaemonEvent's (#518).
+    const deps: AttachmentUploadDeps = {
+      // The progress seam is forwarded, never swallowed: the flow module owns the threshold that
+      // decides whether a report becomes a message, and this arrow owns nothing but the join.
+      upload: (input, onProgress) => connection.uploadAttachment(input, onProgress),
+      emit: (uploadEvent) => {
+        if (sender.isDestroyed()) return
+        sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, uploadEvent)
+      },
+      diagnosticLog
+    }
+
+    // The DROPPED-FILE arm (#890). `request !== undefined` is the whole discriminator, and the guard
+    // decides the rest: a malformed ask returns here, having made no filesystem call and emitted no
+    // event.
+    if (request !== undefined) {
+      if (!isAttachmentUploadRequest(request)) return
+      void uploadAttachmentFile(request.path, deps)
+      return
+    }
+
+    // The PICKER arm (#862), unchanged.
     if (pickerOpen) return
     pickerOpen = true
-    const sender = event.sender
     void dialog
       .showOpenDialog({ properties: ['openFile'] })
       .then((choice) => {
         // Cancelling is a TOTAL no-op: nothing read, nothing sent, no outcome reported (AC1).
         if (choice.canceled || choice.filePaths.length === 0) return
-        void uploadAttachmentFile(choice.filePaths[0], {
-          // The progress seam is forwarded, never swallowed: the flow module owns the threshold that
-          // decides whether a report becomes a message, and this arrow owns nothing but the join.
-          upload: (input, onProgress) => connection.uploadAttachment(input, onProgress),
-          emit: (uploadEvent) => {
-            if (sender.isDestroyed()) return
-            sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, uploadEvent)
-          },
-          diagnosticLog
-        })
+        void uploadAttachmentFile(choice.filePaths[0], deps)
       })
       .finally(() => {
         pickerOpen = false

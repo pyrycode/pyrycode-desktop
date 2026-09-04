@@ -12,8 +12,9 @@ pushed back to the window on a dedicated channel pair, optionally preceded by in
 for a large file (#864, below). A cancelled picker, and a malformed or unrecognised ask on either guarded
 shape, are all a total no-op: nothing read, nothing sent, nothing emitted. **Nothing renders here** — this
 slice ends at the bridge; the button and the outcome's appearance, and the drop gesture itself, are
-[Composer attach](composer-attach.md) (#863, #890). #1032 adds no renderer surface either — the paste
-keystroke that calls it is #1033, blocked by #1032 and not yet started.
+[Composer attach](composer-attach.md) (#863, #890). #1032 adds no renderer surface itself — the paste
+keystroke that calls it, and the mount-point/predicate design, are
+[Composer attach § The paste entry](composer-attach.md#the-paste-entry-1033) (#1033, landed).
 
 Introduced in [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), split from #685.
 In-flight progress added in [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864). The
@@ -270,8 +271,7 @@ Four members on the existing `api` literal (#1032 added the fourth): `requestAtt
 void` (#890, below), `pasteAttachmentImage(): void` (#1032, below), and `onAttachmentUploadEvent(listener):
 () => void` (the `onDaemonEvent` shape — strips the raw `IpcRendererEvent`, returns an unsubscribe handle
 that removes the exact handler). All four are called from [Composer attach](composer-attach.md) (#863's
-button and outcome view, #890's drop handler); `pasteAttachmentImage`'s only caller is #1033, blocked by
-\#1032 and not yet landed.
+button and outcome view, #890's drop handler, #1033's paste handler).
 
 **`dropAttachmentFile` (#890) is the one place on the window side that may touch a host path** — the
 deliberate, narrow exception to "the renderer names an intent, main owns the path", and the reason the
@@ -485,11 +485,14 @@ correlating the ask to a real key event) is the stated fallback if that residual
   byte figure, and doesn't contain the `uploadId`; the too-large arm's shipped assertions stay green,
   proving the split didn't disturb it. See [Composer attach's copy
   section](composer-attach.md#attachmentuploadcopyts---the-copy-is-a-selection-not-a-rendering).
-- **No Playwright spec for the paste entry (#1032), stated rather than skipped.** Nothing in the fake tier
-  can fire `pasteAttachmentImage` — the keystroke that calls it is #1033, which adds no composer surface
-  here. Driving it through `app.evaluate` would prove the composition-root join but would also clobber the
-  machine's clipboard without restoring it, `e2e/message-copy.spec.ts`'s already-accepted price for that
-  route; #1033 is the slice that can pay it once for the whole chain.
+- **The whole-chain e2e proof landed with #1033, not here.** `e2e/composer-paste-image.spec.ts` seeds a
+  real bitmap on the real OS clipboard and drives a trusted `webContents.paste()`, paying
+  `e2e/message-copy.spec.ts`'s already-accepted clobber-without-restore price once for the entire chain —
+  keystroke → predicate → this ask → `uploadClipboardImage` → guard → transfer → wire → terminal. It also
+  measured what this file's design left open: a real OS-clipboard bitmap advertises `['Files']` only, with
+  no `image/png` entry. See [Composer attach § Testing the paste
+  entry](composer-attach.md#testing-the-paste-entry) for the drive and its two-different-daemon-code trick
+  against a vacuous pass.
 - **No test for `index.ts`'s wiring or the preload members, `dropAttachmentFile` and `pasteAttachmentImage`
   included (#890, #1032)** — the
   composition root and the preload are Electron-bound and untested here by existing convention; the
@@ -585,5 +588,6 @@ correlating the ask to a real key event) is the stated fallback if that residual
 - [#1032](https://github.com/pyrycode/pyrycode-desktop/issues/1032) (paste, split from #891) — landed;
   the third entry into this flow, via `uploadClipboardImage` — not `uploadAttachmentBytes`, see the SHOULD
   FIX noted above. No composer surface of its own: the keystroke that calls `pasteAttachmentImage()` is
-  [#1033](https://github.com/pyrycode/pyrycode-desktop/issues/1033), blocked by #1032 and not yet started.
-  `docs/specs/architecture/1032-paste-clipboard-image-attach.md` has the full plan and security review.
+  [Composer attach § The paste entry](composer-attach.md#the-paste-entry-1033) (#1033, landed).
+  `docs/specs/architecture/1032-paste-clipboard-image-attach.md` and
+  `docs/specs/architecture/1033-paste-image-to-attach.md` have the full plans and security reviews.

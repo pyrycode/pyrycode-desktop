@@ -365,7 +365,10 @@ container** so all three drawn states stay provable under `renderToStaticMarkup`
 
 - `pending` → `null`. Nothing drawn and nothing reserved — reserving space needs the aspect ratio, which
   needs the bytes, which is the thing being fetched. A late-loading thumbnail moving the reader's scroll
-  position is consequently a real follow-up, filed and blocked on this ticket, not a defect here.
+  position was the real follow-up this arm's header predicted; [#1046](conversation-shell.md) measured it
+  and found Chromium's own scroll anchoring already holds a reader's place against a thumbnail resolving
+  **above** them, so nothing changed here or in `useThreadScrollPin`. Growth **below** the reader (their
+  own last row, where anchoring does not apply) is the one case left open, filed as #1049.
 - `ready` → `<img className="bubble__image" src={url} alt={ATTACHMENT_IMAGE_ALT} onError={onDecodeError} />`.
   `alt` is the **client-owned constant** `'Attached image'`, never the filename — `alt` is an attribute, and
   #815's ruling that the untrusted name never enters one is carried across rather than reopened. `onError`

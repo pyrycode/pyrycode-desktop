@@ -255,5 +255,32 @@ paste through `webContents.paste()`), `thread-scroll-pin.spec.ts` and `attachmen
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — Open Questions resolved empirically; design unchanged
+
+All three Open Questions were answered by running the tier rather than by reasoning, and none of them
+moved the design. Recorded here because the answers are the part worth keeping — the plan's fallback was
+real, and knowing it was *not* taken is what makes the shipped shape a choice rather than an accident.
+
+1. **`navigator.clipboard.writeText` in a never-shown window: resolved, it works.**
+   `e2e/message-copy.spec.ts` passes with the window never shown — the real renderer write lands on the
+   real OS clipboard and the main-process read-back finds it. So Chromium's document-focus requirement for
+   the async clipboard write is satisfied here, and `backgroundThrottling: false` reporting the page as
+   visible is evidently enough. **The `'inactive'` / `showInactive()` fallback was NOT taken**, and
+   `WindowPresentation` stays the two-member union the plan specified. AC2 is met in its strict form (never
+   shown), not the weaker "never frontmost" reading the fallback would have needed.
+2. **Image decode and scroll geometry: resolved, they survive.** All seven `thread-scroll-pin.spec.ts`
+   tests and `attachment-image-thumbnail.spec.ts` pass, including the three that gate on a thumbnail
+   actually decoding before reading scroll metrics.
+3. **`--disable-backgrounding-occluded-windows` with a never-shown window: kept, as planned.** With
+   question 1 resolved the switch is doing less than the other two, but it stays for the reason given: the
+   trio is one contract read back as one list, and thinning it would weaken the read-back for no gain.
+
+**Also confirmed beyond what the plan predicted:** `e2e/window-reopen-converges.spec.ts` passes, so the
+dock-reopened window of the `activate` handler inherits the same presentation as the first — which is the
+single-decision-site property the security review's last SHOULD FIX asked for, now observed rather than
+argued.
 </content>
 </invoke>

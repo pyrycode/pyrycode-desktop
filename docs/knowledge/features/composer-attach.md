@@ -283,8 +283,8 @@ export function drainPendingAttachments(holder: {
 
 **The pending set lives in a `useRef`, not `useState`, because nothing renders it.** The consumers are
 \#815's file row (shipped, [Conversation shell — message bubble § The attachment file
-row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816)) and #868's still-open thumbnail,
-and both read the *timeline item* the send records, not this hook, so a `useState` would re-render the
+row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816)) and #868's image
+thumbnail (shipped, same document), and both read the *timeline item* the send records, not this hook, so a `useState` would re-render the
 whole composer on every arriving upload event for a value no
 markup consults. Worse, its batching would open a real drop window: a completion arriving after the last
 commit but before the click would be invisible to the closure the click reads, and a subsequent take would
@@ -443,7 +443,8 @@ leg re-runs `sanitizeAttachmentFilename` on the value it actually builds a path 
 `randomUUID` identifier, not a capability — the daemon authorises retrieval by the Noise session, not by
 knowledge of the id. A hostile daemon can claim `completed` for an upload it never stored, so the timeline
 can record an attachment the host doesn't have; blast radius is one wrong record with nothing drawing it
-in this slice, surfaced visibly wherever #868's retrieval eventually is. See
+in this slice, surfaced visibly since #868's retrieval landed: the image thumbnail's `failed` fallback
+(or, for a non-image name, a file row whose download/open click answers `unavailable`). See
 `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` § Security review.
 
 ## Related
@@ -455,7 +456,7 @@ in this slice, surfaced visibly wherever #868's retrieval eventually is. See
   `totalChunks` upward through the `onProgress` seam #864 added; the source of the count this control
   renders.
 - [Conversation shell — message bubble § The attachment file
-  row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) (#815) — landed; the file row in
+  row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) (#815) — landed; the file row in
   the message bubble, the other evidence on screen that an upload produced anything, alongside
   `ComposerAttachOutcome`'s line.
 - [Composer attach — the drop entry](composer-attach-drop.md) (#890) — landed; drag-and-drop, split to its

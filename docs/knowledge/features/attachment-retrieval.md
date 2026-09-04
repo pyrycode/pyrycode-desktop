@@ -109,8 +109,11 @@ listener runs. **The first caller landed in #816** — see [§ The renderer clic
 (#1044)](#the-renderer-image-source-1044) below. The three background-process consumers are [attachment
 save](attachment-save.md) (#814), [attachment bytes](attachment-bytes.md) (#866) and [attachment
 open](attachment-open.md) (#867); #816 wires the first of them and #1044 wires the second, by way of
-[attachment bytes](attachment-bytes.md). [#869](attachment-open.md) (the thumbnail's own open-full-size
-click) remains open, and will want this same request/subscribe pair.
+[attachment bytes](attachment-bytes.md). The third consumer's own click,
+[#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045), shipped
+without this pair: the drawn thumbnail is itself proof this driver's retrieval already ran, so the
+open-in-viewer ask needs no request/subscribe of its own — see [attachment open](attachment-open.md)
+§ Composition-root wiring.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 
@@ -233,7 +236,7 @@ the channel argument given.
 ## The renderer click (#816)
 
 [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) gave the [attachment file
-row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) its click, and wired it to
+row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) its click, and wired it to
 this driver first — not to [attachment save](attachment-save.md) (#814) directly, because the save
 channel does not fetch and this driver's retrieval leg is the only writer of the directory it copies
 from. `src/renderer/src/screens/conversation/downloadAttachment.ts` (new) subscribes to
@@ -244,7 +247,7 @@ the reverse order would be a race by construction. The listener ignores every ev
 filename })` only on that event's own `completed` — never on `failed`, and never a second time. Full
 design, including the fetch/save sequencing rationale, the button and accessible-name shape, and the
 per-activation listener lifetime, is in [Conversation shell — message bubble § The attachment file
-row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816).
+row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816).
 
 **A pre-ask bound on *both* identifiers, not just `attachmentId`.** A malformed ask is dropped by
 `isAttachmentRetrievalRequest` with no terminal at all (§ above), which would leak the renderer's

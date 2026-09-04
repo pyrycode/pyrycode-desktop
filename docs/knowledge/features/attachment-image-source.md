@@ -37,8 +37,10 @@ is genuinely common is ~12 lines of subscribe-before-ask / settle-once / correla
 that would make `downloadAttachment.ts` a second production file this slice edits, against this
 project's "don't refactor adjacent code while you are there." The duplication is instead confined
 *inside* this module, where one private `awaitTerminal` helper serves both legs. [#869](attachment-open.md)
-(the thumbnail's own open-full-size click) is the shape's third candidate consumer, and can lift with
-two instances to generalise from rather than one and a half.
+(the thumbnail's own open-in-viewer click) turned out **not** to be a third candidate at all, once it
+shipped: the drawn picture is itself the proof that this module's own fetch already ran, so that click
+is one fire-and-forget ask with no sequencing of its own — the fetch-then-act shape stays a
+two-instance count.
 
 ## The module — `src/renderer/src/screens/conversation/attachmentImageSource.ts`
 
@@ -186,7 +188,7 @@ existed. This module minting a URL nothing could point at yet was the same stage
 `requestAttachmentBytes` was until this landed — not a defect, and not papered over here with a CSP edit
 that would have put two slices in one file for a merge conflict bought for nothing.
 
-[#1045](conversation-shell-message-bubble.md#the-attachment-image-thumbnail-1045) is that consumer, shipped:
+[#1045](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045) is that consumer, shipped:
 it draws the `<img>`, decides imageness from the untrusted filename, and widened `img-src` — **and only
 `img-src`**, exactly as this module's header called for. A `blob:` URL inherits the creating document's
 origin, so a blob of HTML *navigated to* would run script holding the preload bridge. Three existing guards
@@ -294,17 +296,18 @@ them apart would produce a child unverifiable on its own.
 - [Attachment bytes](attachment-bytes.md) — leg two, its three failure literals, the exact-buffer copy
   this module's own `toBlob` copy parallels, and the `contextBridge` hop neither module's tests can pin.
 - [Conversation shell — message bubble § The attachment file
-  row](conversation-shell-message-bubble.md#the-attachment-file-row-815-816) — `downloadAttachment.ts`,
+  row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) — `downloadAttachment.ts`,
   the fetch-then-act shape this module is the second instance of and deliberately did not lift machinery
   out of.
 - `docs/specs/architecture/1044-attachment-image-source.md` — the full architecture spec, including the
   security review and the two open questions (media type, cache ceiling) this doc resolves as shipped.
 - [#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045) — the thumbnail. Shipped: draws the
   `<img>` ([Conversation shell — message bubble § The attachment image
-  thumbnail](conversation-shell-message-bubble.md#the-attachment-image-thumbnail-1045)), decides imageness
+  thumbnail](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045)), decides imageness
   from `MessageAttachment.filename` with a new client-owned exact-extension helper, and widened the CSP's
   `img-src` to `'self' blob:` and nothing else.
 - [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the parent ticket this slice split
   from.
-- [#869](attachment-open.md) — the thumbnail's own open-full-size click, and the fetch-then-act shape's
-  third candidate consumer.
+- [#869](attachment-open.md) — the thumbnail's own open-in-viewer click. Shipped as a single
+  fire-and-forget ask rather than a third fetch-then-act instance — see § No shared fetch-then-act
+  machinery was lifted, above.

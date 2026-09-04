@@ -4,9 +4,9 @@ Opens an attachment that is **already on this machine** in the operating system'
 its type, so zoom and pan come from the OS viewer rather than from a viewer this app would otherwise
 have to build (operator, 2026-08-22). Introduced in
 [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867), split from #691. The background-process
-half only — no visible app UI ships in this slice. The thumbnail that becomes the control calling this
-channel is [#869](https://github.com/pyrycode/pyrycode-desktop/issues/869); the thumbnail itself is
-[#868](https://github.com/pyrycode/pyrycode-desktop/issues/868).
+half only — no visible app UI shipped in that slice. The thumbnail that became the control calling this
+channel is [#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045), shipped;
+the thumbnail itself is [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868).
 
 The fifth attachment channel pair, and the fourth reader of the one `attachmentDir`
 [attachment path resolution](attachment-path-resolution.md) (#818) gates. It closes the on-disk-shape
@@ -209,9 +209,11 @@ join(app.getPath('userData'), ATTACHMENT_OPEN_DIR_NAME)`. `attachmentBytesListen
 
 `src/preload/index.ts` gains `openAttachment(request)` (fire-and-forget) and
 `onAttachmentOpenEvent(listener)` (subscription returning an unsubscribe handle, raw
-`IpcRendererEvent` stripped) — `requestAttachmentBytes`/`onAttachmentBytesEvent`'s shape verbatim. **No
-caller is wired** — the thumbnail click that calls this channel is
-[#869](https://github.com/pyrycode/pyrycode-desktop/issues/869), not started as of this writing.
+`IpcRendererEvent` stripped) — `requestAttachmentBytes`/`onAttachmentBytesEvent`'s shape verbatim. The
+caller is [#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045), shipped:
+`BubbleAttachmentImage.tsx`'s `ready` arm calls `openAttachment({ attachmentId })` from a click handler
+and does not subscribe to `onAttachmentOpenEvent` at all — see § Error handling there. The listener
+side of the pair still has no caller.
 
 ## State and concurrency
 
@@ -307,6 +309,16 @@ which cannot observe an OS viewer appearing.
   file, which is accepted rather than fixed — see § Security above.
 - **A symlink inside the attachment directory is followed** (§ Security) — out of scope, same
   disposition as #814 and #866.
+- **The drawable set and the openable set disagree, and #869 did not reconcile them.** The renderer
+  draws a picture for seven extensions
+  ([`DRAWABLE_IMAGE_EXTENSIONS`](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045),
+  matched on `filename`); this module's `ImageSuffix`/`SIGNATURES`, matched on leading bytes, accepts
+  only the four raster members in the table above. An `.avif` or `.bmp` attachment draws as a picture
+  (Chromium decodes both) and its click resolves `unsupported-type` — a control that is silently dead on
+  two admitted formats, since #869 wires no feedback for any failure reason (§ Error handling below).
+  Left open on purpose: widening `SIGNATURES` and narrowing `DRAWABLE_IMAGE_EXTENSIONS` are each a
+  change to a security-argued closed set with its own reasoning to redo. Whoever files the failure-state
+  ticket in the open question below should read this gap first.
 
 ## Related
 
@@ -324,6 +336,6 @@ which cannot observe an OS viewer appearing.
   this machine before it can be opened.
 - `docs/specs/architecture/867-open-attachment-in-os-image-viewer.md` — the full architecture spec,
   including the security review and the open questions this doc resolves.
-- [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) /
-  [#869](https://github.com/pyrycode/pyrycode-desktop/issues/869) — the thumbnail and the click that
-  calls this channel, not started as of this writing.
+- [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the thumbnail, and
+  [#869](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045) — the click that
+  calls this channel. Both shipped.

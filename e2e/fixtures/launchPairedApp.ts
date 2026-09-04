@@ -1,7 +1,6 @@
 import {
   test as base,
   expect,
-  _electron as electron,
   type ElectronApplication,
   type Page
 } from '@playwright/test'
@@ -16,6 +15,7 @@ import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from '../../
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
+import { launchIsolatedApp } from './desktopIsolation'
 import { pairFromUnpairedLaunch } from './pairingArrival'
 import type {
   ConversationSummary,
@@ -189,7 +189,11 @@ export const test = base.extend<PairedAppFixtures>({
       delete env.ELECTRON_RENDERER_URL
       env[LOOPBACK_RELAY_ENV_FLAG] = '1'
       env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
-      const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+      // #1067: through the shared launch, not `electron.launch` directly — it adds the desktop isolation
+      // (renderer-throttling switches + the third isPackaged-gated dev flag, which keeps the window
+      // hidden) that this fixture's 48 spec files all need and none should re-derive. Everything above
+      // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
+      const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${userDataDir}`], env })
       teardown.push(() => app.close())
 
       const page = await app.firstWindow()

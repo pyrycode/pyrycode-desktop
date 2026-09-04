@@ -128,5 +128,6 @@ The architect self-review verdict is **PASS**. The affordance widens the *single
 - [Relay connection](relay-connection.md) / [#21](../codebase/21.md) — dials the validated URL **verbatim** (no scheme check), which is why `wss:`-only enforcement lives entirely in the gate and this affordance needs no `relayConnection.ts` change.
 - [#97 codebase notes](../codebase/97.md) — implementation summary, patterns, and lessons.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (relay substitution defense; token/keys never reach the renderer).
+- [Window-presentation dev affordance](window-presentation-affordance.md) / [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) — the third instance of this shape (the twin is now a trio), gating whether a non-packaged build shows its window.
 </content>
 </invoke>

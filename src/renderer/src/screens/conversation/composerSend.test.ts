@@ -188,11 +188,19 @@ describe('submitMessage', () => {
   const REPORT: MessageAttachment = { attachmentId: 'upload-1', filename: 'report.pdf' }
   const SHOT: MessageAttachment = { attachmentId: 'upload-2', filename: 'clipboard-2026.png' }
 
+  /** A take whose rollback is a spy, so a test can assert whether the send put the set back (#1055). */
+  const takeOf = (
+    attachments: readonly MessageAttachment[]
+  ): { attachments: readonly MessageAttachment[]; rollback: ReturnType<typeof vi.fn> } => ({
+    attachments,
+    rollback: vi.fn()
+  })
+
   it('#1039: records the taken attachments on the echo, the same list on both write paths', () => {
     const dispatch = vi.fn()
     const dispatchFor = vi.fn()
     const pending = [REPORT, SHOT]
-    const takeAttachments = vi.fn(() => pending)
+    const takeAttachments = vi.fn(() => takeOf(pending))
 
     submitMessage('here you go', 'conv-1', {
       sendCommand: vi.fn(),
@@ -220,7 +228,7 @@ describe('submitMessage', () => {
       dispatch,
       dispatchFor: vi.fn(),
       newMessageId: () => 'a2',
-      takeAttachments: () => []
+      takeAttachments: () => takeOf([])
     })
 
     const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
@@ -248,7 +256,7 @@ describe('submitMessage', () => {
   // is destructive, so a submit that sends nothing must not perform it — the operator's attached file
   // has to survive a blank Enter and a send with no active conversation.
   it('#1039: does not take when the submit is refused, so the pending set survives (AC4)', () => {
-    const takeAttachments = vi.fn(() => [REPORT])
+    const takeAttachments = vi.fn(() => takeOf([REPORT]))
     const deps = {
       sendCommand: vi.fn(),
       dispatch: vi.fn(),
@@ -261,10 +269,83 @@ describe('submitMessage', () => {
     expect(takeAttachments).not.toHaveBeenCalled()
   })
 
-  // A bridge failure is swallowed and the echo still posts, so it still records and still clears — the
-  // timeline moved, which is the same fact `sent === true` reports to the scroll follow.
-  it('#1039: still records the attachments when the send bridge throws', () => {
+  // ================================================================================================
+  // #1055 — the outbound half. The ids ride the frame, so the take now happens ABOVE the guarded send
+  // (the payload literal needs them), and the send's outcome is what decides whether it stands.
+  // ================================================================================================
+
+  /** The payload as it reaches the WIRE: what buildSendMessage hands to JSON.stringify. */
+  const sentPayload = (sendCommand: ReturnType<typeof vi.fn>): Record<string, unknown> => {
+    const [command] = sendCommand.mock.calls[0] as [RendererCommand]
+    if (command.type !== 'sendMessage') throw new Error(`unexpected command ${command.type}`)
+    return JSON.parse(JSON.stringify(command.payload)) as Record<string, unknown>
+  }
+
+  it('#1055: names the taken attachment ids on the frame, in the pending set order (AC1)', () => {
+    const sendCommand = vi.fn()
+
+    submitMessage('here you go', 'conv-1', {
+      sendCommand,
+      dispatch: vi.fn(),
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'w1',
+      takeAttachments: () => takeOf([REPORT, SHOT])
+    })
+
+    // Ids only — the filename is the window's own display supply and has no field on this frame.
+    expect(sentPayload(sendCommand)).toEqual({
+      conversation_id: 'conv-1',
+      message_id: 'w1',
+      text: 'here you go',
+      attachment_ids: ['upload-1', 'upload-2']
+    })
+  })
+
+  // AC1's second half, asserted on the SERIALIZED form rather than on the object: `undefined` is
+  // assigned unconditionally (the `createdAt` idiom) and JSON.stringify is what drops the key, so the
+  // in-memory payload legitimately carries `attachment_ids: undefined` while the wire carries no key.
+  it('#1055: carries NO attachment_ids key at all when nothing was taken (AC1)', () => {
+    for (const take of [() => takeOf([]), undefined]) {
+      const sendCommand = vi.fn()
+      submitMessage('just text', 'conv-1', {
+        sendCommand,
+        dispatch: vi.fn(),
+        dispatchFor: vi.fn(),
+        newMessageId: () => 'w2',
+        takeAttachments: take
+      })
+      const payload = sentPayload(sendCommand)
+      expect('attachment_ids' in payload).toBe(false)
+      expect(payload).toEqual({ conversation_id: 'conv-1', message_id: 'w2', text: 'just text' })
+    }
+  })
+
+  it('#1055: the frame and the echo name exactly the same attachments (AC2)', () => {
+    const sendCommand = vi.fn()
     const dispatch = vi.fn()
+
+    submitMessage('with files', 'conv-1', {
+      sendCommand,
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'w3',
+      takeAttachments: () => takeOf([REPORT, SHOT])
+    })
+
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(sentPayload(sendCommand).attachment_ids).toEqual(
+      (echo.attachments ?? []).map((attachment) => attachment.attachmentId)
+    )
+  })
+
+  // ⭐ AC3, and what it retires: the #1039 contract said a bridge failure "still records and still
+  // clears". It cannot, now that the ids ride the frame — if the frame did not go it named nothing, so
+  // the echo records nothing and the files stay attached for the retry. The alternative (echo shows
+  // them AND they stay pending) would duplicate them on the next send.
+  it('#1055: a throwing send rolls the take back and records nothing on the echo (AC3)', () => {
+    const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
+    const take = takeOf([REPORT])
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     const result = submitMessage('with a file', 'conv-1', {
@@ -272,15 +353,33 @@ describe('submitMessage', () => {
         throw new Error('bridge down')
       },
       dispatch,
-      dispatchFor: vi.fn(),
+      dispatchFor,
       newMessageId: () => 'a4',
-      takeAttachments: () => [REPORT]
+      takeAttachments: () => take
     })
 
+    // The guarded-send contract is unchanged: swallowed, echo still posts, still `true`.
     expect(result).toBe(true)
+    expect(take.rollback).toHaveBeenCalledTimes(1)
     const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toEqual([REPORT])
+    expect(echo.attachments).toBe(undefined)
+    // Both writes share the one object, so neither can disagree with the frame either.
+    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
     errorSpy.mockRestore()
+  })
+
+  it('#1055: a send that does NOT throw keeps the take — no rollback (AC3)', () => {
+    const take = takeOf([REPORT])
+
+    submitMessage('with a file', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch: vi.fn(),
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'a5',
+      takeAttachments: () => take
+    })
+
+    expect(take.rollback).not.toHaveBeenCalled()
   })
 
   it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {

@@ -224,6 +224,49 @@ describe('isRendererCommand', () => {
     ).toBe(false)
   })
 
+  // #1055 — the attachment_ids arm. A message naming files is the ordinary case now, and the key's
+  // three legal shapes on this side are: absent, present-and-undefined, and an array of non-empty
+  // strings. The middle one is not a curiosity: `submitMessage` assigns the field unconditionally (the
+  // `createdAt` idiom, so JSON.stringify drops it on the wire) and structured clone PRESERVES an own
+  // property whose value is `undefined`, so every ordinary send arrives here with the key present.
+  it('#1055: accepts the three legal attachment_ids shapes', () => {
+    const t = 'sendMessage'
+    const base = { conversation_id: 'c1', message_id: 'm1', text: 'hi' }
+    expect(isRendererCommand({ type: t, payload: base })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: undefined } })).toBe(true)
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: [] } })).toBe(true)
+    expect(
+      isRendererCommand({ type: t, payload: { ...base, attachment_ids: ['a', 'b'] } })
+    ).toBe(true)
+  })
+
+  // A type-lie inside a declared string[] would otherwise reach the builder's bare JSON.stringify and
+  // put a `null`/number on the wire, which the daemon refuses as protocol.malformed — taking the whole
+  // message with it. The empty string is refused for isAttachmentRetrievalRequest's recorded reason:
+  // joined onto a directory it names that directory, so this side declines to originate it.
+  it('#1055: rejects a non-array, a non-string element, and the empty string', () => {
+    const t = 'sendMessage'
+    const base = { conversation_id: 'c1', message_id: 'm1', text: 'hi' }
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: 'a' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: [1] } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { ...base, attachment_ids: ['a', ''] } })).toBe(false)
+  })
+
+  // ⭐ THE `for…of`-NOT-`every` PROOF, isAnswerQuestionsPayload's lesson on this file's second array
+  // field: `every` SKIPS holes, so a sparse array would pass it while JSON.stringify emits `null` for
+  // the hole. Sparse arrays survive structured clone, so this shape is reachable over IPC.
+  it('#1055: rejects a SPARSE attachment_ids array', () => {
+    const sparse = ['a', 'b']
+    delete sparse[1]
+    expect(
+      isRendererCommand({
+        type: 'sendMessage',
+        payload: { conversation_id: 'c1', message_id: 'm1', text: 'hi', attachment_ids: sparse }
+      })
+    ).toBe(false)
+  })
+
   it('accepts the bare requestDebugBundle command (no payload — bundle is daemon-global)', () => {
     // The debug-bundle request carries nothing to parameterise, so its guard case is a bare
     // `return true`. A structurally-extra field is harmless (structural minimum), like sendMessage.

@@ -8,6 +8,23 @@ import type { ConnectionStatus } from '../../store/sessionStore'
 import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
 
 /**
+ * One send's claim on the composer's pending attachments (#1055): the set it took, and the undo that
+ * puts them back. The two travel together so a caller cannot hold one without the other.
+ *
+ * DECLARED HERE, WITH THE CONSUMER, AND NOT BESIDE ITS PRODUCER — the module-level rule this repo
+ * already follows for `RelayConnection`. `drainPendingAttachments` in ComposerAttach.tsx is what builds
+ * one, but that is a `.tsx` module: importing the type FROM there would make this pure, React-free
+ * helper name a React module, and a type-only import that is erased at build time is still an edge a
+ * reader has to check. The edge runs the other way instead.
+ */
+export interface PendingAttachmentTake {
+  /** The set this take claimed. Already removed from the composer's holder — reading it consumed it. */
+  attachments: readonly MessageAttachment[]
+  /** Undo this take, restoring exactly the set above. Called when the send did not go. */
+  rollback: () => void
+}
+
+/**
  * The four effects submitMessage performs, injected so the helper stays pure and deterministic in
  * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub. `dispatch`
  * writes a `ThreadEvent` into `timelineStore` (#179): the user's message and the daemon's structured
@@ -37,8 +54,20 @@ import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
  * boundary this pipeline splits at) to buy a compile error, and an unwired take means no attachments
  * rather than a fallback to some other source. It differs from `now` in one way that shapes the rest of
  * this module: **the take is destructive**. The composer's implementation returns the set AND clears it,
- * so calling it is what "this send consumed those attachments" means. That is why it is read exactly once,
- * below both `false` returns — see submitMessage.
+ * so calling it is what "this send consumed those attachments" means.
+ *
+ * ⭐ WHAT #1055 CHANGES, AND WHY THE OLD ORDERING COULD NOT SURVIVE IT. The paragraph that stood here
+ * ended "that is why it is read exactly once, below the guarded send", and that placement is now
+ * impossible: the taken ids RIDE the outbound frame, so they have to be known before the payload literal
+ * is built. What survives verbatim is the half that still holds — the take is read exactly ONCE, and it
+ * is read below BOTH `false` returns, so a blank Enter and a submit with no active conversation still
+ * take nothing and the operator's attached file survives for the next send.
+ *
+ * What the move costs is an undo, and the dep's shape is where that is paid: it now answers a
+ * `PendingAttachmentTake` — the set AND a `rollback` that puts it back — rather than the bare set. A send
+ * whose bridge throws named nothing on the wire, so the files must still be attached for the retry
+ * (#1055's third criterion); handing the undo back with the take is what keeps that from becoming a
+ * second optional dep that could silently go unwired, the failure mode `now` already documents.
  */
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
@@ -46,7 +75,7 @@ export interface ComposerSendDeps {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
   newMessageId: () => string
   now?: () => number
-  takeAttachments?: () => readonly MessageAttachment[]
+  takeAttachments?: () => PendingAttachmentTake
 }
 
 /**
@@ -67,6 +96,12 @@ export interface ComposerSendDeps {
  * key. The send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is
  * dispatched regardless of the send outcome — "optimistic" means show-immediately, and this
  * milestone has no send-failure UI surface.
+ *
+ * #1055 QUALIFIES THAT LAST SENTENCE IN EXACTLY ONE PLACE. The echo still posts on a bridge failure and
+ * this still returns `true`; what a failed send no longer carries is the message's ATTACHMENTS. Their
+ * ids ride the frame now, so a frame that did not go named none — and recording them anyway, while the
+ * files stay pending for the retry, would show them twice. "Optimistic" covers text, which the operator
+ * can see and re-send; it does not cover a claim about what the daemon was handed.
  */
 export function submitMessage(
   text: string,
@@ -79,17 +114,41 @@ export function submitMessage(
 
   const message_id = deps.newMessageId()
 
+  // #1039/#1055: the attachments are TAKEN here, and the position of this line is load-bearing twice
+  // over. It sits below BOTH `false` returns — the take is destructive, so a whitespace-only submit and
+  // a submit with no active conversation take nothing and the operator's attached file survives for the
+  // next send — and it sits ABOVE the payload literal, which is what #1055 moved: the ids ride the
+  // frame, so they have to be known before it is built. It is called ONCE; there is no second call site
+  // and no re-read.
+  const take = deps.takeAttachments?.()
+  // An unwired take and a take of nothing both mean "this message names no files" — the `now`/`createdAt`
+  // rule, restated for the set — so the two collapse to one length here rather than to two branches.
+  const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
+
   const payload: SendMessagePayload = {
     conversation_id: conversationId,
     message_id,
-    text: trimmed
+    text: trimmed,
+    // ⭐ EMPTY NORMALISES TO ABSENT, and `undefined` is assigned unconditionally — the `createdAt`
+    // idiom — because JSON.stringify drops such a key and buildSendMessage serializes this object
+    // verbatim. That is the whole of "a message sent with none carries no `attachment_ids` key at all,
+    // not `null`, not `[]`": no conditional key, and one rule shared with the echo below.
+    attachment_ids: named?.map((attachment) => attachment.attachmentId)
   }
 
+  let sent = true
   try {
     deps.sendCommand(sendMessageCommand(payload))
   } catch (error) {
     // AC4: a send-bridge failure must not crash the window. The optimistic echo still posts.
     console.error('composer send failed', error)
+    // #1055: but it posts WITHOUT the attachments, and the take is undone. If the frame did not go it
+    // named nothing, so the echo records nothing and the files stay attached for the retry. The
+    // alternative — echo shows them AND they stay pending — duplicates them on the next send. Rolling
+    // back is sound because this function is synchronous end to end: the upload listener that appends
+    // to the pending set runs as a separate task, so nothing can have arrived in the gap.
+    sent = false
+    take?.rollback()
   }
 
   // Route the optimistic echo into the timeline as the `userText` item (#245). The timeline reducer
@@ -105,15 +164,10 @@ export function submitMessage(
   // two different instants for one message. Below both `false` returns, so a refused submit reads no clock
   // at all. `deps.now?.()` yields `undefined` when no clock was injected, assigned unconditionally.
   //
-  // #1039: the attachments are TAKEN here, and the position of this line is the fourth criterion in full.
-  // The take is destructive — the composer hands back its pending set and clears it in one act — so it
-  // sits below both `false` returns, exactly where the clock is read: a whitespace-only submit and a
-  // submit with no active conversation take nothing, and the operator's attached file survives for the
-  // next send. It is called ONCE, on the single object both writes share, so the two stores cannot record
-  // two different sets for one message; and it is called after the guarded send, so a bridge failure —
-  // which still posts the echo and still returns `true` — still records and still clears. There is no
-  // second call site and no re-read: "taken" and "consumed" are the same event.
-  const taken = deps.takeAttachments?.()
+  // #1055: the echo records EXACTLY what the frame named, which is the second criterion and is
+  // structural rather than conventional — one `attachments` value feeds both, normalised by one rule
+  // (empty ⇒ absent) and gated by one boolean. The two cannot disagree on any path, including the
+  // throwing one, where the frame named nothing and this records nothing.
   const echo: ThreadEvent = {
     type: 'userText',
     text: trimmed,
@@ -124,7 +178,7 @@ export function submitMessage(
     // the store: the take answers an empty array whenever the operator attached nothing, and an unwired
     // take answers `undefined`. Both land here as `undefined`, assigned unconditionally (the `createdAt`
     // discipline), which is what the store tests as absence.
-    attachments: taken !== undefined && taken.length > 0 ? taken : undefined
+    attachments: sent ? named : undefined
   }
   deps.dispatch(echo)
   // The keyed fold, under the conversation this message was SENT TO — it rides the wire as

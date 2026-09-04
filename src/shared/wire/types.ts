@@ -286,10 +286,43 @@ export interface MessageChunkPayload {
   messages: MessagePayload[]
 }
 
+/**
+ * Outbound `send_message` payload (client → daemon). The three original fields are required and
+ * predate v2; `attachment_ids` (#1055, upstream pyrycode#2036) is the frame's only optional key.
+ *
+ * `attachment_ids` NAMES A MESSAGE'S ATTACHMENTS, which uploading a file does not: the upload leg
+ * stores the bytes on the host under the id the client minted, and nothing else on the wire says which
+ * message they belong to. Consumed by the daemon since pyrycode#2038, which resolves each named id to
+ * its on-host path and composes a prompt naming those paths for `claude` to read — it builds no native
+ * image block, so the bytes are never duplicated into the transcript.
+ *
+ * ABSENT IS THE CANONICAL "NONE" and this type expresses it the way the sibling optional payloads do:
+ * TS has no `omitempty`, so `?` merely PERMITS absence and the ENCODER is what enforces it —
+ * `buildSendMessage` serializes this object verbatim, and `JSON.stringify` drops a key whose value is
+ * `undefined`. Upstream also accepts `null` and `[]` and cannot tell the three apart, so no daemon
+ * behaviour can depend on which; this client sends the absent form only.
+ *
+ * EACH ELEMENT IS A LOWERCASE UUIDv4 under § The `attachment_id` shape — the same canonical rule
+ * binding `RequestAttachmentPayload`'s ids, and lowercase is load-bearing there for the same reason
+ * (the id becomes a directory name on a case-insensitive filesystem). DOCUMENTED, NOT VALIDATED here,
+ * that type's posture verbatim: this wire layer declares shapes and validates none. Upstream mandates
+ * the check on the RECEIVER and enforces it, which is where it answers both of the hazards it names —
+ * an element becoming a path component, and an element becoming prompt content claude reads
+ * (§ Security model threat 1). Containment is upstream's confinement to the message's own
+ * conversation directory, never this side's checking and never the id's unguessability.
+ *
+ * AT MOST 32 ELEMENTS, counting elements rather than distinct ids; upstream refuses an over-bound list
+ * with `protocol.malformed`, taking the whole message with it. Published as contract clarity rather
+ * than as a DoS mitigation (the envelope cap already bounds the list far lower than any resolution
+ * cost matters), and NOT guarded on this side — reaching it needs 33 attach gestures on one message,
+ * which has never happened, and what to do with the 33rd file is an unmade UX decision.
+ */
 export interface SendMessagePayload {
   conversation_id: string
   message_id: string
   text: string
+  /** The uploaded attachments this message references, in the composer's own order. Absent = none. */
+  attachment_ids?: string[]
 }
 
 /**

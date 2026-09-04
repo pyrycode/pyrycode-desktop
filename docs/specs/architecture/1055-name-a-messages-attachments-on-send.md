@@ -28,8 +28,10 @@
 - `e2e/fixtures/realDaemon.ts` → `RealDaemonOptions` (`skipPermissions` defaults `true`, `interactiveRunner`).
 - `docs/knowledge/features/composer-send.md` § the #1039 block — **states "the echo and its attachments
   show regardless of the wire outcome", which AC3 falsifies**; flagged for the documentation phase below.
-- `docs/knowledge/features/live-e2e-runbook.md` § *Current real-claude gate state* — the tier is 11 specs
-  and the untracked `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor needs bumping; this PR adds the 12th.
+- `docs/knowledge/features/live-e2e-runbook.md` § *Current real-claude gate state* — the untracked
+  `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor needs bumping. **The runbook's own count is stale**: it says
+  11, but the merge-base carries **12** `real-*.spec.ts` files, so this PR makes the tier **13**. Measured,
+  not transcribed — see the Revisions entry below.
 - Upstream SSOT `pyrycode` `docs/protocol-mobile.md` § *Naming a message's attachments* / § *The
   `attachment_id` shape* — `attachment_ids` is an optional array of lowercase-UUIDv4 strings, at most 32
   elements, absent/`null`/`[]` indistinguishable to a receiver, consumed since pyrycode#2038.
@@ -213,7 +215,7 @@ The spec is `real-*`-named, so it is `testIgnore`d out of the default tier and r
   a case-insensitive `red` against the whole assistant text. If a live run shows the model answering with
   a synonym, the fix is the prompt, not the assertion.
 - **Does the tier's floor need a bump?** Yes — `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` is untracked and
-  operator-owned; the tier goes 11 → 12. Called out in the PR body, which is the runbook's own stated
+  operator-owned; the tier goes **12 → 13**. Called out in the PR body, which is the runbook's own stated
   mechanism ("a PR that adds a `real-*` spec must say so").
 
 ## For the documentation phase (not written here)
@@ -224,7 +226,12 @@ The spec is `real-*`-named, so it is `testIgnore`d out of the default tier and r
   should stay.
 - `docs/knowledge/features/composer-attach.md` § pending attachments describes `drainPendingAttachments`'s
   old return shape.
-- `docs/knowledge/features/live-e2e-runbook.md` § *Current real-claude gate state* — the tier is 12.
+- `docs/knowledge/features/live-e2e-runbook.md` § *Current real-claude gate state* — the tier is **13**,
+  and the section's standing count of 11 was already stale by one before this PR. The floor
+  (`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`) must equal the exact spec count: set below it, a run in which a
+  spec silently skipped still clears the floor and reports a pass, which is the false green the runbook
+  itself documents. This fork's configured floor is currently **10** (per the gate's own report), i.e.
+  three under the true count.
 
 ## Size
 
@@ -310,4 +317,41 @@ ticket.
 
 ## Revisions
 
-*(none yet — appended if implementation departs from the design above)*
+### 2026-09-04 — rework leg 1 (real-claude gate FAIL + two review findings)
+
+Nothing in the design changed. Three corrections, none of which touches the production diff.
+
+**1. The real-claude tier count was wrong in three places above (verifier, SHOULD FIX).** The plan said
+the tier goes 11 → 12, taking `11` from `live-e2e-runbook.md` § *Current real-claude gate state*. That
+section is itself stale. Measured on this branch rather than transcribed: `origin/main` carries 12
+`real-*.spec.ts` files and this branch carries 13, and the dispatcher's own gate report independently
+says `executed: 13`. The true move is **12 → 13**. This matters beyond tidiness because the documentation
+phase transcribes this plan into the runbook, which is where the operator reads the number for
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` — and a floor set under the true count is the runbook's own
+documented false green (a run in which one spec silently skipped still clears it). The fork's configured
+floor is currently 10, three under. Corrected in *Files read*, *Open questions* and *For the documentation
+phase*. The spec header itself was already state-free and needed no edit.
+
+**2. `EXPECTED_COLOUR` is now word-anchored (verifier, SHOULD FIX).** It was `/red/i`, matched as a
+substring against the whole joined assistant text, so `colored`, `considered`, `rendered`, `required` and
+`hundred` all satisfied it. The reply this assertion exists to *reject* is claude's prose about a missing
+image, which is the text most likely to contain one of those words — so the substring form could report a
+false green on precisely the regression the ticket was filed for. `/\bred\b/i` accepts every example the
+comment names and refuses that. This is the ticket's only liveness proof, so the boundary is what makes
+the spec's stated contract — the assertion reads the reply's content — actually true.
+
+**3. AC4 is still unexecuted, and the reason is not this spec.** The dispatcher's real-claude gate failed
+this branch 12/13, the single failure being `real-claude-attachment.spec.ts`. It did **not** fail on any
+assertion this spec owns: it failed inside the shared `pairFromUnpairedLaunch` helper, waiting for
+`[aria-label="Server key fingerprint"]` on the default 5000 ms budget, which is the flake already filed as
+**#1067** (open, unfixed) and byte-identical to the two occurrences the verifier triaged during code
+review. The drive never reached the picker stub, the upload, the send or the reply poll. Confirmed
+structural rather than incidental: this spec's launch path is a one-line delegation away from the twelve
+that passed — the `page` fixture is itself just `withIsolatedElectronApp(({ page }) => use(page))`, which
+is what this spec calls directly (it needs the `ElectronApplication` handle for the dialog stub, per #517).
+Two consequences worth recording. The tier runs `retries: 0` by deliberate design ("a real-stack failure
+is a genuine liveness signal, not a flake to paper over"), so a single flake fails the whole gate; and
+because 48 of 49 default-tier specs and all 13 real-tier specs route through this one helper, **#1067
+gates this ticket regardless of which spec it lands on**, not merely this one. No workaround was attempted
+here: the fix belongs to #1067, whose own analysis places it in `createWindow`'s `show()` — production
+code, and squarely out of this ticket's scope.

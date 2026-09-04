@@ -52,9 +52,14 @@ const RED_PNG_BASE64 =
 // The name the operator would see. It says nothing about the colour, so a reply that merely echoed the
 // filename could not satisfy the assertion below.
 const IMAGE_FILENAME = 'attached-swatch.png'
-// The word the image's content compels. Matched case-insensitively and as a substring, so "Red", "red."
-// and "The image is red" all pass; nothing else in the drive says it — not the prompt, not the filename.
-const EXPECTED_COLOUR = /red/i
+// The word the image's content compels. Case-insensitive and WORD-ANCHORED: "Red", "red." and "The image
+// is red" all pass, while the substring form this started as would have accepted `colored`, `considered`,
+// `rendered`, `required` and `hundred`. That is not a hypothetical here — the reply this assertion exists
+// to REJECT is claude's prose about a missing image, which is exactly the text most likely to contain one
+// of those words ("I don't see any image attached… could you re-send it?" answers `considered`/`required`
+// on a bad day). The boundary is what makes the header's claim — that the assertion reads the reply's
+// CONTENT — actually true. Nothing else in the drive says the bare word: not the prompt, not the filename.
+const EXPECTED_COLOUR = /\bred\b/i
 
 // --- Selectors (verbatim from real-claude.spec.ts; `rg META_SELECTOR e2e/` finds the family) ----------
 const ASSISTANT_ROW = '[data-thread-role="assistant"]'

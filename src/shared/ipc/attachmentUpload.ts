@@ -1,10 +1,12 @@
-// The attachment-upload channel pair between the renderer window and the background process (#862):
-// two channel constants plus one sealed outcome union, imported by both process sides. The renderer
-// names an INTENT ("let me attach a file"); the background process opens the picker, guards and reads
-// the choice, drives #861's upload driver, and pushes back exactly one terminal.
+// The attachment-upload channel pair between the renderer window and the background process (#862,
+// widened by #890): two channel constants, one optional request shape plus its boundary guard, and one
+// sealed outcome union, imported by both process sides. The renderer either names a bare INTENT ("let
+// me attach a file", and the background process opens the picker and reads the choice) or names a
+// DROPPED PATH. Either way the background process guards, drives #861's upload driver, and pushes back
+// exactly one terminal.
 //
-// This module is channel constants + a discriminated union with NO runtime logic — the same shape as
-// pairingStatus.ts and events.ts.
+// This module is channel constants + a discriminated union + one pure guard, with no I/O and no state —
+// attachmentBytes.ts's shape. It was constants and a union alone until #890 added the door below.
 //
 // TWO CHANNELS, NOT AN INVOKE. The outcome comes back with ipcRenderer.on rather than as an
 // invoke reply because the channel must carry MORE THAN ONE MESSAGE per intent: #864 puts in-flight
@@ -12,13 +14,25 @@
 // alternative — a new DaemonEvent union member — is a compile-forced edit in four renderer bridges
 // that each end their switch in assertNever, which is over this slice's file boundary.
 //
-// THE INTENT CARRIES NO REQUEST BODY, and that is the design's central security property rather than
-// a convenience. The renderer sends with no argument, so there is no untrusted request field to
-// validate at the boundary and NO renderer-supplied string can reach a host path, a declared
-// filename, or the wire. A fully compromised renderer can make a picker appear; it cannot choose what
-// that picker opens. This is why the module ships no isAttachmentUploadRequest guard (pairingStatus's
-// argument, restated). #890 will widen the intent to carry a dropped path — THAT widening owes a
-// request guard, and the door is left value-free today so the obligation is visible when it arrives.
+// THE REQUEST BODY IS OPTIONAL, AND THAT SHAPE IS THE DESIGN'S CENTRAL SECURITY PROPERTY. #862 shipped
+// this channel value-free: the renderer sent with no argument, so there was no untrusted request field
+// at the boundary at all and no renderer-supplied string could reach a host path, a declared filename or
+// the wire — a fully compromised renderer could make a picker appear, but not choose what it opened.
+// That door was left value-free deliberately, so that the obligation would be VISIBLE the day something
+// wanted to widen it. #890 is that day, and it pays the debt in the shape the header named: an
+// argument-free send still means "open the picker" and reaches no request field; a send carrying a
+// request means "upload this path" and is refused outright by isAttachmentUploadRequest below unless it
+// is well-formed. There is still exactly ONE place a path enters main from the window.
+//
+// WHAT REPLACES "NOTHING CROSSES" IS NOT A WEAKER CLAIM, IT IS A DIFFERENT ONE. The path is resolved in
+// the preload by `webUtils.getPathForFile`, which answers the EMPTY STRING for a File the page
+// constructed itself — only a file an operator gesture delivered is backed by a path. So a compromised
+// renderer still cannot name an arbitrary file on disk and have it streamed to the host; it can only
+// forward a path-backed File it holds. That property survives only while the preload is the sole
+// resolver AND main refuses an empty or non-string path outright, which is what the guard is for.
+//
+// `RendererCommand` stays the wrong home for this, for the reason the original filing gave: a path is
+// not a renderer-owned value. Keeping it here keeps it out of there.
 //
 // Imports nothing from src/main (layering: shared is loaded by preload and renderer and must not pull
 // main-only code). Relative imports only — src/main and src/preload have no @shared alias.
@@ -32,6 +46,75 @@ export const ATTACHMENT_UPLOAD_CHANNEL = 'pyry:attachment-upload' as const
  *  deliberately separate from ATTACHMENT_UPLOAD_CHANNEL so the two directions cannot be confused, and
  *  separate from DAEMON_EVENT_CHANNEL so an upload outcome never reaches the daemon-event bridges. */
 export const ATTACHMENT_UPLOAD_EVENT_CHANNEL = 'pyry:attachment-upload-event' as const
+
+/**
+ * Upper bound on the accepted path, in UTF-16 code units, enforced at the guard (#890) —
+ * MAX_SAVE_FILENAME_LENGTH's figure and MAX_BYTES_IDENTIFIER_LENGTH's argument, applied to the one
+ * attachment ask whose untrusted value is a host path. It is boundary hygiene: the value the window
+ * supplies is bounded before the background process does anything with it, exactly as MAX_PASTE_LENGTH
+ * bounds a paste before main runs a regex over it.
+ *
+ * 4096 is the platform ceiling for a path a real drop can produce (PATH_MAX is 1024 on macOS and 4096
+ * on Linux; a Windows path is far shorter in practice), so it refuses nothing an operator can do.
+ *
+ * A SIZE bound, not a shape or canonicity one, which is what leaves the single-gate argument intact:
+ * `readChosenFile` (src/main/attachmentUpload.ts) stays the sole thing that decides whether a path names
+ * a readable regular file, and it decides it by OPENING the path rather than by inspecting the string.
+ * Confining the path to a root would be the wrong check to add here and not merely a redundant one —
+ * dropping a file from anywhere on the operator's own disk is the whole feature.
+ */
+export const MAX_UPLOAD_PATH_LENGTH = 4096
+
+/**
+ * What a DROPPED file asks for (#890): a path, AND NOTHING ELSE. One field, because everything else the
+ * flow needs is derived in the background process from the file itself — `readChosenFile` takes the
+ * display name from `basename` and the type from the name, so a window that supplied either could
+ * mislabel a file it did not choose.
+ *
+ * camelCase, not the wire's snake_case, because this is a client-internal IPC contract rather than a
+ * wire type. Nothing downstream rebuilds a value from this object's other keys, so an ask carrying extra
+ * ones is accepted and its extras are simply never read.
+ *
+ * OPTIONAL ON THE CHANNEL: a send with no argument at all is the picker intent #862 shipped and is not
+ * an ill-formed request. The two are told apart by presence, not by a discriminator field, because the
+ * shipped sender cannot be given one without changing what a conforming renderer puts on the wire.
+ */
+export interface AttachmentUploadRequest {
+  /** The host path of the dropped file, resolved in the preload by `webUtils.getPathForFile`.
+   *  Untrusted in the same way a wire field is: it may be empty, absurd, or name a file the operator
+   *  never dropped. It is a CLAIM, not a capability — main opens it and refuses anything that is not a
+   *  regular file, and drops the errno unexamined because it carries this same path. */
+  path: string
+}
+
+/**
+ * The runtime guard the main receiver applies at the untrusted renderer→main boundary (#890) —
+ * isAttachmentBytesRequest's role for this channel, in its shape. A failing ask is DROPPED: no
+ * filesystem call, no event. There is no identifier to address an answer to, and nothing an operator can
+ * physically do produces one — a real drop always carries a real path, so an empty or malformed request
+ * means a page-constructed `File` or a compromised renderer, and neither is owed a sentence in the
+ * composer.
+ *
+ * THE EMPTY-STRING REFUSAL IS THE LOAD-BEARING LINE, not the length bound above it.
+ * `webUtils.getPathForFile` answers '' for a `File` the page built itself, so this is where "only a file
+ * an operator gesture delivered is backed by a path" stops being a property the preload observes and
+ * becomes a refusal main performs.
+ *
+ * SHAPE ONLY, NOT CANONICITY, deliberately, and for attachmentBytes.ts's recorded reason: two divergent
+ * checks on one value is the shape that ends with one of them being weaker than the other. There is no
+ * root to be canonical against here in any case — see MAX_UPLOAD_PATH_LENGTH.
+ *
+ * The field read is an `in`-guarded property access on a narrowed `object`, so a hostile ask built with
+ * a `__proto__` key is refused on its own merits: the polluting object has no OWN `path`, and reading
+ * one inherited from Object.prototype is not possible here because the typeof test runs on the value
+ * actually found.
+ */
+export function isAttachmentUploadRequest(value: unknown): value is AttachmentUploadRequest {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('path' in value)) return false
+  const { path } = value as Record<string, unknown>
+  return typeof path === 'string' && path.length > 0 && path.length <= MAX_UPLOAD_PATH_LENGTH
+}
 
 /**
  * Why one upload ended without the file being stored, as a closed set of CLIENT-OWNED literals.

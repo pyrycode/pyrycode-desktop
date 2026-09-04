@@ -521,8 +521,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   stale-window-reference problem entirely. A `pickerOpen` flag bounds the dialog to one at a time without
   bounding concurrent transfers. Neither `uploadAttachmentFile` nor `uploadAttachmentBytes` ever rejects.
   Architect self-review: first pass FAILED on the size-only guard, PASSED after the `isFile()` revision.
-  Nothing renders — the button and the outcome's appearance are #863 (not started); #864 (progress) and
-  #890/#891 (drop/paste, second entries into this same flow) are also not started.
+  Nothing renders — the button and the outcome's appearance are #863 (landed), which also gained #864's
+  in-flight progress and #890's drag-and-drop entry (landed: the channel's request body widened from
+  value-free to optional, guarded by `isAttachmentUploadRequest`). #891 (paste, the remaining second
+  entry into this same flow) is not started.
 - [Request-attachment envelope](features/request-attachment-envelope.md) — the **outbound half of the
   retrieval leg** (#993, split from #687): a new `request_attachment` `EnvelopeType` member, a
   two-field `RequestAttachmentPayload` (`conversation_id`, `attachment_id`, both required, no

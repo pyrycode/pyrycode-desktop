@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
 import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
@@ -14,7 +14,8 @@ import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabe
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
-  type AttachmentUploadEvent
+  type AttachmentUploadEvent,
+  type AttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
 import {
   ATTACHMENT_RETRIEVAL_CHANNEL,
@@ -160,13 +161,59 @@ const api = {
    * per intent once #864 adds progress.
    *
    * CALLED WITH NO ARGUMENT, and that is the point rather than an omission: this window names an
-   * INTENT, never a file. Nothing crosses, so no renderer-supplied string can reach a host path, a
-   * declared filename, or the wire — the picker, the path and the bytes all stay in the background
-   * process. ATTACHMENT_UPLOAD_CHANNEL is fixed here so the renderer cannot address arbitrary IPC
-   * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the button is #863.
+   * INTENT, never a file. Nothing crosses on THIS call, so no string it could supply reaches a host
+   * path, a declared filename, or the wire — the picker, the path and the bytes all stay in the
+   * background process. ATTACHMENT_UPLOAD_CHANNEL is fixed here so the renderer cannot address
+   * arbitrary IPC channels, and ipcRenderer never crosses the bridge.
+   *
+   * The channel itself is no longer value-free — `dropAttachmentFile` below sends a request on it — so
+   * this paragraph is scoped to this function rather than to the channel. The two are told apart on the
+   * main side by presence: an argument-free send reaches no request field at all.
    */
   requestAttachmentUpload: (): void => {
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL)
+  },
+
+  /**
+   * Attach a file the operator DROPPED onto the window (#890), entering the same flow the picker does.
+   * Fire-and-forget; the outcome arrives on the push channel below, from the same driver and the same
+   * exactly-one terminal.
+   *
+   * ⭐ THIS IS THE ONE PLACE ON THE WINDOW SIDE THAT MAY TOUCH A HOST PATH, and the deliberate, narrow
+   * exception to #862's "the renderer names an intent, main owns the path" rule — the reason the ticket
+   * carried `security-sensitive`. It exists because a drop is delivered by the operating system to the
+   * WINDOW, as a DOM `File` on the drop event, so there is nowhere else the path can be recovered.
+   * Electron 33 removed `File.path`; `webUtils.getPathForFile` is the sanctioned route and works in a
+   * sandboxed preload, which this app runs (`sandbox: true`).
+   *
+   * WHY THE EXCEPTION IS CONTAINED. `getPathForFile` answers the EMPTY STRING for a `File` the page
+   * constructed itself — only a file an operator GESTURE delivered is backed by a path. That is the
+   * honest form of the property, and it is slightly wider than "only a drop": any path-backed `File`
+   * this window holds would do, from a drop or a file input (this app renders none). What a compromised
+   * renderer cannot do is name an arbitrary file on disk and have the background process stream it to
+   * the host, which is the property #862 built the channel around.
+   *
+   * The resolved string is a local in this isolated-world frame and the function returns `void`, so it
+   * reaches no renderer state, no log line and no diagnostic record. The `File` handle is all the window
+   * ever holds. `webUtils` itself does not cross the bridge, any more than `ipcRenderer` does, and
+   * ATTACHMENT_UPLOAD_CHANNEL is fixed here so the renderer cannot address arbitrary channels.
+   *
+   * TWO WAYS OUT WITHOUT SENDING, both silent. `getPathForFile` THROWS when handed something that is not
+   * a `File`, so the call is wrapped — the `try` is what stops that throw from crossing the bridge as
+   * much as it is a non-`File` filter. An empty result sends nothing. Neither is a defence on its own:
+   * the window is untrusted at the boundary regardless of the declared parameter type, so
+   * `isAttachmentUploadRequest` re-checks on the main side and drops a malformed ask there.
+   */
+  dropAttachmentFile: (file: File): void => {
+    let path: string
+    try {
+      path = webUtils.getPathForFile(file)
+    } catch {
+      return
+    }
+    if (path === '') return
+    const request: AttachmentUploadRequest = { path }
+    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 
   /**

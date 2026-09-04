@@ -3,8 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import {
   COMPOSER_ATTACH_LABEL,
+  COMPOSER_DROP_ACTIVE_CLASS,
   ComposerAttachButton,
-  ComposerAttachOutcome
+  ComposerAttachOutcome,
+  composerClassName,
+  dragCarriesFiles,
+  fileToAttach,
+  reduceFileDropDepth
 } from './ComposerAttach'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 
@@ -178,5 +183,100 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
       <ComposerAttachOutcome outcome={{ type: 'failed', uploadId, reason: 'send-failed' }} />
     )
     expect(markup).not.toContain(uploadId)
+  })
+})
+
+// #890: the drop decision, as four pure functions. The static tier cannot drag — vitest runs `node` and
+// nothing in this repo can click — so what it pins is every branch of the decision itself, and
+// e2e/composer-file-drop.spec.ts drives the transitions through them.
+describe('composerClassName', () => {
+  // ⭐ THE BYTE-IDENTITY ASSERTION, and it is load-bearing rather than pedantic: three shipped
+  // assertions in composerSlot.test.tsx match `class="composer"` as a WHOLE ATTRIBUTE RUN, two of them
+  // as `class="composer" hidden=""`. A trailing space from a template literal, or a modifier prepended
+  // to the run, reddens them — and the two-class mix is what the active state must be, so the resting
+  // branch cannot be built by joining an array.
+  it('is exactly the bare block class at rest, with no trailing space', () => {
+    expect(composerClassName(false)).toBe('composer')
+  })
+
+  it('wears the modifier as a two-class mix when a file is held over the composer', () => {
+    expect(composerClassName(true)).toBe(`composer ${COMPOSER_DROP_ACTIVE_CLASS}`)
+  })
+
+  // BEM, and the modifier belongs to the block it modifies. A name that did not start with the block's
+  // would still pass the two assertions above while making the stylesheet rule a lie.
+  it('names the modifier after the block', () => {
+    expect(COMPOSER_DROP_ACTIVE_CLASS.startsWith('composer--')).toBe(true)
+  })
+})
+
+describe('dragCarriesFiles', () => {
+  it('is true for a file drag and for one that also carries other flavours', () => {
+    expect([dragCarriesFiles(['Files']), dragCarriesFiles(['text/plain', 'Files'])]).toEqual([
+      true,
+      true
+    ])
+  })
+
+  // AC3's second half: a drag carrying no file is NOT INTERCEPTED AT ALL, so text dropped into the
+  // textarea keeps doing what it does today. Every one of these must stay false or that breaks — a
+  // `text/uri-list` drag included, which is deliberately left to `will-navigate` in the background
+  // process rather than intercepted here (widening to it would swallow link drags into the box).
+  it('is false for every drag that carries no file', () => {
+    const notFiles: (readonly string[] | undefined)[] = [
+      ['text/plain'],
+      ['text/uri-list'],
+      ['text/html', 'text/plain'],
+      [],
+      undefined
+    ]
+    expect(notFiles.map(dragCarriesFiles)).toEqual(notFiles.map(() => false))
+  })
+})
+
+describe('reduceFileDropDepth', () => {
+  // ⭐ THE FLICKER CASE, and the whole reason this is a counter rather than a boolean. Crossing from the
+  // composer onto a child fires the CHILD's dragenter and the parent-relative dragleave as a pair, both
+  // of which bubble to the same handler: a boolean flipped on dragleave would clear the state mid-drag
+  // and the edge would strobe as the pointer moves over the textarea, the footer and the menus.
+  it('stays active while the pointer crosses a child element', () => {
+    let depth = 0
+    depth = reduceFileDropDepth(depth, { type: 'enter' }) // onto the composer
+    depth = reduceFileDropDepth(depth, { type: 'enter' }) // onto a child, before the parent's leave
+    expect(depth > 0).toBe(true)
+    depth = reduceFileDropDepth(depth, { type: 'leave' }) // the composer-relative leave of the pair
+    expect(depth > 0).toBe(true)
+    depth = reduceFileDropDepth(depth, { type: 'leave' }) // out of the composer for real
+    expect(depth > 0).toBe(false)
+  })
+
+  // A stray leave is the shape a missed enter produces — a drag that began over a child, or one whose
+  // enter was swallowed by a re-render. Floored at zero, the next real enter still activates; without
+  // the floor the counter goes negative and the composer never lights up again.
+  it('floors at zero rather than going negative on an unmatched leave', () => {
+    expect(reduceFileDropDepth(0, { type: 'leave' })).toBe(0)
+    expect(reduceFileDropDepth(reduceFileDropDepth(0, { type: 'leave' }), { type: 'enter' })).toBe(1)
+  })
+
+  // A DROP FIRES NO MATCHING dragleave, which is why `settled` resets outright instead of decrementing:
+  // from a depth of three (composer, footer, button) a decrement would leave the edge painted forever.
+  it('clears outright from any depth when the drag settles', () => {
+    expect([0, 1, 3, 17].map((depth) => reduceFileDropDepth(depth, { type: 'settled' }))).toEqual([
+      0, 0, 0, 0
+    ])
+  })
+})
+
+describe('fileToAttach', () => {
+  // Generic over the element, so this tier needs no `File`: what is being decided is the COUNT, and
+  // nothing about the file is read to decide it.
+  it('takes the one file, and nothing at all for none or for many', () => {
+    expect(fileToAttach(['a'])).toBe('a')
+    expect(fileToAttach([])).toBe(null)
+    // AC3's last line: a drop of more than one file attaches nothing. It also says nothing — a refusal
+    // reason would mean a new member in the shared union plus a branch in attachmentUploadCopy's
+    // compiler-forced switch, which is the follow-up ticket's, together with the messaging.
+    expect(fileToAttach(['a', 'b'])).toBe(null)
+    expect(fileToAttach(['a', 'b', 'c'])).toBe(null)
   })
 })

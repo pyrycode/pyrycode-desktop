@@ -14,7 +14,7 @@ shape, are all a total no-op: nothing read, nothing sent, nothing emitted. **Not
 slice ends at the bridge; the button and the outcome's appearance, and the drop gesture itself, are
 [Composer attach](composer-attach.md) (#863, #890). #1032 adds no renderer surface itself — the paste
 keystroke that calls it, and the mount-point/predicate design, are
-[Composer attach § The paste entry](composer-attach.md#the-paste-entry-1033) (#1033, landed).
+[Composer attach § The paste entry](composer-attach-paste.md) (#1033, landed).
 
 Introduced in [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862), split from #685.
 In-flight progress added in [#864](https://github.com/pyrycode/pyrycode-desktop/issues/864). The
@@ -538,7 +538,7 @@ correlating the ask to a real key event) is the stated fallback if that residual
   keystroke → predicate → this ask → `uploadClipboardImage` → guard → transfer → wire → terminal. It also
   measured what this file's design left open: a real OS-clipboard bitmap advertises `['Files']` only, with
   no `image/png` entry. See [Composer attach § Testing the paste
-  entry](composer-attach.md#testing-the-paste-entry) for the drive and its two-different-daemon-code trick
+  entry](composer-attach-paste.md#testing-the-paste-entry) for the drive and its two-different-daemon-code trick
   against a vacuous pass.
 - **No test for `index.ts`'s wiring or the preload members, `dropAttachmentFile` and `pasteAttachmentImage`
   included (#890, #1032)** — the
@@ -635,12 +635,12 @@ correlating the ask to a real key event) is the stated fallback if that residual
 - [#890](https://github.com/pyrycode/pyrycode-desktop/issues/890) (drag-and-drop) — landed; the second
   entry into this flow via `uploadAttachmentFile`, riding this channel's now-optional request body. See
   § The request body and its guard above, § The bridge's `dropAttachmentFile`, and
-  [Composer attach § The drop entry](composer-attach.md) for the renderer-visible half.
+  [Composer attach § The drop entry](composer-attach-drop.md) for the renderer-visible half.
   `docs/specs/architecture/890-composer-file-drop.md` has the full plan and security review.
 - [#1032](https://github.com/pyrycode/pyrycode-desktop/issues/1032) (paste, split from #891) — landed;
   the third entry into this flow, via `uploadClipboardImage` — not `uploadAttachmentBytes`, see the SHOULD
   FIX noted above. No composer surface of its own: the keystroke that calls `pasteAttachmentImage()` is
-  [Composer attach § The paste entry](composer-attach.md#the-paste-entry-1033) (#1033, landed).
+  [Composer attach § The paste entry](composer-attach-paste.md) (#1033, landed).
   `docs/specs/architecture/1032-paste-clipboard-image-attach.md` and
   `docs/specs/architecture/1033-paste-image-to-attach.md` have the full plans and security reviews.
 - [#1038](https://github.com/pyrycode/pyrycode-desktop/issues/1038) — landed; the `completed` arm gains

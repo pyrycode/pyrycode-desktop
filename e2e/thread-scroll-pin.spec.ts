@@ -696,6 +696,7 @@ const SUBPIXEL_PX = 1.5
 // would become the fallback, and the growth these tests turn on would never happen.
 const ID_ABOVE = '5a6b7c8d-9e0f-4a1b-8c9d-5e6f7a8b9c0d'
 const ID_BELOW = '6a7b8c9d-0e1f-4a2b-8c9d-6e7f8a9b0c1d'
+const ID_LAST = '7a8b9c0d-1e2f-4a3b-8c9d-7e8f9a0b1c2d'
 
 /** A 200x400 solid-colour PNG, generated for this suite and carrying no information at all. Portrait on
  *  purpose: at THUMBNAIL_HEIGHT_PX tall it draws 80 wide, under the bubble's content box at every window
@@ -709,6 +710,9 @@ const THUMBNAIL_FILENAME = 'portrait.png'
 
 const ABOVE_TEXT = 'a picture from further up the thread'
 const BELOW_TEXT = 'a picture from further down the thread'
+// #1049's own message, and its text shares no substring with the four above — `thumbnailBubble` matches on
+// `hasText`, which is a substring match, so a shared fragment would silently address the wrong bubble.
+const LAST_TEXT = 'a picture in the newest row of all'
 
 /**
  * The daemon's answer to one `request_attachment`: a single `attachment_chunk` carrying the whole file.
@@ -847,6 +851,25 @@ const rowPosition = (bubble: Locator): Promise<'above' | 'below' | 'overlapping'
     if (box.bottom <= view.top) return 'above'
     if (box.top >= view.bottom) return 'below'
     return 'overlapping'
+  })
+
+/**
+ * Is this bubble's row the LAST child of the thread's scroll region?
+ *
+ * #1049's precondition, and it has to be structural rather than positional. `rowPosition` answers
+ * `'overlapping'` for this row rather than `'below'` — the last row of a bottom-resting thread is on screen
+ * by definition — so the "the growth lands past the fold" claim cannot be made by looking at the viewport.
+ * Being the final row plus the reader being at the bottom is what makes it true: everything the row gains
+ * extends below where the reader is resting.
+ *
+ * `Timeline` writes its rows as DIRECT children of `.conversation__thread` (the flex column, its `gap` and
+ * its `padding` all live on the scroll container), so `lastElementChild` is the last row and not a wrapper.
+ */
+const isLastRow = (bubble: Locator): Promise<boolean> =>
+  bubble.evaluate((element) => {
+    const thread = element.closest('.conversation__thread')
+    if (thread === null) throw new Error('the bubble is not inside a thread scroll region')
+    return element.closest('.message-row') === thread.lastElementChild
   })
 
 /**
@@ -1023,4 +1046,66 @@ test('a thumbnail resolving leaves a scrolled-up reader where they were, above t
   // And NOT yanked to the bottom — the same distance as before, still a full viewport clear of it.
   expect(distanceFromBottom(afterAbove)).toBeCloseTo(distanceFromBottom(afterBelow), 0)
   expect(distanceFromBottom(afterAbove)).toBeGreaterThan(AT_BOTTOM_TOLERANCE_PX + SUBPIXEL_PX)
+})
+
+// ---------------------------------------------------------------------------------------------------
+// #1049 — the direction anchoring is indifferent to: a thumbnail resolving in the reader's OWN last row.
+//
+// This is the case #1046 left open, and it is the one a reader hits with their own message rather than one
+// further up the thread. Everything about the settle is identical — the leaf's `useState` flip, then a
+// decode-and-layout with no React render anywhere — but the growth lands BELOW the reader, and scroll
+// anchoring holds a node's position against growth ABOVE it. The same 172px of drift was measured with and
+// without `overflow-anchor: none`, so the browser is not going to close this one.
+//
+// WHAT CLOSES IT IS THE PIN'S OWN RESIZE OBSERVER, running the SAME guarded write the dep-free layout effect
+// runs (`reassertPinnedToBottom`). The hinge is the existing flag, not a new one: growth re-pins while
+// `following` is set and writes nothing while it is clear. So the test below and the picture-below arm of the
+// test above are the two halves of one condition, and the second is what reddens if the mechanism ever
+// re-pins on content growth unconditionally.
+
+test('a thumbnail resolving in the last row leaves a bottom-resting reader at the bottom', async ({
+  launchPairedApp
+}) => {
+  const withheld = withheldThumbnails()
+  const { page, app, daemon } = await launchPairedApp({
+    buildReplyFrames: withheld.buildReplyFrames
+  })
+
+  // THE STAGING ORDER IS THE REVERSE of the picture-above test's, and that reversal is the whole scenario:
+  // the primer's twenty turns go in FIRST so the picture's row is genuinely the last one in the thread. Its
+  // bytes are withheld, so the row it mounts draws nothing and reserves nothing while the reader rests
+  // beneath it.
+  await primeOverflowingThread(page)
+  await sendWithThumbnail(page, app, ID_LAST, LAST_TEXT)
+
+  // The preconditions. The reader is genuinely resting at the bottom (the primer's overflow gate has already
+  // proved the thread can scroll at all), and the picture is genuinely in the FINAL row — which, with the
+  // reader at the bottom, is what makes the growth necessarily extend past the fold.
+  //
+  // `'overlapping'` rather than `'below'`, deliberately: the last row of a bottom-resting thread is on
+  // screen, so asserting `'below'` here would fail as a precondition rather than as a finding.
+  await expectPinnedToBottom(page)
+  expect(await rowPosition(thumbnailBubble(page, LAST_TEXT))).toBe('overlapping')
+  expect(await isLastRow(thumbnailBubble(page, LAST_TEXT))).toBe(true)
+
+  const before = await readThreadMetrics(page)
+  await resolveThumbnail(
+    page,
+    daemon,
+    withheld,
+    ID_LAST,
+    thumbnailBubble(page, LAST_TEXT).locator('img.bubble__image')
+  )
+  const after = await readThreadMetrics(page)
+
+  // NON-VACUITY, and it carries more weight here than anywhere else in this file. At the bottom, "the
+  // thumbnail never resolved" is indistinguishable from "the fix worked" — both leave the distance at zero —
+  // so without proving the content actually grew first, this test passes against an app with no mechanism in
+  // it at all. A floor rather than an equality: the quantity is a drawn box, not a contract.
+  expect(after.scrollHeight - before.scrollHeight).toBeGreaterThanOrEqual(THUMBNAIL_GROWTH_PX)
+
+  // The criterion, asserted with NO frame pushed, no send and no other screen render in between — the drift
+  // this closes is exactly the window before something unrelated snaps the reader back. Against `main` this
+  // reads 172px; the observer takes it to zero.
+  await expectPinnedToBottom(page)
 })

@@ -219,3 +219,51 @@ the spec is typechecked by hand with an ad-hoc `tsc --noEmit` and the result rea
   parks a reader mid-thread leaves `following.current` false, and every test that rests at the bottom already
   expects to stay there. Confirm by running the fake-transport tier's scroll-adjacent specs, and if any
   disagrees, drop the container from the observed set rather than weakening the guard.
+
+## Revisions
+
+### 2026-09-04 — the pin's own scroll event had to stop counting as the operator scrolling away
+
+**What changed.** The design above has the observer call `reassertPinnedToBottom` and nothing else, on the
+strength of the flag already distinguishing the two readers. That was not sufficient, and the shortfall was
+found by running the new test rather than by reasoning: with the observer wired exactly as planned, the test
+still measured the full 172px of drift.
+
+**What the measurement said.** A probe stamped the observer's firing count and the flag's value onto the
+document element. The observer fired **twice** across one thumbnail resolve, and the flag was `false` by the
+second firing. A thumbnail settles in more layout steps than the plan's two-event account admits: mounting the
+`<img>` applies `.bubble__image-button`'s 12px `margin-top` immediately, and the picture's own 160px lands a
+frame or more later when the bytes decode. The observer pinned correctly on the 12px step — and the scroll
+event *that write* queued dispatched in the next frame's scroll steps, which run before that frame's resize
+observations, by which time the row had grown the remaining 160px. `onScroll` measured a distance of 160
+against a reader who had not moved, read it as scrolling away, and cleared the flag one instant before the
+observation that mattered.
+
+This is the plan's own stated hazard arriving from an unplanned direction. `useThreadScrollPin`'s docblock
+already warns that a measurement taken when new content lands reads a layout that includes it and so cannot
+say where the reader was beforehand; the plan assumed only the *arrival* path could hit that, and the pin's
+own write turned out to reach it too. Nothing about it is specific to this ticket's case — it is latent in any
+mechanism that writes `scrollTop` in response to growth.
+
+**The new contract.** `reassertPinnedToBottom` takes a third argument, `pinnedOffset`, and records the offset
+it produced — **only when the write actually moved the offset**, because a no-op write queues no event and a
+record left behind would swallow the operator's next real scroll. `onScroll` clears that record on every
+event, matching or not, and declines to re-measure only for an event reporting exactly the offset the pin just
+wrote. So a record can never outlive one event, and an event the operator caused in the same frame reports a
+different offset and re-measures normally.
+
+The hook's contract is unchanged in substance rather than widened: the flag is still written only by the
+operator's own scrolling, and an event the pin itself caused was never the operator's. It remains one
+condition on one existing value, per the ticket's design hinge.
+
+**Cost.** One more hook-local ref and one more parameter; `conversation.css` and `BubbleAttachmentImage.tsx`
+are still untouched, and the file count is still one.
+
+### Open questions, resolved
+
+- **Redundant initial notifications from re-`observe()`ing.** Not observable, and moot either way: the
+  callback is the same idempotent guarded write, and the three-times-repeated suite run is stable.
+- **Existing e2e expectations under the container observation.** None changed. The six pre-existing tests in
+  `thread-scroll-pin.spec.ts` pass unmodified, as do `send-and-stream`, `queued-backlog-interrupt`,
+  `question-answer-continue`, `conversation-switch-keeps-both-threads`, `conversation-switch-remount`,
+  `attachment-image-thumbnail` and `attachment-image-open`. The container stays in the observed set.

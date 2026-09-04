@@ -511,6 +511,53 @@ interface ThreadPin {
 const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
 
 /**
+ * The pin's ONE write, shared by the two things that can trigger it: the dep-free layout effect below, and
+ * #1049's growth observer beside it.
+ *
+ * Module-level rather than a closure inside the hook, and deliberately — the observer is constructed once and
+ * would otherwise capture its constructing render's closure for the hook's whole life. A function that takes
+ * everything it reads carries no such trap for whoever edits here next.
+ *
+ * BOTH SAFETY PROPERTIES THE DEP-FREE FORM RELIES ON ARE PROPERTIES OF THIS FUNCTION, which is the whole
+ * reason #1049 routed its observer through it rather than giving the observer a write of its own. It is
+ * IDEMPOTENT: it writes only while following, and assigns scrollTop a value it already holds — a no-op that
+ * fires no scroll event — so neither caller can drive a feedback loop, and a StrictMode double-invoke is
+ * likewise a no-op. And it is NOT A WRITER OF THE FLAG: `following` is taken read-only, so the hook's
+ * contract that only the container's own scroll events and `followBottom` ever set it survives the arrival of
+ * a second caller.
+ *
+ * ⭐ `pinnedOffset` IS WHAT KEEPS THAT SECOND CALLER FROM CORRUPTING THE FLAG, and it is not defensive
+ * plumbing — it was MEASURED. A thumbnail settles in more layout steps than one: mounting the <img> applies
+ * `.bubble__image-button`'s 12px margin immediately, and the picture's own 160px lands a frame or more later
+ * when the bytes decode. Before this record existed, the observer pinned on the 12px step, and the scroll
+ * event that write queued dispatched only in the NEXT frame's scroll steps — which run before that frame's
+ * resize observations — by which time the row had grown the remaining 160px. `onScroll` then measured a
+ * distance of 160 against a reader who had not moved, read it as scrolling away, and cleared the flag one
+ * instant before the observation that mattered. Observed as 172px of residual drift with the observer
+ * otherwise working (`probeFires` 4 -> 6, `probeFollowing` false).
+ *
+ * So the write records the offset it produced, and only when the write actually MOVED the offset — a no-op
+ * write queues no event and must leave no record behind to swallow the operator's next real scroll. The
+ * handler recognises exactly that one echo and declines to re-measure through it. The hook's contract is
+ * unchanged in substance: the flag is still written only by the OPERATOR's scrolling, and an event the pin
+ * itself caused was never the operator's. Nothing here can go stale for longer than a single event, because
+ * the handler clears the record on every scroll, matching or not.
+ */
+function reassertPinnedToBottom(
+  el: HTMLElement,
+  following: { readonly current: boolean },
+  pinnedOffset: { current: number | null }
+): void {
+  if (!following.current) return
+  const before = el.scrollTop
+  // Past the maximum; the browser clamps to exactly the bottom.
+  el.scrollTop = el.scrollHeight
+  // Read back rather than recomputing the clamp: the browser owns the rounding, and this is the exact value
+  // the queued scroll event will report.
+  if (el.scrollTop !== before) pinnedOffset.current = el.scrollTop
+}
+
+/**
  * #601: keep the thread following the conversation while the operator is already reading at the bottom.
  *
  * The ORDER of the decision is the whole design. The flag is written only by the container's own scroll
@@ -542,6 +589,14 @@ const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useL
 function useThreadScrollPin(): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const following = useRef(true)
+  // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
+  // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
+  // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
+  const growth = useRef<ResizeObserver | null>(null)
+  const observedRegion = useRef<HTMLElement | null>(null)
+  // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
+  // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
+  const pinnedOffset = useRef<number | null>(null)
 
   // NO dependency array — this runs after every render of the screen, and that is what makes the chrome
   // case work rather than being a missing optimization. Enumerating what changes the region's height in a
@@ -567,11 +622,14 @@ function useThreadScrollPin(): ThreadPin {
   //     wakes the timeline), and the panel takes the slot the covered composer vacates, so its height is not
   //     the composer's. That shrink gets no re-assert either.
   //
-  // The last two are a known LATENCY gap, not a broken pin: their shrink fires no scroll event (see below), so
-  // the flag stays correct and the next screen render re-pins. Neither is measured or under test. Closing
-  // either means the same choice #1009 faced — hoist the read, or observe the container's size directly with a
-  // ResizeObserver, which covers every occupant at once. A dependency array is not on that list: no array can
-  // reach a leaf that re-renders alone.
+  // The last two were a known LATENCY gap, not a broken pin: their shrink fires no scroll event (see below), so
+  // the flag stayed correct and the next screen render re-pinned. Neither was measured or under test. Closing
+  // either meant the same choice #1009 faced — hoist the read, or observe the container's size directly with a
+  // ResizeObserver, which covers every occupant at once. A dependency array was never on that list: no array
+  // can reach a leaf that re-renders alone. #1049 BUILT THAT OBSERVER (below) FOR A DIFFERENT CASE, and both
+  // fall out of it: each shrinks the flexible middle region, so `.conversation__thread`'s OWN border box
+  // changes and the observation fires. Neither has a test of its own and neither was this ticket's
+  // deliverable — they are consequences of the mechanism, recorded here so the inventory above stays true.
   //
   // #1046 ADDED A THIRD MEMBER TO THAT CLASS AND FOUND IT ALREADY CLOSED — by the browser, not by this app.
   // A thumbnail (BubbleAttachmentImage) resolves in two events: its own useState flips pending → ready,
@@ -581,23 +639,73 @@ function useThreadScrollPin(): ThreadPin {
   // place is Chromium's scroll anchoring, live because .conversation__thread leaves `overflow-anchor` at
   // its default; that is now MEASURED and pinned by thread-scroll-pin.spec.ts's last two tests, which were
   // shown failing with `overflow-anchor: none` present. Two consequences for anyone editing here. Do not
-  // add that line to the stylesheet (its rule says the same). And a ResizeObserver added later would be a
-  // SECOND mechanism over a working one for this case — it would need to not fight anchoring and to keep
-  // the idempotence the two properties below rely on, which a handler writing unconditionally does not
-  // inherit. The one case anchoring is indifferent to is growth BELOW the reader — a thumbnail resolving in
-  // their own last row leaves them 172px short — which is #1049, deliberately not fixed here.
+  // add that line to the stylesheet (its rule says the same). And the ResizeObserver #1049 went on to add is
+  // NOT a second mechanism over a working one for that case: it meets both terms named there. It does not
+  // FIGHT anchoring, because anchoring runs during layout and has already advanced scrollTop by the inserted
+  // height by the time resize observations are delivered — so the shared write finds the reader already at
+  // the bottom and assigns the value already held. And it keeps the IDEMPOTENCE, because it does not write at
+  // all: it calls `reassertPinnedToBottom` above, which is the same guarded write this effect makes.
+  //
+  // #1049 IS THE ONE CASE ANCHORING IS INDIFFERENT TO — growth BELOW the reader, a thumbnail resolving in
+  // their own last row, measured at 172px short with and without `overflow-anchor: none` — AND IT IS WHAT THE
+  // OBSERVER BELOW CLOSES. The hinge is this flag rather than a new one: growth re-pins while `following` is
+  // set and writes nothing while it is clear, which is one condition on an existing value.
+  //
+  // WHAT IT OBSERVES IS THE REGION: the container AND each of its direct children. Observing the container
+  // alone cannot see this case — it is `flex: 1 1 auto; min-height: 0; overflow-y: auto`, so its border box is
+  // fixed by the parent's layout and does not change when content grows inside it; the rows are what grow.
+  // Observing the container as WELL is the line that covers the two chrome occupants above, whose shrink is
+  // exactly a change to that border box. No content wrapper was introduced to make this one observation
+  // instead of many: the flex column, the `gap` and the `padding` all live on the scroll container, so a
+  // wrapper would move all three, change the markup run every renderer test asserts against, and interpose an
+  // element between the rows and a container several CSS rules describe themselves as stretch items of.
+  //
+  // THE OBSERVED SET SYNCS HERE because this effect already runs after every render and rows can only appear
+  // via a render. `observe()` on an already-observed target with the same box is a no-op, so the loop is
+  // O(rows) early returns — and re-observing unconditionally is also what makes the set heal itself after
+  // StrictMode's simulated teardown. Rows only ever LEAVE the set with the container: within one container's
+  // lifetime the timeline is append-only with tail mutation under index keys, so rows are updated in place,
+  // and `.conversation__thread` unmounts outright when the timeline empties (Timeline renders <EmptyThread />
+  // at zero items). A change of container identity is therefore the one and only disconnect point.
   //
   // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
   // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
-  // feedback loop (and a StrictMode double-invoke is likewise a no-op). And chrome CANNOT corrupt the flag:
-  // a chrome mount shrinks clientHeight while leaving scrollTop and scrollHeight untouched, which raises
+  // feedback loop (and a StrictMode double-invoke is likewise a no-op). Scrolling resizes nothing, so the
+  // observer cannot re-trigger itself either, and when the write does move the offset the scroll event it
+  // fires computes at-bottom -> true, which is the value the flag already holds. And chrome CANNOT corrupt the
+  // flag: a chrome mount shrinks clientHeight while leaving scrollTop and scrollHeight untouched, which raises
   // the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires at all.
   useThreadLayoutEffect(() => {
     const el = ref.current
-    if (el === null || !following.current) return
-    // Past the maximum; the browser clamps to exactly the bottom.
-    el.scrollTop = el.scrollHeight
+    if (el === null) return
+
+    const observer = (growth.current ??= new ResizeObserver(() => {
+      // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
+      // an unmount, and the null path is that case.
+      const region = ref.current
+      if (region !== null) reassertPinnedToBottom(region, following, pinnedOffset)
+    }))
+    if (observedRegion.current !== el) {
+      observer.disconnect()
+      observedRegion.current = el
+    }
+    observer.observe(el)
+    for (const row of el.children) observer.observe(row)
+
+    reassertPinnedToBottom(el, following, pinnedOffset)
   })
+
+  // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
+  // dependency array, so ITS cleanup would run after every render and tear down the set it just synced.
+  // Mount-scoped, so this cleanup runs exactly at teardown — clearing the recorded node as well, so a
+  // StrictMode remount takes the disconnect branch above and rebuilds the set from scratch rather than
+  // trusting a stale identity.
+  useEffect(() => {
+    return () => {
+      growth.current?.disconnect()
+      observedRegion.current = null
+    }
+  }, [])
 
   return {
     scrollPin: {
@@ -609,6 +717,13 @@ function useThreadScrollPin(): ThreadPin {
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        // #1049: the pin's own write queues a scroll event, and that event is not the operator scrolling.
+        // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
+        // the write produced, so an event the operator caused in the same frame — a different offset —
+        // re-measures normally. See `reassertPinnedToBottom` for the drift this was measured to fix.
+        const echo = pinnedOffset.current
+        pinnedOffset.current = null
+        if (echo !== null && el.scrollTop === echo) return
         following.current = isAtBottom({
           scrollOffset: el.scrollTop,
           viewportHeight: el.clientHeight,

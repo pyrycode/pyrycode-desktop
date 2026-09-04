@@ -304,3 +304,25 @@ is three lines carried by comments. Stated here so the gap is a decision rather 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — the take is a pure function, not three lines inside the hook
+
+§3.2 planned `takePendingAttachments` as a closure reading and resetting the ref in place, and § Testing
+strategy listed "the ref read at the click" among the things no tier proves. Implementing it made the
+cost of that concession clearer than the plan had: AC4's clearing half — "a second message sent with no
+further uploads records none" — would then have lived *only* inside the hook, which is precisely the
+no-tier-can-reach-it shape the ticket's Technical Notes rule out.
+
+So the act is now the exported pure `drainPendingAttachments(holder)`, generic over a `{ current }`
+holder (a `MutableRefObject` satisfies it structurally, `fileToAttach`'s generic-over-the-element idiom),
+and the hook member is one line binding it to this mount's ref. `ComposerAttach.test.tsx` walks it with a
+plain object: the take empties the holder, a second take answers the shared empty constant, and the array
+handed back is not mutated. Everything else in §3.2 stands — same ref, same reason for the ref, same
+listener fold, same untouched gesture-clear.
+
+What no tier proves shrinks accordingly, to the listener's own assignment line and the hook's binding.
+
+No effect on § Security review: the value's placement, lifetime and trust posture are unchanged, and no
+capability, channel or bridge member moved.

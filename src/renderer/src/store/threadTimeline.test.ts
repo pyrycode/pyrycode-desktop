@@ -8,6 +8,7 @@ import {
   selectApiRetry,
   selectCompacting,
   selectLocalSendPending,
+  type MessageAttachment,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
@@ -88,6 +89,16 @@ function deltaAt(turnId: string, text: string, createdAt: number, seq = 0): Thre
 
 function userTextAt(text: string, createdAt: number): ThreadEvent {
   return { type: 'userText', text, createdAt }
+}
+
+/**
+ * #1039's sibling of the two above, carrying the attachments the composer recorded on the send. A third
+ * separate builder for `userTextAt`'s reason exactly: widening either of them would push a
+ * present-but-`undefined` `attachments` into every existing caller's fixture, and `userText(...)` must
+ * stay the builder for the shape a message sent with nothing pending produces.
+ */
+function userTextWith(text: string, attachments: readonly MessageAttachment[]): ThreadEvent {
+  return { type: 'userText', text, attachments }
 }
 
 function sessionBoundary(
@@ -407,6 +418,62 @@ describe('reduceTimeline — userText (user message)', () => {
   it('lands in arrival order interleaved among the other fresh-append arms', () => {
     const state = run([userText('q'), delta('A', 'answer'), turnEnd('A')])
     expect(state.items.map((i) => i.kind)).toEqual(['userText', 'assistantText', 'turnBoundary'])
+  })
+})
+
+// #1039: the attachments a sent message carries. The reducer is a CARRIER of this fact and not its
+// source — the composer decides which attachments a send records and normalises "none" to absence, so
+// what these pin is that the arm carries whatever arrived, verbatim and by reference, and invents
+// nothing when nothing arrived.
+describe('reduceTimeline — a user message’s attachments (#1039)', () => {
+  const REPORT: MessageAttachment = { attachmentId: 'upload-1', filename: 'report.pdf' }
+  const SHOT: MessageAttachment = { attachmentId: 'upload-2', filename: 'clipboard-2026.png' }
+
+  it('carries the recorded attachments onto the item, in the order they were recorded (AC1)', () => {
+    const state = run([userTextWith('here you go', [REPORT, SHOT])])
+    expect(state.items).toEqual([
+      { kind: 'userText', text: 'here you go', attachments: [REPORT, SHOT] }
+    ])
+  })
+
+  // ⭐ BY REFERENCE, never `[...event.attachments]`. A spread would look identical to `toEqual` and would
+  // silently mint `[]` from an absent list one arm over — the `input` (#643) discipline, which is why the
+  // identity is asserted rather than the contents.
+  it('carries the list by reference, never a copy', () => {
+    const attachments = [REPORT]
+    const state = run([userTextWith('one file', attachments)])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'userText' }>
+    expect(item.attachments).toBe(attachments)
+  })
+
+  // AC2: a message sent with nothing pending produces the item today's producer already produces. The
+  // `toEqual` against the bare literal is the "byte-identical" half — the reducer assigns the field
+  // unconditionally, so it is present-and-undefined, which `toEqual` and the shipped userText assertions
+  // both read as absent.
+  it('leaves attachments undefined for a message that carries none, item unchanged otherwise (AC2)', () => {
+    const state = run([userText('just text')])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'userText' }>
+    // `=== undefined`, never `'attachments' in item`: the field is assigned unconditionally, so the key
+    // is present with an undefined value. An EMPTY LIST is a different value and the composer never
+    // produces one (it normalises at the echo), which is what keeps "absent means none" the only reading.
+    expect(item.attachments).toBe(undefined)
+    expect(state.items).toEqual([{ kind: 'userText', text: 'just text' }])
+  })
+
+  it('still tail-appends, leaves phase untouched and opens the local send window', () => {
+    const thinking = reduceTimeline(initialTimelineState, { type: 'turnState', state: 'thinking' })
+    const state = reduceTimeline(thinking, userTextWith('with a file', [REPORT]))
+    expect(state.items.map((i) => i.kind)).toEqual(['userText'])
+    expect(state.phase).toBe('thinking')
+    expect(state.localSendPending).toBe(true)
+  })
+
+  // The two optional fields are independent: one carried without the other must not drop it.
+  it('carries attachments and the creation stamp together', () => {
+    const state = run([{ type: 'userText', text: 'both', createdAt: 1_700_000_000_000, attachments: [REPORT] }])
+    expect(state.items).toEqual([
+      { kind: 'userText', text: 'both', createdAt: 1_700_000_000_000, attachments: [REPORT] }
+    ])
   })
 })
 

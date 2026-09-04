@@ -11,7 +11,7 @@ import {
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
-import type { ThreadEvent } from '../../store/threadTimeline'
+import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
 import type { HelloAckPayload } from '@shared/wire/types'
 
 // submitMessage is a pure, React-free function (the pairingState precedent): its three effects
@@ -177,6 +177,110 @@ describe('submitMessage', () => {
     expect(submitMessage('   ', 'conv-1', deps)).toBe(false)
     expect(submitMessage('hi', null, deps)).toBe(false)
     expect(now).not.toHaveBeenCalled()
+  })
+
+  // ================================================================================================
+  // #1039 — the attachments the send records. `takeAttachments` is read once, past both `false`
+  // returns, exactly where the clock above is: that placement IS the fourth criterion, because the
+  // hook's take is also its CLEAR. A submit that sends nothing never calls it, so nothing is cleared.
+  // ================================================================================================
+
+  const REPORT: MessageAttachment = { attachmentId: 'upload-1', filename: 'report.pdf' }
+  const SHOT: MessageAttachment = { attachmentId: 'upload-2', filename: 'clipboard-2026.png' }
+
+  it('#1039: records the taken attachments on the echo, the same list on both write paths', () => {
+    const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
+    const pending = [REPORT, SHOT]
+    const takeAttachments = vi.fn(() => pending)
+
+    submitMessage('here you go', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor,
+      newMessageId: () => 'a1',
+      takeAttachments
+    })
+
+    // Taken ONCE, so the flat store and the keyed holder cannot record two different sets for one
+    // message — the built-once property asserted at the take, the way #1013 asserts it at the clock.
+    expect(takeAttachments).toHaveBeenCalledTimes(1)
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.attachments).toBe(pending)
+    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
+  })
+
+  // AC2: nothing pending ⇒ the field is ABSENT, not an empty list. The composer is where that
+  // normalisation happens, so the store never sees `[]` and "absent means none" stays the only reading.
+  it('#1039: leaves the field absent when the take answers an empty list (AC2)', () => {
+    const dispatch = vi.fn()
+
+    submitMessage('just text', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'a2',
+      takeAttachments: () => []
+    })
+
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.attachments).toBe(undefined)
+  })
+
+  // The shape the thirteen shipped deps literals in this file keep: an unwired take is an unstamped
+  // echo, `now`'s rule exactly, and no field appears where none did before.
+  it('#1039: leaves the field absent when no take is wired at all', () => {
+    const dispatch = vi.fn()
+
+    submitMessage('just text', 'conv-1', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'a3'
+    })
+
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.attachments).toBe(undefined)
+    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'just text' })
+  })
+
+  // ⭐ AC4's second half, and the whole reason the take sits below both `false` returns: the hook's take
+  // is destructive, so a submit that sends nothing must not perform it — the operator's attached file
+  // has to survive a blank Enter and a send with no active conversation.
+  it('#1039: does not take when the submit is refused, so the pending set survives (AC4)', () => {
+    const takeAttachments = vi.fn(() => [REPORT])
+    const deps = {
+      sendCommand: vi.fn(),
+      dispatch: vi.fn(),
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'unused',
+      takeAttachments
+    }
+    expect(submitMessage('   ', 'conv-1', deps)).toBe(false)
+    expect(submitMessage('hi', null, deps)).toBe(false)
+    expect(takeAttachments).not.toHaveBeenCalled()
+  })
+
+  // A bridge failure is swallowed and the echo still posts, so it still records and still clears — the
+  // timeline moved, which is the same fact `sent === true` reports to the scroll follow.
+  it('#1039: still records the attachments when the send bridge throws', () => {
+    const dispatch = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const result = submitMessage('with a file', 'conv-1', {
+      sendCommand: () => {
+        throw new Error('bridge down')
+      },
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'a4',
+      takeAttachments: () => [REPORT]
+    })
+
+    expect(result).toBe(true)
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.attachments).toEqual([REPORT])
+    errorSpy.mockRestore()
   })
 
   it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {

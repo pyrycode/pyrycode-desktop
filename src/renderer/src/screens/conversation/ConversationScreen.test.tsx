@@ -1743,7 +1743,13 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // interactiveRoundtrip.test.tsx holds (`data-thread-role="assistant"><div class="bubble__markdown">`),
     // and it is what reddens if the row is ever prepended ahead of the text.
     const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
-    expect(markup).toContain('data-thread-role="user">here is the report<div class="bubble__file">')
+    // #816 turned the row into a <button>, so the pinned run carries the tag and its `type`. Updated
+    // rather than loosened: the byte string is the whole point of this assertion, and a `<div` still
+    // written here would pass a regex-shaped rewrite while the control had silently gone back to being
+    // unfocusable. The attribute order is JSX order — `type` first, matching .bubble__copy's button.
+    expect(markup).toContain(
+      'data-thread-role="user">here is the report<button type="button" class="bubble__file">'
+    )
     expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
   })
 
@@ -1878,6 +1884,64 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     )
     expect(residue).toContain('data-message-role="user">residue</div>')
     expect(residue).not.toContain(ROW)
+  })
+
+  // #816: the row became a download control. What this tier owns is the ELEMENT and its accessible name;
+  // the click, the keyboard and the wire are e2e/attachment-file-row.spec.ts's, and the two-ask sequencing
+  // behind the handler is downloadAttachment.test.ts's.
+  describe('as a download control (#816)', () => {
+    it('is a real <button type="button">, not a div with a handler (AC1)', () => {
+      const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+      // A real button is what makes one tab stop, Enter and Space, and screen-reader semantics come for
+      // free instead of being rebuilt out of tabIndex + onKeyDown — the ChannelList row's ruling.
+      expect(markup).toContain(`<button type="button" class="${ROW}">`)
+      expect(markup).not.toContain(`<div class="${ROW}">`)
+      // `type="button"` matters beyond tidiness: the default is `submit`, and a submitting button inside a
+      // form would reload the window rather than download anything.
+      expect(markup).not.toContain(`<button class="${ROW}">`)
+    })
+
+    it('takes its accessible name from its TEXT CONTENT, with no aria-label (AC1)', () => {
+      const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+      const row = markup.slice(markup.indexOf(`<button type="button" class="${ROW}"`))
+
+      // ⭐ The criterion is "an accessible name that includes the file name", and the name is COMPUTED
+      // FROM CONTENTS: the glyph and the extension overlay are both aria-hidden, so what is announced is
+      // exactly the filename. An aria-label would satisfy the same criterion by putting untrusted,
+      // model-chosen text into an ATTRIBUTE — the sink #815 closed on purpose — and there is no
+      // visually-hidden utility in this repo to prefix a client-owned verb with instead.
+      expect(row).toContain(`<span class="${NAME_SLOT}">report.pdf</span>`)
+      expect(row.slice(0, row.indexOf('>'))).not.toContain('aria-label')
+      // Neither half is separately focusable: the icon and the name are one control, which is the AC.
+      expect(row).not.toContain('tabindex')
+      // The overlay's aria-hidden is load-bearing twice over — it keeps the announced name exactly the
+      // filename with nothing doubled, and it is #815's bidi mitigation, which this slice must not weaken.
+      expect(row).toContain(`<span class="${EXT_SLOT}" aria-hidden="true">PDF</span>`)
+    })
+
+    it('gives two attachments two independent controls, and still leaks no identifier', () => {
+      const markup = renderToStaticMarkup(
+        <Timeline
+          items={[
+            {
+              kind: 'userText',
+              text: 'two of them',
+              attachments: [
+                { attachmentId: 'att-1', filename: 'first.pdf' },
+                { attachmentId: 'att-2', filename: 'second.zip' }
+              ]
+            }
+          ]}
+        />
+      )
+      // Two rows, two buttons — each addressing its own attachment through its own closure. Counted rather
+      // than matched by string, so a shared control wrapping both rows would redden here.
+      expect(rowCount(markup)).toBe(2)
+      expect(markup.match(/<button type="button" class="bubble__file">/g)?.length ?? 0).toBe(2)
+      // Becoming a control did not give the storage handle a reason to appear in the DOM: it reaches the
+      // click closure and nothing else.
+      for (const id of ['att-1', 'att-2']) expect(markup).not.toContain(id)
+    })
   })
 })
 

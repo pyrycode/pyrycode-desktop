@@ -328,6 +328,66 @@
   color: var(--color-on-secondary-container);
 }
 
+/* #1045 — the thumbnail an IMAGE attachment draws in place of the file row below (Figma `Slot`
+   I132:4567;132:4465 in 120-3848). Five declarations, and the sizing rule is two of them.
+
+   ⭐ max-height + max-width WITH BOTH DIMENSIONS LEFT `auto` IS CSS'S OWN CONTAIN BEHAVIOUR for a replaced
+   element (CSS 2.1 s10.4): the used size is computed from the image's intrinsic ratio, then each constraint
+   clamps and the OTHER dimension follows proportionally. That is exactly the operator's 2026-08-22 ruling,
+   including the assumption at its end, in one mechanism:
+     - naturally 160px tall or taller  -> clamped to 160, width from the ratio;
+     - that width over the content box -> clamped to the box, height falls proportionally;
+     - naturally shorter than 160      -> neither clamp binds, natural size, NOT scaled up;
+     - never cropped, stretched or letterboxed, because no object-fit is declared and neither axis is fixed.
+
+   `height: 160px` WAS THE REJECTED ALTERNATIVE AND IS A REAL TRAP, not a style preference. With a fixed
+   height, max-width clamps the width and leaves the height at 160 — which DISTORTS the image instead of
+   scaling it. The Figma's `object-cover` is declined for the neighbouring reason: it is how the drawing
+   fits its square sample into a square slot, and it is the one declaration that would crop.
+
+   NO FIXED PIXEL WIDTH IS WRITTEN, and both bounds are live. max-width: 100% resolves against .bubble's
+   CONTENT box — min(680px, 75%) less var(--space-5) either side — so it tracks the window between the
+   800px minimum and full screen with nothing to recompute. max-height is a height, not a width.
+
+   margin-top JOINS THE EXISTING RHYTHM rather than adding a second one: .bubble is deliberately not a flex
+   column (see its own rule), so 12px is a margin-top on the FOLLOWING sibling, which .bubble__file and
+   .bubble__meta already carry. text -> picture -> meta falls out at 12px with no new mechanism.
+   display: block removes the inline baseline gap an <img> would otherwise add below itself. */
+.bubble__image {
+  margin-top: var(--space-3);
+  display: block;
+  max-height: 160px;
+  max-width: 100%;
+  border-radius: var(--radius-xs);
+}
+
+/* The one thing drawn when an ask ends without a drawable picture — the fetch terminating `failed` on any
+   reason, or bytes that arrive and do not decode because the name lied. ONE treatment for both, carrying no
+   reason: the host's `not-found` is its single code for every request that yields no bytes, made
+   indistinguishable on purpose, and a per-reason message would undo that from this side.
+
+   It takes .bubble__file's typographic block and the same margin-top, so a failed image occupies exactly
+   the rhythm a drawn one would and the thread does not shift as asks settle. No border, no icon and no
+   dashed placeholder box: the criterion says a PLAIN TEXTUAL fallback, and a box would also be the reserved
+   space the in-flight state deliberately does not reserve. */
+.bubble__image-fallback {
+  margin-top: var(--space-3);
+  margin-bottom: 0;
+  color: var(--color-inverse-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The untrusted name inside that sentence, on its own line so a long one wraps under the client-owned text
+   rather than pushing it. `word-break: break-word` is INHERITED from .bubble and inherits through here, so
+   an unbroken name breaks inside itself instead of widening the bubble — #815's measured mechanism, reused
+   rather than restated. */
+.bubble__image-fallback-name {
+  display: block;
+}
+
 /* #815 — the file row a non-image attachment draws inside the message bubble (Figma `File field` 132:4605,
    in the bubble at 121:3860): the outlined document glyph, then the filename, 12px apart and both
    vertically centred. Placed here rather than below the meta row so the file mirrors the DOM order, which

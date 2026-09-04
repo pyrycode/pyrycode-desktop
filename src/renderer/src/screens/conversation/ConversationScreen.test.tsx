@@ -1943,6 +1943,83 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       for (const id of ['att-1', 'att-2']) expect(markup).not.toContain(id)
     })
   })
+
+  // #1045: the slot's other filling. What this tier owns is WHICH of the two an attachment gets and where
+  // the result sits among the bubble's children. The picture itself draws nothing here — the fetch starts
+  // in a useEffect and effects do not run under renderToStaticMarkup — so "an image draws no file row" is
+  // exactly the observable fact, and it is the one that matters: the row is what it replaces.
+  describe('an image attachment takes the slot instead (#1045)', () => {
+    it('draws NO file row for an image, and the row unchanged for everything else', () => {
+      const markup = renderToStaticMarkup(
+        <Timeline
+          items={[
+            {
+              kind: 'userText',
+              text: 'a picture',
+              attachments: [{ attachmentId: 'att-1', filename: 'holiday.png' }]
+            },
+            {
+              kind: 'userText',
+              text: 'a document',
+              attachments: [{ attachmentId: 'att-2', filename: 'report.pdf' }]
+            }
+          ]}
+        />
+      )
+      // One row across both bubbles: the document's. The image's would have been the second.
+      expect(rowCount(markup)).toBe(1)
+      expect(markup).toContain(`<span class="${NAME_SLOT}">report.pdf</span>`)
+      // The image's name reaches no DOM sink at all in this state — the picture is not drawn yet and the
+      // fallback is not the state. It is NOT `not.toContain('holiday')` by luck: the image branch has no
+      // markup here whatsoever.
+      expect(markup).not.toContain('holiday.png')
+    })
+
+    it('draws one of each, in the order the record holds them, still between text and meta', () => {
+      // AC1's last clause. The image contributes no markup in this state, so ORDER is asserted where it
+      // is observable: the file row for the SECOND attachment still lands after the message text and
+      // before the meta row, which is the position it would have to leave if the branch had reordered or
+      // wrapped the map.
+      const markup = renderToStaticMarkup(
+        <Timeline
+          items={[
+            {
+              kind: 'userText',
+              text: 'both kinds',
+              attachments: [
+                { attachmentId: 'att-1', filename: 'holiday.png' },
+                { attachmentId: 'att-2', filename: 'report.pdf' }
+              ]
+            }
+          ]}
+        />
+      )
+      expect(rowCount(markup)).toBe(1)
+      expect(markup).toContain(
+        'data-thread-role="user">both kinds<button type="button" class="bubble__file">'
+      )
+      expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
+    })
+
+    it('reads the WHOLE extension, so a decorative-label match is not an image', () => {
+      // The one case that separates `isImageAttachmentName` from `attachmentExtensionLabel`, asserted
+      // where it is drawn rather than only in the helper's own spec: the label slot says PNG and the row
+      // is still a row. attachmentIsImage.test.ts pins the pair directly.
+      const markup = renderToStaticMarkup(
+        <Timeline
+          items={[
+            {
+              kind: 'userText',
+              text: 'not really a png',
+              attachments: [{ attachmentId: 'att-1', filename: 'photo.p-n-g' }]
+            }
+          ]}
+        />
+      )
+      expect(rowCount(markup)).toBe(1)
+      expect(markup).toContain(`<span class="${EXT_SLOT}" aria-hidden="true">PNG</span>`)
+    })
+  })
 })
 
 // #286/#690: the session-boundary delimiter row, redrawn as the desktop inline separator (Figma node

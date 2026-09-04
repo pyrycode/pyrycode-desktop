@@ -3,9 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      #1045 added `img-src 'self' blob:` and NOTHING ELSE. #1044 minted the blob: URL a thumbnail points
+      at and deliberately left this file untouched, because a security policy is only provable where
+      something actually loads and no tier then could load anything.
+
+      THE WIDENING ADDS NO NETWORK-REACHABLE SOURCE. It does not admit `https:`, `http:`, `data:` or `*`,
+      so it does not open the classic img-src exfiltration channel (`new Image().src = 'https://…' +
+      secret`). The only URLs it admits are ones this window itself minted; `data:` is absent because
+      nothing in this path mints one.
+
+      ⭐ DO NOT ADD `frame-src`, `child-src`, OR RELAX `default-src`. A blob: URL inherits the creating
+      document's origin, so a blob of HTML NAVIGATED TO would run script holding the preload bridge. Four
+      things close that and all four must stay: `will-navigate` confines in-place navigation to the app's
+      own document, `setWindowOpenHandler` denies every scheme and externalises only http/https (both in
+      src/main/index.ts), `object-src 'none'` below blocks a blob object, and frames fall back to
+      `default-src 'self'` because no frame-src is declared. img-src alone reopens none of it; any of
+      those three would.
+
+      `'self'` IS RESTATED ON PURPOSE. A present img-src REPLACES default-src for images entirely, so
+      `img-src blob:` alone would silently break every same-origin image the app later adds.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; object-src 'none'"
+      content="default-src 'self'; script-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; base-uri 'none'; object-src 'none'"
     />
     <title>Pyrycode Desktop</title>
   </head>

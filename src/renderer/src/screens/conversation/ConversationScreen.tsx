@@ -75,6 +75,8 @@ import { dropQueuedMessage } from './dropQueuedMessage'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { attachmentExtensionLabel } from './attachmentExtensionLabel'
+import { isImageAttachmentName } from './attachmentIsImage'
+import { BubbleAttachmentImage } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
@@ -972,9 +974,22 @@ function TimelineRow({
                 shipped producer (composerSend normalises "nothing pending" to absence at the echo) but is
                 representable, and `.map` draws no rows for it — the same bytes as absence, which is the only
                 reading consistent with the store's "absent means none". */}
-            {item.attachments?.map((attachment, attachmentIndex) => (
-              <BubbleAttachmentRow key={attachmentIndex} attachment={attachment} />
-            ))}
+            {/* #1045: an IMAGE draws a picture in place of the row — the same Figma `Slot` (132:4466)
+                either way, so this is a branch on what fills the slot rather than a second slot. The
+                decision is `isImageAttachmentName`'s and is made over the untrusted filename, because
+                nothing tells this window an attachment's type; it decides what is DRAWN and never what is
+                fetched or from where, so a name that lies yields a picture that fails to decode rather
+                than a different file. Everything around it is unchanged: still direct children of
+                .bubble with no wrapper, still keyed by array index, still written between the message
+                text and <BubbleMeta>, so a message carrying one of each draws one of each in the order
+                the record holds them. */}
+            {item.attachments?.map((attachment, attachmentIndex) =>
+              isImageAttachmentName(attachment.filename) ? (
+                <BubbleAttachmentImage key={attachmentIndex} attachment={attachment} />
+              ) : (
+                <BubbleAttachmentRow key={attachmentIndex} attachment={attachment} />
+              )
+            )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). The copy source is the echo the composer wrote — the text as sent. */}
             <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />

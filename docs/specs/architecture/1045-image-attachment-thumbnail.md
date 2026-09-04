@@ -348,6 +348,33 @@ refiner already applied `needs-human:sizing` and recorded the declined split on 
 reaches the same answer independently: `isImageAttachmentName` has exactly one consumer, and a CSP widening
 is only provable where something loads, so neither half is verifiable alone. Building as one ticket.
 
+## Revisions
+
+**2026-09-04 — the three Open Questions, resolved in Phase B. None changed the design.**
+
+1. **Does `max-height` + `max-width` contain correctly in Chromium for a `blob:`-sourced `<img>` with no
+   intrinsic-size attributes?** **Yes, measured.** `e2e/attachment-image-thumbnail.spec.ts` asserts the
+   uncapped case (200×400 draws 80×160), the capped case (800×100 draws at the bubble's measured content
+   width with the height at width÷8), and the not-scaled-up case (40×40 draws 40×40), all against a live
+   content box across two window sizes. No `aspect-ratio` and no wrapper element were needed.
+   The rejected `height: 160px` alternative was **mutation-tested rather than argued**: substituting it
+   reddens the capped assertion with a drawn height of 160 against an expected 57 — the distortion the
+   plan predicted, confirmed to be detected.
+2. **Does the fallback want the filename?** **Kept**, as planned. It draws on its own line
+   (`.bubble__image-fallback-name` is `display: block`) so a long name wraps under the client-owned
+   sentence instead of pushing it, and `word-break: break-word` inherits from `.bubble`, so no new
+   overflow mechanism was needed.
+3. **Are `bmp`/`avif` worth admitting?** **Kept.** Both decode in Chromium, neither cost anything, and
+   `attachmentIsImage.test.ts` covers the whole set uniformly.
+
+**One measurement worth carrying forward, recorded because it corrects a plausible assumption rather than
+this plan's design.** The CSP's detector is not what it looks like. Reverting `img-src 'self' blob:` fails
+the e2e spec at `toHaveCount(1)` on `img.bubble__image` — received 0 — not at a `naturalWidth` read: a
+source the policy refuses raises `error` on the `<img>`, the same signal an undecodable byte stream raises,
+so the element unmounts into the fallback and there is no `<img>` left to measure. A spec that had asserted
+only `naturalWidth > 0` would have thrown a locator error rather than a clean failure, and one that
+asserted only "the fallback is absent" would have been the right shape by accident.
+
 ## Security review
 
 **Verdict:** PASS

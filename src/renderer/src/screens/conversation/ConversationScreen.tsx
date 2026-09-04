@@ -2734,14 +2734,19 @@ function Composer({
 
           #682: the permission-mode menu (Figma 115:3678), the row's SECOND item, now at the design's
           x=76 — it is the control the two notes below were holding the slot for, so the row finally
-          matches Figma's own order (Actions · mode · model · effort · reading). It takes NO props: unlike
-          the two menus beside it, its entries are a client-owned constant rather than a daemon-published
-          list, so it reads no model-list slice and needs no `conversationId` to select one with.
+          matches Figma's own order (Actions · mode · model · effort · reading).
 
-          IT IS ALSO THE ONE FOOTER MENU THAT IS ALWAYS OPERABLE. The other two go inert when no list has
-          arrived for the conversation; this one has nothing to be missing, so a mode being known is the
+          #1022 gave it `conversationId`, which it did not take until then. Its VOCABULARY is still
+          client-owned rather than daemon-published, but one entry of it is now conditional: a row's
+          `supports_auto_mode` hides `auto` on a model that refuses it, so this control selects the same
+          model-list slice its two neighbours do. It subtracts one named mode from a list it owns, where
+          they take their whole entry list from the daemon.
+
+          IT IS STILL THE ONE FOOTER MENU THAT IS ALWAYS OPERABLE, and that survived #1022 unchanged. The
+          other two go inert when no list has arrived for the conversation; this one's list never falls
+          below four entries whatever the daemon says or does not say, so a mode being known is still the
           whole condition — which is why the row's anchor and aria-haspopup counts move by one here as
-          soon as a snapshot lands, and why several sibling assertions were re-counted with this ticket.
+          soon as a snapshot lands, and why several sibling assertions were re-counted with #682.
 
           #988: the model menu (Figma 115:3683), at the design's x=135. It takes `conversationId` and
           reads its own four store slices, so a snapshot tick re-renders this leaf rather than the textarea
@@ -2763,7 +2768,7 @@ function Composer({
           process. */}
       <div className="composer__footer">
         <ComposerActionsMenu conversationId={activeConversationId} onCommand={sendText} />
-        <ComposerPermissionModeMenu />
+        <ComposerPermissionModeMenu conversationId={activeConversationId} />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />
         <ContextUsageControl />

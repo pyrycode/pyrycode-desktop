@@ -15,10 +15,12 @@ configuration § Run configuration Model section, daemon-published rows](convers
 hardcoded vocabulary — `EFFORT_LEVELS` — and building the Effort section's segments off the same held
 entry, joined by the same `value`-equality rule (renamed `publishedRowFor`) — see [§ Run configuration
 Effort section, daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
-Two consumers remain queued — the input footer's model and effort menus
-([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)) and the permission-mode menu
-([#682](https://github.com/pyrycode/pyrycode-desktop/issues/682)), which reads each row's
-`supports_auto_mode` to grey out a mode the running model refuses.
+Two more consumers followed: the input footer's model and effort menus
+([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)), and the permission-mode menu
+([#682](composer-permission-mode-menu.md)), which since
+[#1022](composer-permission-mode-menu.md) reads each row's `supports_auto_mode` to **hide** — never
+grey out — the `auto` entry on a model that refuses it, the operator having ruled against a disabled
+row (the shared options panel has no such state).
 [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) landed the store's pairing-scoped
 clear — see § The pairing-scoped clear below.
 
@@ -63,10 +65,10 @@ inspecting the internal map:
 | `{ models: [], droppedModels: 0 }` | that entry | claude published an empty menu |
 | `{ models: [m], droppedModels: 2 }` | that entry | 1 row carried, 3 models in the true menu |
 
-The distinction is load-bearing for every consumer: a sheet that greys out or empties its model
-rows because no frame has arrived would be wrong, while doing so because claude published an empty
-list would be right — and #682 reads `supports_auto_mode` per row, so it must know whether it has
-any rows to reason from at all.
+The distinction is load-bearing for every consumer: a sheet that empties its model rows because no
+frame has arrived would be wrong, while doing so because claude published an empty list would be
+right — and [#682](composer-permission-mode-menu.md) reads `supports_auto_mode` per row, so it must
+know whether it has any rows to reason from at all before it can hide `auto`.
 
 ## How it works
 
@@ -222,7 +224,10 @@ selectModelListFor(openId) / useModelListStore
 - `useModelListStore`/`selectModelListFor` are read since #975/#976, by `RunConfigSections`
   (`src/renderer/src/screens/conversation/RunConfigSections.tsx`), which takes the active
   conversation id as a prop rather than reading `sessionIdStore` — a session id keys nothing in
-  this store's map. #683 and #682 remain queued readers.
+  this store's map. The input footer's [model](composer-model-menu.md) and
+  [effort](composer-effort-menu.md) menus (#683) and, since #1022, the
+  [permission-mode menu](composer-permission-mode-menu.md) (#682) each take `conversationId` the
+  same way and read the same selector.
 
 ## Edge cases and limitations
 
@@ -260,9 +265,14 @@ selectModelListFor(openId) / useModelListStore
   at the next launch.
 - **No DOM sink in this slice.** The inert-escaped-length-bounded render discipline is inherited
   here; #975 discharged it for the Model rows and the running-model lookup, #976 discharged it for
-  the effort segments. #683 and #682 still owe it.
-- **The store's held list renders since #975/#976** (`ModelSection`, `RunningModelSection` and
-  `EffortSection` in `RunConfigSections.tsx`). #683 and #682 remain unbuilt.
+  the effort segments, and #683 discharged it for the footer's model and effort triggers. #682 reads
+  only `row.supports_auto_mode`, a `boolean`, never a claude-authored string, so it adds no render
+  sink at all — see [Composer permission-mode menu § Security](composer-permission-mode-menu.md).
+- **The store's held list renders since #975/#976/#683** (`ModelSection`, `RunningModelSection` and
+  `EffortSection` in `RunConfigSections.tsx`, and the footer's [model](composer-model-menu.md) and
+  [effort](composer-effort-menu.md) menus). [#682](composer-permission-mode-menu.md) is the fourth
+  and, since [#1022](composer-permission-mode-menu.md), reads a row without rendering any of its
+  text.
 
 ## Related
 

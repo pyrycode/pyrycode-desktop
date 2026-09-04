@@ -1441,7 +1441,9 @@ export interface QuestionRefusedPayload {
  * the never-a-lookup-path clause below, not a separate rule.
  *
  * `supports_auto_mode` is whether claude accepts `auto` permission mode for this model. claude refuses
- * per model, so a client greys the option out when this is `false` (#682). It names the SAME `auto`
+ * per model, so a client HIDES the option when this is `false` (#1022 — the operator ruled against
+ * greying it, since the shared options panel has no unavailable row and inventing one would have cost
+ * both a visual and a prop on a surface four menus share). It names the SAME `auto`
  * the daemon's own vocabulary carries — the field is `set_session_settings.permission_mode`, whose
  * write half accepts a closed five of default / acceptEdits / plan / auto / dontAsk, and whose read
  * half (`SessionSettingsPayload.permission_mode`, #1020) additionally reports `bypassPermissions`.

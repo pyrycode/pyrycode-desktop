@@ -1,7 +1,10 @@
+import { useMemo } from 'react'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
+import { useModelListStore, selectModelListFor, type ModelListEntry } from '../../store/modelListStore'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
+import { publishedRowFor } from './RunConfigSections'
 import { changeSetting } from './runSettingsControls'
 
 // #682: the composer footer's PERMISSION MODE menu (Figma 115:3678) — the row's second control, between
@@ -15,14 +18,21 @@ import { changeSetting } from './runSettingsControls'
 //
 // WHERE IT DEPARTS FROM ITS TWO NEIGHBOURS, because at a glance the three look interchangeable:
 //
-//   - ITS ENTRIES ARE A CLIENT-OWNED CONSTANT. The model and effort menus read a daemon-published list
-//     (`model_list`), so each has a third rendering — an inert label that opens nothing — for the three
-//     ways that list can be missing. This vocabulary is published by nobody: neither the daemon nor claude
-//     tells this client which permission modes may be set. So there is no list frame to read, no
-//     empty-list arm, no `publishedRowFor` lookup and no model-list store read at all, and there is never
-//     "nothing to offer" — every mode that renders at all renders an OPERABLE trigger. That is not a
-//     relaxation of the sibling rule against re-minting a deleted vocabulary (#976); it is the opposite
-//     situation, and the constants below are the single place this client states it.
+//   - ITS VOCABULARY IS CLIENT-OWNED, AND ONLY ONE ENTRY OF IT IS CONDITIONAL. The model and effort menus
+//     read a daemon-published list (`model_list`), so each has a third rendering — an inert label that
+//     opens nothing — for the three ways that list can be missing. This vocabulary is published by nobody:
+//     neither the daemon nor claude tells this client which permission modes may be set, so there is no
+//     list frame to wait for and no empty-list arm, and THERE IS NEVER "NOTHING TO OFFER" — every mode
+//     that renders at all renders an OPERABLE trigger. That is not a relaxation of the sibling rule
+//     against re-minting a deleted vocabulary (#976); it is the opposite situation, and the constants
+//     below are the single place this client states it.
+//
+//     #1022 GAVE IT A `publishedRowFor` LOOKUP AND A MODEL-LIST STORE READ, which this paragraph used to
+//     deny. It reads exactly one field of the matched row — `supports_auto_mode` — to drop ONE entry, and
+//     the two claims around that are unchanged: the list is still never empty, and the trigger is still
+//     never inert. What separates this control from its neighbours is now the direction of the read, not
+//     its absence: their whole entry list is the daemon's, while this one subtracts a single named mode
+//     from a list it owns. That asymmetry is a security property — see the note on the filter below.
 //
 //   - ITS LABEL IS LOOKED UP, unlike the effort trigger's. Claude publishes effort levels byte-identical
 //     to what it accepts, so that control relabels nothing. Permission modes arrive as camelCase machine
@@ -62,7 +72,12 @@ export const PERMISSION_MODE_LABELS: Readonly<Record<string, string>> = {
 }
 
 /** The five modes this control may submit, in the daemon's own declared order. `bypassPermissions` is
- *  absent, and its absence is a security property rather than an omission — see the header. */
+ *  absent, and its absence is a security property rather than an omission — see the header.
+ *
+ *  Five plain literals, deliberately: this is the daemon's declared vocabulary stated verbatim, and
+ *  substituting AUTO_PERMISSION_MODE into the middle of it would obscure the one thing the list exists to
+ *  say. The two are tied together by an assertion instead — the filtered mode must be a member of this
+ *  list — so a rename cannot silently disable the filter. */
 export const SETTABLE_PERMISSION_MODES: readonly string[] = [
   'default',
   'acceptEdits',
@@ -70,6 +85,11 @@ export const SETTABLE_PERMISSION_MODES: readonly string[] = [
   'auto',
   'dontAsk'
 ]
+
+/** #1022 — the one settable mode a MODEL can refuse, and therefore the only entry above that is
+ *  conditional. Exported because both test tiers must name it to derive their expectations; a second copy
+ *  typed into either would be free to drift from the string the filter actually removes. */
+export const AUTO_PERMISSION_MODE = 'auto'
 
 // The PANEL's accessible name, and a client-owned constant — NOT the trigger's visible text. The container
 // puts no aria-label on the TRIGGER (ComposerOptionsMenu), so the button's accessible name stays its
@@ -107,11 +127,12 @@ function permissionModeLabel(mode: string): string {
 
 /** What the trigger shows and what the menu offers.
  *
- *  There is no empty-`options` arm here, unlike both siblings: the entries are a constant, so the array is
- *  always the same five. `currentId` is the session's own mode VERBATIM — the machine value, not the
- *  display name — because the panel matches on `id`, and because a mode appearing in no entry (a session
- *  in bypass, or a mode this client cannot name) must mark nothing through the panel's existing
- *  `option.id === currentId` branch rather than through a special case here. */
+ *  There is no empty-`options` arm here, unlike both siblings: the entries are this client's own
+ *  vocabulary less at most one mode, so the array is always four or five. `currentId` is the session's own
+ *  mode VERBATIM — the machine value, not the display name — because the panel matches on `id`, and
+ *  because a mode appearing in no entry (a session in bypass, a mode this client cannot name, or since
+ *  #1022 a session running `auto` on a model that refuses it) must mark nothing through the panel's
+ *  existing `option.id === currentId` branch rather than through a special case here. */
 export interface ComposerPermissionModeMenuModel {
   label: string
   options: readonly ComposerOptionsPanelOption[]
@@ -122,12 +143,13 @@ export interface ComposerPermissionModeMenuModel {
  * The whole decision, as a pure function of the one input — so every rule is unit-testable as data rather
  * than only through markup (the sibling menus' property, kept even though this one's entries are fixed).
  *
- * TWO RENDERINGS, where the neighbours have three:
+ * TWO RENDERINGS, where the neighbours have three — and #1022 did NOT add a third:
  *
  *   permissionMode === ''   → null      no mode is known; draw nothing
- *   any other string        → the menu  always the same five entries
+ *   any other string        → the menu  four entries or five, never fewer and never none
  *
- * The first is AC1's second half, and both neighbours ship it for the identical case one button along.
+ * The first is #682's AC1 second half, and both neighbours ship it for the identical case one button
+ * along.
  * `selectEffectiveSettings` resolves `permissionMode` to '' until a run-config snapshot has arrived, and
  * the snapshot lands on a turn-end edge, so that window is ordinary app startup rather than an edge case.
  * '' is ALSO the daemon's own reading for "no session was resolved" (runConfigStore) — one string reached
@@ -136,17 +158,57 @@ export interface ComposerPermissionModeMenuModel {
  * and #811's no-placeholder rule points the same way.
  *
  * The second covers the bypass reading with no branch of its own, which is the design rather than a
- * shortcut: the label names whatever the daemon reports (AC2's "a session already in it still shows
- * bypassPermissions"), and the entries stay the five it may send.
+ * shortcut: the label names whatever the daemon reports (#682's "a session already in it still shows
+ * bypassPermissions"), and the entries stay what it may send.
+ *
+ * #1022 — THE ENTRY LIST IS NOW FOUR OR FIVE, and the whole of that decision is `hidesAuto` below.
+ *
+ * THE FILTER CAN ONLY EVER SUBTRACT, AND ONLY EVER ONE NAMED MODE. The offered list is this client's own
+ * constant MINUS `AUTO_PERMISSION_MODE`; it is never computed FROM the published row. That is the
+ * security property: the worst a hostile or merely buggy daemon achieves by lying with
+ * `supports_auto_mode: false` is removing one middle-permission entry, while `default` and `plan` — the
+ * two safest options — are unconditional and cannot be hidden, and no row can ADD an entry, least of all
+ * the escalation the header excludes. A design that derived the entries from the row instead would be
+ * exploitable. It is also worth stating what this is NOT: the hide is a UX affordance, never an
+ * authorization boundary. The daemon refuses a mode it does not accept and #256 rolls the optimistic
+ * label back, so nothing here is relied on for safety.
+ *
+ * FAILING OPEN IS THE RULE, not a fallback (AC2): `auto` is offered wherever the client does not
+ * positively know otherwise. Three inputs reach that reading and they are ONE reading, so they get one
+ * condition and no branches — no frame has arrived for the conversation (`models` is null), the
+ * conversation's published list is empty, and the session's model matches no row, which includes a row
+ * whose `value` the daemon cut mid-token and which therefore simply misses.
+ *
+ * `=== false` RATHER THAN `!row.supports_auto_mode`. In the shipped path the two agree: parseModelList's
+ * `requireBoolean` throws on a non-boolean and drops the whole frame, so a row that reaches the store
+ * always carries a real boolean. The strict form is written anyway because it states the rule directly —
+ * only a row SAYING false hides the entry — and because it stays correct on a path that bypasses the
+ * narrower, which WireModelOption's docblock warns about for a frame reached through a bare `as` (there an
+ * absent key reads `undefined`, and the loose form would act on a flag this client never received). It is
+ * the decoder's own posture one layer down: checked on the TYPE, never on truthiness. `row === undefined`
+ * is the outer guard for the same reason a `?? false` would be wrong: a miss is the unknown reading.
+ *
+ * THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor — the
+ * same string and the same rule EffortSection and both neighbouring triggers join, and this is that
+ * helper's FIFTH caller. No family derivation, no substring, prefix, case fold or trim anywhere on this
+ * path. The caller passes the EFFECTIVE model (pending pick > client-confirmed > snapshot base), which is
+ * what makes picking a model that refuses `auto` drop the entry at once, and a rejected model pick bring
+ * it back, with no code of its own here.
  */
 export function composerPermissionModeMenuModel(
+  models: ModelListEntry | null | undefined,
+  model: string,
   permissionMode: string
 ): ComposerPermissionModeMenuModel | null {
   if (permissionMode === '') return null
+  const row = publishedRowFor(models, model)
+  const hidesAuto = row !== undefined && row.supports_auto_mode === false
   return {
     label: permissionModeLabel(permissionMode),
     currentId: permissionMode,
-    options: SETTABLE_PERMISSION_MODES.map((mode) => ({
+    options: SETTABLE_PERMISSION_MODES.filter(
+      (mode) => !(hidesAuto && mode === AUTO_PERMISSION_MODE)
+    ).map((mode) => ({
       id: mode,
       label: permissionModeLabel(mode)
     }))
@@ -174,13 +236,20 @@ export function composerPermissionModeMenuModel(
  * remotely triggerable by a hostile or merely buggy daemon.
  */
 export function ComposerPermissionModeMenuView({
+  model,
   permissionMode,
+  models,
   onSelect
 }: {
+  model: string
   permissionMode: string
+  models: ModelListEntry | null
   onSelect: (mode: string) => void
 }): JSX.Element | null {
-  const menu = composerPermissionModeMenuModel(permissionMode)
+  // #1022 — every prop stays REQUIRED, including the two added here. The container always knows both, so
+  // an optional `models` would only hide the wiring seam: the model function stays green with the mount
+  // unwired, and the failure is silent in the fail-open direction. The e2e drive is what catches that.
+  const menu = composerPermissionModeMenuModel(models, model, permissionMode)
   if (menu === null) return null
 
   return (
@@ -218,35 +287,56 @@ export function ComposerPermissionModeMenuView({
  * The store-bound container — the sibling menus' recipe minus the model list, in a leaf so a snapshot tick
  * re-renders this control rather than the textarea and the send button beside it.
  *
- * It takes NO PROPS, which is the visible half of this control reading no per-conversation list: both
- * neighbours take `conversationId` solely to select their model-list slice, and there is nothing here to
- * select it for.
+ * `conversationId` arrives as a PROP rather than as a fifth store read, the settled house idiom that both
+ * neighbours already follow: Composer already subscribes to `activeConversationId`, so the prop costs no
+ * subscription. It is NOT the session id also read here — those are different identifiers, and a session
+ * id keys nothing in the model-list map. #1022 added it; until then this container took no props at all,
+ * which was the visible half of reading no per-conversation list.
  *
- * AC3's "sends nothing when there is no addressable session id" is met by changeSetting's OWN gate, not by
+ * #682's AC3, "sends nothing when there is no addressable session id", is met by changeSetting's OWN gate,
+ * not by
  * withholding the handler. The run-configuration sheet withholds `onChange` because its view branches
  * OPERABILITY on handler presence; this view has no operability branch at all, so withholding would fuse
  * two unrelated conditions and make a populated menu unopenable whenever the session id is unknown, which
  * no AC asks for. changeSetting is documented as the deterministic safety net behind that structural gate;
  * here it is the whole gate, and it has its own unit tests.
  */
-export function ComposerPermissionModeMenu(): JSX.Element | null {
+export function ComposerPermissionModeMenu({
+  conversationId
+}: {
+  conversationId: string | null
+}): JSX.Element | null {
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // The RAW write state (stable identity between dispatches). NOT selectEffectiveSettings as the zustand
   // selector: it returns a fresh object every call, which defeats Object.is and re-renders on every store
   // tick — the composition runs in the render body instead.
   const writeState = useRunSettingsWriteStore((s) => s)
+  // #1022 — the neighbours' selector verbatim. A useMemo-stable selector per id, since a fresh closure
+  // each render would churn the subscription. A null conversation selects nothing THROUGH THE SAME PATH,
+  // with no invented key and no second branch downstream, and `null` is a stable reference.
+  const selectModels = useMemo(
+    () => (conversationId === null ? () => null : selectModelListFor(conversationId)),
+    [conversationId]
+  )
+  const models = useModelListStore(selectModels)
 
   // The pending optimistic overlay > the client-confirmed override > the snapshot base. This composition is
-  // AC3's second half and AC4 in full, with no code of its own: it moves the label to the picked mode at
-  // once, and returns it to the daemon-reported mode when the store drops the pending record on a
+  // #682's AC3 second half and its AC4 in full, with no code of its own: it moves the label to the picked
+  // mode at once, and returns it to the daemon-reported mode when the store drops the pending record on a
   // rejection. There is no local state here, and there must not be — a second copy of the displayed value
   // could disagree with the run-configuration sheet's.
+  //
+  // #1022 joins the model list on `effective.model` — the SAME composition, not the snapshot's model — so
+  // picking a model that refuses `auto` drops the entry at once and a rejected model pick brings it back,
+  // through this one expression and no code of its own.
   const effective = selectEffectiveSettings(snapshot, writeState)
 
   return (
     <ComposerPermissionModeMenuView
+      model={effective.model}
       permissionMode={effective.permissionMode}
+      models={models}
       // An arrow, so `window.pyry` is dereferenced at INTERACTION time and never during render — hoisting
       // it (or the deps object) would move the dereference into the render path, where window.pyry does not
       // exist under renderToStaticMarkup and every container smoke test would throw. The mode is submitted

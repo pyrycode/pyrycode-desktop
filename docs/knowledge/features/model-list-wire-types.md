@@ -123,9 +123,11 @@ different field.
   it rarely equals a bare published `value`). `display_name` is what a *hit* renders, not what
   either side compares. See [#975 codebase notes](../codebase/975.md) § Revisions for the full
   argument.
-- `supports_auto_mode` is whether claude accepts `auto` permission mode for this model (#682: a
-  client greys the option out on `false`). Absent in claude's reply decodes to `false`, the correct
-  reading, not a missing one.
+- `supports_auto_mode` is whether claude accepts `auto` permission mode for this model — since
+  \#1022, [the permission-mode menu](composer-permission-mode-menu.md) hides the `auto` entry on a
+  matched row saying `false`, checked strictly (`=== false`, never `!supports_auto_mode`) rather than
+  greyed out, the operator having ruled against a disabled row. Absent in claude's reply decodes to
+  `false`, the correct reading, not a missing one.
 - `truncated_fields` names **this row's own** cut fields, producer order `resolved_model`, `value`,
   `display_name`, `effort_levels`. Load-bearing, not decoration — see the cut-`value` hazard below.
   Element vocabulary stays a plain `string[]`, not narrowed to those four names, for
@@ -253,7 +255,9 @@ rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-sec
 `EFFORT_LEVELS` and built the Effort section's segments off the same held entry, joined by the same
 `value`-equality helper (renamed `publishedRowFor`) — see [§ Run configuration Effort section,
 daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
-The input footer's menus (#683) and the permission-mode menu (#682) remain unbuilt.
+The input footer's [model and effort menus](composer-model-menu.md) (#683) and the
+[permission-mode menu](composer-permission-mode-menu.md) (#682, its `auto`-hiding join at #1022)
+followed the same pattern.
 
 ## Edge cases and limitations
 

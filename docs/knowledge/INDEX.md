@@ -716,6 +716,12 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `refused` (permanent) / `unavailable` (fetch and retry) / `unsupported-type` (permanent, distinct
   from `refused` — offer the save leg instead) / `open-failed` (the only one a plain retry can fix).
   Architect self-review PASS, no MUST FIX. Renderer wiring (#869, the thumbnail click) not started.
+- [Attachment image source](features/attachment-image-source.md) — turns a `MessageAttachment` record
+  into a `blob:` URL an `<img>` can point at (#1044, split from #868): fetches the file back over
+  [attachment retrieval](features/attachment-retrieval.md), reads it over
+  [attachment bytes](features/attachment-bytes.md), mints the URL with no media type, and refcounts it
+  by attachment id so a second ask joins rather than re-fetches. Nothing is drawn and the URL is inert
+  until #1045 widens the CSP's `img-src` — this slice's whole output is a module with no JSX.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

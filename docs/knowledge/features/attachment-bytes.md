@@ -2,10 +2,12 @@
 
 The fourth attachment channel pair, and the first one that is not content-free: the window names an
 attachment already on this machine by identifier, and the background process answers exactly one
-terminal — the file's bytes, or a client-owned failure literal. Nothing renders here. The thumbnail
-that consumes these bytes is [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) and
-[attachment open](attachment-open.md) (#867, landed) opens a file in the OS viewer over its own
-channel, each its own ticket.
+terminal — the file's bytes, or a client-owned failure literal. Nothing renders here.
+[Attachment image source](attachment-image-source.md) (#1044, landed, split from #868) is the first
+renderer caller, turning delivered bytes into a `blob:` URL; the thumbnail that draws it is
+[#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045), still not started. [Attachment
+open](attachment-open.md) (#867, landed) opens a file in the OS viewer over its own channel, a separate
+consumer of this same directory.
 
 Introduced in [#866](https://github.com/pyrycode/pyrycode-desktop/issues/866), split from #691. The
 second consumer of [attachment retrieval](attachment-retrieval.md)'s directory to land, after
@@ -60,7 +62,10 @@ below it.
 **The channel carries bytes and nothing else** — no path, no directory, no URL, no filename, no media
 type, no errno, in either direction. The retrieval leg never kept a filename or a MIME type
 (`attachmentReassembler` reads neither, and the stored file is extension-less on purpose), so there is
-nothing main-side to read one back from. Whether a consumer needs a type at all is #868's question.
+nothing main-side to read one back from. Resolved by #1044: no consumer needs a type at all — the
+minted `blob:` URL is built with none, and [attachment image source § the media
+type](attachment-image-source.md#the-media-type-none-with-a-named-seam) records why and leaves a named
+seam should #1045 find otherwise.
 
 ### Three failure reasons, split on what a consumer can do next
 
@@ -190,22 +195,27 @@ window closed mid-read, register with `ipcMain.on`, remove on `will-quit`. `setW
 `requestAttachmentBytes(request)` — fire-and-forget on the fixed channel — and
 `onAttachmentBytesEvent(listener)` — subscription returning an unsubscribe handle, the raw
 `IpcRendererEvent` stripped — copy `saveAttachment` / `onAttachmentSaveEvent` exactly. `index.d.ts`
-needed no edit: `PyryApi` is `typeof api`. No caller is wired yet — the first consumer is #868.
+needed no edit: `PyryApi` is `typeof api`. **The first caller landed in #1044** — see [Attachment image
+source](attachment-image-source.md).
 
 ## The one property no tier in this repo can pin
 
 The bytes make two hops: `webContents.send` → `ipcRenderer.on` (blink's structured serializer, which
 copies a typed array), then the `contextBridge` callback into the main world, which copies
 non-function values through the same serializer. Renderer tests here are node-environment static
-renders and the bridge only exists in the built app, so neither hop is observable from vitest, and
-this slice wires no renderer consumer to exercise it. Documented rather than hidden: #868 is the first
-end-to-end proof. If the second hop ever proved lossy, the repair is local to the preload listener
-(re-wrap the incoming value), not to this contract.
+renders and the bridge only exists in the built app, so neither hop is observable from vitest. [Attachment
+image source](attachment-image-source.md) (#1044) wired the first renderer consumer but cannot exercise
+this hop either — its own test tier is the same node-environment static render, with no DOM and no
+bridge. Documented rather than hidden: #1045's browser-context e2e tier is the first end-to-end proof.
+If the second hop ever proved lossy, the repair is local to the preload listener (re-wrap the incoming
+value), not to this contract.
 
 ## State and concurrency model
 
-One integer in the driver's closure — `inFlight` — and nothing else. No map, no timer, no store slice
-(this slice has no renderer state; #868 owns that). The slot is released in a `finally` on every path.
+One integer in the driver's closure — `inFlight` — and nothing else. No map, no timer, no store slice on
+this main-process side; [attachment image source](attachment-image-source.md) holds the renderer-side
+live-URL map, and #1045 owns whatever component state draws it. The slot is released in a `finally` on
+every path.
 Cancellation: none is owed — each ask is one bounded `readFile` with no long-lived job to tear down; a
 window that closes mid-read drops its terminal at the `isDestroyed()` guard, the same accepted loss
 the retrieval, upload and save edges already take.
@@ -255,8 +265,8 @@ Architect self-review verdict **PASS**, no MUST FIX. Full review in
 ## Testing
 
 Unit tier only — a main-process filesystem module plus a boundary guard, both directly unit-testable
-against a temp directory the way `attachmentSave.test.ts` is. No Playwright coverage is owed; the
-interaction that would need `e2e/` arrives with #868.
+against a temp directory the way `attachmentSave.test.ts` is. No Playwright coverage is owed on this
+side; the interaction that would need `e2e/` arrives with #1045.
 
 - `src/shared/ipc/attachmentBytes.test.ts` — the guard's accept/refuse table, the identifier length
   bound at and past the limit, a `../../etc/passwd` identifier **accepted** here on shape (canonicity
@@ -280,7 +290,7 @@ interaction that would need `e2e/` arrives with #868.
 - **No digest re-verification at read time**, by design — see § Security.
 - **A symlink planted inside the attachment directory is followed** — deferred, see § Security.
 - **The `contextBridge` hop is unobservable from this repo's test tiers** — see § "The one property no
-  tier in this repo can pin". #868 is the first end-to-end proof.
+  tier in this repo can pin". #1045's browser-context e2e tier is the first end-to-end proof.
 - **Nothing evicts attachment files.** Retention has no ticket in any repo.
 - **Is `4` the right concurrency cap?** It matches `ATTACHMENT_MAX_CONCURRENT_RETRIEVALS` and its
   ceiling argument exactly. Left as-is; revisit only if a consumer needs a larger simultaneous fan-out
@@ -301,8 +311,10 @@ interaction that would need `e2e/` arrives with #868.
 - `docs/specs/architecture/866-deliver-attachment-bytes-to-the-window.md` — the full architecture spec,
   including the security review and the two open questions this doc resolves as documented, not
   blocking.
-- [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the thumbnail, the first renderer
-  consumer of this channel and the first end-to-end proof of the `contextBridge` hop; not started.
+- [Attachment image source](attachment-image-source.md) — #1044, landed: the first renderer consumer of
+  this channel, turning delivered bytes into a `blob:` URL. It cannot itself prove the `contextBridge`
+  hop; that waits on [#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045), the thumbnail
+  that draws the URL and widens the CSP to make it loadable.
 - [Attachment open](attachment-open.md) — #867, landed: the other consumer of
   [attachment retrieval](attachment-retrieval.md)'s directory, opening a file in the OS image viewer
   over its own channel rather than this one.

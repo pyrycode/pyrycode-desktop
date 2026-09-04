@@ -692,9 +692,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   from `createAttachmentRetrieval`: the terminal is a promise to **one** caller, so a dropped duplicate
   would leave it unanswered, and the in-flight state is a plain counter rather than a map. The
   `contextBridge` structured-clone hop is documented as unobservable from this repo's test tiers;
-  #868 (thumbnail) is the first end-to-end proof. Third reader of the composition root's one
-  `attachmentDir` join — no new `app.getPath` call. Architect self-review PASS, no MUST FIX. Renderer
-  wiring (#868 thumbnail) not started; #867 (OS-viewer open) has since landed.
+  #1045 (thumbnail, split from #868) is the first end-to-end proof. Third reader of the composition root's
+  one `attachmentDir` join — no new `app.getPath` call. Architect self-review PASS, no MUST FIX. Renderer
+  wiring for the thumbnail landed via #1045; #867 (OS-viewer open) has since landed too.
 - [Attachment open](features/attachment-open.md) — hands an attachment already on this machine to the
   OS's default image-viewer handler (#867, split from #691), closing the extension question
   [attachment path resolution](features/attachment-path-resolution.md) left open: the stored file is
@@ -720,8 +720,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   into a `blob:` URL an `<img>` can point at (#1044, split from #868): fetches the file back over
   [attachment retrieval](features/attachment-retrieval.md), reads it over
   [attachment bytes](features/attachment-bytes.md), mints the URL with no media type, and refcounts it
-  by attachment id so a second ask joins rather than re-fetches. Nothing is drawn and the URL is inert
-  until #1045 widens the CSP's `img-src` — this slice's whole output is a module with no JSX.
+  by attachment id so a second ask joins rather than re-fetches. Nothing is drawn by this module itself —
+  the URL is consumed and the CSP's `img-src` widened by #1045 (shipped), which draws the `<img>` and
+  decides imageness from the untrusted filename.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

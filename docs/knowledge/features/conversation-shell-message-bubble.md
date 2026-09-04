@@ -208,11 +208,11 @@ its file-count boundary.
   app) — emits `bubble bubble--user` / `bubble bubble--daemon` and so inherits the CSS restyle passively,
   but gained no `BubbleMeta` and no code change. Its tests still pin the message text as the bubble's
   sole child (`data-message-role="user">text m1</div>`).
-- **The tool rows, the fenced code block and the image thumbnail** are untouched: the tool rows are not
-  bubbles, and the thumbnail (still unbuilt — [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868))
-  is another instance of the same `Message` component with its `Slot` shown — this ticket restyles the
-  bubble around it, not its own contents. The non-image file row this paragraph used to list here has
-  since shipped; see [§ The attachment file row](#the-attachment-file-row-815-816) below.
+- **The tool rows and the fenced code block** are untouched by the #969 restyle: they are not bubbles. The
+  file row and the image thumbnail — both instances of the same `Message` component's `Slot` — inherit the
+  restyle around them but drew no content of their own at the time; both have since shipped. See
+  [§ The attachment file row](#the-attachment-file-row-815-816) and
+  [§ The attachment image thumbnail](#the-attachment-image-thumbnail-1045) below.
 - **`.bubble__markdown`** ([Assistant markdown
   renderer](assistant-markdown-renderer.md)) is unaffected structurally: `.bubble__meta` is appended as
   its *sibling* inside `.bubble`, never as its child, so the markdown container's own flex column and 8px
@@ -328,12 +328,138 @@ it directly with the row's own `attachment` record — no prop drilling, `Bubble
 in-bubble precedent, and the open conversation id is read outside React from `activeConversationStore`
 rather than threaded down through `Timeline`'s ~30 render sites.
 
-**Not built:** image attachments render nothing here yet
-([#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) owns the thumbnail, same slot), and
-in-flight/failed attachments stay the composer's own concern (`attachmentUploadCopy.ts`) — this row draws
+**Image attachments no longer draw this row.** [#1045](#the-attachment-image-thumbnail-1045) takes the
+same `Slot` over for a name `isImageAttachmentName` admits and draws the picture instead — see below.
+In-flight/failed attachments stay the composer's own concern (`attachmentUploadCopy.ts`) — this row draws
 a settled attachment only. Neither a pending state nor a failure state exists for the download itself
 (#816's Open Question: no Figma node for either, so both need their own ticket) — the row is activatable
 at every instant, with nothing to reset on a failure.
+
+### The attachment image thumbnail (#1045)
+
+An image attachment on a sent message draws as the picture its own bytes decode to, taking over the same
+`Slot` (132:4466) the file row above draws into — a branch on what fills the slot, not a second slot. Split
+from #868 via [#1044](attachment-image-source.md) (the bytes-to-`blob:`-URL path) and this ticket (the
+`<img>`, the CSP widening, and the imageness decision itself).
+
+**Imageness is a client-owned decision over an untrusted name, made by `attachmentIsImage.ts` (new,
+`isImageAttachmentName`) — deliberately not `attachmentExtensionLabel`.** Nothing tells the window an
+attachment's type: the bytes channel carries none, the retrieval leg discards name and type on purpose, and
+the minted blob has `type === ''`. The only signal is `MessageAttachment.filename`, so imageness is the
+text after the *last* dot, lowercased, compared for **exact** equality against a frozen seven-member set
+(`png` `jpg` `jpeg` `gif` `webp` `avif` `bmp`) — not `attachmentExtensionLabel`'s decorative
+uppercase-strip-cap pipeline, which would call `photo.p-n-g` a `PNG`. `svg` is excluded because it is a
+document rather than bytes (the `img-src` widening's whole argument is "a `blob:` URL only ever reaches an
+`<img>` `src`", and admitting a format whose safety rests on a second browser-internal rule weakens that to
+two sentences); `heic`/`heif`/`tiff` are excluded because Chromium cannot decode them, and an excluded name
+falls back to the working file row rather than a dead thumbnail. Linear time, no backtracking pattern —
+`attachmentExtensionLabel`'s own inherited constraint, since this also runs on an untrusted-length name on
+every render. The decision governs only what is **drawn**: a name that lies produces a picture that fails to
+decode, never a different file, because the fetch is addressed by `attachmentId` and this helper never sees
+it.
+
+**The mount, `BubbleAttachmentImage.tsx` (new), splits a pure state-to-markup function from a one-effect
+container** so all three drawn states stay provable under `renderToStaticMarkup`'s no-DOM tier.
+`AttachmentThumbnail({ state, filename, onDecodeError })` takes no hooks and switches on
+`AttachmentThumbnailState`:
+
+- `pending` → `null`. Nothing drawn and nothing reserved — reserving space needs the aspect ratio, which
+  needs the bytes, which is the thing being fetched. A late-loading thumbnail moving the reader's scroll
+  position is consequently a real follow-up, filed and blocked on this ticket, not a defect here.
+- `ready` → `<img className="bubble__image" src={url} alt={ATTACHMENT_IMAGE_ALT} onError={onDecodeError} />`.
+  `alt` is the **client-owned constant** `'Attached image'`, never the filename — `alt` is an attribute, and
+  #815's ruling that the untrusted name never enters one is carried across rather than reopened. `onError`
+  is AC5's decode-failure half (bytes arrive, the name lied) and cannot loop: moving off `ready` unmounts the
+  very `<img>` that raised it.
+- `failed` → a `<p className="bubble__image-fallback">` holding the client-owned sentence `'Image could not
+  be shown'` and, in its own `<span className="bubble__image-fallback-name">`, the filename as escaped React
+  children — included, not omitted, because a reader who sent several pictures needs to know which is
+  missing.
+
+`failed` carries no reason, structurally rather than by care: `BubbleAttachmentImage` reads the
+`AttachmentImageSourceFailure` off the effect, logs it as a bare `console.error` event name, and discards it
+before it reaches state — no reason is left in scope for a later edit to interpolate into the fallback,
+which makes AC5's "never a per-reason message" a property of the code shape rather than a rule to remember.
+The host's `not-found` is deliberately its one code for every request that yields no bytes, so a per-code
+message here would have undone that indistinguishability from this side.
+
+The effect returns the [release handle](attachment-image-source.md#the-release-handle-and-refcounting)
+directly as its own cleanup — legal because the handle comes back on every branch before any terminal. A
+synchronous outcome (the URL is already live) sets state from inside the effect body, the case #1044's
+`takeShare` records the map entry before invoking the callback to make safe. Under `React.StrictMode`'s
+development double-invoke the sequence is request → release → request; the second ask finds the retrieval
+already `inFlight` main-side and is a no-op, and the second mount still settles because main answers over a
+channel broadcast every listener receives, not a per-request reply.
+
+**The box, `.bubble__image` in `conversation.css`, is five declarations, two of which are the whole sizing
+rule:**
+
+```css
+.bubble__image {
+  margin-top: var(--space-3);
+  display: block;
+  max-height: 160px;
+  max-width: 100%;
+  border-radius: var(--radius-xs);
+}
+```
+
+`max-height` + `max-width` with both dimensions left `auto` is CSS's own contain behaviour for a replaced
+element (CSS2.1 §10.4): the used size comes from the image's intrinsic ratio, then whichever constraint
+binds clamps and the other dimension follows proportionally — the operator's 2026-08-22 sizing ruling (160px
+tall, width from the ratio, capped at the bubble's content width with height falling proportionally, never
+scaling a naturally-shorter image up) as one mechanism rather than computed and reapplied. `height: 160px`
+was the rejected alternative and is a real trap, not a style preference: a fixed height makes `max-width`
+clamp the width and *distort* the image — confirmed by mutation-testing the substitution, which reddens the
+capped e2e assertion at a drawn height of 160 against an expected 57. `max-width: 100%` resolves against
+`.bubble`'s own content box (`min(680px, 75%)` less `--space-5` either side), so both bounds move live with
+the window; no fixed pixel width is written anywhere. `margin-top: var(--space-3)` joins the file row's and
+the meta row's existing following-sibling rhythm rather than adding a second mechanism, since `.bubble` is
+deliberately not a flex column (see above). The fallback (`.bubble__image-fallback`) takes the file row's
+typographic block (body-small, `--color-inverse-primary`) and the same `margin-top`, so a failed image
+occupies the rhythm a drawn one would and the thread does not shift as asks settle.
+
+**The CSP widening, `img-src 'self' blob:`, is the one directive this ticket adds to
+`src/renderer/index.html`, and its shape was settled by #1044's own security review rather than chosen
+here.** It adds no network-reachable source — no `https:`, `http:`, `data:` or `*` — so it does not open the
+classic `img-src` exfiltration channel; the only URLs it admits are ones this window itself minted. `'self'`
+is restated because a present `img-src` *replaces* `default-src` for images entirely, so `img-src blob:`
+alone would silently break every same-origin image the app later adds. The blob-of-HTML-navigation vector (a
+`blob:` URL inherits the creating document's origin, so a blob of HTML *navigated to* would run script
+holding the preload bridge) stays closed by three guards this ticket left untouched: `will-navigate`
+confines in-place navigation to the app's own document, `setWindowOpenHandler` denies every scheme and
+externalises only `http:`/`https:`, and `object-src 'none'` blocks a blob object — plus a fourth that holds
+by fallback rather than declaration: no `frame-src` is declared, so a frame inherits `default-src 'self'`
+and a `blob:` iframe is refused. **A `frame-src`, `child-src`, or a relaxed `default-src` would reopen
+exactly what `img-src` alone does not, and none is touched.**
+
+**Measured, not assumed: the CSP's own detector is not what it looks like.** Reverting the widening fails
+the e2e spec at `toHaveCount(1)` on `img.bubble__image` — received `0` — never at a `naturalWidth` read. A
+source the policy refuses raises `error` on the `<img>`, the same signal an undecodable byte stream raises,
+so the element unmounts into the fallback before anything is left to measure. A spec asserting only
+`naturalWidth > 0` would have thrown a locator error instead of failing cleanly.
+
+**`e2e/attachment-image-thumbnail.spec.ts` (new) is the family's first spec to drive an attachment fetch to
+completion** — `attachment-file-row.spec.ts` answers `request_attachment` with no frames on purpose, since
+\#816's next step there is a save into the operator's real Downloads folder; this slice has no save, so
+completion is safe and is the only way real bytes reach an `<img>`. It seeds four fixture PNGs as
+`attachment-chunk` reply frames with a real SHA-256 computed at spec time (a hand-written digest fails
+closed as `verification-failed`): 200×400 (portrait, proves 160-tall with width from the ratio), 800×100
+(proves the width cap and the proportional height at every window size up to a 680px bubble), 40×40 (proves
+no upscale), and a liar — ASCII bytes under a `.png` name — proving the decode-error fallback. **Fixture
+attachment ids must be canonical** (hex and hyphen, per `CANONICAL_ATTACHMENT_ID`): `attachment-file-row.
+spec.ts`'s `e2e-download-1` shape gets away with not being canonical only because that spec never drives a
+retrieval as far as the store; this one does, and a non-canonical id would make `resolveAttachmentPath`
+refuse and every picture silently become the fallback. Geometry assertions read a live content box
+(`.bubble`'s box and its computed padding) rather than a computed constant, at both the 800px minimum window
+width and a wide size via the existing `setSize` resize idiom, polling after each resize; a rounded pixel
+delta is normalised with `+ 0` before any `toBe(0)`, since `Math.round` of a tiny negative fraction is `-0`
+and `Object.is(-0, 0)` is `false`.
+
+**A hostile-name test can write an unsatisfiable assertion — the same shape #815's `README` case already
+warned about.** `not.toContain('onerror=')` fails on a *correctly escaped* render if the hostile filename
+itself contains that substring; what actually separates safe from unsafe is whether the `"` survived
+escaping (`&quot;onerror=&quot;`), not whether the raw substring is absent.
 
 ## Testing
 
@@ -391,6 +517,21 @@ in this tier, since a real save would copy into the runner's actual Downloads fo
 window. The same test also asserts the row is a `<button>`, becomes `document.activeElement` after a
 keyboard interaction, and matches `:focus-visible` with a solid outline.
 
+**#1045's own coverage.** `attachmentIsImage.test.ts` pins the two cases that justify the helper existing
+(`photo.p-n-g` and `x.jpegg` are **not** images, where `attachmentExtensionLabel` would call them `PNG` and
+`JPEG`), plus case-insensitivity, every admitted extension, `svg`/`heic` refused, and the no-dot/trailing-dot
+edge cases. `BubbleAttachmentImage.test.tsx` renders `AttachmentThumbnail` directly in each of the three
+states — `pending` draws nothing, `ready` draws exactly one `<img class="bubble__image">` with the URL as
+`src` and the constant as `alt` and the filename absent from the markup, `failed` draws the fallback with
+the name as escaped children (a name carrying `<script>` and `"` renders as visible, escaped characters) —
+plus the container itself under static render (always `pending`). The extended `ConversationScreen.test.tsx`
+`describe` asserts an image attachment draws no `.bubble__file`, a non-image one is unchanged, and a message
+carrying both draws one of each in record order, still between the message text and `.bubble__meta`. The
+bubble-text sweep (`toHaveText|toContainText` and `textContent|allTextContents|innerText` across `e2e/` with
+no tier filter) found no existing site that reddens: the `<img>` bears no text, and the fallback — the only
+text-bearing child this ticket adds — appears solely on a state no pre-existing spec can reach. The e2e
+spec's own coverage is in [§ The attachment image thumbnail](#the-attachment-image-thumbnail-1045) above.
+
 ## Related
 
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
@@ -413,8 +554,16 @@ keyboard interaction, and matches `:focus-visible` with a solid outline.
   split from: [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) (shipped, this section),
   [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) (shipped, the row's download action,
   covered above), and [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) (the image
-  thumbnail, same slot, not yet built) — instances of the same `Message` component whose bubble this
-  ticket restyles.
+  thumbnail, same slot) — instances of the same `Message` component whose bubble this ticket restyles.
+  #868 itself split further into [#1044](attachment-image-source.md) (shipped, the bytes-to-URL path),
+  [#1045](#the-attachment-image-thumbnail-1045) (shipped, this document's new section) and #869 (the
+  thumbnail's own open-full-size click, not yet built).
+- [#1045 architecture spec](../../specs/architecture/1045-image-attachment-thumbnail.md) — the image
+  thumbnail's full design, the operator's 2026-08-22 sizing ruling, and the security review covering the
+  CSP widening and the attacker-chosen-bytes-reach-a-decoder threat model.
+- [Attachment image source](attachment-image-source.md) — the bytes-to-`blob:`-URL path #1045 consumes,
+  the release-handle/refcounting contract `BubbleAttachmentImage` honours, and the CSP-widening argument
+  this document's § The attachment image thumbnail carries out.
 - [#1028](https://github.com/pyrycode/pyrycode-desktop/issues/1028) / [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) —
   the record a sent message's attachments carry on its timeline item, which #815 reads and without which
   it has no name to draw.

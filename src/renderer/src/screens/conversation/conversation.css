@@ -364,11 +364,53 @@
    .bubble__meta already carry. text -> picture -> meta falls out at 12px with no new mechanism.
    display: block removes the inline baseline gap an <img> would otherwise add below itself. */
 .bubble__image {
-  margin-top: var(--space-3);
   display: block;
   max-height: 160px;
   max-width: 100%;
   border-radius: var(--radius-xs);
+}
+
+/* #869 — the control the picture became. .bubble__file's UA reset, MINUS its width: 100%, and that
+   subtraction is the whole rule. A row should fill the bubble; a picture should not, and a focus ring
+   tracing a bubble-width band around a 160px-tall thumbnail is the visible failure AC3 names.
+
+   width: fit-content SHRINK-WRAPS the drawn picture, including when the picture's own width comes from
+   max-height binding against its aspect ratio (a 200x400 source draws 80 wide). display: block rather
+   than a button's inline-block default: an inline-block sits on the parent's text baseline and adds
+   descender space beneath itself, which would push .bubble__file / .bubble__meta off the 12px rhythm
+   the thread already measures. max-width: 100% keeps the cap that made a panorama stop at the bubble's
+   content width — on the button, since it is the box that is now laid out.
+
+   THE margin-top MOVED HERE FROM .bubble__image, and it had to. .bubble is deliberately not a flex
+   column (see its own rule), so the drawing's rhythm is a margin-top on the FOLLOWING sibling — and the
+   following sibling is now this button. Left on the image it would sit INSIDE the control (a button's
+   contents are their own formatting context, so the margin does not collapse out) and the focus ring
+   would carry a 12px band above the picture. What a resolving thumbnail adds to the thread is unchanged
+   at 160 + 12, which is what thread-scroll-pin.spec.ts measures as a floor.
+
+   The radius is restated here so the outline follows the picture's own rounded corners; the image keeps
+   its own for the same reason it always had one. */
+.bubble__image-button {
+  margin-top: var(--space-3);
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+/* The drawing shows no focus treatment for the picture, so this takes the answer .bubble__file already
+   gives in this same bubble rather than inventing one — and it is not optional, because AC1 makes the
+   thumbnail a tab stop and a control the keyboard can reach must show where it is.
+
+   NO :hover TWIN, deliberately. .bubble__file's hover brightens the INK one step up the tonal ramp,
+   which means nothing on a picture, and any other treatment would be an invention the drawing does not
+   authorise. */
+.bubble__image-button:focus-visible {
+  outline: 1px solid var(--color-outline);
 }
 
 /* The one thing drawn when an ask ends without a drawable picture — the fetch terminating `failed` on any

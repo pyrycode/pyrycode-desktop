@@ -25,6 +25,11 @@ const URL_FIXTURE = 'blob:pyry-desktop/6b1f0c2a-0000-4000-8000-000000000000'
 // optional so the production path cannot forget it.
 const NO_DECODE_ERROR = (): void => {}
 
+// #869's seam, and the same story: a static render drops `onClick`, so what this tier owns is that the
+// ELEMENT carrying it exists in exactly one of the three states. The activation itself — click, Enter,
+// Space — is e2e/attachment-image-open.spec.ts's.
+const NO_OPEN = (): void => {}
+
 describe('AttachmentThumbnail — the three states (#1045)', () => {
   it('draws NOTHING while the fetch is in flight, and reserves nothing either', () => {
     // AC-in-flight: no spinner, no placeholder box. Reserving space needs the aspect ratio, which needs
@@ -35,6 +40,7 @@ describe('AttachmentThumbnail — the three states (#1045)', () => {
         state={{ type: 'pending' }}
         filename={FILENAME}
         onDecodeError={NO_DECODE_ERROR}
+        onOpen={NO_OPEN}
       />
     )
     expect(markup).toBe('')
@@ -46,6 +52,7 @@ describe('AttachmentThumbnail — the three states (#1045)', () => {
         state={{ type: 'ready', url: URL_FIXTURE }}
         filename={FILENAME}
         onDecodeError={NO_DECODE_ERROR}
+        onOpen={NO_OPEN}
       />
     )
     expect(markup).toContain(`src="${URL_FIXTURE}"`)
@@ -70,6 +77,7 @@ describe('AttachmentThumbnail — the three states (#1045)', () => {
         state={{ type: 'failed' }}
         filename={FILENAME}
         onDecodeError={NO_DECODE_ERROR}
+        onOpen={NO_OPEN}
       />
     )
     expect(markup).toContain(ATTACHMENT_IMAGE_UNAVAILABLE)
@@ -93,6 +101,7 @@ describe('AttachmentThumbnail — the three states (#1045)', () => {
         state={{ type: 'failed' }}
         filename={hostile}
         onDecodeError={NO_DECODE_ERROR}
+        onOpen={NO_OPEN}
       />
     )
     expect(markup).toContain('&lt;script&gt;')
@@ -107,6 +116,71 @@ describe('AttachmentThumbnail — the three states (#1045)', () => {
     // Sinks that cannot appear in escaped text at all, and appear nowhere in this element.
     for (const sink of ['alt=', 'src=', 'title=', 'href=', 'aria-label=']) {
       expect(markup).not.toContain(sink)
+    }
+  })
+})
+
+describe('AttachmentThumbnail — the drawn picture is the control (#869)', () => {
+  const ready = (filename = FILENAME): string =>
+    renderToStaticMarkup(
+      <AttachmentThumbnail
+        state={{ type: 'ready', url: URL_FIXTURE }}
+        filename={filename}
+        onDecodeError={NO_DECODE_ERROR}
+        onOpen={NO_OPEN}
+      />
+    )
+
+  it('wraps the picture in one real <button>, which is where click, Enter and Space come from', () => {
+    // AC1. A `role="button"` div would need its own keydown handler for Enter and Space; the platform
+    // element supplies all three, which is why the criterion costs no key handling. `type="button"` is
+    // not decoration — a bare <button> inside a form would be a submit control.
+    const markup = ready()
+    expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('type="button"')
+    expect(markup).toContain('class="bubble__image-button"')
+    // The picture is INSIDE the control rather than beside it: that nesting is what gives the button its
+    // accessible name and what makes the ring trace the picture's box.
+    expect(markup).toMatch(/<button[^>]*>\s*<img/)
+    expect(markup.match(/<img/g)?.length ?? 0).toBe(1)
+    // No hand-rolled key handling: a static render drops handler VALUES, but a `tabindex` or a `role`
+    // standing in for the platform element would survive as an attribute and reddens here.
+    for (const stand_in of ['tabindex', 'role=', 'onkeydown']) {
+      expect(markup.toLowerCase()).not.toContain(stand_in)
+    }
+  })
+
+  it("names the control by the client-owned constant, never by the file's name", () => {
+    // AC1's second half and #815's ruling, carried to the control: a <button> wrapping an <img> takes
+    // its accessible name from the `alt`, so the existing constant already names it and no second name
+    // is minted. The untrusted filename enters no attribute — asserted with a name that would be
+    // unmistakable in one.
+    const markup = ready('holiday-photo.png')
+    expect(markup).toContain(`alt="${ATTACHMENT_IMAGE_ALT}"`)
+    expect(markup).not.toContain('holiday')
+    for (const sink of ['aria-label=', 'title=', 'aria-labelledby=', 'href=']) {
+      expect(markup).not.toContain(sink)
+    }
+    // AC2's renderer half: no path is built here, and the one URL still reaches exactly one attribute.
+    expect(markup.split(URL_FIXTURE).length - 1).toBe(1)
+  })
+
+  it('gives the in-flight and fallback states NO control at all', () => {
+    // AC1's last clause. `pending` draws nothing, so there is nothing to focus or press; `failed` draws
+    // a textual fallback, and what a reader would want there is a RE-FETCH — #1044's leg, not #867's.
+    // Both are asserted through the same string so a control added to either state reddens.
+    for (const state of [{ type: 'pending' } as const, { type: 'failed' } as const]) {
+      const markup = renderToStaticMarkup(
+        <AttachmentThumbnail
+          state={state}
+          filename={FILENAME}
+          onDecodeError={NO_DECODE_ERROR}
+          onOpen={NO_OPEN}
+        />
+      )
+      expect(markup).not.toContain('<button')
+      expect(markup).not.toContain('bubble__image-button')
+      expect(markup.toLowerCase()).not.toContain('tabindex')
     }
   })
 })

@@ -173,11 +173,24 @@ it with an explicit return type and **no `default`** on its `switch` — a disci
 for real: #864's `progress` member reached this switch through the compile error rather than a silent
 fallthrough, the `relayLeg`/`daemonLeg` discipline one directory over.
 
-- **`refused`** composes its one sentence from the event's own `limitBytes` via `formatByteLimit`, and
+- **`refused` is a second, nested `switch` on `event.reason` (#1032), also with no `default`.** The `refused`
+  member split in two — `too-large` (`limitBytes: number`) and `no-image` (no figure) — because
+  `attachmentUploadOutcomeCopy`'s single `case 'refused'` used to read `limitBytes` unconditionally, which
+  would have silently rendered the too-large sentence for a paste that found nothing had `reason` been
+  widened in place instead of split. The nested switch's absent `default` is what makes a *third* refusal
+  reason a compile error here too, exactly as `progress` was for the outer one — see
+  [Attachment upload § The paste ask](attachment-upload.md#the-paste-ask-and-the-refused-split-1032) for
+  the union shape and why the split was forced rather than chosen.
+- **`too-large`** composes its one sentence from the event's own `limitBytes` via `formatByteLimit`, and
   names the bound as **this app's**, never the host's: the union's docblock is explicit that a file under
   this bound can still come back `attachment-too-large` from the daemon, so wording it as the daemon's
   limit would state a fact the client does not have. `attachment-too-large`'s own sentence is the one that
   speaks for the host.
+- **`no-image`** (#1032) names the clipboard rather than describing a failure — nothing was attempted and
+  nothing went wrong, so `NO_IMAGE_COPY` reads "No image on the clipboard — nothing was attached." It
+  states no figure and nothing about what the clipboard *did* hold (no flavour, no length), which is AC4
+  at the copy layer: the event carries none of that, and inventing it in a sentence would be the leak the
+  content-free union is shaped to prevent.
 - **`failed`** is a lookup keyed on `event.reason` against `ATTACHMENT_UPLOAD_FAILURE_COPY`, a
   `Record<AttachmentUploadFailure, string>` — the third acceptance criterion's mechanism, since a member
   added upstream fails to typecheck rather than silently rendering blank. **No count of the union is
@@ -379,7 +392,10 @@ class present nowhere in the markup — the whole-attribute-run separation prove
 restated member list), drives the three hostile reason strings through the `Map` indirection, exercises
 `formatByteLimit`'s three unit arms, and (#864) `uploadProgressPercent` against a mid-transfer figure, a
 `sent === total` 100% reading, and — per the rework-leg lesson above — whole-sentence equality (not
-`toContain`) for the totality guard's zero/negative/non-finite/string-coercion cases. `ConversationScreen.test.tsx`
+`toContain`) for the totality guard's zero/negative/non-finite/string-coercion cases. (#1032) The `no-image`
+sentence is asserted non-blank, distinct from the too-large sentence and from every failure-map value,
+naming the clipboard, stating no byte figure and carrying no `uploadId`; the too-large arm's shipped
+assertions are re-run unchanged to prove the split left it alone. `ConversationScreen.test.tsx`
 gained mount proofs that the button lands after `.composer__context` (the row's last item) and that a fresh
 mount carries no `.composer__attach-outcome` at all.
 

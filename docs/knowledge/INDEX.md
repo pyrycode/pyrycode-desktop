@@ -523,8 +523,25 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   Architect self-review: first pass FAILED on the size-only guard, PASSED after the `isFile()` revision.
   Nothing renders — the button and the outcome's appearance are #863 (landed), which also gained #864's
   in-flight progress and #890's drag-and-drop entry (landed: the channel's request body widened from
-  value-free to optional, guarded by `isAttachmentUploadRequest`). #891 (paste, the remaining second
-  entry into this same flow) is not started.
+  value-free to optional, guarded by `isAttachmentUploadRequest`). #1032 (paste, split from #891, landed)
+  is the third entry: the ask carries nothing (`AttachmentPasteRequest`, one client-owned literal), the
+  background process reads `clipboard.readImage()` itself and joins the flow via `uploadClipboardImage`
+  (not `uploadAttachmentBytes` — a shipped, unaddressed SHOULD FIX), and a no-image read is a **new
+  `refused` member** (`reason: 'no-image'`, no `limitBytes`) rather than a second `reason` on the shipped
+  one, since widening in place typechecked and silently rendered the too-large sentence for an empty
+  clipboard. Self-review PASS on the clipboard-read finding the `security-sensitive` label was for: no
+  renderer permission is added, the outcome union stays content-free, and the residual (an unprompted
+  upload of a held image) is bounded by the byte guard and the daemon's concurrency answer, named rather
+  than fixed. `src/main/attachmentUpload.ts`'s content split out to [Attachment upload — the guard and
+  the drive](features/attachment-upload-guard-and-drive.md) when #1032 pushed this document over the size
+  cap. The paste keystroke, #1033, is blocked by #1032 and not started.
+- [Attachment upload — the guard and the drive](features/attachment-upload-guard-and-drive.md) — child of
+  [Attachment upload](features/attachment-upload.md), split out 2026-09-04 when #1032 pushed the parent
+  over the 50000-byte cap. Holds `src/main/attachmentUpload.ts` in full: `uploadAttachmentFile`,
+  `uploadAttachmentBytes`, `driveUpload`'s exactly-one-terminal discipline, the chunk-based size bound,
+  the open-then-stat `isFile()` guard, `filename`/`mime_type` declaration, content-free logging, and
+  #1032's `uploadClipboardImage`. No new content beyond what the parent's own entry above already
+  summarizes.
 - [Request-attachment envelope](features/request-attachment-envelope.md) — the **outbound half of the
   retrieval leg** (#993, split from #687): a new `request_attachment` `EnvelopeType` member, a
   two-field `RequestAttachmentPayload` (`conversation_id`, `attachment_id`, both required, no

@@ -221,7 +221,17 @@
 }
 
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
-   refuses to shrink and the whole window scrolls instead of this region. */
+   refuses to shrink and the whole window scrolls instead of this region.
+
+   ⭐ `overflow-anchor` IS ABSENT ON PURPOSE, AND ADDING IT IS A BEHAVIOUR CHANGE (#1046). Unset means the
+   default `auto`, which leaves Chromium's scroll anchoring on, and that is what holds the reader's place
+   when a late-resolving thumbnail grows a row further up the thread — a growth that involves no React
+   render anywhere, so `useThreadScrollPin`'s re-assert provably cannot reach it. `overflow-anchor: none`
+   here is the documented way to defeat it and is the ONE line that does: with it present, a reader resting
+   at the bottom lands 172px short and a scrolled-up reader's rows shift 172px under them, both measured.
+   `thread-scroll-pin.spec.ts`'s last two tests are the detector and were shown failing with exactly this
+   line in place. #601's original ruling that `overflow-anchor` was indifferent held only for the cases it
+   tested, which were all screen renders; it is not indifferent here. */
 .conversation__thread {
   flex: 1 1 auto;
   min-height: 0;

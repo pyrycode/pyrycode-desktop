@@ -1,12 +1,17 @@
-import type { Locator, Page } from '@playwright/test'
+import { createHash } from 'node:crypto'
+import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { AT_BOTTOM_TOLERANCE_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
+import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
+import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 import type {
   AssistantDeltaPayload,
+  AttachmentChunkPayload,
   QueuedItem,
   QueueStatePayload,
+  RequestAttachmentPayload,
   SendMessagePayload,
   SessionTransitionPayload,
   StallPayload,
@@ -47,6 +52,14 @@ import type {
 // only; the reply texts, conversation_id, turn ids, tool ids and session ids are non-secret display &
 // routing literals. The pairing plumbing (synthetic token, fake static key) lives in launchPairedApp and is
 // never echoed. No failure diagnostic serialises a token, key, or plaintext.
+//
+// #1046 ADDED A SECOND MECHANISM TO THIS FILE, and the two are not the same one observed twice. Everything
+// above proves the app's OWN pin — the tracked flag plus the dep-free layout re-assert. The two tests at the
+// bottom prove the browser's: a thumbnail resolving late grows the thread with NO React render anywhere, so
+// the pin provably cannot run, and what holds the reader's place is Chromium's scroll anchoring. Both live
+// here because they share every helper below and because a reader of either needs to know the other exists —
+// the pin is what re-pins on a render, anchoring is what holds between renders. See that section's own
+// header for the measurement and for the one line that defeats it.
 
 // The primer's reply travels a real send -> Noise -> decode -> render round-trip; generous headroom for a
 // cold runner (the siblings' value).
@@ -624,4 +637,389 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   daemon.pushFrame(toolUseFrame())
   await expect(page.locator('.tool-row')).toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)
+})
+
+// ---------------------------------------------------------------------------------------------------
+// #1046 — a thumbnail that resolves late must not move the reader's place.
+//
+// THE PIN CANNOT REACH THIS, AND THAT IS A FACT ABOUT THE MECHANISM RATHER THAN A GAP IN ITS WIRING.
+// A thumbnail settles in TWO events and only the second one moves geometry. First
+// `BubbleAttachmentImage`'s own `useState` flips `pending` -> `ready`: a real React render, but of that leaf
+// alone, so `ConversationScreen` does not re-render and the dep-free re-assert above does not run — and at
+// that instant the <img> carries a blob: src and deliberately no width/height attributes, so it occupies
+// nothing. Then the browser decodes the bytes and lays the picture out, growing the row by
+// THUMBNAIL_GROWTH_PX with NO React render anywhere. No dependency array can reach the first event and no
+// render exists to observe the second, so hoisting state — #1009's fix for the queued backlog — closes
+// nothing here.
+//
+// WHAT HOLDS THE PLACE IS CHROMIUM'S SCROLL ANCHORING, and it was MEASURED rather than reasoned about.
+// `.conversation__thread` leaves `overflow-anchor` unset, which is the default `auto`. Each scenario below
+// was run twice against the built app — once as shipped, once with the single line `overflow-anchor: none`
+// added to that rule — with the content growing by exactly 172px (160 + 12) against a 488px viewport:
+//
+//   reader at the bottom, picture above them   0px from the bottom  ->  172px with the line present
+//   reader parked mid-thread, picture above    a fixed row's viewport top 218 -> 218  ->  218 -> 390
+//   reader parked mid-thread, picture below    scrollTop unchanged  ->  scrollTop unchanged (indifferent)
+//
+// So the first two tests are the detector for that one line and the third arm is not — it is the OVER-REACH
+// guard, whose job is to stay green: a fix that re-pinned on any content growth would yank a scrolled-up
+// reader to the bottom, and that is what reddens it. No production code ships for this; the deliverable is
+// the proof, because an untested behaviour this app depends on and did not write is exactly what disappears
+// in a later Electron bump.
+//
+// AC2'S LITERAL WORDING IS SPLIT BETWEEN THE TWO DIRECTIONS ON PURPOSE. "The scroll offset left exactly
+// where it was" is literally true for a picture BELOW the reader and is asserted as an exact equality. For
+// one ABOVE it is unsatisfiable in that form: the only way to leave the reader looking at the same content
+// when 172px is inserted above the viewport is to move scrollTop by those 172px, which is what anchoring
+// does and what any mechanism satisfying the first criterion must do. So that arm asserts the reader-facing
+// fact — a stable row's VIEWPORT-relative top is unchanged — plus, as its own assertion, that the distance
+// from the bottom did not move either.
+//
+// A THUMBNAIL RESOLVING IN THE READER'S OWN LAST ROW IS A DIFFERENT CASE and is deliberately not here: the
+// growth is BELOW the reader, anchoring is indifferent to it (172px of drift measured with and without the
+// line), and closing it needs production code this ticket's verify-first instruction rules out. Filed as
+// #1049.
+
+/** `.bubble__image`'s `max-height`, and its `margin-top` (--space-3). Their sum is what a resolving
+ *  thumbnail adds to the thread, and it is the floor every growth assertion below is measured against —
+ *  never an exact equality, so a redrawn bubble that grows the picture does not redden a scroll test. */
+const THUMBNAIL_HEIGHT_PX = 160
+const THUMBNAIL_GROWTH_PX = THUMBNAIL_HEIGHT_PX + 12
+
+/** The browser lays out in fractional pixels, and every quantity compared here is a measured box. */
+const SUBPIXEL_PX = 1.5
+
+// ⭐ CANONICAL ATTACHMENT IDS — hex digits and hyphen only, and load-bearing rather than cosmetic.
+// `resolveAttachmentPath`'s canonical id pattern gates the store write AND the read back, so a
+// non-canonical id (`attachment-file-row.spec.ts`'s `e2e-download-1` shape) would be refused, the picture
+// would become the fallback, and the growth these tests turn on would never happen.
+const ID_ABOVE = '5a6b7c8d-9e0f-4a1b-8c9d-5e6f7a8b9c0d'
+const ID_BELOW = '6a7b8c9d-0e1f-4a2b-8c9d-6e7f8a9b0c1d'
+
+/** A 200x400 solid-colour PNG, generated for this suite and carrying no information at all. Portrait on
+ *  purpose: at THUMBNAIL_HEIGHT_PX tall it draws 80 wide, under the bubble's content box at every window
+ *  size, so no cap is in play and the growth is the full THUMBNAIL_GROWTH_PX. A few hundred bytes, far
+ *  under one chunk's payload budget, so it rides exactly one `attachment_chunk`. */
+const THUMBNAIL_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAMgAAAGQCAIAAABkkLjnAAACz0lEQVR42u3SQQkAAAgEwYtiLtMZ1RKCn4FJsGyqB85FAoyFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsbCWGAsjIWxwFgYC2NhLBUwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsbCWGAsjIWxwFgYC2OBsTAWxsJYKmAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBbGkgBjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2NhLBUwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbH4sADgZVQK/cnv+wAAAABJRU5ErkJggg=='
+const THUMBNAIL_BYTES = Buffer.from(THUMBNAIL_PNG_BASE64, 'base64')
+const THUMBNAIL_NATURAL_WIDTH = 200
+const THUMBNAIL_FILENAME = 'portrait.png'
+
+const ABOVE_TEXT = 'a picture from further up the thread'
+const BELOW_TEXT = 'a picture from further down the thread'
+
+/**
+ * The daemon's answer to one `request_attachment`: a single `attachment_chunk` carrying the whole file.
+ * Taken from `attachment-image-thumbnail.spec.ts`'s own builder, whose two rules both survive here.
+ *
+ * THE DIGEST IS COMPUTED, NEVER WRITTEN BY HAND. `attachmentReassembler` verifies the assembled bytes
+ * against an exact lowercase-hex SHA-256 of the whole file, neither prefix- nor case-insensitive, so a
+ * hand-written digest fails closed and the picture silently becomes the fallback. CORRELATION RIDES THE
+ * ENVELOPE: `daemonConnection` routes a retrieval chunk by `in_reply_to` against the id of the
+ * `request_attachment` this client minted, and drops a frame matching no live retrieval with no event and
+ * no log — which is exactly why the id is captured off the wire below rather than guessed.
+ */
+function attachmentChunkFrame(requestId: number, ask: RequestAttachmentPayload): Uint8Array {
+  const payload: AttachmentChunkPayload = {
+    attachment_id: ask.attachment_id,
+    index: 0,
+    total_chunks: 1,
+    filename: THUMBNAIL_FILENAME,
+    mime_type: 'image/png',
+    size: THUMBNAIL_BYTES.length,
+    sha256: createHash('sha256').update(THUMBNAIL_BYTES).digest('hex'),
+    data: THUMBNAIL_BYTES.toString('base64')
+  }
+  return encodeEnvelope({
+    id: 900 + requestId,
+    type: 'attachment_chunk',
+    ts: FIXED_TS,
+    in_reply_to: requestId,
+    payload
+  })
+}
+
+interface WithheldThumbnails {
+  /** Composed into `launchPairedApp` in place of the module-level builder, which it delegates to. */
+  buildReplyFrames: (inbound: Uint8Array) => Uint8Array[]
+  /** The correlated chunk for one recorded ask, once that ask has actually reached the daemon. */
+  serve: (attachmentId: string) => Promise<Uint8Array>
+}
+
+/**
+ * Withhold every thumbnail's bytes, and hand back the frame that releases one.
+ *
+ * THE LATE RESOLUTION IS THE WHOLE CASE. A thumbnail whose bytes are in hand when its row first paints
+ * exercises nothing — the row is laid out at its final height before the reader ever takes a position. So
+ * `request_attachment` is answered with NO frames, the thread is allowed to settle, the reader takes their
+ * place, and only then is the correlated frame pushed out of band with `daemon.pushFrame`.
+ *
+ * PER-TEST STATE, NOT MODULE STATE, and that is forced rather than stylistic: `playwright.config.ts` sets
+ * `workers: 1` and `fullyParallel: false`, so every test in this file runs in one worker process and a
+ * capture map at module scope would carry one test's request ids into the next.
+ *
+ * `serve` POLLS rather than reading the map once. The ask is raised by the leaf's own mount effect and
+ * travels renderer -> main -> wire, so it is in flight at the moment the bubble appears; reading the map
+ * synchronously would race it and produce a frame correlated to nothing, which the connection drops in
+ * silence. Keyed by attachment id and overwritten on each ask, so a re-mounted leaf's newer request id
+ * wins.
+ */
+function withheldThumbnails(): WithheldThumbnails {
+  const asks = new Map<string, { requestId: number; ask: RequestAttachmentPayload }>()
+  return {
+    buildReplyFrames: (inbound) => {
+      const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'request_attachment') {
+        const ask = envelope.payload as RequestAttachmentPayload
+        asks.set(ask.attachment_id, { requestId: envelope.id, ask })
+        return []
+      }
+      return buildReplyFrames(inbound)
+    },
+    serve: async (attachmentId) => {
+      await expect
+        .poll(() => asks.has(attachmentId), { timeout: STREAM_TIMEOUT_MS })
+        .toBe(true)
+      const recorded = asks.get(attachmentId)
+      if (recorded === undefined) throw new Error('unreachable: the poll above proved the entry exists')
+      return attachmentChunkFrame(recorded.requestId, recorded.ask)
+    }
+  }
+}
+
+/** One settled upload exactly as `src/main/attachmentUpload` emits it. The SENDER is the only thing
+ *  standing in for production, because the alternative is a native file dialog no Playwright locator can
+ *  dismiss — `composer-attach.spec.ts`'s established seam, carried from
+ *  `attachment-image-thumbnail.spec.ts`. */
+const pushCompletedUpload = (app: ElectronApplication, uploadId: string): Promise<void> =>
+  app.evaluate(
+    ({ BrowserWindow }, delivery) => {
+      const [window] = BrowserWindow.getAllWindows()
+      window.webContents.send(delivery.channel, delivery.event)
+    },
+    {
+      channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+      event: {
+        type: 'completed',
+        uploadId,
+        filename: THUMBNAIL_FILENAME
+      } satisfies AttachmentUploadEvent
+    }
+  )
+
+/** Send one message carrying one image attachment, and wait for its optimistic echo. The fake answers a
+ *  send with no frames (the module-level builder's non-primer arm), so the echo is the whole mutation. */
+async function sendWithThumbnail(
+  page: Page,
+  app: ElectronApplication,
+  uploadId: string,
+  text: string
+): Promise<void> {
+  await pushCompletedUpload(app, uploadId)
+  await page.getByPlaceholder('Message…').fill(text)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(thumbnailBubble(page, text)).toHaveCount(1)
+}
+
+/** The user bubble carrying one of the two pictures, addressed by its OWN message text.
+ *
+ *  Deliberately not by index among user bubbles: `primeOverflowingThread` sends a message of its own, so
+ *  the picture-bearing rows are not consecutive and an index would silently address the primer's bubble —
+ *  a row with no picture in it, on which every position assertion below would answer something true and
+ *  irrelevant. `hasText` is a substring match, and the three texts share no substring with each other. */
+const thumbnailBubble = (page: Page, text: string): Locator =>
+  page.locator('.bubble[data-thread-role="user"]', { hasText: text })
+
+/**
+ * Where a row sits relative to the thread's visible band. Both criteria are stated in terms of a picture
+ * ABOVE or BELOW the reader, so each test guards which one it actually staged rather than inferring it from
+ * the send order — a redrawn bubble or a different window height could quietly move a row into view and
+ * turn the criterion into a different, weaker one.
+ */
+const rowPosition = (bubble: Locator): Promise<'above' | 'below' | 'overlapping'> =>
+  bubble.evaluate((element) => {
+    const thread = element.closest('.conversation__thread')
+    if (thread === null) throw new Error('the bubble is not inside a thread scroll region')
+    const view = thread.getBoundingClientRect()
+    const box = element.getBoundingClientRect()
+    if (box.bottom <= view.top) return 'above'
+    if (box.top >= view.bottom) return 'below'
+    return 'overlapping'
+  })
+
+/**
+ * The index, among assistant bubbles, of the first one resting ENTIRELY inside the thread's visible band —
+ * the reference row whose viewport-relative top is what "the reader's place" means concretely.
+ *
+ * Chosen live rather than hardcoded: which row is on screen depends on the parked offset, the window
+ * height and the drawn bubble, none of which this criterion is about. Throwing when none qualifies is the
+ * guard that keeps the reads below meaningful.
+ */
+const firstFullyVisibleAssistantRow = (page: Page): Promise<number> =>
+  page.locator('.conversation__thread').evaluate((thread) => {
+    const view = thread.getBoundingClientRect()
+    const index = [...thread.querySelectorAll('.bubble[data-thread-role="assistant"]')].findIndex(
+      (row) => {
+        const box = row.getBoundingClientRect()
+        return box.top >= view.top && box.bottom <= view.bottom
+      }
+    )
+    if (index < 0) throw new Error('no assistant bubble rests fully inside the thread viewport')
+    return index
+  })
+
+/** A row's top edge in VIEWPORT coordinates — unchanged is what a reader experiences as "my place was
+ *  left alone", and the quantity anchoring exists to hold. Deliberately not `scrollTop`: see this
+ *  section's header for why the two disagree for a picture above the reader. */
+const viewportTop = (row: Locator): Promise<number> =>
+  row.evaluate((element) => element.getBoundingClientRect().top)
+
+/** How far the thread is resting from its own bottom. */
+const distanceFromBottom = (metrics: ThreadMetrics): number =>
+  metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight
+
+/**
+ * Release one withheld thumbnail and wait until it is DRAWN, not merely delivered.
+ *
+ * Two gates, and both are needed. `naturalWidth` reaching the served image's own intrinsic width is the
+ * round-trip proof — retrieval, store, bytes leg, blob URL — and reads 0 for a source that never decoded.
+ * The drawn box reaching THUMBNAIL_HEIGHT_PX is the LAYOUT gate: decoding precedes layout, so the first
+ * poll can pass while the row has not grown yet, and it is the growth that every assertion here turns on.
+ * The rAF settle then closes the frame in which any scroll adjustment is applied.
+ */
+async function resolveThumbnail(
+  page: Page,
+  daemon: { pushFrame: (frame: Uint8Array) => void },
+  withheld: WithheldThumbnails,
+  attachmentId: string,
+  image: Locator
+): Promise<void> {
+  daemon.pushFrame(await withheld.serve(attachmentId))
+  await expect(image).toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
+  await expect
+    .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth), {
+      timeout: STREAM_TIMEOUT_MS
+    })
+    .toBe(THUMBNAIL_NATURAL_WIDTH)
+  await expect
+    .poll(async () => Math.round((await image.boundingBox())?.height ?? 0), {
+      timeout: STREAM_TIMEOUT_MS
+    })
+    .toBe(THUMBNAIL_HEIGHT_PX)
+  await settleScrollEvent(page)
+}
+
+test('a thumbnail resolving above a bottom-resting reader leaves the thread at the bottom', async ({
+  launchPairedApp
+}) => {
+  const withheld = withheldThumbnails()
+  const { page, app, daemon } = await launchPairedApp({
+    buildReplyFrames: withheld.buildReplyFrames
+  })
+
+  // The picture goes in FIRST so the primer's twenty turns pile below it and carry it off the top of the
+  // viewport. Its bytes are withheld, so the row it mounts draws nothing and reserves nothing — which is
+  // the state the reader is in while they read at the bottom.
+  await sendWithThumbnail(page, app, ID_ABOVE, ABOVE_TEXT)
+  await primeOverflowingThread(page)
+
+  // The preconditions, and neither is decoration. The reader is genuinely resting at the bottom (the
+  // primer's overflow gate has already proved the thread can scroll at all), and the picture is genuinely
+  // ABOVE them, which is the case this criterion is scoped to.
+  await expectPinnedToBottom(page)
+  expect(await rowPosition(thumbnailBubble(page, ABOVE_TEXT))).toBe('above')
+
+  const before = await readThreadMetrics(page)
+  await resolveThumbnail(page, daemon, withheld, ID_ABOVE, page.locator('img.bubble__image'))
+  const after = await readThreadMetrics(page)
+
+  // NON-VACUITY. Without this the test passes against an app in which the thumbnail never resolved and the
+  // thread therefore never moved — which is indistinguishable, at the bottom, from the behaviour under
+  // test. A floor rather than an equality: the quantity is a drawn box, not a contract.
+  expect(after.scrollHeight - before.scrollHeight).toBeGreaterThanOrEqual(THUMBNAIL_GROWTH_PX)
+
+  // The criterion, asserted with NO frame pushed and no send in between — "with no intervening render to
+  // snap them back". Every other re-pin proof in this file rides a screen render; this one has none
+  // available, which is exactly why it is a proof of a different mechanism.
+  await expectPinnedToBottom(page)
+})
+
+test('a thumbnail resolving leaves a scrolled-up reader where they were, above them or below them', async ({
+  launchPairedApp
+}) => {
+  const withheld = withheldThumbnails()
+  const { page, app, daemon } = await launchPairedApp({
+    buildReplyFrames: withheld.buildReplyFrames
+  })
+
+  // Two pictures in one thread, one on each side of where the reader will park: the first ahead of the
+  // primer's twenty turns, the second behind them. Both are withheld, so both rows are still empty when the
+  // reader takes their position.
+  await sendWithThumbnail(page, app, ID_ABOVE, ABOVE_TEXT)
+  await primeOverflowingThread(page)
+  await sendWithThumbnail(page, app, ID_BELOW, BELOW_TEXT)
+
+  // Park part-way up — programmatic for the reasons the tests above give (it fires the same DOM `scroll`
+  // event the production handler listens to, with no hover position and no smooth-scroll timing), at 40%
+  // rather than at the top. Zero is the ONE offset at which scroll anchoring does not run at all, so
+  // parking there would make the picture-above arm below vacuous in the exact direction that matters.
+  const settled = await readThreadMetrics(page)
+  const parked = Math.round(settled.scrollHeight * 0.4)
+  await page.locator('.conversation__thread').evaluate((el, top) => {
+    el.scrollTop = top
+  }, parked)
+  await settleScrollEvent(page)
+
+  // The preconditions: the reader really is where the test put them, that place is neither the top nor
+  // anywhere near the bottom, and each picture really is on the side of them this test claims.
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBe(parked)
+  expect(before.scrollTop).toBeGreaterThan(0)
+  expect(distanceFromBottom(before)).toBeGreaterThan(before.clientHeight)
+  expect(await rowPosition(thumbnailBubble(page, ABOVE_TEXT))).toBe('above')
+  expect(await rowPosition(thumbnailBubble(page, BELOW_TEXT))).toBe('below')
+
+  // --- The picture BELOW the reader. Content growing out of sight below moves nothing: this is the arm
+  // where the criterion's literal wording holds, so the offset is asserted as an exact equality. It is also
+  // the over-reach guard — a mechanism that re-pinned on any content growth passes the first test and yanks
+  // the reader to the bottom right here. ---
+  await resolveThumbnail(
+    page,
+    daemon,
+    withheld,
+    ID_BELOW,
+    thumbnailBubble(page, BELOW_TEXT).locator('img.bubble__image')
+  )
+  const afterBelow = await readThreadMetrics(page)
+  expect(afterBelow.scrollHeight - before.scrollHeight).toBeGreaterThanOrEqual(THUMBNAIL_GROWTH_PX)
+  expect(afterBelow.scrollTop).toBe(before.scrollTop)
+
+  // --- The picture ABOVE the reader. Here the offset MUST move, by exactly what was inserted above the
+  // viewport, or the reader ends up looking at different content — so the assertion is the reader-facing
+  // quantity instead: a row that was on screen keeps its viewport-relative top. ---
+  const referenceRow = page
+    .locator('.conversation__thread .bubble[data-thread-role="assistant"]')
+    .nth(await firstFullyVisibleAssistantRow(page))
+  const referenceTopBefore = await viewportTop(referenceRow)
+
+  await resolveThumbnail(
+    page,
+    daemon,
+    withheld,
+    ID_ABOVE,
+    thumbnailBubble(page, ABOVE_TEXT).locator('img.bubble__image')
+  )
+  const afterAbove = await readThreadMetrics(page)
+
+  const grewBy = afterAbove.scrollHeight - afterBelow.scrollHeight
+  expect(grewBy).toBeGreaterThanOrEqual(THUMBNAIL_GROWTH_PX)
+  // The reader's place, held: the row under their eyes did not move on screen.
+  expect(await viewportTop(referenceRow)).toBeCloseTo(referenceTopBefore, 0)
+  // The mechanism, made visible: the offset advanced by exactly what was inserted above it. Asserted so
+  // that a future reader of a failure can tell "the place moved" from "nothing compensated at all".
+  expect(afterAbove.scrollTop - afterBelow.scrollTop).toBeCloseTo(grewBy, 0)
+  // And NOT yanked to the bottom — the same distance as before, still a full viewport clear of it.
+  expect(distanceFromBottom(afterAbove)).toBeCloseTo(distanceFromBottom(afterBelow), 0)
+  expect(distanceFromBottom(afterAbove)).toBeGreaterThan(AT_BOTTOM_TOLERANCE_PX + SUBPIXEL_PX)
 })

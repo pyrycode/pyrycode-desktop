@@ -180,8 +180,10 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   the whole region, covering every occupant at once. Deliberately not built here — out of scope, per the
   ticket.
 
-  `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
-  e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
+  `overflow-anchor` stays unset — closed as indifferent by #601, confirmed on an observed e2e run rather
+  than reasoned about, but that ruling covered only the screen-render cases #601 tested. **[#1046](https://github.com/pyrycode/pyrycode-desktop/issues/1046) found it decisive, not
+  indifferent, for the one case those tests couldn't reach:** a growth that involves no React render
+  anywhere. **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
   mechanism with no second one: `useThreadScrollPin` now also returns `followBottom`, a single
   `following.current = true` re-arm, wired as a required `onMessageSent` prop on `Composer` and invoked
   inside `handleSubmit`'s existing `if (sent)` branch — so a submit that sends nothing (not connected,
@@ -197,6 +199,24 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   swap (`PairedShell.tsx:88-97`), and `following`'s `true` initial value pinning before paint on the fresh
   mount — three independent facts, none added for this ticket, now locked by an e2e test rather than left
   as an untested accident.
+
+  **A late-resolving image thumbnail ([#1046](https://github.com/pyrycode/pyrycode-desktop/issues/1046))
+  is the third member of the docblock's own "known latency gap" class, and it closed on inspection rather
+  than on a code change.** `BubbleAttachmentImage` ([Message bubble § The attachment image
+  thumbnail](conversation-shell-message-bubble.md)) resolves in two events: its own `useState` flips
+  `pending` → `ready`, a React render of the leaf alone that `ConversationScreen` never sees, and then the
+  browser decodes and lays the picture out — up to 172px of growth (`.bubble__image`'s 160px `max-height`
+  plus its 12px `margin-top`) with **no React render anywhere**. Hoisting the read, [#1009](../codebase/1009.md)'s
+  fix for the queued-backlog gap, cannot reach this one: the hoisted render would still land before the
+  image decodes. What closes it is Chromium's scroll anchoring, already live because `.conversation__thread`
+  leaves `overflow-anchor` at its default — measured against the built app (172px of drift with
+  `overflow-anchor: none` added, 0px without it) and now pinned by the last two tests in
+  `thread-scroll-pin.spec.ts`, shown failing with that one line present. No production behaviour shipped;
+  the two comment-only edits (this docblock and `.conversation__thread`'s own rule in `conversation.css`)
+  exist so a future `ResizeObserver` addition — still on the docblock's list for the *other* two known
+  gaps — does not get layered over a case the browser already handles for free. Anchoring is indifferent to
+  growth **below** the reader (their own last bubble); that gap is unaffected and stays filed as
+  [#1049](https://github.com/pyrycode/pyrycode-desktop/issues/1049).
 
 ## Related
 

@@ -573,6 +573,20 @@ function useThreadScrollPin(): ThreadPin {
   // ResizeObserver, which covers every occupant at once. A dependency array is not on that list: no array can
   // reach a leaf that re-renders alone.
   //
+  // #1046 ADDED A THIRD MEMBER TO THAT CLASS AND FOUND IT ALREADY CLOSED — by the browser, not by this app.
+  // A thumbnail (BubbleAttachmentImage) resolves in two events: its own useState flips pending → ready,
+  // which re-renders that leaf alone, and then the browser decodes and lays the picture out, growing the
+  // row with NO React render anywhere. Hoisting the read cannot close it — the hoisted render would land at
+  // the first event, before the image has decoded, and the second is unobserved. What holds the reader's
+  // place is Chromium's scroll anchoring, live because .conversation__thread leaves `overflow-anchor` at
+  // its default; that is now MEASURED and pinned by thread-scroll-pin.spec.ts's last two tests, which were
+  // shown failing with `overflow-anchor: none` present. Two consequences for anyone editing here. Do not
+  // add that line to the stylesheet (its rule says the same). And a ResizeObserver added later would be a
+  // SECOND mechanism over a working one for this case — it would need to not fight anchoring and to keep
+  // the idempotence the two properties below rely on, which a handler writing unconditionally does not
+  // inherit. The one case anchoring is indifferent to is growth BELOW the reader — a thumbnail resolving in
+  // their own last row leaves them 172px short — which is #1049, deliberately not fixed here.
+  //
   // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
   // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
   // feedback loop (and a StrictMode double-invoke is likewise a no-op). And chrome CANNOT corrupt the flag:

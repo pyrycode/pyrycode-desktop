@@ -208,15 +208,102 @@ its file-count boundary.
   app) — emits `bubble bubble--user` / `bubble bubble--daemon` and so inherits the CSS restyle passively,
   but gained no `BubbleMeta` and no code change. Its tests still pin the message text as the bubble's
   sole child (`data-message-role="user">text m1</div>`).
-- **The tool rows, the fenced code block, the thumbnail and the file row** are untouched: the tool rows
-  are not bubbles, and the attachment slots are instances of the same `Message` component with their
-  `Slot` shown — this ticket restyles the bubble around them, not their own contents.
+- **The tool rows, the fenced code block and the image thumbnail** are untouched: the tool rows are not
+  bubbles, and the thumbnail (still unbuilt — [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868))
+  is another instance of the same `Message` component with its `Slot` shown — this ticket restyles the
+  bubble around it, not its own contents. The non-image file row this paragraph used to list here has
+  since shipped; see [§ The attachment file row](#the-attachment-file-row-815) below.
 - **`.bubble__markdown`** ([Assistant markdown
   renderer](assistant-markdown-renderer.md)) is unaffected structurally: `.bubble__meta` is appended as
   its *sibling* inside `.bubble`, never as its child, so the markdown container's own flex column and 8px
   block-rhythm gap never reach the meta row.
 - **`e2e/assistant-whitespace.spec.ts`** reads `.bubble`'s padding at runtime and asserts inequalities
   against it rather than a literal value, so the 14px → 20px change needed no edit there.
+
+### The attachment file row (#815)
+
+A settled, non-image attachment on a sent message draws as `.bubble__file`: an outlined document glyph
+(45×60, inline `<svg>`, its extension overlaid across the lower half) and the filename beside it, 12px
+apart and both vertically centred. Figma `File field` 132:4605, inside the bubble at 121:3860. `#1039`
+supplied the record this reads (`MessageAttachment[]` on a `userText` [timeline item](thread-timeline.md#types));
+until that ticket landed there was no name to draw.
+
+**User-arm only, and structurally so — not a scope choice.** The drawing is an *assistant* bubble, but
+`MessagePayload` carries no attachment field and there is no list verb, so an assistant-produced file
+cannot reach the window at all today. `attachments` can only ever describe files the client itself
+minted. Building an assistant-side mount would be building for a wire change nobody has filed.
+
+**Rendered as one `<div className="bubble__file">` per attachment, each a direct child of `.bubble`, no
+wrapper** — the same reason `.bubble__meta` uses a `margin-top` rather than a flex-column gap (`.bubble`
+can't be a flex column; see above). Each row carries `margin-top: var(--space-3)`, so text → file → file
+→ meta falls out at the drawn 12px rhythm with one rhythm mechanism, not two. Written between the message
+text and `<BubbleMeta>` — the slot `BubbleMeta`'s own comment reserved for it — which keeps
+`interactiveRoundtrip.test.tsx`'s pinned opening-child byte string intact. React key is the array index:
+the list is a frozen record written once at send and never reordered, so index identity is stable
+(`Timeline`'s own argument), and a `filename`-derived key was deliberately avoided as the step that makes
+`id={filename}` look natural next.
+
+**`attachmentExtensionLabel(filename)`** (new, `attachmentExtensionLabel.ts`, pure, beside
+`messageTime.ts`): text after the *last* dot (`archive.tar.gz` → `GZ`), uppercased, `[A-Za-z0-9]` only
+(not `\p{L}` — a 44px slot can't hold an arbitrary script, so `файл.документ` draws nothing by design,
+not defect), capped at 4 characters *after* stripping (so the cap bounds what's drawn, not what was
+parsed). Returns `''` — never a fallback word like `FILE` — when there's no dot, a trailing dot, or the
+character class removes everything. `lastIndexOf` + `slice` + one single-character-class `replace` +
+`slice`, deliberately linear (no backtracking regex) since it runs on every render of untrusted-length
+input.
+
+**Colour and type follow the meta row's precedent exactly:** `--color-inverse-primary`, read off the
+Figma *variable* rather than the export (same transposition trap, same accepted-contrast ruling, not
+reopened here). All four body-small axes (size, line-height, tracking, weight) are restated on
+`.bubble__file` because `.bubble` sets title-small emphasized — three of the four differ and are easy to
+leave inherited by accident. The extension overlay additionally sets
+`--text-body-small-weight-emphasized` (500), the token this ticket confirmed already exists at
+`tokens.css:159` after an earlier draft claimed otherwise.
+
+**The glyph is a stroke, not a fill — a deliberate departure from the ticket's own AC wording.** The
+Figma layer is named `file-solid-full` but the export is `fill="none"` with a stroked path; the drawing
+is an outline. `fill="currentColor"` as the AC literally asked would render a solid document, contradicting
+the same ticket's "outlined document glyph". Shipped as `fill="none" stroke="currentColor"` instead — the
+ink still comes from the row's `color`, satisfying the criterion's substance. Recorded in the code comment
+and the PR body rather than silently reconciled, because it's the same "layer name lies, trust the render"
+trap the ticket flags once already, one line further in.
+
+**AC5 (wrap beside the icon, never truncate, never squeeze the icon below 45px) needed no CSS at all —
+measured, not assumed.** The plan specified `.bubble__file-name { min-width: 0; overflow-wrap: anywhere }`
+on the theory that a flex item's automatic minimum size is a different mechanism than `.bubble`'s
+inherited `word-break: break-word`. Four mutations against a 184-character space-free name in
+`e2e/attachment-file-row.spec.ts` (drop `min-width: 0`; drop `overflow-wrap: anywhere`; drop both; drop
+`flex: 0 0 auto` from the icon) all passed unchanged. The reason: `word-break: break-word` behaves as
+`overflow-wrap: anywhere`, which *does* reduce a box's min-content size — unlike `overflow-wrap:
+break-word` — so `.bubble`'s existing rule already collapses the automatic minimum to one character.
+`.bubble__file-name` ships with **no CSS of its own**; the class is a locator only. This follows the same
+"a settled inherited value that's restated is a value that gets lost" ruling this file already applies to
+`.bubble__markdown code` and `.bubble__markdown a` (#607/#623/#628/#629/#630). `flex: 0 0 auto` stays on
+the icon despite measuring inert on this AC, kept as this file's vocabulary for a non-shrinking lead item
+and because the automatic-minimum floor it duplicates is conditional in a way the declaration isn't — a
+later `min-width: 0` on that rule would remove it. The guard for AC5 is `e2e/attachment-file-row.spec.ts`
+alone: nothing in this AC is observable in the static (no-DOM) tier, so if `.bubble`'s `word-break` is ever
+narrowed, that spec is what goes red.
+
+**Untrusted display text, first DOM sink — never sanitised here.** `filename` is IPC-delivered and, until
+this ticket, rendered nowhere at all (asserted by `attachmentUploadCopy.test.ts` and
+`ComposerAttach.test.tsx`). It and the extension label reach the DOM as auto-escaped React children only
+— never an attribute, a `title`, an `alt`, a URL, or `dangerouslySetInnerHTML` — the [daemon-text
+rendering ruling](../../../CLAUDE.md) extended to a name the client itself, not the daemon, produced.
+`attachmentId` (the host-side storage handle #816's download action will need) is deliberately not
+rendered anywhere. The row does **not** sanitise, trim or normalise the name: `sanitizeAttachmentFilename`
+already re-runs in main on the value a save builds a path from, and a second sanitiser here would let what
+the operator *sees* diverge from what a save *writes* — a worse defect than the tidiness bought. Bidi/
+control-character extension spoofing (`report<U+202E>gpj.exe` reading as `report…jpg.exe`) is a live
+possibility but not fixed here — the row is drawn, not wired, so there's no action to mis-trigger yet; it's
+deferred to [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816), which should treat the
+extension overlay as the trustworthy half since its character-class filter drops bidi controls the name
+run doesn't.
+
+**Not built:** the row isn't clickable ([#816](https://github.com/pyrycode/pyrycode-desktop/issues/816)),
+image attachments render nothing here yet ([#868](https://github.com/pyrycode/pyrycode-desktop/issues/868)
+owns the thumbnail, same slot), and in-flight/failed attachments stay the composer's own concern
+(`attachmentUploadCopy.ts`) — this row draws a settled attachment only.
 
 ## Testing
 
@@ -246,6 +333,17 @@ text assertions across the fake tier plus four raw `textContent` reads in the re
 e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the fix and the sweep
 method that finds the next one.
 
+**#815's own coverage:** `attachmentExtensionLabel.test.ts` pins the four ordering decisions (last-dot,
+strip-before-cap, ASCII-only, the leading-dot `.hidden` → `HIDD` case shipped as documented rather than
+carved out). A new `ConversationScreen.test.tsx` `describe` pins the row's position between the text and
+`.bubble__meta`, the icon/name markup, the extension overlay present for a real extension and empty for
+one without, two attachments rendering two rows in list order, and a **count** of `.bubble__file` over
+the whole markup for the arms that must render none (assistant bubble, queued row, `MessageBubble`
+residue) — the same count-not-absence idiom the meta row's own proof used. `e2e/attachment-file-row.spec.ts`
+(new, fake tier) is the only place AC5's wrapping is actually provable, and **does not use
+`bubbleTextExactly`**: that fixture is an anchored whole-bubble matcher (six existing callers), and this
+is the first bubble in the suite with a text-bearing child beside the message text.
+
 ## Related
 
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
@@ -255,9 +353,17 @@ method that finds the next one.
   (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional
   `createdAt`, no visible change) and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
   (shipped — `messageTime.ts` and the render slot, covered in full above), both blocked on this ticket.
-- [#691](https://github.com/pyrycode/pyrycode-desktop/issues/691) / [#686](https://github.com/pyrycode/pyrycode-desktop/issues/686) —
-  the image thumbnail and file row, instances of the same `Message` component whose bubble this ticket
-  restyles; their slot contents are unaffected.
+- [#815 architecture spec](../../specs/architecture/815-bubble-attachment-file-row.md) — the non-image
+  attachment file row's full design, the AC5 CSS-vs-inherited measurement, and the security review this
+  file's § The attachment file row summarizes.
+- [#686](https://github.com/pyrycode/pyrycode-desktop/issues/686) — the parent ticket the attachment slots
+  split from: [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) (shipped, this section),
+  [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) (the row's download action, not yet
+  built), and [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) (the image thumbnail, same
+  slot, not yet built) — instances of the same `Message` component whose bubble this ticket restyles.
+- [#1028](https://github.com/pyrycode/pyrycode-desktop/issues/1028) / [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) —
+  the record a sent message's attachments carry on its timeline item, which #815 reads and without which
+  it has no name to draw.
 - [#721 codebase notes](../codebase/721.md) — the code-block redraw that introduced
   `--text-label-medium-weight-emphasized` and the "more `title-small` consumers are coming" comment this
   ticket's tokens fulfil.

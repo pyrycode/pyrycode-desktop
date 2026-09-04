@@ -165,10 +165,11 @@ rarely the assertion it looks like — prefer whole-value equality.
 ## `attachmentUploadCopy.ts` — the copy is a selection, not a rendering
 
 Every field on `AttachmentUploadEvent` is client-owned by construction ([#862](attachment-upload.md)'s own
-docblock): no member can hold the file's bytes, its host path or its name, `reason` is a literal written in
-this repo, and `limitBytes` is a client-owned constant. So there is no daemon text on this path — no
-escaping obligation, no length bound, and no truncation chain of the kind `.composer__model-label` carries
-for a claude-authored label. What's at stake is coverage, and `attachmentUploadOutcomeCopy(event)` closes
+docblock): no member can hold the file's bytes or its host path — `completed.filename` (#1038) is the one
+exception, and this module does not read it — `reason` is a literal written in this repo, and `limitBytes`
+is a client-owned constant. So there is no daemon text on this path — no escaping obligation, no length
+bound, and no truncation chain of the kind `.composer__model-label` carries; the first consumer of
+`filename` inherits both. What's at stake is coverage, and `attachmentUploadOutcomeCopy(event)` closes
 it with an explicit return type and **no `default`** on its `switch` — a discipline that has already fired
 for real: #864's `progress` member reached this switch through the compile error rather than a silent
 fallthrough, the `relayLeg`/`daemonLeg` discipline one directory over.

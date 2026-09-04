@@ -534,7 +534,17 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   upload of a held image) is bounded by the byte guard and the daemon's concurrency answer, named rather
   than fixed. `src/main/attachmentUpload.ts`'s content split out to [Attachment upload — the guard and
   the drive](features/attachment-upload-guard-and-drive.md) when #1032 pushed this document over the size
-  cap. The paste keystroke, #1033, is blocked by #1032 and not started.
+  cap. The paste keystroke, #1033, has landed — see [Composer attach](features/composer-attach.md).
+  **#1038 (landed)** gives the `completed` arm a required `filename`, the missing supply
+  [Attachment save](features/attachment-save.md)'s `AttachmentSaveRequest` needed and had none for: an
+  operator's own filename (`basename(path)`) for the picker and drop entries, the paste entry's minted
+  client-owned stem for its, both read from the same const `driveUpload` already trims once for the wire
+  envelope, so the window is told the same bounded value the daemon was told rather than a second,
+  divergent one. Ships with no consumer — #1039 wires it. Self-review PASS: the widened crossing is
+  main→window disclosure, not renderer→main validation, so #862's containment claim is untouched; the
+  diagnostic log keeps its unnarrowed content-free guarantee, only the event-side leak walk narrows by
+  this one field, proven a single path component rather than asserted to contain no `\` (legal on macOS
+  and Linux).
 - [Attachment upload — the guard and the drive](features/attachment-upload-guard-and-drive.md) — child of
   [Attachment upload](features/attachment-upload.md), split out 2026-09-04 when #1032 pushed the parent
   over the 50000-byte cap. Holds `src/main/attachmentUpload.ts` in full: `uploadAttachmentFile`,

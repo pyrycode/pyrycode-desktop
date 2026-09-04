@@ -26,6 +26,13 @@ anticipates. The name is **display-derived, not addressing**: the bytes are sele
 attachment identifier alone, so a wrong or hostile name saves the right file under a poor name, never
 a different file.
 
+**For an attachment the window's own operator just uploaded, the supply is
+[Attachment upload](attachment-upload.md#1038)'s `completed.filename` (#1038).** Before that slice,
+`AttachmentUploadEvent`'s `completed` arm was content-free — `{ type: 'completed'; uploadId }` — so
+this channel's `filename` had no source for an upload the window itself had just driven; the design
+above predates its own supply by four tickets. #1038 closes that gap for the picker, drop and paste
+entries alike, deriving the value from the same bounded const the wire itself was told.
+
 ## Two new modules, two composition-root edges
 
 ### 1. The IPC contract — `src/shared/ipc/attachmentSave.ts`

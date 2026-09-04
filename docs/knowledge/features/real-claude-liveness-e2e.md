@@ -109,6 +109,30 @@ re-ask) are expected never to fire on a passing run without that being dead code
 zero modals allowed is a structural gap in what the model has been observed to do, not evidence the
 arms are unreachable.
 
+[#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055), the sixth sibling, is
+`e2e/real-claude-attachment.spec.ts` — the real-stack proof that an attached file actually reaches
+claude, the gap every other tier in this repo cannot close: the fake tier stubs the upload's *outcome*
+and uploads nothing, and the unit tier asserts only on the frame this window built, so neither can tell
+"the id rode the frame" from "the daemon resolved it, named its path in the prompt, and claude opened the
+file." It clones the fixture trio and `withIsolatedElectronApp` drive (needed here, uniquely among the
+siblings, for the `ElectronApplication` handle the dialog stub requires — the #517 lift), stubs
+`dialog.showOpenDialog` with a **real** file (a solid `#FF0000` PNG this spec writes to a temp dir and
+reaps in a `finally`) rather than #890's invented outcome, and lets production chunk it to the real
+daemon. **One precondition this spec's own first live run discovered the hard way:** an
+`attachment_chunk` carries no conversation id by design, so a completing upload resolves against the
+daemon's follow-active cursor — which only a prior `send_message` stamps, never conversation creation
+itself. The spec therefore drives one ordinary **cursor-stamp turn**, drained to quiesce, before
+attaching; without it the upload is refused with `attachment.storage_failed` and the spec never reaches
+the send under test. See [live e2e runbook](live-e2e-runbook.md) § Current real-claude gate state for the
+measured failure and [#1076](https://github.com/pyrycode/pyrycode-desktop/issues/1076), the matching
+operator-facing gap this spec's diagnosis surfaced (filed, not fixed here). The assertion reads the
+assistant rows' stripped text, skip-offset past the stamp turn's own reply, against a **word-anchored**
+`/\bred\b/i` — anchored rather than substring, since claude's own prose about a missing image ("I don't
+see any image attached… could you re-send it?") satisfies `considered`/`required` on a bad day, which is
+exactly the false green this boundary exists to refuse. `skipPermissions` stays at its `true` default, so
+claude's read of the file never blocks on a permission modal. Bumped the tier's
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor from 12 to 13.
+
 ## How it works
 
 ### Gated out of the default run
@@ -385,3 +409,7 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   fake-stack twin #921 ([question-panel-cancel-refusal.md](question-panel-cancel-refusal.md)). Proves a
   live claude honours a Cancel refusal by leaving no artefact for the gated work, via a recursive
   post-quiesce workdir walk made non-vacuous by an allow arm on any post-refusal permission modal.
+- [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
+  / [Composer attach § Pending attachments](composer-attach.md#pending-attachments-1039) / [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) — the sixth tier sibling
+  (`real-claude-attachment.spec.ts`), covered above; the live proof for the client-side change that names
+  a message's attachments on the outbound `send_message` frame.

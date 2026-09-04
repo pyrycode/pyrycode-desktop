@@ -71,6 +71,29 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**Last run: 2026-09-04 — the tier grew to 13 specs.** `e2e/real-claude-attachment.spec.ts` ([#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055)) is the live proof that an attached file
+actually reaches claude: it pairs against a real spawned daemon, creates a conversation through the UI,
+drives one **cursor-stamp turn** first (an ordinary message, drained to quiesce), then stubs
+`dialog.showOpenDialog` to answer a real solid-red PNG on disk, attaches it through the production upload
+path, sends a message asking claude to name the image's dominant colour, and polls the assistant rows —
+stripped and skip-offset past the stamp turn's own reply — for a **word-anchored** `/\bred\b/i`. The
+assertion is on the reply's text, never on client state, which is the point: a client that renders the
+attachment perfectly and sends no `attachment_ids` passes every other tier in this repo and fails only
+this one.
+
+**The cursor-stamp turn is load-bearing, not incidental, and was discovered by a failing live run.** An
+`attachment_chunk` carries no conversation id by design — the daemon files a completing upload under its
+follow-active cursor, which its `send_message` relay handler stamps only on the successful-route path;
+creating a conversation does not stamp it. The first live run of this spec attached immediately after
+conversation creation and died 123 polls into "The host could not store the file." (`attachment.storage_failed`), with the drive never reaching the picker stub at all. Upstream's daemon-side twin rides the identical prior-turn precondition — see `pyrycode` `docs/specs/architecture/2039-live-attachment-read.md` § Sequence step 2. **The operator hits the same wall** — attaching to a brand-new discussion is an ordinary flow and fails identically — filed separately as [#1076](https://github.com/pyrycode/pyrycode-desktop/issues/1076); not fixed here, since the remedy is an unmade UX decision and this ticket's scope is the spec, not the precondition.
+
+The tenth interactive spec (the entry directly below, #929) still reads "11" as the prior state at the
+time it landed; that count was **itself already stale by one**, since #1067's `desktop-isolation.ts`
+landed between #929 and #1055 with no `real-*` spec of its own (a harness fix, not a tier addition) —
+`origin/main` carried 12 `real-*.spec.ts` files by the time #1055 branched, measured directly rather than
+transcribed from this section. **The
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` floor below (§ Automated coverage) needs bumping to 13** to match.
+
 **Last run: 2026-09-04 — the tier grew to 11 specs and holds green.** The tenth interactive spec,
 `e2e/real-claude-question-cancel.spec.ts` (#929), landed as the refusal twin of #928's answer arm on
 the same question vertical: it drives a live claude into refusing its own `AskUserQuestion` batch
@@ -146,14 +169,14 @@ next state change updates one place, not four.
 PYRY_REAL_CLAUDE_GATE_CMD="npm install --no-audit --no-fund >&2 && npm run build >&2 && npx playwright test --config playwright.real-claude.config.ts --reporter=json"
 PYRY_REAL_CLAUDE_GATE_FORMAT=playwright-json
 PYRY_REAL_CLAUDE_GATE_TIMEOUT_MS=1800000
-PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=10
+PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=13
 ```
 
 Why each line is what it is:
 
 - **Install and build chatter goes to stderr on purpose.** The gate reads stdout and expects Playwright's JSON report alone. Its parser skips to the first `{`, but npm output ahead of the report can still defeat it, so the chatter is routed away rather than tolerated.
 - **The gate needs the per-test JSON reporter, not `e2e:real:gate`.** The repo's own gate script prints a human list. The dispatcher counts tests that ran a body, and it cannot count what it cannot read.
-- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so. #929 is the latest such PR: the tier is now 11 specs and the floor shown above (10) needs bumping to match — see § Current real-claude gate state.
+- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so. [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) is the latest such PR: the tier is now 13 specs and the floor shown above (13) reflects that — see § Current real-claude gate state, which also records the count drifting stale by one between #929 and #1055 with no PR announcing it, the exact failure mode this bullet exists to prevent.
 - **The floor is one-sided.** It answers "did enough tests run", never "did the right ones run". The 66-executed run described in § Current real-claude gate state cleared a floor of 10 with room to spare while running 56 fake-tier specs under the real-daemon config. A count above the floor is not evidence that the intended tier ran.
 
 **This fork cannot tell an inherited failure from a new one.** On a red run the gate is meant to re-run just the failing tests against the base commit, so a failure that already exists on `main` parks for the operator instead of being blamed on the branch. That comparison never runs here: the dispatcher's filter builder rejects any test name outside a conservative character set, and every Playwright name carries spaces and a `›` separator, so the filter is always refused ([agent-dispatcher#38](https://github.com/pyrycode/agent-dispatcher/issues/38)). While any spec in the tier is red, **every** gated ticket that reaches the gate is failed and sent back for rework for a fault it did not cause, and each one needs a hand correction. That is what happened to [#928](https://github.com/pyrycode/pyrycode-desktop/issues/928) on the first live run, for the pre-existing red later filed as [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941).

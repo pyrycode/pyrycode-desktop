@@ -2,6 +2,7 @@ import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/lau
 import { decodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
+import type { RequestAttachmentPayload } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for #815's file row in the message bubble — the LAYOUT half of the ticket, which is the
 // half the static tier cannot reach at all. `vitest.config.ts` sets `environment: 'node'`, so every renderer
@@ -219,4 +220,150 @@ test('the attachment file row draws in the bubble, and a long name wraps beside 
   const longRowBox = (await secondRow.boundingBox())!
   const secondMetaBox = (await secondBubble.locator('.bubble__meta').boundingBox())!
   expect(secondMetaBox.y - (longRowBox.y + longRowBox.height)).toBeCloseTo(RHYTHM_PX, 0)
+})
+
+// #816 — the row became a download control. This half of the coverage exists because NOTHING in `src/`
+// can click: the renderer tier is `renderToStaticMarkup` under `environment: 'node'`, so the element and
+// its accessible name are ConversationScreen.test.tsx's and the two-ask sequencing behind the handler is
+// downloadAttachment.test.ts's, but the activation itself only exists in a real window.
+//
+// ⭐ THE ROUND TRIP IS DELIBERATELY NOT DRIVEN TO COMPLETION. This tier runs the real background process,
+// so a fetch that actually reached `completed` would put a real file in the app's attachment directory and
+// the save that follows would copy it into the REAL Downloads folder and call `shell.showItemInFolder` — a
+// Finder window opening on whoever ran the suite. So `buildReplyFrames` answers `request_attachment` with
+// no frames at all: the ask is observed on the wire, which is AC2, and nothing ever reaches the terminal
+// AC3 sequences on. That division is the ticket's own.
+//
+// ⭐ THREE DISTINCT ATTACHMENTS, AND THAT IS LOAD-BEARING, not tidiness. `src/main/attachmentRetrieval.ts`
+// keys its `inFlight` map by attachment id and returns early for an id already being fetched, so a second
+// activation of the SAME row puts no second envelope on the wire — three activations of one row would
+// assert one envelope and prove nothing about Enter or Space. Three ids stay under that module's
+// ATTACHMENT_MAX_CONCURRENT_RETRIEVALS of 4, so none of the three is refused `busy` either.
+//
+// SECRET HYGIENE, as above: every literal here is invented non-secret display text, and every assertion
+// reads DOM state, wire payload fields or geometry.
+
+const THIRD_MESSAGE = 'and a third'
+
+/** The three settled uploads, one per message, each with its own identifier. Typed to the `completed` arm
+ *  rather than the whole union, so `filename` reads without a narrowing step at every use. */
+const DOWNLOADABLE: Extract<AttachmentUploadEvent, { type: 'completed' }>[] = [
+  { type: 'completed', uploadId: 'e2e-download-1', filename: 'first-report.pdf' },
+  { type: 'completed', uploadId: 'e2e-download-2', filename: 'second-notes.txt' },
+  { type: 'completed', uploadId: 'e2e-download-3', filename: 'third-archive.zip' }
+]
+
+test('activating the file row asks the host for that attachment, by click and by keyboard (#816)', async ({
+  launchPairedApp
+}) => {
+  // Every `request_attachment` the window put on the wire, in order. Recorded rather than asserted inside
+  // the callback so a failure prints the whole set instead of the first mismatch.
+  const asked: RequestAttachmentPayload[] = []
+
+  const { page, app } = await launchPairedApp({
+    buildReplyFrames: (inbound: Uint8Array): Uint8Array[] => {
+      const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'request_attachment') {
+        asked.push(envelope.payload as RequestAttachmentPayload)
+        // No frames: the retrieval stays open, never reaches `completed`, and no save is ever asked.
+        return []
+      }
+      return envelope.type === 'send_message' ? [] : [seedConversationsFrame()]
+    }
+  })
+
+  const pushCompleted = (event: AttachmentUploadEvent): Promise<void> =>
+    app.evaluate(
+      ({ BrowserWindow }, payload) => {
+        const [window] = BrowserWindow.getAllWindows()
+        window.webContents.send(payload.channel, payload.event)
+      },
+      { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+    )
+
+  const send = async (text: string): Promise<void> => {
+    await page.getByPlaceholder('Message…').fill(text)
+    await page.getByRole('button', { name: 'Send' }).click()
+  }
+
+  // One upload per message, so each bubble carries exactly one row and the rows are in send order.
+  for (const [index, upload] of DOWNLOADABLE.entries()) {
+    await pushCompleted(upload)
+    await send([FIRST_MESSAGE, SECOND_MESSAGE, THIRD_MESSAGE][index])
+  }
+
+  const rows = page.locator('.bubble[data-thread-role="user"] .bubble__file')
+  await expect(rows).toHaveCount(3, { timeout: ROW_TIMEOUT_MS })
+
+  // --- AC1's "one control, not two". The row IS the button; neither the icon nor the name is separately
+  // focusable, which is what makes the pair one tab stop rather than two. ---
+  const first = rows.nth(0)
+  expect(await first.evaluate((element) => element.tagName)).toBe('BUTTON')
+  await expect(first).toHaveJSProperty('type', 'button')
+  for (const child of ['.bubble__file-icon', '.bubble__file-name']) {
+    expect(
+      await first.locator(child).evaluate((element) => element.hasAttribute('tabindex'))
+    ).toBe(false)
+  }
+  // The accessible name is computed from the contents, so it is exactly the filename — the aria-hidden
+  // extension overlay contributes nothing and no aria-label overrides it.
+  await expect(first).toHaveAccessibleName(DOWNLOADABLE[0].filename)
+
+  // --- AC1's "activating alike on click, Enter and Space", and AC2's ask. One activation per row, one
+  // mechanism each, so a keyboard path that silently did nothing cannot hide behind the click's envelope.
+  // `locator.press` focuses the element and dispatches a real key event, which is also what puts the row
+  // into `:focus-visible` for the assertion below. ---
+  await first.click()
+  await expect.poll(() => asked.length, { timeout: ROW_TIMEOUT_MS }).toBe(1)
+
+  await rows.nth(1).press('Enter')
+  await expect.poll(() => asked.length, { timeout: ROW_TIMEOUT_MS }).toBe(2)
+
+  await rows.nth(2).press(' ')
+  await expect.poll(() => asked.length, { timeout: ROW_TIMEOUT_MS }).toBe(3)
+
+  // AC2: the conversation and the attachment identifier AND NOTHING ELSE. An exact-object comparison per
+  // envelope, so a stray `filename` key — the value sitting right there on the record — reddens here.
+  expect(asked).toEqual(
+    DOWNLOADABLE.map((upload) => ({
+      conversation_id: SEEDED_ROW.id,
+      attachment_id: upload.uploadId
+    }))
+  )
+  // AC3's "no file name reaches a URL", proven where the name could actually have leaked: on the wire.
+  for (const upload of DOWNLOADABLE) {
+    expect(JSON.stringify(asked)).not.toContain(upload.filename)
+  }
+
+  // --- AC1's focus indicator. The drawing supplies no focus state, so the row takes .bubble__copy's
+  // shipped `:focus-visible` outline; a keyboard-reachable control with no visible focus is the gap the
+  // criterion closes. The last interaction above was a key press, which is what makes :focus-visible
+  // match rather than plain :focus. ---
+  const focused = rows.nth(2)
+  expect(await focused.evaluate((element) => element === document.activeElement)).toBe(true)
+  expect(await focused.evaluate((element) => element.matches(':focus-visible'))).toBe(true)
+  expect(await focused.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid')
+
+  // --- The button reset put the drawn box back. These are the same constants the first test holds, re-read
+  // on a row that is now a form control: a UA padding, border, font or text-align that survived would move
+  // one of them, and #815's own record is that this row's layout defies prediction. ---
+  const rowBox = (await first.boundingBox())!
+  const iconBox = (await first.locator('.bubble__file-icon').boundingBox())!
+  const nameBox = (await first.locator('.bubble__file-name').boundingBox())!
+  const bubbleBox = (await page.locator('.bubble[data-thread-role="user"]').first().boundingBox())!
+  const metaBox = (await page
+    .locator('.bubble[data-thread-role="user"]')
+    .first()
+    .locator('.bubble__meta')
+    .boundingBox())!
+
+  expect(rowBox.height).toBeCloseTo(ICON_HEIGHT_PX, 0)
+  expect(rowBox.y - bubbleBox.y).toBeCloseTo(ROW_TOP_IN_BUBBLE_PX, 0)
+  expect(metaBox.y - (rowBox.y + rowBox.height)).toBeCloseTo(RHYTHM_PX, 0)
+  expect(iconBox.width).toBeCloseTo(ICON_WIDTH_PX, 0)
+  expect(iconBox.height).toBeCloseTo(ICON_HEIGHT_PX, 0)
+  expect(nameBox.x - (iconBox.x + iconBox.width)).toBeCloseTo(RHYTHM_PX, 0)
+  // The name still starts at the row's left edge rather than being centred by a button's UA text-align —
+  // invisible on one line, and the failure AC5 of #815 measures on a wrapped one.
+  expect(await first.evaluate((element) => getComputedStyle(element).textAlign)).toBe('left')
 })

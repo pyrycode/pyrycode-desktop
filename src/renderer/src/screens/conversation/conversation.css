@@ -349,17 +349,55 @@
    and not from the export, which prints the light-scheme transposition tokens.css:25-33 warns about. The
    meta row directly below resolves the same variable the same way. Its measured contrast on these fills is
    the accepted consequence that rule already records; this row inherits that ruling and does not reopen
-   it. The glyph takes the same colour through stroke: currentColor rather than restating it. */
+   it. The glyph takes the same colour through stroke: currentColor rather than restating it.
+
+   #816 MADE THE ROW A <button>, so the six declarations after `gap` are a UA reset putting the drawn box
+   back — not new styling. Each answers something a button's UA sheet would otherwise win:
+
+     - width: 100% reproduces the block-level <div>'s box exactly. A form control's `width: auto` is
+       fit-content rather than fill-available even at `display: flex`, so without this the row's box would
+       depend on how a UA sizes a flex button — and #815's geometry is measured, not reasoned about.
+     - padding / border / background are the button chrome; .bubble__copy resets the same three the same
+       way, and neither needs `appearance: none` on top.
+     - font-family: inherit is the easy one to miss. This rule already restates all four body-small axes
+       (see above) but NOT the family, so the button's UA font would survive and the name would draw in
+       Arial while the extension overlay beside it drew in the app's face.
+     - text-align: left undoes the UA `center`, which is invisible on a short name and centres every line
+       of a wrapped one — exactly the AC5 case e2e/attachment-file-row.spec.ts measures.
+
+   `word-break` is INHERITED and inherits into a button, so #815's measurement holds unchanged: .bubble's
+   `break-word` is what collapses the name's automatic minimum size, and .bubble__file-name still ships
+   with no rule of its own. */
 .bubble__file {
   margin-top: var(--space-3);
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
   color: var(--color-inverse-primary);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
+}
+
+/* THE DRAWING HAS NO HOVER OR FOCUS STATE for this row, so both take the answer .bubble__copy already
+   gives in this same bubble rather than inventing one: hover BRIGHTENS the ink one step up the same tonal
+   ramp (--color-primary against the resting --color-inverse-primary) instead of lifting a neutral grey
+   surface that would read as a foreign patch on either navy fill. The focus half is not optional here —
+   AC1 requires keyboard activation, and a control the keyboard can reach must show where it is. */
+.bubble__file:hover {
+  color: var(--color-primary);
+}
+
+.bubble__file:focus-visible {
+  outline: 1px solid var(--color-outline);
 }
 
 /* The glyph's frame, and the positioning context its extension overlay hangs on. 45x60 is a drawn

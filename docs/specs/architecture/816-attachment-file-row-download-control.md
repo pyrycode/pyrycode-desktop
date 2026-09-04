@@ -388,3 +388,25 @@ Design was revised inline before this section was written).
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-04
+
+## Revisions
+
+### 2026-09-04 — both Open Questions resolved by measurement, no design change
+
+Recorded rather than deleted, because "we predicted a risk and measured it away" is the useful half.
+
+1. **A `<button>`'s UA styling needed exactly the six declarations the plan listed, and no seventh.**
+   `e2e/attachment-file-row.spec.ts`'s existing #815 test passed unchanged on the first run with the
+   reset in place — every drawn constant it measures (row top 48, row height 60, icon 45×60, name 12px
+   right of the icon, meta rhythm 12, and all five AC5 reads on the 184-character space-free name) held.
+   No `appearance: none`, no `white-space`, no `align-items` override and no `min-width` was needed. The
+   new test re-reads four of those constants plus `text-align` on a row that is now a form control, so
+   the reset has its own detector rather than relying on #815's test to notice.
+2. **`:focus-visible` matches after `locator.press()` in this Chromium build**, so the assertion stayed
+   as planned: after the `Space` activation the row is `document.activeElement`, matches
+   `:focus-visible`, and computes `outline-style: solid`. The narrowed fallback the plan held in reserve
+   was not needed and is not shipped.
+
+Nothing in § Design changed. The one design change this ticket made after its first draft was the
+security review's MUST FIX (bounding the conversation id as well as the attachment id), which was
+applied inline *before* the plan commit and is recorded in § Security review rather than here.

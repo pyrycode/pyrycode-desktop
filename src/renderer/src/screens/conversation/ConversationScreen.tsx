@@ -75,6 +75,7 @@ import { dropQueuedMessage } from './dropQueuedMessage'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { attachmentExtensionLabel } from './attachmentExtensionLabel'
+import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
@@ -782,6 +783,24 @@ function BubbleMeta({
 // `id={filename}` look natural next). And `attachmentId` is not rendered at all: it is a host-side storage
 // handle with no display value, which #816 needs in a click handler rather than in markup.
 //
+// #816: THE WHOLE ROW IS ONE CONTROL — a real <button>, not a div with a handler, so one tab stop, Enter
+// and Space, and screen-reader semantics all come for free rather than being rebuilt (the ChannelList
+// row's recorded reason). Neither child takes a tabIndex: the icon and the name are halves of one control,
+// which is AC1, and giving either its own would make two.
+//
+// ⭐ THE ACCESSIBLE NAME IS THE BUTTON'S OWN TEXT CONTENT — deliberately NOT an aria-label. The name is
+// computed from the contents, and the extension overlay beside the glyph is already aria-hidden, so the
+// button announces exactly the filename, which is what AC1 asks for ("an accessible name that includes the
+// file name the row draws"). An aria-label would put this untrusted, model-chosen text into an ATTRIBUTE —
+// the sink the paragraph above closes on purpose — and prefixing a client-owned verb instead would need a
+// visually-hidden utility this repo does not have (PairingScreen records that adding one is unticketed).
+// A content-derived name is the one shape that satisfies the criterion without reopening either question.
+//
+// The handler is a closure over this row's own record calling the module helper directly, drilling nothing
+// — BubbleMeta's copy control established that shape in this same bubble, and Timeline's ~30 render sites
+// stay untouched. The conversation id the fetch needs is read outside React from `activeConversationStore`
+// inside `attachmentDownloadDeps`, the conversationLastReadBridge idiom, so it is not a prop either.
+//
 // NOTHING IS SANITISED, TRIMMED OR NORMALISED HERE, and that is deliberate twice over. The timeline store's
 // contract forbids a second sanitiser on this side as the divergent-checks shape, and
 // `sanitizeAttachmentFilename` already re-runs in main on the value a save actually builds a path from.
@@ -789,7 +808,11 @@ function BubbleMeta({
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
   return (
-    <div className="bubble__file">
+    <button
+      type="button"
+      className="bubble__file"
+      onClick={() => downloadAttachment(attachmentDownloadDeps, attachment)}
+    >
       <span className="bubble__file-icon">
         {/* The Figma glyph transcribed inline, following .bubble__copy-icon in this same bubble: sized by
             its own width/height with a matching viewBox, aria-hidden because the name beside it carries
@@ -829,7 +852,7 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
         </span>
       </span>
       <span className="bubble__file-name">{attachment.filename}</span>
-    </div>
+    </button>
   )
 }
 

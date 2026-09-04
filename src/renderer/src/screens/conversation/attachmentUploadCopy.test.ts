@@ -125,6 +125,44 @@ describe('attachmentUploadOutcomeCopy — the three arms (#863 AC3)', () => {
     expect(ATTACHMENT_UPLOAD_FAILURE_COPY['attachment-too-large'].toLowerCase()).toContain('host')
   })
 
+  // ⭐ #1032's refusal arm — a SECOND member under one `type`, which is what forced the switch to branch
+  // twice. It is a refusal and not a failure (the ticket's second criterion), so it must not read as one
+  // and must not have been smuggled into ATTACHMENT_UPLOAD_FAILURE_COPY.
+  it('states the clipboard reason, with no limit figure and nothing from the clipboard', () => {
+    const copy = attachmentUploadOutcomeCopy({ type: 'refused', uploadId: 'a', reason: 'no-image' })
+
+    // It names WHY, so the reader learns nothing was there rather than that something broke.
+    expect(copy.toLowerCase()).toContain('clipboard')
+    expect(copy.trim()).not.toBe('')
+    // No figure of any kind: this refusal has no limit to state, and inventing one would be a lie the
+    // too-large arm's own test forbids in the other direction.
+    expect(copy).not.toMatch(/\d/)
+    // It is not one of the failure sentences, and the reason literal is not interpolated — the same
+    // selection-not-rendering property the failure arm is held to.
+    expect(Object.values(ATTACHMENT_UPLOAD_FAILURE_COPY)).not.toContain(copy)
+    expect(copy).not.toContain('no-image')
+  })
+
+  it('reads differently from the too-large refusal, which keeps its limit', () => {
+    // THE WHOLE POINT OF THE SPLIT, as one assertion. Widening `reason` in place would have typechecked
+    // and rendered the too-large sentence — limit figure and all — for a clipboard that held no image,
+    // so these two must not be the same string and the shipped one must still name its bound.
+    const noImage = attachmentUploadOutcomeCopy({
+      type: 'refused',
+      uploadId: 'a',
+      reason: 'no-image'
+    })
+    const tooLarge = attachmentUploadOutcomeCopy({
+      type: 'refused',
+      uploadId: 'a',
+      reason: 'too-large',
+      limitBytes: 23_040_000
+    })
+    expect(noImage).not.toBe(tooLarge)
+    expect(tooLarge).toContain('23 MB')
+    expect(noImage).not.toContain('23 MB')
+  })
+
   // AC3's third arm. #815 is not started, so nothing else anywhere is evidence that a file was stored —
   // a silent success would be indistinguishable from a cancelled picker, which reports nothing at all.
   it('acknowledges a completed upload rather than saying nothing', () => {

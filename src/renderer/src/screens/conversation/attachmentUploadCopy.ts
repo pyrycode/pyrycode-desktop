@@ -115,6 +115,19 @@ export function uploadProgressPercent(sentChunks: number, totalChunks: number): 
 const COMPLETED_COPY = 'File attached.'
 
 /**
+ * What a paste that found nothing gets (#1032). It NAMES THE CLIPBOARD, which is the whole of the
+ * ticket's second criterion in one string: the operator asked for the image on the clipboard and there
+ * was none, and saying so is what stops this reading as a failure — nothing was attempted and nothing
+ * went wrong.
+ *
+ * NO FIGURE AND NOTHING FROM THE CLIPBOARD. The sibling refusal states a limit because it has one; this
+ * one has none, and it must not describe what the clipboard DID hold — not the flavour, not a length —
+ * because the event carries none of that and inventing it would be the leak the union is shaped to
+ * prevent. `refused` speaks for this app, which is why this sentence claims nothing about the host.
+ */
+const NO_IMAGE_COPY = 'No image on the clipboard — nothing was attached.'
+
+/**
  * The sentence for one outcome.
  *
  * An explicit return type and NO `default` on the switch, so a member added to
@@ -134,13 +147,23 @@ const COMPLETED_COPY = 'File attached.'
 export function attachmentUploadOutcomeCopy(event: AttachmentUploadEvent): string {
   switch (event.type) {
     case 'refused':
-      // THE LIMIT IS THIS APP'S, AND THE SENTENCE SAYS SO. `limitBytes` is the client's own bound; the
-      // union's docblock is explicit that a file under it can still come back `attachment-too-large` from
-      // the daemon. Wording this as the host's limit would state a fact the renderer does not have, and
-      // would mislead exactly when someone is working out why an upload failed. The figure is read off the
-      // event rather than from a constant here, so this copy cannot drift from the bound the background
-      // process actually enforced.
-      return `Too large to attach — this app sends files up to ${formatByteLimit(event.limitBytes)}.`
+      // A SECOND SWITCH, because `refused` is two members (#1032) and only one of them has a limit. It
+      // carries no `default` for the outer switch's reason: a third refusal reason leaves this function
+      // able to return undefined and trips TS2366 here, rather than falling through to a blank line. That
+      // is not a hypothetical — the outer switch caught #864's `progress` this way, and the shape of this
+      // member is what caught #1032 at the compiler instead of on screen.
+      switch (event.reason) {
+        case 'too-large':
+          // THE LIMIT IS THIS APP'S, AND THE SENTENCE SAYS SO. `limitBytes` is the client's own bound; the
+          // union's docblock is explicit that a file under it can still come back `attachment-too-large`
+          // from the daemon. Wording this as the host's limit would state a fact the renderer does not
+          // have, and would mislead exactly when someone is working out why an upload failed. The figure
+          // is read off the event rather than from a constant here, so this copy cannot drift from the
+          // bound the background process actually enforced.
+          return `Too large to attach — this app sends files up to ${formatByteLimit(event.limitBytes)}.`
+        case 'no-image':
+          return NO_IMAGE_COPY
+      }
     case 'failed':
       return FAILURE_COPY_BY_REASON.get(event.reason) ?? UNREPRESENTABLE_FAILURE_COPY
     case 'completed':

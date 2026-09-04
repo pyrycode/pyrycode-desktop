@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Notification,
+  session,
+  shell
+} from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { hostname } from 'os'
@@ -29,12 +38,17 @@ import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
 import { onCommand } from './receiveCommand'
 import { onDiagnostic } from './receiveDiagnostic'
-import { uploadAttachmentFile, type AttachmentUploadDeps } from './attachmentUpload'
+import {
+  uploadAttachmentFile,
+  uploadClipboardImage,
+  type AttachmentUploadDeps
+} from './attachmentUpload'
 import { createAttachmentRetrieval } from './attachmentRetrieval'
 import { ATTACHMENT_DIR_NAME, storeAttachment } from './attachmentStore'
 import {
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  isAttachmentPasteRequest,
   isAttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
 import {
@@ -557,15 +571,20 @@ app.whenReady().then(() => {
   // switch in assertNever. That "more than one" is live as of #864 — a transfer over
   // ATTACHMENT_PROGRESS_MIN_CHUNKS pushes a report per chunk ahead of its terminal.
   //
-  // TWO ENTRIES, ONE LISTENER, TOLD APART BY PRESENCE (#890). An argument-free send is #862's bare
-  // intent: the renderer names an intent and nothing else, so that arm still reaches no untrusted
-  // request field and no renderer-supplied string can get near a path, a declared filename or the wire.
-  // A send CARRYING a request is a dropped file, and its path is untrusted at this boundary regardless
-  // of the declared type — `isAttachmentUploadRequest` is the guard the header promised when the door
-  // was left value-free, and a failing ask is DROPPED: no filesystem call, no event, matching every
-  // sibling attachment channel. Nothing an operator can physically do produces one, so there is nothing
-  // to report. Presence rather than a discriminator field, because the shipped picker sender cannot be
-  // given one without changing what a conforming renderer puts on the wire.
+  // THREE ENTRIES, ONE LISTENER (#890, #1032). An argument-free send is #862's bare intent: the
+  // renderer names an intent and nothing else, so that arm still reaches no untrusted request field and
+  // no renderer-supplied string can get near a path, a declared filename or the wire. A send CARRYING a
+  // request is a dropped file or a pasted image, and whichever it is, it is untrusted at this boundary
+  // regardless of the declared type — the two guards are the locks the header promised when the door
+  // was left value-free, and an ask that passes neither is DROPPED: no filesystem call, no clipboard
+  // read, no event, matching every sibling attachment channel. Nothing an operator can physically do
+  // produces one, so there is nothing to report.
+  //
+  // PRESENCE ALONE NO LONGER SUFFICES, which is #1032's substance. Presence was the discriminator
+  // because the shipped picker sender cannot be given a field without changing what a conforming
+  // renderer puts on the wire — so with a third entry, the NEW ask is the one that names itself, and
+  // the two shipped shapes are untouched. The path guard is tried first, so every ask that works today
+  // reaches the arm it reaches today.
   //
   // The path is a CLAIM, NOT A CAPABILITY, which is what makes the drop arm safe to have at all: the
   // background process does not trust that the path names what the window says it does, it OPENS it —
@@ -594,6 +613,29 @@ app.whenReady().then(() => {
   //
   // The bare `void` is safe because uploadAttachmentFile never rejects — a property of that module
   // and of connection.uploadAttachment, not of a `.catch()` anyone must remember (AC4).
+  /**
+   * The clipboard's image as PNG bytes, or null when it holds none (#1032) — this slice's ONLY Electron
+   * touch, held here so `src/main/attachmentUpload.ts` stays Electron-free and its no-image branch
+   * unit-tests without reaching the operator's real clipboard. The `saveDebugBundle` / `downloadsDir`
+   * seam, in the same shape.
+   *
+   * THE BACKGROUND PROCESS READS THE CLIPBOARD ITSELF rather than trusting anything the window claims
+   * about it, and that is what bounds this capability: a text-only clipboard answers `isEmpty()` and
+   * becomes a refusal, so a text-flavoured secret cannot become an attachment however the ask is
+   * forged. This adds NO renderer permission — see the allowlist above, which must still never grow to
+   * `clipboard-read`: the renderer never holds clipboard content, it only asks for this one act, and
+   * what comes back to it is a content-free outcome.
+   *
+   * A true Uint8Array VIEW honouring offset and length, `readChosenFile`'s idiom — and it matters more
+   * here, because a small Buffer from native code can sit in a pooled ArrayBuffer.
+   */
+  const readClipboardImagePng = (): Uint8Array | null => {
+    const image = clipboard.readImage()
+    if (image.isEmpty()) return null
+    const png = image.toPNG()
+    return new Uint8Array(png.buffer, png.byteOffset, png.byteLength)
+  }
+
   let pickerOpen = false
   const attachmentUploadListener = (event: Electron.IpcMainEvent, request?: unknown): void => {
     const sender = event.sender
@@ -611,14 +653,28 @@ app.whenReady().then(() => {
       diagnosticLog
     }
 
-    // The DROPPED-FILE arm (#890). `request !== undefined` is the whole discriminator, and the guard
-    // decides the rest: a malformed ask returns here, having made no filesystem call and emitted no
-    // event.
-    if (request !== undefined) {
-      if (!isAttachmentUploadRequest(request)) return
+    // The DROPPED-FILE arm (#890), TRIED FIRST OF THE TWO GUARDED ONES and that ordering is
+    // load-bearing rather than stylistic: an ask carrying a valid `path` reaches this arm exactly as it
+    // does today, extra keys included, so nothing an operator can produce changes arm now that a second
+    // shape is accepted. A malformed ask falls past both guards and returns below, having made no
+    // filesystem call, no clipboard read and no event.
+    if (isAttachmentUploadRequest(request)) {
       void uploadAttachmentFile(request.path, deps)
       return
     }
+
+    // The PASTED-IMAGE arm (#1032). The ask carries nothing but its own name, so nothing is read off
+    // it — the reader below is what produces the bytes, and it is a local closure over Electron's
+    // `clipboard`, never anything the window sent.
+    if (isAttachmentPasteRequest(request)) {
+      void uploadClipboardImage(readClipboardImagePng, deps)
+      return
+    }
+
+    // An ask that carried SOMETHING and matched neither guard is dropped outright, matching every
+    // sibling attachment channel: no event, and no log either, which is what denies a looping renderer
+    // a way to drive the main-process logger.
+    if (request !== undefined) return
 
     // The PICKER arm (#862), unchanged.
     if (pickerOpen) return

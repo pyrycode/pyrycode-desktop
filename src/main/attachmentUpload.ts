@@ -20,8 +20,14 @@
 // clipboard, read HERE rather than claimed by the window, and the name, the type and the id are all
 // constants or randomUUID. The drop entry alone admits a renderer-supplied value, a host path, and it
 // is a CLAIM rather than a capability: `isAttachmentUploadRequest` shapes it at the boundary and
-// `readChosenFile` refuses anything that is not a regular file. None of the three can read back what
-// was sent.
+// `readChosenFile` refuses anything that is not a regular file.
+//
+// WHAT A WINDOW CAN READ BACK is one thing and no longer nothing (#1038): the completed terminal names
+// the file, so a window learns the DISPLAY NAME of an upload that succeeded — `basename(path)` for the
+// first two entries, and for the paste entry a name minted here from constants, which discloses nothing
+// about the clipboard at all. It never learns a host path, a directory or a byte, and the three
+// paragraphs above are unaffected: this is the main→window direction, and nothing a compromised
+// renderer may NAME has changed.
 //
 // NO ENTRY EVER REJECTS. #861's `uploadAttachment` already never rejects, so the `fs` read and the
 // injected clipboard reader are the only other rejection surfaces on the chain and both are caught;
@@ -271,12 +277,19 @@ async function driveUpload(
     deps.emit({ type: 'progress', uploadId, sentChunks, totalChunks })
   }
 
+  // ⭐ TRIMMED ONCE, READ TWICE — the wire envelope below and the completed terminal at the bottom of
+  // this function (#1038). Hoisting this out of the envelope literal is the whole of "the window is
+  // told the same bounded value the daemon was told": a second trimToBytes call would agree for every
+  // short name and diverge at exactly 255 bytes, which is where a display name is worth having. One
+  // const read twice makes it a fact rather than a convention two call sites happen to share.
+  const declaredFilename = trimToBytes(file.filename, ATTACHMENT_FILENAME_MAX_BYTES)
+
   let result: AttachmentTransferResult
   try {
     result = await deps.upload(
       {
         attachment_id: uploadId,
-        filename: trimToBytes(file.filename, ATTACHMENT_FILENAME_MAX_BYTES),
+        filename: declaredFilename,
         mime_type: file.mimeType,
         bytes: file.bytes
       },
@@ -294,8 +307,12 @@ async function driveUpload(
   terminal = true
 
   if (result.ok) {
+    // The LOG is unchanged and stays content-free: a static event name and a client-owned stage code,
+    // no name, no path, no separator. Only the EVENT carries the display name (#1038), and the two
+    // sinks are deliberately not symmetrical — a log file under userData is readable by anything
+    // running as the user, whereas the window already holds the timeline the file was attached to.
     deps.diagnosticLog?.event({ event: LOG_EVENT, code: 'completed' })
-    deps.emit({ type: 'completed', uploadId })
+    deps.emit({ type: 'completed', uploadId, filename: declaredFilename })
     return
   }
   deps.diagnosticLog?.event({ event: LOG_EVENT, code: result.outcome })

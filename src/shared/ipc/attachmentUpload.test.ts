@@ -57,7 +57,11 @@ describe('AttachmentUploadEvent', () => {
       // sentence, limit figure and all, for a paste that found nothing.
       { type: 'refused', uploadId: 'u', reason: 'no-image' },
       { type: 'failed', uploadId: 'u', reason: 'unreadable' },
-      { type: 'completed', uploadId: 'u' },
+      // #1038's widened terminal, and the KEY LIST BELOW IS WHERE ITS SCOPE IS PROVED: `filename` is on
+      // THIS member and on no other, so the walk is simultaneously the proof that the completed arm
+      // names the file and that every sibling still carries no string but its own uploadId and reason.
+      // Required rather than optional — omitting it here would not compile.
+      { type: 'completed', uploadId: 'u', filename: 'report.pdf' },
       // #864's in-flight member. Its two fields are FRAME COUNTS: neither can hold a byte of the
       // file, a path segment or a name, which is what keeps the union's argument covering every
       // member after this slice.
@@ -68,9 +72,25 @@ describe('AttachmentUploadEvent', () => {
       ['limitBytes', 'reason', 'type', 'uploadId'],
       ['reason', 'type', 'uploadId'],
       ['reason', 'type', 'uploadId'],
-      ['type', 'uploadId'],
+      ['filename', 'type', 'uploadId'],
       ['sentChunks', 'totalChunks', 'type', 'uploadId']
     ])
+  })
+
+  // #1038 as a property of the TYPE rather than of the emitter: the display name is scoped to the one
+  // terminal that reports a stored file. Walked over the member list above rather than restated, so a
+  // `filename` added to a second arm has to change this assertion to pass.
+  it('scopes the display name to the completed terminal and to no other member', () => {
+    const members: AttachmentUploadEvent[] = [
+      { type: 'refused', uploadId: 'u', reason: 'too-large', limitBytes: 1 },
+      { type: 'refused', uploadId: 'u', reason: 'no-image' },
+      { type: 'failed', uploadId: 'u', reason: 'unreadable' },
+      { type: 'completed', uploadId: 'u', filename: 'report.pdf' },
+      { type: 'progress', uploadId: 'u', sentChunks: 1, totalChunks: 2 }
+    ]
+
+    const naming = members.filter((member) => 'filename' in member)
+    expect(naming).toEqual([{ type: 'completed', uploadId: 'u', filename: 'report.pdf' }])
   })
 
   // #864: the two counts are NUMBERS on every member that carries one, walked positively so a member

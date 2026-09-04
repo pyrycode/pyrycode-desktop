@@ -31,8 +31,12 @@ import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/convers
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads DOM text, roles, counts
 // and geometry. Nothing serialises a token, a key or plaintext — and nothing here could: no member of
-// `AttachmentUploadEvent` can hold a path, a filename or a byte, which is the property #862 built the
-// channel around. The stub records only that the dialog was ASKED for, never a path, because there is none.
+// `AttachmentUploadEvent` can hold a path or a byte, which is the property #862 built the channel around.
+// The stub records only that the dialog was ASKED for, never a path, because there is none.
+// SINCE #1038 the completed terminal carries the stored file's display NAME. That does not weaken the rule
+// here: the name this spec pushes is an invented literal like every other, and the spec asserts the
+// composer renders it nowhere. A real name is one path component — never a directory — and its only
+// onward use is the save leg, which re-sanitises whatever the window hands back.
 
 const OUTCOME_TIMEOUT_MS = 15_000
 
@@ -66,7 +70,14 @@ const FAILED: AttachmentUploadEvent = {
   uploadId: 'e2e-upload-2',
   reason: 'attachment-storage-failed'
 }
-const COMPLETED: AttachmentUploadEvent = { type: 'completed', uploadId: 'e2e-upload-3' }
+// The `filename` is #1038's field and is an INVENTED non-secret name, like every other literal here. It
+// is deliberately distinctive so the assertion that the composer does not render it can tell a partial
+// interpolation from a clean absence.
+const COMPLETED: AttachmentUploadEvent = {
+  type: 'completed',
+  uploadId: 'e2e-upload-3',
+  filename: 'e2e-report.pdf'
+}
 
 // #864's two in-flight reports and the terminal that ends them. `totalChunks` is 200 — a ~9 MB file,
 // comfortably over the background process's ATTACHMENT_PROGRESS_MIN_CHUNKS, which is what a real
@@ -228,6 +239,12 @@ test('composer footer: the attach button dispatches the intent and states the la
   await expect(outcome).toHaveCount(1)
   // The uploadId reaches no attribute and no text node — it is a discriminator this window cannot use.
   await expect(outcome).not.toContainText(COMPLETED.uploadId)
+  // Nor does the stored file's NAME (#1038). The field crosses the bridge and the composer ignores it:
+  // this slice supplies the value and #1039 is where a consumer decides to render it. Asserted through
+  // the running app rather than only in a unit render, because the bridge is the half a unit test
+  // cannot reach — a preload that helpfully stringified the whole event into the slot would pass
+  // ComposerAttach.test.tsx and fail here.
+  await expect(outcome).not.toContainText(COMPLETED.filename)
 
   // --- #864, AC1 and AC3: an in-flight report takes the slot the terminal was in, ADVANCES as further
   // chunks go out, and is then replaced by a terminal of its own. Pushed on the same channel through

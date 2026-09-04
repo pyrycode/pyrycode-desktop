@@ -37,8 +37,12 @@ import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/convers
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads DOM text, classes,
 // counts and a boolean. Nothing serialises a token, a key or plaintext — and nothing here could: the file
-// is invented in page context and no member of `AttachmentUploadEvent` can hold a path, a filename or a
-// byte, which is the property #862 built the channel around.
+// is invented in page context and no member of `AttachmentUploadEvent` can hold a path or a byte, which
+// is the property #862 built the channel around.
+// SINCE #1038 the completed terminal carries the stored file's display NAME. Nothing changes for this
+// spec's hygiene: a dropped file is named `basename(path)` — one path component, never the directory it
+// sat in — and this spec's own file is invented in page context, so the name it could ever produce is a
+// literal written here.
 
 const OUTCOME_TIMEOUT_MS = 15_000
 

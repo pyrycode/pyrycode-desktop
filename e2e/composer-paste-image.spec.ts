@@ -48,7 +48,12 @@ import type { ErrorPayload } from '../src/shared/wire/types'
 // SECRET HYGIENE (the sibling specs' standing rule): every literal is an invented non-secret value and
 // every assertion reads DOM text, counts, a boolean, or a list of clipboard FORMAT NAMES — never a
 // clipboard value. Nothing here could leak one anyway: no member of `AttachmentUploadEvent` can hold a
-// path, a filename or a byte, which is the property #862 built the channel around.
+// path or a byte, which is the property #862 built the channel around.
+// SINCE #1038 the completed terminal carries the stored file's display NAME — and on THIS entry that is
+// the strongest of the three rather than a weakening, because a pasted image's name is minted in the
+// background process from a client-owned stem, a UTC stamp and `.png` (`clipboardImageFilename`,
+// src/main/attachmentUpload.ts). Nothing about what the operator was holding is in it: not a byte, not a
+// length, not a dimension, not a flavour.
 
 const OUTCOME_TIMEOUT_MS = 15_000
 const FIXED_TS = '2026-07-07T12:00:00.000Z'

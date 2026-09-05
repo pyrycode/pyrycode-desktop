@@ -14,7 +14,33 @@
    also what it did as a direct child of the block-level #root before the two-pane shell. It carries no
    width rule of its own, so the sidebar's 400px is the single place that width is decided.
    box-sizing:border-box keeps the vertical padding inside that 100% so the surface fills edge-to-edge
-   (Figma 15-8) and long lists scroll inside this column rather than the window. */
+   (Figma 15-8) and long lists scroll inside this column rather than the window.
+
+   #1058 — NO background. This used to paint --color-surface, the same colour .paired-shell paints behind
+   it, which is precisely why the sidebar never read as a pane; the card now lives on
+   .paired-shell__sidebar as a wash, and a background here would paint straight over it. That deletion is
+   the blocker #670 named when it deferred the card, and it is paid. This class has exactly one mount site
+   (ChannelList.tsx, inside the shell's sidebar wrapper), so there is nowhere it can render without a card
+   behind it.
+
+   `position: relative` is #1058's only other edit here, and it is a STACKING fix, not decoration. An
+   absolutely positioned ::before at z-index: auto paints in step 6 of the painting order — above every
+   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header, .channel-list__host
+   and .channel-list__workspace-label are all unpositioned, while .channel-list__row is already relative
+   and .channel-list__actions / .channel-list__fab are sticky at z-index: 1. Without this one declaration
+   the headers and host rows would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
+   defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
+   turns e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
+   `blocked by .paired-shell__sidebar`. Lifting this element into step 6 takes the whole subtree with it,
+   and tree order puts it after the wrapper's ::before. The same idiom, for the same reason, as
+   .composer__input over .composer__row::before and .pairing-field__row.
+
+   DELIBERATELY NO z-index: with z-index auto this does not become a stacking context, so the sticky FAB
+   and actions cluster keep painting at the root's positive-z layer exactly as they did. And `relative` is
+   not one of the properties that makes an ancestor a containing block for FIXED descendants, so
+   .save-as-channel-overlay and .rename-conversation-overlay still escape this column and cover the
+   window. Do not "simplify" this to isolation: isolate + z-index: -1; that form appears nowhere in this
+   repo. */
 .channel-list {
   height: 100%;
   box-sizing: border-box;
@@ -22,7 +48,7 @@
   flex-direction: column;
   overflow-y: auto;
   padding: var(--space-1) 0 var(--space-6);
-  background: var(--color-surface);
+  position: relative;
   color: var(--color-on-surface);
   font-family: var(--font-sans);
 }

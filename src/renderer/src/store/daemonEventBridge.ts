@@ -6,11 +6,38 @@
 // subscribes through the preload bridge and dispatches typed actions.
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
-import { sessionStore, type SessionAction } from './sessionStore'
+import { sessionStore, type SessionAction, type StatusOrigin } from './sessionStore'
 
 /** Compile-time exhaustiveness guard: a new DaemonEvent arm without a case is a type error. */
 function assertNever(event: never): never {
   throw new Error(`Unhandled daemon event: ${JSON.stringify(event)}`)
+}
+
+/**
+ * Read the server this event came from (#1133), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring
+ * `translateDaemonEvent`'s parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so
+ * at a bare-`DaemonEvent`-typed parameter it arrives structurally while the static type stays silent
+ * about it. Re-declaring the parameter would also fail the 51 bridge tests that call this module
+ * with bare event literals. `liveWindow.ts`'s `originOf` is the same idiom applied main-side.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload — in particular never from
+ * `connected`'s `ack.server_id`, which is a DISTINCT, daemon-supplied value. The stamp is bound
+ * main-side at construction from a paired record this client holds, so a hostile or confused daemon
+ * cannot make its events claim another server's slot and overwrite that server's status; a
+ * wire-sourced id would hand it exactly that. `ServerOrigin`'s header and `serverInfo.ts` both
+ * already rule this.
+ */
+function originOf(event: DaemonEvent): StatusOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null files under the unstamped slot: no producer
+  // can emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot
+  // rather than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
 }
 
 /**
@@ -22,15 +49,20 @@ function assertNever(event: never): never {
  * unrelated field later. The three debug-bundle arms (#168) return `null`: the download UI (#72)
  * consumes them, not the session store, so they dispatch nothing. The `assertNever` guard stays
  * load-bearing — a future variant is still a compile error.
+ *
+ * The four session-lifecycle arms also carry the event's origin (#1133) onto the action, so the
+ * store can file each server's status in its own slot. `originOf` is the only place that origin is
+ * derived, and it derives it from the stamp alone — see its docblock for why the `connected` arm
+ * reads `event.ack` for the ack and pointedly not for the server.
  */
 export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
   switch (event.type) {
     case 'connecting':
-      return { type: 'connecting' }
+      return { type: 'connecting', serverId: originOf(event) }
     case 'connected':
-      return { type: 'connected', ack: event.ack }
+      return { type: 'connected', ack: event.ack, serverId: originOf(event) }
     case 'disconnected':
-      return { type: 'disconnected' }
+      return { type: 'disconnected', serverId: originOf(event) }
     case 'failed':
       return {
         type: 'failed',
@@ -38,7 +70,8 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
           code: event.error.code,
           message: event.error.message,
           retryable: event.error.retryable
-        }
+        },
+        serverId: originOf(event)
       }
     case 'messageReceived':
       return { type: 'messageReceived', message: event.message }

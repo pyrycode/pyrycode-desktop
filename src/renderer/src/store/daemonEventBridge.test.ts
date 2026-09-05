@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
-import { createSessionStore, initialSessionState, type SessionAction } from './sessionStore'
+import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
+import {
+  createSessionStore,
+  initialSessionState,
+  selectStatusFor,
+  type ConnectionStatus,
+  type SessionAction,
+  type StatusOrigin
+} from './sessionStore'
 import { translateDaemonEvent } from './daemonEventBridge'
 
 // Fixtures — plain wire-shaped data, mirroring sessionStore.test.ts. No transport involved.
@@ -565,5 +573,92 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     dispatchIfAction(store, translateDaemonEvent({ type: 'debugBundleFailed', reason: 'write-failed' }))
     expect(store.getState().status).toEqual(initialSessionState.status)
     expect(store.getState().messages).toEqual(initialSessionState.messages)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// The server a status is filed under — the stamp, and only the stamp.
+// ---------------------------------------------------------------------------------------------
+
+const A = 'srv-a'
+const B = 'srv-b'
+
+/**
+ * Build the value the preload listener actually hands the bridge: a `StampedDaemonEvent`, which
+ * carries #1068's stamp BESIDE the union. Passing one to `translateDaemonEvent`'s bare-union
+ * parameter is the production shape exactly — a stamped event IS a `DaemonEvent`, so the property
+ * arrives structurally while the static type goes silent about it, which is the hole `originOf`
+ * exists to read through.
+ */
+function stamped(event: DaemonEvent, serverId: string | null): StampedDaemonEvent {
+  return { ...event, serverId }
+}
+
+/** Read one server's slot the way a consumer will. */
+function slot(
+  store: ReturnType<typeof createSessionStore>,
+  origin: StatusOrigin
+): ConnectionStatus | undefined {
+  return selectStatusFor(origin)(store.getState())
+}
+
+describe('translateDaemonEvent — which server a status is filed under', () => {
+  it('files a stamped status event under its stamp', () => {
+    const store = createSessionStore()
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'connecting' }, A)))
+    expect(slot(store, A)).toEqual({ type: 'connecting' })
+    expect(slot(store, B)).toBeUndefined()
+  })
+
+  it('separates an unstamped event, a null-stamped one and a string-stamped one', () => {
+    const store = createSessionStore()
+    // Unstamped: no property at all. Reachable only from a producer that never went through a
+    // binding — which in production is nothing, and in these tests is the other 51 calls.
+    dispatchIfAction(store, translateDaemonEvent({ type: 'connecting' }))
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'disconnected' }, null)))
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'failed', error: wireErr }, A)))
+
+    expect(slot(store, undefined)).toEqual({ type: 'connecting' })
+    expect(slot(store, null)).toEqual({ type: 'disconnected' })
+    expect(slot(store, A)).toEqual({
+      type: 'error',
+      error: { code: 'unauthorized', message: 'pairing token rejected', retryable: false }
+    })
+  })
+
+  it('reads the origin from the stamp, never from connected’s ack.server_id (AC4)', () => {
+    // The ack is DAEMON-supplied; the stamp is bound main-side from a record this client holds. A
+    // confused or hostile daemon naming another server here must not reach that server's slot.
+    const store = createSessionStore()
+    const foreignAck: HelloAckPayload = { ...ack, server_id: B }
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'connected', ack: foreignAck }, A)))
+    expect(slot(store, A)).toEqual({ type: 'connected', ack: foreignAck })
+    expect(slot(store, B)).toBeUndefined()
+  })
+
+  it('keeps two servers independent through the bridge (AC1)', () => {
+    const store = createSessionStore()
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'connected', ack }, A)))
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'failed', error: wireErr }, B)))
+
+    expect(slot(store, A)).toEqual({ type: 'connected', ack })
+    expect(slot(store, B)).toEqual({
+      type: 'error',
+      error: { code: 'unauthorized', message: 'pairing token rejected', retryable: false }
+    })
+    // AC3: the app-wide cell is the most recently written value, exactly as before.
+    expect(store.getState().status).toBe(slot(store, B))
+  })
+
+  it('gives a __proto__ stamp its own slot and inherits nothing from Object.prototype', () => {
+    const store = createSessionStore()
+    dispatchIfAction(store, translateDaemonEvent(stamped({ type: 'connecting' }, '__proto__')))
+    const { statuses } = store.getState()
+
+    expect(statuses.get('__proto__')).toEqual({ type: 'connecting' })
+    // A bare-object index would answer `Object.prototype.toString` here — a slot no event opened.
+    expect(statuses.get('toString')).toBeUndefined()
+    // ...and would have taken the write into its prototype chain rather than into a slot.
+    expect(Object.getPrototypeOf(statuses)).toBe(Map.prototype)
   })
 })

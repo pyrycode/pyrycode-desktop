@@ -5,9 +5,12 @@ import {
   createSessionStore,
   initialSessionState,
   selectStatus,
+  selectStatusFor,
   selectMessages,
   type ConnectionError,
-  type SessionState
+  type SessionAction,
+  type SessionState,
+  type StatusOrigin
 } from './sessionStore'
 
 // Fixtures — plain wire-shaped data, no transport involved.
@@ -148,7 +151,11 @@ describe('reduceSession — orthogonality', () => {
 
 describe('reduceSession — purity', () => {
   it('does not mutate the input state or its messages array on append', () => {
-    const start: SessionState = { status: { type: 'disconnected' }, messages: [msg('m1')] }
+    const start: SessionState = {
+      status: { type: 'disconnected' },
+      statuses: new Map(),
+      messages: [msg('m1')]
+    }
     const startMessages = start.messages
     const next = reduceSession(start, { type: 'messageReceived', message: msg('m2') })
 
@@ -159,10 +166,106 @@ describe('reduceSession — purity', () => {
   })
 })
 
+// Two paired servers, the world this store now has to describe (#1117 dials one connection each).
+const A = 'srv-a'
+const B = 'srv-b'
+
+/** Read one server's slot the way a consumer will: through the factory selector. */
+function statusFor(state: SessionState, origin: StatusOrigin) {
+  return selectStatusFor(origin)(state)
+}
+
+describe('reduceSession — the per-server status index', () => {
+  it('keeps two servers independent across every status action (AC1)', () => {
+    const s1 = reduceSession(initialSessionState, { type: 'connecting', serverId: A })
+    const s2 = reduceSession(s1, { type: 'connected', ack, serverId: B })
+    expect(statusFor(s2, A)).toEqual({ type: 'connecting' })
+    expect(statusFor(s2, B)).toEqual({ type: 'connected', ack })
+
+    // Untouched BY REFERENCE, not merely equal: that is what keeps a component watching B from
+    // re-rendering when A moves, and it is the property the single cell could not offer.
+    const s3 = reduceSession(s2, { type: 'failed', error: connError, serverId: A })
+    expect(statusFor(s3, B)).toBe(statusFor(s2, B))
+    expect(statusFor(s3, A)).toEqual({ type: 'error', error: connError })
+
+    const s4 = reduceSession(s3, { type: 'disconnected', serverId: B })
+    expect(statusFor(s4, A)).toBe(statusFor(s3, A))
+    expect(statusFor(s4, B)).toEqual({ type: 'disconnected' })
+  })
+
+  it('holds a healthy server steady while another server churns (AC1)', () => {
+    // The defect this replaces: A connects and then never changes again — on a healthy connection
+    // the next status change is never — so under the single cell A's leg read whatever B last said.
+    const connected = reduceSession(initialSessionState, { type: 'connected', ack, serverId: A })
+    const churn: SessionAction[] = [
+      { type: 'connecting', serverId: B },
+      { type: 'failed', error: connError, serverId: B },
+      { type: 'disconnected', serverId: B }
+    ]
+    const final = churn.reduce((s, action) => reduceSession(s, action), connected)
+    expect(statusFor(final, A)).toBe(connected.status)
+  })
+
+  it('tells a server that has reported nothing from one that has (AC2)', () => {
+    const seen = reduceSession(initialSessionState, { type: 'disconnected', serverId: A })
+    // Known-disconnected and never-heard-from are different answers, not the same one.
+    expect(statusFor(seen, A)).toEqual({ type: 'disconnected' })
+    expect(statusFor(seen, B)).toBeUndefined()
+  })
+
+  it('keeps a present-null origin and an absent origin in separate slots', () => {
+    // The registry's not-paired stand-in dials with `serverId: null` and its failure genuinely
+    // lands here; an action with no origin at all is a third case, not a synonym for that one.
+    const s1 = reduceSession(initialSessionState, { type: 'connecting', serverId: null })
+    const s2 = reduceSession(s1, { type: 'disconnected' })
+    expect(statusFor(s2, null)).toEqual({ type: 'connecting' })
+    expect(statusFor(s2, undefined)).toEqual({ type: 'disconnected' })
+    expect(statusFor(s2, A)).toBeUndefined()
+  })
+
+  it('leaves the app-wide status the most recently written value (AC3)', () => {
+    const s1 = reduceSession(initialSessionState, { type: 'connected', ack, serverId: A })
+    expect(selectStatus(s1)).toEqual({ type: 'connected', ack })
+    const s2 = reduceSession(s1, { type: 'failed', error: connError, serverId: B })
+    expect(selectStatus(s2)).toEqual({ type: 'error', error: connError })
+    // One object in both places, so no consumer can catch the cell and its slot disagreeing.
+    expect(selectStatus(s2)).toBe(statusFor(s2, B))
+  })
+
+  it('does not mutate the input state’s index on a status write (purity)', () => {
+    const s1 = reduceSession(initialSessionState, { type: 'connecting', serverId: A })
+    const before = s1.statuses
+    const s2 = reduceSession(s1, { type: 'connecting', serverId: B })
+    expect(s2.statuses).not.toBe(before)
+    expect(before.has(B)).toBe(false)
+    expect(s1.statuses).toBe(before)
+  })
+
+  it('leaves the index untouched by reference on a message action (orthogonality)', () => {
+    const s1 = reduceSession(initialSessionState, { type: 'connecting', serverId: A })
+    const s2 = reduceSession(s1, { type: 'messageReceived', message: msg('m1') })
+    expect(s2.statuses).toBe(s1.statuses)
+  })
+
+  it('reset empties the index and still returns initialSessionState by reference', () => {
+    const populated = reduceSession(initialSessionState, { type: 'connected', ack, serverId: A })
+    expect(populated.statuses.size).toBe(1)
+    const next = reduceSession(populated, { type: 'reset' })
+    expect(next.statuses.size).toBe(0)
+    expect(next).toBe(initialSessionState)
+  })
+})
+
 describe('selectors', () => {
   it('selectStatus returns the current status slice', () => {
     const connecting = reduceSession(initialSessionState, { type: 'connecting' })
     expect(selectStatus(connecting)).toBe(connecting.status)
+  })
+
+  it('selectStatusFor returns the slot for a known origin and undefined for an unknown one', () => {
+    const s = reduceSession(initialSessionState, { type: 'connecting', serverId: A })
+    expect(selectStatusFor(A)(s)).toBe(s.status)
+    expect(selectStatusFor(B)(s)).toBeUndefined()
   })
 
   it('selectMessages returns the current messages slice', () => {

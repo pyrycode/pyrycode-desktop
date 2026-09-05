@@ -261,6 +261,15 @@ so no `vi.mock` and no fake timers are needed.
 2. Does #1070 need a whole-map selector, or per-row `selectStatusFor` calls? Left to #1070, which
    knows how it enumerates servers. Adding one now would ship an unconsumed read surface.
 
+## Revisions
+
+**2026-09-06 — three `SessionState` literals to update, not two.** The Design section counted two
+(`sessionStore.test.ts`'s purity fixture and `sessionDiagnostics.test.ts`'s `stateWith`). There is a
+third: `clearPairingScopedState.test.ts` builds one inline as a `createSessionStore` argument, so it
+carries no `: SessionState` annotation and the grep that found the other two missed it. `tsc` found
+it; no design changed, and three sites is still far inside the ten-call-site ceiling. Nothing else
+departed from the plan.
+
 ## Security review
 
 **Verdict:** PASS

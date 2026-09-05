@@ -210,3 +210,9 @@ Status isn't among those losses: `replayStatus()` runs at the load, after the ga
   beside the store's existing app-wide `status` cell, following the same three-key domain and the same
   stamp-only-origin rule. Two separate copies of the type, not a shared one — the renderer may not
   import `src/main/`.
+- [Relay-link store](relay-link-store.md#one-slot-per-server-since-1134) — #1134, a third application
+  of the same shape for the relay leg. Its open question was whether a third consumer would justify
+  lifting `StatusOrigin` into `src/shared/`; #1134 answered no, because this module is the one holdout
+  a lift can't reach without a `src/main/` edit outside that ticket's scope — so the domain stays a
+  third local declaration (`RelayLinkOrigin`), and the lift question stays open for whichever ticket
+  next touches this file.

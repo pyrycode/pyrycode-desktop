@@ -395,3 +395,9 @@ exports were confirmed to be functions returning objects before being called.
 The **second SHOULD FIX is discharged** by the case *"renders markup-looking task and struck text as
 inert escaped characters"*, which asserts the escaped-not-absent discriminator and sweeps the render for
 `style=`, `href` and `<img` — the shape #1079 used for table cells.
+
+**Vacuity probe, run rather than reasoned about.** Emptying `.bubble__markdown .task-list-item` and
+rebuilding turns the e2e marker assertion red (both items compute `disc`) while its paired plain-item
+assertion still holds — so the rule is what suppresses the bullet, not something arriving from
+elsewhere, and the detector fails on the right half. Restored and re-run green. The result is recorded
+beside the rule itself, following #1079's `overflow-x` precedent.

@@ -1209,7 +1209,12 @@
    both classes, so the grain is pinned rather than merely intended.
 
    The `padding-inline-start` on .bubble__markdown ul/ol is untouched, so the item keeps its indent and
-   the mark opens the text column — which is what GFM's own rendering does. */
+   the mark opens the text column — which is what GFM's own rendering does.
+
+   MEASURED, NOT ASSUMED, the way #1079's `overflow-x` was: emptying this rule and rebuilding turns
+   e2e/assistant-whitespace.spec.ts's marker assertion red — the items compute `disc` and the paired
+   plain-item assertion still holds, which is the detector behaving as intended rather than a rule whose
+   effect arrives from somewhere else. */
 .bubble__markdown .task-list-item {
   list-style: none;
 }

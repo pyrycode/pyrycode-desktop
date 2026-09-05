@@ -253,6 +253,34 @@ No ADR: the value (`pre-wrap`) was already settled by #607; this ticket only ext
 stated. See [architecture spec](../../specs/architecture/1057-user-bubble-whitespace.md) for the full
 design and its `## Revisions`, where these three measurements were recorded.
 
+## The shadow (the 2026-09-05 shadow fix)
+
+Every element of the desktop message area casts one drop shadow (Figma "Content" 132:4012 / "Message
+area" 132:3959): X 0, Y 4, blur 5, spread 0, black at 20%. The bubble had none until now; nor did the
+tool row or the session-reset separator, which took theirs in the same fix (see
+[tool row box](conversation-shell-tool-row-box.md#the-shadow-the-2026-09-05-shadow-fix) and
+[session boundaries](conversation-shell-session-and-channel-info.md#session-boundary-delimiter-286-redrawn-690)).
+The value is one new token, `--shadow-thread` in `tokens.css`, because four rules in one stylesheet
+share it — where the FAB's M3 level-3 shadow stays an inlined literal with a single consumer and a
+different value. `.bubble` takes it as `box-shadow`: the design draws the effect on the message
+*container* frame, which has no fill and hugs the bubble, so the container's shadow is the bubble's, and
+a box-shadow follows the 6px corner. The queued row inherits it through `.bubble--user`, dimmed with the
+rest of the row by the region's 50% opacity.
+
+**The blur is 5, not 2.5.** The design's export prints this one effect two ways:
+`shadow-[0px_4px_5px_0px_…]` on the filled tool row and `drop-shadow-[0px_4px_2.5px_…]` on the unfilled
+wrapper frames around the bubbles and the separator. A CSS filter's drop-shadow takes its blur as a
+standard deviation and box-shadow's blur radius is twice that, so the two numbers are the same effect.
+The token records the box-shadow form and its comment says why; reading the filter's number into a
+box-shadow halves the design's blur.
+
+**Testing.** `e2e/thread-shadow.spec.ts`, one launch: a real send raises the user bubble and a scripted
+one-turn reply, then a pushed `tool_use` and `session_transition` raise the row and the separator. Every
+assertion is a computed `box-shadow` or `text-shadow` built from the Figma numbers in Chromium's own
+serialisation, so a swapped token or an un-doubled blur reddens. Proved red first against the unpatched
+build (`none` on the user bubble). Nothing in the unit tier can observe a computed shadow, and the markup
+is byte-identical, so no unit test changed.
+
 ## What stays untouched
 
 - **The queued row** (`QueuedBacklog`, [queued backlog + drop

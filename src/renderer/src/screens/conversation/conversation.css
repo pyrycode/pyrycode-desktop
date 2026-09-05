@@ -306,9 +306,11 @@
    replacing the mobile thread's bubble (16-22 / 16-23) this wore until now. ONE SHAPE FOR BOTH SIDES:
    6px on all four corners, so the two side modifiers below no longer carry a radius at all and the
    mirrored clipped corner is gone. Padding is the drawing's 16/20 (--space-4 / --space-5), not the
-   mobile 12/14 — and NOT by repurposing --space-bubble-x, which reads 14 and has two other consumers
-   (.tool-row__result / .tool-row__input-value and .unrecognized-row__raw); changing its value would
-   restyle rows this ticket is explicitly not touching.
+   mobile 12/14 — and NOT by repurposing --space-bubble-x, which reads 14 and has one other consumer
+   (.unrecognized-row__raw); changing its value would restyle a row this ticket is explicitly not
+   touching. That count was TWO until #1103, which drew the expanded tool row's body from the design:
+   the result lost its padding entirely and the field value box moved to the design's --space-4, so
+   .tool-row__result / .tool-row__input-value is no longer among them.
 
    max-width (not a fixed width) so bubbles reflow as the window resizes. The drawing gives one width at
    one window size — 680px inside the 780px column at 1280px — which min(680px, 75%) already yields
@@ -2181,6 +2183,12 @@
    and at the bottom, which is the design's 4px on the Body frame plus the 8px the row does not carry.
    e2e/tool-row-toggle.spec.ts measures all four against the row's padding box.
 
+   THE GAP IS #1103's, and it is the design's own 12px between the Body frame's blocks — the command
+   block, each field and the result. It replaces the 8 this column carried since #696, which was never
+   drawn from anything. The design's TIGHTER 8px between consecutive fields is not a second container:
+   see the .tool-row__input + .tool-row__input correction below for why the Fields frame stayed a
+   grouping rather than becoming an element.
+
    max-width/min-width ARE NOW BELT AND BRACES, and the note that they are what keeps a single
    16000-character line from widening the row is #1102-stale. The container's `stretch` is what does that
    now: .tool-row--expanded dropped align-items: flex-start, so this body's cross size is the row's
@@ -2192,75 +2200,142 @@
 .tool-row__body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: 0 var(--space-3) var(--space-3);
   max-width: 100%;
   min-width: 0;
 }
 
-/* The result text. .unrecognized-row__raw's treatment (:2536) — the house style for a large untrusted
-   payload — with one deliberate deviation: --radius-sm instead of its --radius-md, taken from the chip
-   because this body sits under the chip and the two should read as one object. #722's desktop redraw
-   moved the CHIP's corner to --radius-xs and deliberately left this one alone: the expanded body is not
-   drawn in that design and is #774's to redraw, so following the chip here would be a visual change to
-   a body this ticket held.
+/* #1103 — THE SHARED SET, now genuinely shared rather than shared-because-nothing-drew-it. Figma
+   152:5215 finally draws the expanded body, and it gives the two halves the SAME code surface and
+   exactly one difference: the field value sits in a box and the result does not. So this selector keeps
+   everything still common in substance and sheds the three declarations that were only ever the value's
+   — see .tool-row__input-value below, which reads as "the result block, boxed". #706's argument that
+   "the field list takes the result block's visual language rather than inventing a third" therefore
+   survives the split as a fact by construction over nine declarations rather than becoming a claim two
+   rule bodies could drift out of. The set the design left common: the cap, the scroll, the
+   shape-preserving white-space, the mono quartet and the ink. What went: padding, background,
+   border-radius.
 
-   white-space: pre, not pre-wrap: the rule stated on .code-block__body puts a payload whose exact shape IS
-   the content on the keep-it-and-scroll side, and tool output is machine output (a listing, a diff, an
-   aligned table)
-   where column position carries information — reflowing it at the row's measure mangles it. overflow:
-   auto then supplies the x-axis for the long unwrapped line for free.
+   THE OUTGOING CORNER AND FILL ARE BOTH GONE FROM HERE, and the pairing that justified them goes with
+   them. --radius-sm was chosen to match the chip's OLD 12px corner so the body would "read as one
+   object" with it; #722 moved the chip to --radius-xs and deliberately left this one alone because the
+   expanded body was not drawn in that design. It is drawn now, and it puts --radius-xs on the value box
+   and no box at all on the result, so both ends of that pairing move at once.
 
-   max-height is a literal, copied from .unrecognized-row__raw:2538: there is no max-height token, every
-   other max-height in this file is a percentage, and a one-off bound shared with its own precedent does
-   not earn one. It is not there to stop the composer being pushed off screen — :371 already records that
-   .conversation__thread is its own scroll region and .composer its sibling, so that cannot happen. It is
-   there so one 64KB result cannot eat the whole thread viewport.
+   THE LEADING IS 20, NOT BODY-SMALL'S 16. The design's value box and result are both mono 12/20, which
+   is --text-code-body-line exactly — the token #721 minted for the fenced code body, whose own comment
+   in tokens.css writes out why 12/20 is not a scale step and must not be assembled from one. Taken
+   rather than a bare 20px or a second name for the same value.
 
-   #706 JOINED .tool-row__input-value to this selector rather than copying the ten declarations into a
-   rule of its own. "The field list takes the result block's visual language rather than inventing a
-   third" is then a fact by construction instead of a claim that two declaration sets can drift out of.
-   The set already supplies everything a value needs: white-space: pre keeps the line breaks, overflow:
-   auto scrolls the long unwrapped line, and max-height caps a 4000-rune replacement string — ~200 short
-   lines — from eating the viewport on its own. The contents below are untouched. */
+   THE TYPE RUN IS THE FULL QUARTET, and that is a decision rather than an inheritance. The outgoing rule
+   stated two tokens, which left both these runs at the UA's letter-spacing: normal while BOTH their mono
+   neighbours — .code-block__body above and .tool-row__input-name below, the latter stacked directly on
+   top of the value inside the same field — drew at body-small's 0.4px. Nobody chose that difference. The
+   design says the body leads with an instance of the same Code component the fenced block draws, so the
+   value box and that block are meant to read alike; this puts the three mono runs of an opened row on
+   one answer. Whether mono should carry a SANS tracking at all is a live question .code-block__body's
+   comment already parks, and this slice does not settle it — it only stops one row answering it twice.
+
+   --color-on-surface IS THE DESIGN'S Schemes/On Background, read rather than inherited. That variable
+   prints #e0e2e8, which is this token exactly: M3 gives background and surface one value here, the same
+   equivalence .code-block's header comment already records. There is no --color-on-background token and
+   this slice does not add one for a duplicate value.
+
+   white-space: pre, not pre-wrap: the rule stated on .code-block__body puts a payload whose exact shape
+   IS the content on the keep-it-and-scroll side, and tool output is machine output (a listing, a diff,
+   an aligned table) where column position carries information — reflowing it at the row's measure
+   mangles it. overflow: auto then supplies the x-axis for the long unwrapped line for free.
+
+   max-height is a literal, copied from .unrecognized-row__raw (the house treatment for a large untrusted
+   payload, at the foot of this file): there is no max-height token, every other max-height in this file
+   is a percentage, and a one-off bound shared with its own precedent does not earn one. It is not there
+   to stop the composer being pushed off screen — .conversation__thread is its own scroll region and
+   .composer its sibling, so that cannot happen. It is there so one 64KB result cannot eat the whole
+   thread viewport, and on the value side so a 4000-rune replacement string (~200 short lines) cannot
+   either. BOTH classes need it, which is why it stayed on the shared selector: taking the cap off the
+   value along with the box would leave a hostile input value unbounded. */
 .tool-row__result,
 .tool-row__input-value {
   margin: 0;
   max-height: 240px;
   overflow: auto;
-  padding: var(--space-3) var(--space-bubble-x);
-  background: var(--color-surface-container-high);
   color: var(--color-on-surface);
-  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
+  line-height: var(--text-code-body-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
   white-space: pre;
 }
 
-/* The failed-tool body. The chip's own error device (:943) applied to the body, in the same descendant
-   shape.
+/* #1103 — the value box, and the WHOLE of what the design draws differently from the result: a fill, an
+   inset and a corner over the shared code surface above. Figma 152:5215's `Value box` node.
 
-   The modifier goes on the CONTAINER, but the selector below is a DESCENDANT one naming
-   .tool-row__result alone, so the accent reaches the result block and nothing else — not
-   .tool-row__empty, and not #706's field list. (An earlier version of this comment claimed both, which
-   was never true of the rule beneath it.) For the field list that scope is DELIBERATE: a failed tool's
-   INPUT is not itself an error, and tinting it would say otherwise. #706 joined .tool-row__input-value
-   to the BASE rule above, which by construction does not add it here. Do not extend this selector to
-   reach either one — that is a separate behaviour change with its own visual-fidelity question. */
-.tool-row__body--error .tool-row__result {
-  border: 1px solid var(--color-error);
+   EVERY VALUE IS .code-block__body's, and that is the design's instruction rather than a coincidence
+   worth noting in passing: the node's Body leads with an instance of the same Code component the fenced
+   block draws, so the two are meant to read as one surface. --space-3/--space-4 (12/16) and --radius-xs
+   are that block's own pairing, already on screen 1150 lines up, taken rather than re-derived token by
+   token.
+
+   --space-4 AND NOT --space-bubble-x, which reads 14 and is what the outgoing shared rule took. That
+   leaves --space-bubble-x with exactly one consumer, .unrecognized-row__raw, and .bubble's comment was
+   corrected in the same edit because it enumerated the two this one just left. */
+.tool-row__input-value {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-xs);
 }
 
-/* #706 — one input field: its name stacked above its value. --space-1 (4px) is TIGHTER than the body's
-   own --space-2 gap, which is what makes a name read as belonging to the value beneath it rather than
-   floating between two blocks — the grouping the list gets without a wrapper element. min-width: 0
+/* #1103 — WHERE THE ERROR RULE WAS. `.tool-row__body--error .tool-row__result` drew a 1px --color-error
+   border around the result, the chip's own error device applied to the body in the same descendant
+   shape. It is deleted rather than retuned: with the result now bare text carrying no fill and no box,
+   that rule would draw a red rectangle around loose text, which is not a device the design has. The
+   accent LIVES OUTWARD now — #1102 moved the retint to .tool-row--error, the row's own border, so
+   deleting this removes the second failure device and not the last one.
+
+   THE MODIFIER CLASS ITSELF STAYS in the markup, deliberately. Removing it from ToolRow is a markup
+   change with test churn (two ConversationScreen.test.tsx assertions pin it as a substring) and no
+   visual gain, and it remains the body's own failure hook for anything a later ticket wants to draw
+   here. e2e/tool-row-toggle.spec.ts asserts a failed result's computed border width is 0 on all four
+   sides while the row's border colour still differs from a successful row's, so restoring this rule
+   reddens and losing the row-level retint reddens separately. */
+
+/* #706 — one input field: its name stacked above its value. --space-1 (4px) is TIGHTER than the
+   distance between fields, which is what makes a name read as belonging to the value beneath it rather
+   than floating between two blocks — the grouping the list gets without a wrapper element. (It used to
+   be stated against the body's own gap, which was 8; since #1103 the body's gap is 12 and the
+   between-fields distance is 8, so the contrast is with that 8 rather than with the gap.) min-width: 0
    because this is itself a flex container holding a potentially very wide <pre>. */
 .tool-row__input {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
+}
+
+/* #1103 — the design's TIGHTER rhythm between consecutive fields, as a correction to the body's gap
+   rather than as a container. Figma nests a `Fields` frame (8px gap) inside `Body` (12px gap); the
+   arithmetic here is 12 − 4 = 8, and it applies to exactly the one pair the design draws tighter.
+
+   WHY NOT THE WRAPPER ELEMENT. ConversationScreen's ToolRow renders the field list as a bare .map()
+   with no wrapper and no `.length > 0` guard ON PURPOSE, and its comment says why: an empty array
+   renders literally nothing, so "an absent, empty or fully carved-out map draws no field list AND no
+   empty container" is structural rather than a second condition that could drift from this one. A
+   `.tool-row__fields` element turns that back into a guarded fact, and the three shipped assertions
+   that police it are substring checks on `tool-row__input` which a differently-named wrapper walks
+   straight past. `Fields` is a layout grouping in an auto-layout tool, and what the design actually
+   binds is two DISTANCES — which this buys without giving the invariant up. It is also the same idiom
+   one level down: .tool-row__input's own gap is already documented as the grouping the list gets
+   without a wrapper element, and this states the outer half of that grouping the same way.
+
+   THE CORRECTION CANNOT INVERT. It is strictly smaller in magnitude than the gap it corrects, so the
+   drawn distance stays positive under any retune of either token — a retune that made --space-2 the
+   larger would spread the fields apart, never overlap them. `+` cannot match a first child, so the
+   leading field is untouched in every ordering, and flex items never margin-collapse, so the margin
+   adds to the gap rather than merging with it. */
+.tool-row__input + .tool-row__input {
+  margin-top: calc(var(--space-2) - var(--space-3));
 }
 
 /* The field name. Mono because a field name is an identifier (`file_path`, `command`) — .tool-row__name's

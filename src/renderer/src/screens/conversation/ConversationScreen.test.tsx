@@ -1005,6 +1005,31 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).toContain('<pre class="tool-row__result">184 lines</pre>')
   })
 
+  it('leaves no wrapper element of ANY name around an empty field list (#1103 AC3)', () => {
+    // #1103 draws the design's two intra-body rhythms — 12px between the body's blocks, 8px between
+    // consecutive fields. Figma gets the tighter one from a `Fields` frame nested inside `Body`, and the
+    // obvious way to reproduce that is a .tool-row__fields wrapper. It was declined: a wrapper needs a
+    // `.length > 0` guard, which turns "an absent, empty or fully carved-out map draws no field list AND
+    // no empty container" from a structural fact back into a second condition that can drift. The
+    // distances come from .tool-row__body's gap plus an adjacent-sibling correction instead.
+    //
+    // THE THREE ASSERTIONS THAT ALREADY POLICE THIS CANNOT CATCH THAT MISTAKE. All three (here, in the
+    // absent-map case, and in #780's fully-carved-out shell case) are
+    // `not.toContain('tool-row__input')` — a substring check on ONE class name, which a wrapper named
+    // `tool-row__fields`, `tool-row__field-list` or anything else walks straight past while stranding an
+    // empty container on screen, all three still green.
+    //
+    // So this pins the body's WHOLE subtree as one contiguous byte run rather than naming a class the
+    // decision declined to mint. Any introduced element reddens it whatever it is called, and no banned
+    // name has to be typed into the file to make that true.
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, {})} defaultExpanded />
+    )
+    expect(markup).toContain(
+      '<div class="tool-row__body"><pre class="tool-row__result">184 lines</pre></div>'
+    )
+  })
+
   it('renders an absent input map identically to an empty one (AC4)', () => {
     // Equality, not two independent not.toContain assertions: the AC asks for a body IDENTICAL to
     // the one #696 draws, which is what keeps talking to a pre-pyrycode#1678 daemon from reading as

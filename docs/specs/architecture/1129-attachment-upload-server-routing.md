@@ -386,3 +386,29 @@ Each is resolved in Phase B; anything that changes the design above is recorded 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+### 2026-09-06 — Open Questions resolved; one addition to the amendment set
+
+Both Open Questions resolved without changing the design.
+
+1. **Nothing outside the preload constructs an ask literal.** A repo-wide sweep for the two type names,
+   the two channel constants and the two sender names finds production constructions only in
+   `dropAttachmentFile` and `pasteAttachmentImage` (`src/preload/index.ts`), plus the guard tests. No
+   `e2e/` spec and no renderer module builds one, so the narrowed guards refuse nothing that is sent
+   today — no sender emits `serverId` at all, and a non-string value is the only newly rejected shape.
+2. **`buildDeps` goes after the `pickerOpen` gate.** A suppressed second picker now builds nothing, and
+   the deps are needed only once the dialog resolves with a choice.
+
+**Addition to AC4's amendment set: two more restatements in the module header, and one in a test
+comment.** AC4 names three assertion sites for the paste ask's "nothing else" property. A sweep for the
+property's other spellings found three more, all of which would have left the repo contradicting itself:
+`attachmentUpload.ts`'s module header asserts it twice (the three-asks paragraph, and the
+narrowest-of-the-three paragraph), and `attachmentUpload.test.ts`'s extra-keys acceptance asserts the
+stronger form — "nothing downstream reads ANY field off this ask" — which `serverId` makes false as
+written. All three are amended alongside AC4's three, so the set is six rather than three. The property
+they now state is the one that survives: nothing renderer-supplied reaches a filename, a byte or the
+wire, and the ask carries nothing *about the image*.
+
+No change to the design, the resolution model, the failure literal or the file set.

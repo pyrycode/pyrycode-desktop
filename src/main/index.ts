@@ -380,27 +380,28 @@ app.whenReady().then(() => {
       }),
     diagnosticLog
   })
-  // The stable stand-in the call sites below reach (#1117), bound ONCE here so those lines keep their
-  // current shape: it resolves the current connection at call time and answers for the most recently
-  // paired server. Its type omits start/stop/reconnect, so nothing below can drive one connection's
-  // lifecycle — the registry owns that.
+  // ⭐ THE STAND-IN IS RETIRED (#1129). `const connection = registry.active` stood here from #1117
+  // so that call sites written for a single connection kept working while the registry held many;
+  // it answered for the most recently PAIRED server, which is not a routing decision at all. Four
+  // slices emptied it and this line's removal is the last of them:
   //
-  // SINCE #1118 IT IS NO LONGER WHAT A CONVERSATION-SCOPED COMMAND REACHES. The ten entry points that
-  // carry a conversation id go through `router.route(...)` and reach the server that owns that
-  // conversation. #1119 took the next five: the modal, question and session id spaces go through
-  // `correlations.route*(...)` and reach the server that RAISED the thing being answered.
+  //   #1118 — the ten entry points carrying a CONVERSATION id → `router.route(...)`, reaching the
+  //           server that owns that conversation.
+  //   #1119 — the five carrying a modal, question-batch or session id → `correlations.route*(...)`,
+  //           reaching the server that RAISED the thing being answered.
+  //   #1120 — the six about a WHOLE server, carrying no id of any kind → `servers.route(...)` /
+  //           `servers.resolve(...)`, reaching the server the window named.
+  //   #1129 — the attachment upload, which arrives on its own IPC channel behind two request guards of
+  //           its own rather than through the `onCommand` switch, and now routes through `servers` as
+  //           well. See `attachmentUploadListener` below.
   //
-  // SINCE #1120 IT IS NO LONGER WHAT A SERVER-SCOPED COMMAND REACHES EITHER. The six entry points that
-  // are about a WHOLE server — the two list requests, the two create requests, `interrupt` and the
-  // debug bundle — carry an optional server id and go through `servers.route(...)` / `servers.resolve(...)`.
-  //
-  // WHAT IS LEFT ON THIS STAND-IN is ONE entry point: `uploadAttachment`. It arrives on its own IPC
-  // channel rather than through the `onCommand` switch, behind two request guards of its own, so naming
-  // its server is a separate contract on a separate surface — #1129, blocked by #1120 and reusing the
-  // same resolver. Do not start anything else here, and do not add a sixth answer-shaped command to
-  // this list: if it correlates to something a daemon raised, it belongs on `correlations`; if it is
-  // about a whole server, it belongs on `servers`.
-  const connection = registry.active
+  // SO THERE IS NO LONGER A "DEFAULT CONNECTION" IN THIS PROCESS, and nothing new should mint one.
+  // Every path to a daemon now resolves through one of the three indexes and REFUSES what it cannot
+  // resolve — never "the first" connection, never "the most recent". A new entry point picks its
+  // index by what it is ABOUT: if it correlates to something a daemon raised, `correlations`; if it
+  // carries a conversation id, `router`; if it is about a whole server, `servers`.
+  // `ConnectionRegistry.active` itself survives this slice with no consumer, and retiring the
+  // accessor is its own cleanup.
 
   // The pairing invoke handler (#54), registered now that the registry exists so a successful
   // confirm can dial the just-persisted pairing with no manual step (#82). ipcMain.handle allows
@@ -845,19 +846,75 @@ app.whenReady().then(() => {
   let pickerOpen = false
   const attachmentUploadListener = (event: Electron.IpcMainEvent, request?: unknown): void => {
     const sender = event.sender
-    // ONE deps object for both entries rather than one per arm: the two must not be able to drift into
-    // reporting on different channels or forwarding progress differently. `sender` — the window that
-    // asked — is closed in, and the isDestroyed() guard is emitDaemonEvent's (#518).
-    const deps: AttachmentUploadDeps = {
-      // The progress seam is forwarded, never swallowed: the flow module owns the threshold that
-      // decides whether a report becomes a message, and this arrow owns nothing but the join.
-      upload: (input, onProgress) => connection.uploadAttachment(input, onProgress),
+    /**
+     * ONE deps object per ask, shared by all three arms rather than one per arm: they must not be
+     * able to drift into reporting on different channels or forwarding progress differently.
+     * `sender` — the window that asked — is closed in, and the isDestroyed() guard is
+     * emitDaemonEvent's (#518).
+     *
+     * A FACTORY SINCE #1129, and that makes the single-instance property STRONGER rather than
+     * weaker. The deps now depend on the ask's server, which is knowable only once an arm has been
+     * selected, so a single inline literal at the top of the listener could no longer express them.
+     * There is still exactly ONE construction site and exactly one call per ask — each arm below
+     * returns — and with one body rather than one object it is now structurally impossible to hand
+     * two arms differently-built `emit`s.
+     *
+     * ⭐ CALLED FROM INSIDE AN ARM, NEVER AT THE TOP OF THE LISTENER, and that placement is a
+     * security property rather than a style choice. `servers.route` LOGS `server-route-refused` on
+     * both of its refusal branches, so resolving before the guards discriminate would hand a
+     * looping renderer exactly the lever the neither-guard return below exists to deny. The chain
+     * that keeps it denied: `route` is reached only from `upload`, `upload` only from the flow
+     * module, and the flow module only from a matched arm.
+     */
+    const buildDeps = (serverId: string | undefined): AttachmentUploadDeps => ({
+      /**
+       * The progress seam is forwarded, never swallowed: the flow module owns the threshold that
+       * decides whether a report becomes a message, and this arrow owns nothing but the join and,
+       * since #1129, the routing.
+       *
+       * ROUTED BY SERVER (#1129), the last entry point off `registry.active`. `servers.route`
+       * answers the connection for the server the window named, or — when the ask carries no id,
+       * which is every ask until #1086 gives the composer a per-server surface — the sole
+       * connection if the registry holds exactly one entry. Anything else REFUSES: an id no held
+       * entry matches, or an absent id with more than one entry. There is no fallback to the first
+       * or the most recent connection.
+       *
+       * ⭐ THE REFUSAL IS SURFACED THROUGH THIS SEAM RATHER THAN DECIDED ABOVE THE FLOW MODULE,
+       * which is what buys the window a well-formed terminal for free. `driveUpload` mints the
+       * `uploadId`, calls this arrow exactly once, and emits exactly one terminal from what it
+       * returns — so a refusal reported here is addressed with the same id every other terminal for
+       * this ask would carry, by machinery that already exists and is already tested. A refusal
+       * decided BEFORE the flow module runs would have no id to address itself to and would have to
+       * hand-write the exactly-one property.
+       *
+       * `not-connected` RATHER THAN A LITERAL OF ITS OWN, weighed rather than defaulted to. It is
+       * exactly right for `server-not-connected` and imprecise for `ambiguous-server`, where the
+       * client is connected to more than one host and cannot choose. It is accepted because
+       * `resolve` collapses both refusals into one `null` — so a distinct literal would need either
+       * a sentence vague enough to cover both, which is no more honest than this one, or a
+       * re-derivation of the resolver's own branch at this call site, minting a second copy of the
+       * decision `serverRouter.ts` owns. The distinction is not lost: `resolve` logs
+       * `server-route-refused` with `ambiguous-server` vs `server-not-connected`, so the
+       * operator-facing diagnostic is precise while the composer sentence is coarse. There is also
+       * no action a truer sentence could invite today. When #1086 gives the composer a server to
+       * name, a truer literal becomes worth minting — and at that point the resolver must report
+       * WHICH refusal it made, which is a change to `serverRouter.ts`.
+       *
+       * With exactly one held entry this reduces to the expression it replaces, which is what keeps
+       * single-server behaviour byte-for-byte unchanged.
+       */
+      upload: (input, onProgress) => {
+        const target = servers.route(serverId)
+        return target === null
+          ? Promise.resolve({ ok: false, outcome: 'not-connected' })
+          : target.uploadAttachment(input, onProgress)
+      },
       emit: (uploadEvent) => {
         if (sender.isDestroyed()) return
         sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, uploadEvent)
       },
       diagnosticLog
-    }
+    })
 
     // The DROPPED-FILE arm (#890), TRIED FIRST OF THE TWO GUARDED ONES and that ordering is
     // load-bearing rather than stylistic: an ask carrying a valid `path` reaches this arm exactly as it
@@ -865,15 +922,19 @@ app.whenReady().then(() => {
     // shape is accepted. A malformed ask falls past both guards and returns below, having made no
     // filesystem call, no clipboard read and no event.
     if (isAttachmentUploadRequest(request)) {
-      void uploadAttachmentFile(request.path, deps)
+      void uploadAttachmentFile(request.path, buildDeps(request.serverId))
       return
     }
 
-    // The PASTED-IMAGE arm (#1032). The ask carries nothing but its own name, so nothing is read off
-    // it — the reader below is what produces the bytes, and it is a local closure over Electron's
-    // `clipboard`, never anything the window sent.
+    // The PASTED-IMAGE arm (#1032). The ask carries nothing but its own name and, since #1129, an
+    // optional routing key — so nothing about the IMAGE is read off it. The reader below is what
+    // produces the bytes, and it is a local closure over Electron's `clipboard`, never anything the
+    // window sent; `uploadClipboardImage` still takes no field off the ask whatsoever, and the id
+    // it now carries is resolved against the registry and discarded, reaching no filename, byte or
+    // wire field. See AttachmentPasteRequest, which amends its own "and nothing else" paragraph to
+    // say so.
     if (isAttachmentPasteRequest(request)) {
-      void uploadClipboardImage(readClipboardImagePng, deps)
+      void uploadClipboardImage(readClipboardImagePng, buildDeps(request.serverId))
       return
     }
 
@@ -882,15 +943,20 @@ app.whenReady().then(() => {
     // a way to drive the main-process logger.
     if (request !== undefined) return
 
-    // The PICKER arm (#862), unchanged.
+    // The PICKER arm (#862). There is no ask object on this path, so there is nowhere for a routing
+    // key to ride and none is invented: it takes the resolver's UNNAMED path, the same one an
+    // id-less drop or paste takes — the sole connection when the registry holds exactly one entry,
+    // a refusal when it holds more. Built AFTER the pickerOpen gate so a suppressed second picker
+    // builds nothing.
     if (pickerOpen) return
     pickerOpen = true
+    const pickerDeps = buildDeps(undefined)
     void dialog
       .showOpenDialog({ properties: ['openFile'] })
       .then((choice) => {
         // Cancelling is a TOTAL no-op: nothing read, nothing sent, no outcome reported (AC1).
         if (choice.canceled || choice.filePaths.length === 0) return
-        void uploadAttachmentFile(choice.filePaths[0], deps)
+        void uploadAttachmentFile(choice.filePaths[0], pickerDeps)
       })
       .finally(() => {
         pickerOpen = false

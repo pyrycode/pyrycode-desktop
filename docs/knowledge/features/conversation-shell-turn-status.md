@@ -221,7 +221,7 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 rather than the `items` list. Through #796 it mounted immediately after `Timeline`; **since
 [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) it mounts as the sole child of
 `ComposerStatusArea`**, the fixed-height row directly above the composer — see [Composer status
-row](conversation-shell-composer.md#composer-status-row-796) below for the row itself. **Since
+row](conversation-shell-composer-status.md#composer-status-row-796) below for the row itself. **Since
 [#967](https://github.com/pyrycode/pyrycode-desktop/issues/967) this is the row's only occupant, full
 stop** — the region between `Timeline` and the queued backlog, which through #796 still held three loose
 null-at-rest bubble blocks (`ApiRetryIndicator`, `CompactingIndicator`, `StallIndicator`, see below), is
@@ -246,7 +246,7 @@ footprint" describes the label only, not the row**, since `ComposerStatusArea` a
 its height regardless (AC2, see below); otherwise a single `<span
 className="conversation__thinking composer-status__label">` (a `<div className="bubble bubble--daemon
 bubble--thinking">` through #796; the bubble treatment retired when the label moved into the row — see
-[Composer status row](conversation-shell-composer.md#composer-status-row-796)) with `THINKING_COPY` (`'Thinking…'`) when `state ===
+[Composer status row](conversation-shell-composer-status.md#composer-status-row-796)) with `THINKING_COPY` (`'Thinking…'`) when `state ===
 'thinking'` or `WORKING_COPY` (`'Working…'`) when `state === 'working'`. The label now inherits
 `--color-primary` from the row's `.composer-status__activity` group rather than carrying its own muted
 tint — both labels are still static, client-owned constants, never `phase` itself.
@@ -292,7 +292,7 @@ node `16-8`) has no dedicated working-indicator node. **#796 is the deferred des
 paragraph used to await** — the desktop layout's own Figma node (`111:3525`) exists, and consuming it
 moved the label off the daemon-bubble surface into the fixed-height row above the composer and added the
 one genuinely new piece, a turning icon; see [Composer status
-row](conversation-shell-composer.md#composer-status-row-796) below.
+row](conversation-shell-composer-status.md#composer-status-row-796) below.
 
 **The label is a single text child in every one of the five states, never constant-plus-span.** That is
 load-bearing for the truncation bound: one text run ellipsizes as one unit, so on overflow the client `…`
@@ -442,7 +442,7 @@ the moment the tool's `toolResult` fills the item — no further `turn_state` ne
 composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s own `max-width: min(680px,
 75%)`; **since #796 via `.composer-status__label--tool`**, and the backstop changed with it: `.bubble` is
 gone from this label's ancestry, so the bound is now a three-link flex chain instead — see [Composer
-status row § the truncation bound](conversation-shell-composer.md#composer-status-row-796) below for the replacement and why it had to
+status row § the truncation bound](conversation-shell-composer-status.md#composer-status-row-796) below for the replacement and why it had to
 be re-derived rather than copied. One deliberately undefended edge: an interrupted turn can leave a
 `toolCall` permanently `result: null`, so the *next* turn's indicator could name that stale tool — the
 timeline already shows that call as a permanently pending, dimmed row (#230), so the label would mirror

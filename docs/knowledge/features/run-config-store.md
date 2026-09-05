@@ -453,7 +453,7 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   `RunConfigLiveData` leaf, refreshed on the connected edge and each turn-end edge, so the figures
   are true whether or not the sheet has ever been opened; `RunConfigData` kept its per-open request
   unchanged. Security-sensitive, architect self-review PASS. See § Live outside the sheet above.
-- **#811** — gave this store's live figures a second reader: the [conversation shell](conversation-shell-composer.md#composer-footer-row-811)'s
+- **#811** — gave this store's live figures a second reader: the [conversation shell](conversation-shell-composer-message-box.md#composer-footer-row-811)'s
   new composer footer row, a "Context: N%" reading beside the four blocked desktop-layout slots
   (#680/#682/#683/#685). Added no store change here — `usedTokens`/`windowTokens` were already
   required `number`s under this store's `snapshot`. What moved is the *consumer-side* percentage math:
@@ -463,7 +463,7 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   gap the old clamp had on an overflowing daemon value (`Number.isFinite(windowTokens)` added to the
   guard). See [conversation shell § Run configuration Context window
   section](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192) for the extraction and
-  [§ Composer footer row](conversation-shell-composer.md#composer-footer-row-811) for the new consumer.
+  [§ Composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811) for the new consumer.
 - **[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)** — root-cause slice 1 of
   [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941): threaded a `conversation_id` onto
   the wire `request_session_settings` frame (main/shared only) after the daemon made it conversation-

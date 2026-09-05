@@ -399,7 +399,7 @@ count) stays an in-file, unexported one-liner; zero new public exports, zero new
 own inline expression — `Math.min(100, Math.max(0, Math.round((usedTokens / windowTokens) * 100)))`
 behind `windowTokens > 0` — is now `contextUsagePercent(usedTokens, windowTokens)`, in the new
 `src/renderer/src/screens/conversation/contextUsage.ts`, so this gauge and the
-[composer footer row](conversation-shell-composer.md#composer-footer-row-811)'s "Context: N%" reading share one guard and one clamp
+[composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811)'s "Context: N%" reading share one guard and one clamp
 rather than two that could drift apart. `ContextWindowSection` calls it and derives nothing itself —
 `pct !== null` replaces the old `available` ternary — and every other line in the section (the usage
 string, the `role="progressbar"` triple, the inline fill width, the unavailable line) is byte-identical

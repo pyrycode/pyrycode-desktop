@@ -115,12 +115,12 @@ for the route-flip half.
 longer be used — a terminal transport/handshake failure or a non-retryable daemon rejection.
 Closed the live incident (2026-07-07, #120) where a dead connection left the user staring at a
 disabled composer with no recovery. #963 replaced it with a filled button in the composer status
-row's own right-hand slot — the surface [#797's error chip](conversation-shell-composer.md#composer-error-chip-797)
+row's own right-hand slot — the surface [#797's error chip](conversation-shell-composer-status.md#composer-error-chip-797)
 already occupies — on Juhana's 2026-09-02 ruling that an error the operator can act on becomes a
 button in that slot rather than a second surface below the composer. `RepairPrompt` and
 `RepairControl` (both formerly exported/module-private from this file) no longer exist;
 `.composer__repair` no longer exists in the stylesheet. See [Conversation shell — composer §
-Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+Actionable-error button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
 for the current shape — `ComposerErrorSlot`/`ComposerErrorSlotControl`, beside `ComposerErrorChip`.
 
 The gating predicate is unchanged, reused byte-for-byte, and still lives in `composerSend.ts`

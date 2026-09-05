@@ -2,7 +2,7 @@
 
 The footer's third live control, immediately right of [the model menu](composer-model-menu.md) and its
 last before the context reading (Figma `115:3688`). Part of
-[Conversation shell — composer](conversation-shell-composer.md#composer-footer-row-811); see that
+[Conversation shell — composer](conversation-shell-composer-message-box.md#composer-footer-row-811); see that
 document's footer-row section for the row's geometry and no-placeholder rule.
 
 Everything under this control was already built and dormant: the shared

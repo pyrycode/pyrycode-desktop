@@ -21,7 +21,7 @@ daemon `error` (correlated by [#248](../codebase/248.md)) had nothing left on sc
 `PermissionModal.tsx`, mirroring the pure-view/store-bound-container split `RepairPrompt`/`RepairControl`
 demonstrated at the time (since retired, folded into `ComposerErrorSlot`/`ComposerErrorSlotControl` by
 [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) — see [Conversation shell — composer §
-Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)):
+Actionable-error button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)):
 
 - **`PermissionModalView({ prompt, pendingOption, onSelect, onConfirm, onBack, onCancel })`** — pure,
   exported. Renders a centered M3 dialog (Figma "Dialogs", node `22-3`) reusing `StatusSheet`'s

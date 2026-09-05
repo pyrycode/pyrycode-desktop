@@ -266,7 +266,7 @@ of that three-selector list into a `.button-small` base class**, on its second c
 status row's new actionable-error button wants the same reset, corner, nowrap and `flex: 0 0 auto`, and
 this repo's own "One consumer is not a pattern" ruling (at `.composer__actions`) is what triggers an
 extraction on the second one rather than a third selector on this list. See [Conversation shell — composer
-§ Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+§ Actionable-error button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
 for the class itself. All three of this panel's buttons now wear `button-small` *in their `className`*
 alongside their own class (`class="button-small question-panel__cancel"`, etc.) — an ordinary two-class
 BEM mix, not a rename — and `QuestionPanel.test.tsx`'s exact-string markup assertion on Cancel moved with

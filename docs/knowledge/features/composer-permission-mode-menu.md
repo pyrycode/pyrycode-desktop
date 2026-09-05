@@ -2,7 +2,7 @@
 
 The footer's second live control, between [the Actions menu](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680)
 and [the model menu](composer-model-menu.md) (Figma `115:3678`). Part of
-[Conversation shell — composer](conversation-shell-composer.md#composer-footer-row-811); see that
+[Conversation shell — composer](conversation-shell-composer-message-box.md#composer-footer-row-811); see that
 document's footer-row section for the row's geometry and no-placeholder rule.
 
 It assembles rather than invents: the panel is [#838/#839/#840's](conversation-shell-composer-options-panel.md),

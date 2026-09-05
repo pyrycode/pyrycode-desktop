@@ -324,4 +324,40 @@ against, so each was re-derived arithmetically rather than assumed.
 
 ## Revisions
 
-_(none yet — appended here if implementation departs from the design above.)_
+### 2026-09-05 — implementation
+
+**The insets land on the body's CONTENT box, not its border box.** The Testing strategy above said "the
+body's border box is inset 12px from the row's padding box on the left and on the right", which is the
+ticket's own wording — and it is wrong under the padding split *this same plan* chose. Because the body
+supplies the 12px itself, its border box is flush with the row's padding box on three sides and the
+design's inset falls between the body's border box and its content. Caught by the assertion measuring 0
+where it expected 12. The design is unchanged; the spec names the right box, and its `boxesOf` helper
+returns both so the next reader cannot repeat the confusion. The two block-level distances AC1 words
+("the body's first block", "the body's last block") are asserted as well.
+
+**Open question 1 — does a pending row still read as pending? Yes.** Confirmed on a rendered screenshot
+of four rows (expanded success, hovered collapsed, expanded failure, pending). The 50% dimming over a
+fill that is the thread's own `--color-surface` reads as a half-strength outlined box, unmistakably
+de-emphasised beside the resolved rows. Nothing retuned, nothing to report on the ticket.
+
+**Open question 2 — the hover corner. No finding.** The chip's square hover fill clipped to the row's
+5px inner radius is visually indistinguishable from the 6px it drew itself, and the fill still reaches
+all four corners inside the border, which is AC2's requirement.
+
+**The focus-ring finding was confirmed by measurement, not just by reasoning.** On the pre-change build
+the focused toggle's computed `outlineOffset` was `0` — the UA ring painted outside a border box that
+now coincides with the row's clip. Chromium's `:focus-visible` does match after Playwright's
+`locator.focus()` in this fixture (`element.matches(':focus-visible')` returned `true`), so the
+assertion ships rather than being dropped as the plan allowed for.
+
+**Both new detectors were proved red as controls, not assumed.** Restoring
+`.tool-row--error .tool-row__chip` makes the two rows' border colours identical and reddens AC4's
+comparison; restoring `align-items: flex-start` makes the body hug and reddens its trailing inset by
+373px. The `measureChip` re-derivation is deliberately *not* a detector for this slice — it passes both
+before and after, which is what "re-derived, not deleted" means: it is #722's property, and it must keep
+holding.
+
+**One Figma deviation observed and deliberately deferred.** The node gives `Body` a 12px internal gap
+between `Fields` and the result; `.tool-row__body` keeps its 8px (`--space-2`). That is a treatment
+inside the body, which this slice holds and #1103 owns along with the result's fill — the other visible
+delta against the node. Both are listed here so #1103 does not have to rediscover them.

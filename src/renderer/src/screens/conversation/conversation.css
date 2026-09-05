@@ -984,9 +984,13 @@
    of .tool-row__body. That is deliberate rather than incidental — the two must read as one code surface,
    so the chrome stays here in CSS keyed on these classes and both call sites emit the same two elements.
    A restyle therefore lands on both without touching either TSX, which is how #721 itself shipped. Neither
-   width nor height needs anything new for the second site: .tool-row--expanded is a column flex with
-   align-items: flex-start, so .tool-row__body is content-sized under its own max-width: 100%, this block
-   is a stretched item of that column, and the body's pre-wrap + break-word wrap inside it. */
+   width nor height needs anything new for the second site, but the REASON changed with #1102: this note
+   used to read off .tool-row--expanded's align-items: flex-start to conclude that .tool-row__body — and so
+   this block — was content-sized. That declaration is gone, because the design sizes every block in an
+   opened tool row at the row's full content width. The body is now a stretched item of .tool-row and this
+   block a stretched item of the body's column, so the command block FILLS the row's measure rather than
+   hugging its command; e2e/tool-row-toggle.spec.ts pins its two edges against the row's padding box. The
+   body's pre-wrap + break-word still wrap inside it, unchanged. */
 .code-block {
   background: var(--color-surface);
   border: 1px solid var(--color-primary-container);
@@ -1758,80 +1762,135 @@
   display: block;
 }
 
-/* #218 — the pending tool row (Figma node 16-28): a compact bordered chip, not a message bubble,
-   left-aligned in the thread, carrying the tool name and its one-line input summary. Every value is a
+/* #218 — the tool row (Figma node 16-28, redrawn 152:5215): the tool name and its one-line input summary
+   on one line, with the input and the result stacked underneath once it is opened. Every value is a
    token; the two off-grid Figma values are tokenized per the file's established ±2px/±1px convention
    (see the .status-row / .run-config__* comments). The whole row sits at 50% opacity — the
    pending/unresolved dimming (opacity is a de-emphasis device here, not a color literal, like the
    .status-sheet-overlay__scrim / .status-sheet__handle precedent); #206 fills the result and owns
    whether that dimming lifts. A child of .conversation__thread's flex column, so it inherits the
-   column's gap; no flex/margin of its own. */
+   column's gap; no flex/margin of its own.
+
+   #1102 MOVED THE BOX TREATMENT HERE, from .tool-row__chip. #696 made the body the chip's SIBLING —
+   the chip is a <button> and a <pre> is not phrasing content, so nesting was never available — and #722
+   then made the chip itself the full-width bordered box, which left the border closing ABOVE the content
+   it is supposed to contain. The four declarations below are the chip's own former values, moved rather
+   than re-picked: --color-surface fill, a 1px --color-primary-container border, --radius-xs, and the
+   design's overflow-clip. Nothing is re-parented; the body is already inside .tool-row, so it falls
+   inside the border for free. #1073 (joining consecutive rows by overlapping their borders 1px) is
+   natively unblocked by this, since it wants a border on exactly this element.
+
+   NO PADDING HERE, and that is the decided half of the split rather than an omission. The row takes the
+   fill, the border, the corner and the clip; the chip keeps its own --space-2/--space-3 and the body
+   states its own 0/12/12. Hoisting the design's 8/12 onto the row instead would shrink the toggle's
+   :hover fill to a rectangle inset 12px inside the border on every side — a collapsed row changed on
+   screen, which AC2 forbids — and would move the chip-width equalities in e2e/tool-row-toggle.spec.ts by
+   26px rather than by the 2px of border they actually moved. Collapsed height is 1 + 8 + 20 + 8 + 1 = 38
+   either way, unchanged from #722, which is what e2e/thread-scroll-pin.spec.ts's rows measure.
+
+   flex-direction: column MOVED HERE from .tool-row--expanded: the row is a column in both states once it
+   is the box, and only the GAP between the two children is state-dependent. justify-content: flex-start
+   went rather than moved — it was the main-axis alignment of a ROW-direction container ("left-aligned in
+   the thread"), and in a column of auto height it says nothing. The row's horizontal placement is
+   unaffected: it is a stretch item of .conversation__thread's column and has always been the full
+   measure. */
 .tool-row {
   display: flex;
-  justify-content: flex-start;
+  flex-direction: column;
+  overflow: hidden;
   opacity: 0.5;
+  background: var(--color-surface);
+  border: 1px solid var(--color-primary-container);
+  border-radius: var(--radius-xs);
 }
 
 /* #230 — the resolved states. When #121's reducer fills the toolCall's `result` in place, the arm adds
    these modifiers to the wrapper. Placed immediately after the base .tool-row so source order gives the
    equal-specificity modifier precedence over the pending opacity. tool-row--resolved lifts the pending
    dimming for BOTH outcomes (the success state is the mock's chip with dimming lifted — no accent
-   added); tool-row--error additionally retints the chip border to signal the failure. */
+   added); tool-row--error additionally retints the border to signal the failure. */
 .tool-row--resolved {
   opacity: 1;
 }
 
-.tool-row--error .tool-row__chip {
+/* #1102 — the retint FOLLOWED THE BOX OUTWARD, from `.tool-row--error .tool-row__chip` to the row itself,
+   because the chip no longer has a border to retint and the failure is a property of the whole row rather
+   than of its header. THE PLACEMENT IS NOW LOAD-BEARING: at (0,1,0) this is equal specificity with the
+   base .tool-row, so it wins on SOURCE ORDER alone and must stay after it — the outgoing descendant
+   selector won at (0,2,0) and could have sat anywhere. e2e/tool-row-toggle.spec.ts compares a failed
+   row's computed border colour against a successful one's, so a selector left on the chip goes red rather
+   than silently drawing no failure device at all. */
+.tool-row--error {
   border-color: var(--color-error);
 }
 
-/* #696 — the expanded row. Turns the row into a column so the result body stacks under the chip; placed
-   here (immediately after the other modifiers) for the same source-order reason. The gap is
-   .unrecognized-row's own column gap (:2462), since this is the same stacked shape.
+/* #696 — the expanded row. Since #1102 the row is a column in BOTH states, so what is left on this
+   modifier is the gap between the header and the body — and it is 4px, not the 8 it was.
 
-   align-items: flex-start IS STILL LOAD-BEARING, FOR A DIFFERENT REASON SINCE #722. It was held because
-   the flex default `stretch` would have blown the hug-width pill out to the full row; #722 made the chip
-   full-width on purpose and carries its own `width: 100%`, so the chip is now unaffected either way.
-   What the declaration still holds is .tool-row__body, the column's OTHER child: under `stretch` the
-   body would go full width too, stretching .tool-row__result and the .code-block #780 puts inside it.
-   That is a change to the EXPANDED BODY, which #722 leaves alone and #774 owns. Under flex-start the
-   body stays content-sized inside its own max-width: 100%, exactly as .code-block's comment documents. */
+   4 AND NOT THE DESIGN'S 12, which is arithmetic rather than a fudge. Figma measures 12 from the Header
+   frame to the Body frame on a node whose header carries no padding of its own. Under this file's padding
+   split 8 of that 12 is the CHIP's own bottom padding, which sits inside the header's box on an expanded
+   row and stands in for the row's bottom padding on a collapsed one; the row's gap supplies the
+   remaining 4. Declaring --space-3 here would draw 20px and redden AC1's header-to-body equality in
+   e2e/tool-row-toggle.spec.ts.
+
+   IT STAYS ON THIS MODIFIER rather than being hoisted to the base rule alongside flex-direction. A gap
+   only falls between items and a collapsed row has one child, so hoisting would be provably inert —
+   leaving it here is what makes "a collapsed row is unchanged" true by reading rather than by argument.
+
+   align-items: flex-start IS GONE. It was held for #218's hug-width pill, then re-held by #722 for
+   .tool-row__body: under `stretch` the body would go full width, which was a change to the expanded body
+   #722 was deliberately not making. #1102 IS that change — the design sizes Body, Fields, every field and
+   Result at the row's full content width (851 = 875 − 24 on the 875px instance; nothing hugs), so the
+   children must stretch. The two comments that reasoned FROM this declaration, .code-block's and
+   .tool-row__body's own, are re-stated where they stand rather than left wrong. */
 .tool-row--expanded {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
-/* The chip. #218 drew it from the mobile mock (Figma 16-29) as a hug-width pill — surface-container
-   fill, 1px outline-variant border, 12px radius; #722 redrew it to the desktop design (Figma 134:4939)
-   as a FULL-WIDTH BORDERED BOX on the thread's own background. That box is the one .code-block (:562)
-   already ships from #721 — --color-surface fill, 1px --color-primary-container border, --radius-xs —
-   adopted here rather than invented, so the two read as one family. Same warning as there: the design's
-   generated fallback for primary-container is the LIGHT scheme's; this node's variable prints #134a74,
-   which agrees with the dark token, so there is nothing to "correct" on this one. The padding is
-   unchanged (py 8 / px 12 → --space-2 / --space-3); the gap widens 8 → 12, --space-2 → --space-3.
+/* The chip — the row's HEADER, and since #1102 no longer the row's box. #218 drew it from the mobile
+   mock (Figma 16-29) as a hug-width pill; #722 redrew it to the desktop design (Figma 134:4939) as the
+   full-width bordered box; #1102 moved that box treatment out to .tool-row so the expanded body would
+   fall inside it, and the fill, the border and the corner went with it — the values are unchanged, they
+   are simply declared one element out. What is left here is the header's own INSET and its layout.
+
+   THE PADDING IS THE PART THAT DELIBERATELY DID NOT MOVE (py 8 / px 12 → --space-2 / --space-3, still
+   the mock's). It is what draws the header's 8px of air inside the row's border on a collapsed row, and
+   what stands in for the row's bottom padding there; the row itself carries none. See .tool-row for the
+   full split and for why hoisting it would change a collapsed row on screen.
 
    THE WIDTH MECHANIC, and it lives on THIS rule because this is the one that reaches both branches.
    .tool-row is already a stretch item of .conversation__thread's flex column, so the row was always the
-   full measure — only the chip hugged. `max-width: 100%` was a CEILING on a hug-width box; it becomes
-   `width: 100%`, and box-sizing comes with it (index.css sets no global rule, .paired-shell:20-22 is the
-   file-family precedent for declaring it at the call site) so the 12px padding and 1px border are drawn
-   INSIDE the measure rather than added to it. Stating both here is what makes the <button> and <div>
-   branches identical by construction — same width, same box-sizing, same padding, same border, and
-   `chipRuns` is one shared fragment — which is what "a resolving row does not shift" means; the three
-   width assertions in e2e/tool-row-toggle.spec.ts pin it, since a rendered width is invisible to the
-   renderToStaticMarkup unit tier. NOT a flex remedy (`flex: 1` or `align-self: stretch`): this chip's
-   container flips its flex-direction between collapsed (row) and expanded (column), so a main-axis
-   remedy would fill the row collapsed and grow the chip VERTICALLY expanded, and a cross-axis one the
-   reverse. `width: 100%` is direction-agnostic, and is what .status-row (:1558) and
-   .unrecognized-row__summary already use for the same job.
+   full measure — only the chip hugged. `max-width: 100%` was a CEILING on a hug-width box; #722 made it
+   `width: 100%`, and box-sizing came with it (index.css sets no global rule, .paired-shell:20-22 is the
+   file-family precedent for declaring it at the call site) so the 12px padding is drawn INSIDE the
+   measure rather than added to it. Both now resolve against the ROW's CONTENT box, since the row carries
+   the border: the chip's content width is row − 2 − 24, exactly what it was before the move, which is
+   why e2e/tool-row-toggle.spec.ts's `contentWidth` and `leadingInset` helpers still compute the same
+   numbers. `width: 100%` is a SPECIFIED cross size and therefore wins over the container's `stretch`
+   rather than being redundant to it; box-sizing is what keeps the padding inside the measure either way.
+   Stating both here is what makes the <button> and <div> branches identical by construction — same
+   width, same box-sizing, same padding, and `chipRuns` is one shared fragment — which is what "a
+   resolving row does not shift" means; the width assertions in e2e/tool-row-toggle.spec.ts pin it
+   against the row's CONTENT width, since a rendered width is invisible to the renderToStaticMarkup unit
+   tier. NOT a flex remedy (`flex: 1` or `align-self: stretch`): #722's argument was that this chip's
+   container flipped its flex-direction between the two states, which #1102 ended — but `width: 100%` is
+   direction-agnostic, is what .status-row (:1558) and .unrecognized-row__summary already use for the
+   same job, and swapping it now would move a shipped equality for nothing.
 
    min-width: 0 STAYS: it is the flex-item automatic-minimum-size remedy that lets the chip be narrower
    than its own min-content, which is what keeps .tool-row__summary's ellipsis reachable in a narrow
-   window. overflow: hidden stays (the design's overflow-clip). display: inline-flex stays and is inert
-   either way — the chip is always a flex item of .tool-row and has therefore always been blockified;
-   `flex` would be the honest keyword now, but ToolRow's own comment names this one and #722 may not
-   touch TSX. */
+   window.
+
+   OVERFLOW: HIDDEN STAYS EVEN THOUGH THE ROW NOW CLIPS TOO, and this one is a security control rather
+   than a duplicate. #856 measures the chevron against the CHIP's padding edge: .tool-row__right's
+   max-width caps an unbounded `result_detail`, and this clip is what would otherwise catch a chevron
+   pushed past it — the row's clip sits 12px further out, so relying on it would loosen the bound by
+   exactly that. Both ship.
+
+   display: inline-flex stays and is inert either way — the chip is always a flex item of .tool-row and
+   has therefore always been blockified; `flex` would be the honest keyword now, but ToolRow's own comment
+   names this one and neither #722 nor #1102 may touch TSX. */
 .tool-row__chip {
   display: inline-flex;
   align-items: center;
@@ -1841,9 +1900,6 @@
   min-width: 0;
   overflow: hidden;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-surface);
-  border: 1px solid var(--color-primary-container);
-  border-radius: var(--radius-xs);
 }
 
 /* #697 — the chip AS the disclosure control. A resolved chip renders as a real <button> (keyboard
@@ -1856,15 +1912,35 @@
    made false from the other direction: the chip ITSELF is now a full-width bordered box, declared on the
    base rule that reaches both branches rather than adopted by this one.
 
-   It declares only what a UA <button> would otherwise inject or override. NOT `border` in any form:
-   `.tool-row--error .tool-row__chip` (:943) retints the border at specificity (0,2,0) against this
-   rule's (0,1,0) and keeps winning ONLY while this rule stays silent about it — a `border:` here would
-   silently kill the error accent on every failed tool row. NOT `outline` either: the UA focus ring is
-   inherited for free, which is exactly what .unrecognized-row__summary relies on. And no font-size /
-   line-height / letter-spacing / font-weight, because both child runs set all four explicitly and
-   every spacing and radius token in this file is px, so no box metric depends on the button's own
-   font. */
+   It declares only what a UA <button> would otherwise inject or override. THREE OF THAT RULE'S CLAIMS
+   DIED WITH #1102, ALL BY THE SAME MOVE, and they are recorded here rather than deleted because each was
+   argued at length and each is the kind of thing a later reader would otherwise re-litigate.
+
+   1. NOT `border`, it said, because `.tool-row--error .tool-row__chip` retinted at (0,2,0) against this
+      rule's (0,1,0) and kept winning only while this rule stayed silent — a `border:` here would have
+      silently killed the error accent on every failed row. That accent now lives on `.tool-row--error`,
+      a different element, so nothing here can reach it. And the declaration became REQUIRED by the same
+      move: with the border gone from the base rule, the <button> branch would inherit the UA's own grey
+      3D border and grow, while the pending <div> branch would not — breaking the "identical by
+      construction" property #722 wrote this rule for. `background: none` is required for the same reason
+      (button-face), and pairs with the :hover rule below rather than fighting it.
+   2. NOT `outline` either, it said, because the UA focus ring is inherited for free — .unrecognized-row
+      __summary's own reliance. That was true while nothing clipped it. .tool-row now carries the
+      design's overflow-clip, and this button's border box coincides EXACTLY with the row's padding box
+      (width: 100% + border-box against a row with no padding; on a collapsed row the chip is the row's
+      whole height), so a UA outline — painted OUTSIDE the border box, at offset 0, measured — is clipped
+      away on all four sides and the row's one keyboard affordance loses its indicator entirely. The ring
+      below is therefore drawn INSIDE the border box; see its own note.
+   3. `box-sizing: content-box` was already deleted by #722 for a third reason; the note survives below.
+
+   Unchanged: no font-size / line-height / letter-spacing / font-weight, because both child runs set all
+   four explicitly and every spacing and radius token in this file is px, so no box metric depends on the
+   button's own font. .composer__footer-button:2495 is this file's UA-reset idiom for the two
+   declarations added here. */
 .tool-row__chip--toggle {
+  /* #1102, per 1 above — REQUIRED now, forbidden before. */
+  border: none;
+  background: none;
   /* Load-bearing, not cosmetic: .tool-row__summary (:1029) deliberately sets no font-family and
      inherits --font-sans from .conversation (:15). A <button> sets its own via the UA `font`
      shorthand, which would silently re-parent that inheritance to the UA font. (.tool-row__name sets
@@ -1880,6 +1956,22 @@
      branch would overflow its row by 2×12px of padding plus 2×1px of border — so the base rule states
      border-box for both branches at once and this declaration is gone rather than flipped. */
   cursor: pointer;
+}
+
+/* #1102 — the focus ring, drawn INSIDE the border box. The rule above records why this rule had to stop
+   inheriting the UA's: .tool-row now clips, and this button's border box coincides exactly with the row's
+   padding box, so an outline at the UA's 0 offset is painted entirely outside the clip and vanishes.
+   1px solid --color-outline is this file's :focus-visible idiom at seven call sites
+   (.conversation__back, .bubble__copy, .queued-row__drop, …), and --color-outline rather than
+   --color-primary because the latter is reserved here for an edge that must not read as the ring's twin
+   (.composer__row--drop's note). outline-offset: -1px is .composer__row:has(.composer__input:focus-visible)'s
+   own device for the same job — the ring lands just inside the row's border rather than on top of it.
+   :focus-visible and not :focus, so a mouse click on the header does not draw a ring the design does not
+   model. e2e/tool-row-toggle.spec.ts asserts a NEGATIVE offset on the focused toggle, which is what makes
+   "the clip does not eat it" a measured fact rather than this note's claim. */
+.tool-row__chip--toggle:focus-visible {
+  outline: 1px solid var(--color-outline);
+  outline-offset: -1px;
 }
 
 /* The hover fill had to move with the resting one. Resting was --color-surface-container and this was
@@ -2076,15 +2168,32 @@
   font-weight: var(--text-body-medium-weight);
 }
 
-/* #696 — the expanded body, a sibling of the chip (the chip is a single-line pill with overflow: hidden,
-   so it cannot hold this). A CONTAINER, not a lone text node: #706 landed its per-input-field list in
-   here, above the result, and #780 put a shell call's .code-block at the head of the same column.
-   max-width/min-width are what make a single 16000-character line scroll inside the body rather than
-   widen the row — and what cap the code block, which wraps at that measure rather than scrolling. */
+/* #696 — the expanded body, a sibling of the chip. The parenthesis that used to open this note ("the chip
+   is a single-line pill with overflow: hidden, so it cannot hold this") was #696's reasoning for putting
+   the body OUTSIDE the box, and #1102 supersedes it by moving the box rather than the body: the enduring
+   reason for the sibling relationship is that the chip is a <button> and a <pre> is not phrasing content,
+   so nesting was never available in either design. A CONTAINER, not a lone text node: #706 landed its
+   per-input-field list in here, above the result, and #780 put a shell call's .code-block at the head of
+   the same column.
+
+   THE PADDING IS #1102's, and it is the body's half of the row's padding split. 0 on top because the
+   distance to the header is the row's gap (see .tool-row--expanded's arithmetic); --space-3 on the sides
+   and at the bottom, which is the design's 4px on the Body frame plus the 8px the row does not carry.
+   e2e/tool-row-toggle.spec.ts measures all four against the row's padding box.
+
+   max-width/min-width ARE NOW BELT AND BRACES, and the note that they are what keeps a single
+   16000-character line from widening the row is #1102-stale. The container's `stretch` is what does that
+   now: .tool-row--expanded dropped align-items: flex-start, so this body's cross size is the row's
+   content width less this padding — definite, because .tool-row is itself a stretch item of
+   .conversation__thread's column and a flex item's automatic minimum size applies to its MAIN axis, which
+   in a column container is the block axis. The line still scrolls inside .tool-row__result's overflow:
+   auto, and the code block still wraps at this measure rather than scrolling. The pair is kept rather
+   than deleted: it costs nothing and it is the bound if this ever stops being a stretch item. */
 .tool-row__body {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
   max-width: 100%;
   min-width: 0;
 }

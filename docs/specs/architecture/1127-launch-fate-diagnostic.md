@@ -254,6 +254,41 @@ filename (the `realDaemon.ts` / noise-chain diagnostics are known pre-existing c
 - Does a `SIGKILL`ed app's `app.close()` resolve or throw? Either is acceptable — the killed-launch
   scenario deliberately does not assert on `teardownFailures`, so the answer only decides a comment.
 
+## Revisions
+
+### 2026-09-05 — `watch` captures the `ChildProcess`; it does not re-read it
+
+**What changed.** `watch(app)` now stores `app.process()` in the per-launch record, and both
+`closeWatched` and `report()` read the stored handle. The plan implied the handle could be re-read off
+the app on demand.
+
+**Why.** `ElectronApplication.process()` reaches through a channel object that `close()` tears down, so a
+read after the close throws `TypeError: Cannot read properties of undefined (reading '_object')`. Since
+the exit code is by definition only readable *after* the close, a lazy read makes the diagnostic
+unobtainable in exactly the case it exists for. The `ChildProcess` handle itself stays valid and keeps
+reporting `exitCode` / `signalCode` long after the app is gone — capturing it early is what makes the
+post-close read work at all. Caught by the live-launch scenario, which is why that scenario exists as the
+mutation control for the killed one: the killed arm passed straight through the bug, because
+`app.close()` on a `SIGKILL`ed app throws and never reached the broken read.
+
+**Open questions, resolved.**
+
+- *Is the bounded post-close exit wait a no-op in practice?* Yes on the normal path — a clean
+  `closeWatched` reports `exitCode: 0` with the wait never firing. Kept as the documented safety net
+  rather than deleted, per the plan: its absence is what would turn a real exit code into a misleading
+  `null` on a slow runner, and the live-launch scenario's `exitCode !== null` assertion is its detector.
+- *Does a `SIGKILL`ed app's `close()` resolve or throw?* It throws, which is why `closeWatched`
+  propagating (rather than swallowing) matters: the site's bindingless catch records the `'app'` step and
+  the drain continues. No assertion depends on it; the killed scenario deliberately does not assert on
+  `teardownFailures`.
+
+**Verified end to end**, beyond the cover spec: a temporarily broken assertion in `smoke.spec.ts`
+produced, inline in the `reporter: 'list'` terminal output,
+`attachment #1: launch-fate (text/plain)` followed by
+`{"launches":[{"runningAtOutcome":true,"exitCode":0,"signal":null}],"teardownFailures":[]}` — 88
+characters, no path, no argv — reading exactly as intended: the app was alive when the test failed and
+closed cleanly, so this red was an assertion, not a dead process. The forced failure was reverted.
+
 ## Security review
 
 **Verdict:** PASS

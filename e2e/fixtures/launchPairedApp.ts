@@ -15,7 +15,12 @@ import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from '../../
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
-import { launchIsolatedApp } from './desktopIsolation'
+import {
+  attachLaunchFate,
+  createLaunchFateLog,
+  launchIsolatedApp,
+  type TeardownStep
+} from './desktopIsolation'
 import { pairFromUnpairedLaunch } from './pairingArrival'
 import type {
   ConversationSummary,
@@ -149,10 +154,18 @@ function encodePairingPayload(qr: QrPayload): string {
 // mid-drive failure (e.g. the row click times out) from leaking resources. Each thunk is best-effort
 // so one failure doesn't abort the rest of the drain; `close()` on both fakes is idempotent. The
 // epilogue runs through Playwright's fixture lifecycle, so it fires on pass AND fail — no orphans.
+//
+// #1127: each thunk now carries a fixed-literal STEP LABEL, because "best-effort" used to mean the drain
+// left no trace of what failed — and a failed `app.close()` under `workers: 1` leaks an Electron process
+// into the next spec's launch. The catch stays BINDINGLESS on purpose: an Electron close error can carry
+// the launch argv, which embeds `--user-data-dir=<path>`, so the label is what gets recorded and the
+// error is never in scope. The drain's contract is unchanged — one failing step still does not abort the
+// rest of the LIFO drain.
 export const test = base.extend<PairedAppFixtures>({
   launchPairedApp: async ({}, use, testInfo) => {
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
-    const teardown: Array<() => Promise<void>> = []
+    const fate = createLaunchFateLog()
+    const teardown: Array<{ step: TeardownStep; run: () => Promise<void> }> = []
 
     await use(async (options = {}, control = {}) => {
       // Isolated `--user-data-dir`. Default: `mkdtemp` a fresh throwaway for a guaranteed-unpaired start
@@ -164,11 +177,14 @@ export const test = base.extend<PairedAppFixtures>({
       const reuseUserDataDir = control.reuseUserDataDir
       const userDataDir = reuseUserDataDir ?? (await mkdtemp(join(tmpdir(), 'pyry-e2e-')))
       if (reuseUserDataDir === undefined) {
-        teardown.push(() => rm(userDataDir, { recursive: true, force: true }))
+        teardown.push({
+          step: 'user-data-dir',
+          run: () => rm(userDataDir, { recursive: true, force: true })
+        })
       }
 
       const forwarder = await startFakeRelayForwarder()
-      teardown.push(() => forwarder.close())
+      teardown.push({ step: 'forwarder', run: () => forwarder.close() })
 
       // Default `buildReply` seeds the one-row list so the list→thread path exists with the spec
       // supplying nothing. `...options` spreads AFTER, so a caller's `buildReply`/`buildReplyFrames`
@@ -180,7 +196,7 @@ export const test = base.extend<PairedAppFixtures>({
         buildReply: () => seedConversationsFrame(),
         ...options
       })
-      teardown.push(() => daemon.close())
+      teardown.push({ step: 'daemon', run: () => daemon.close() })
 
       // Mirror electronApp.ts's hardening: `args: ['.']` launches the built app (package.json `main`),
       // stripping ELECTRON_RENDERER_URL keeps createWindow on the built-renderer path. Plus the two
@@ -193,8 +209,15 @@ export const test = base.extend<PairedAppFixtures>({
       // (renderer-throttling switches + the third isPackaged-gated dev flag, which keeps the window
       // hidden) that this fixture's 48 spec files all need and none should re-derive. Everything above
       // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
-      const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${userDataDir}`], env })
-      teardown.push(() => app.close())
+      const app = await launchIsolatedApp({
+        args: ['.', `--user-data-dir=${userDataDir}`],
+        env,
+        fate
+      })
+      // #1127: `fate.closeWatched` replaces `app.close()` and owns the one ordering that yields a
+      // readable fate — liveness read before the close, exit code after it. It propagates a close
+      // failure, so the drain below records it under this thunk's label exactly like any other step.
+      teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
       const page = await app.firstWindow()
 
@@ -249,13 +272,19 @@ export const test = base.extend<PairedAppFixtures>({
       return { page, app, daemon, forwarder, userDataDir }
     })
 
-    for (const step of teardown.reverse()) {
+    for (const { step, run } of teardown.reverse()) {
       try {
-        await step()
+        await run()
       } catch {
-        // Best-effort: one failing teardown must not abort the rest of the LIFO drain.
+        // Best-effort: one failing teardown must not abort the rest of the LIFO drain. Bindingless —
+        // the error can carry the launch argv, so only the fixed step label is recorded.
+        fate.recordTeardownFailure(step)
       }
     }
+
+    // Last, after the drain: the exit codes only settle once the closes have run. Attaches on a failing
+    // test only, so a green run carries nothing.
+    await attachLaunchFate(testInfo, fate)
   }
 })
 

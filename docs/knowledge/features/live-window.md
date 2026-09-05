@@ -136,12 +136,19 @@ Status isn't among those losses: `replayStatus()` runs at the load, after the ga
   face both forward through; its open question 3 (do the three interfaces collapse?) is answered here.
 - [#504 codebase notes](../codebase/504.md) — the unpair teardown that makes "the sink must never
   report itself destroyed" a concrete requirement rather than a hypothetical.
-- [Daemon connection](daemon-connection.md) — the connection's `sink` is `live.sink`; its `start()`
-  idempotence is what the replay-then-start load handler relies on.
+- [Daemon connection](daemon-connection.md) — the connection's `deps.sink` is `live.sink`; its
+  `start()` idempotence is what the replay-then-start load handler relies on. Since #1068 the
+  connection's actual emit target is `bindServerOrigin(live.sink, deps.serverId)`, a wrapper the
+  connection builds itself — `live.sink` remains the bind *target*, and this module (and its status
+  recorder) sit downstream of that wrapper, storing and replaying already-stamped events.
 - [Push notifications](push-notifications.md) — the `notify` closure's focus query and click
-  activation route through `live.window`/`live.sink`.
-- [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — its injected `emit` now closes over
-  `live.sink`.
+  activation route through `live.window`/`live.sink`; since #1068 its `notificationActivated` emit goes
+  through its own `bindServerOrigin(live.sink, null)`, permanently `null` because no daemon originates
+  the event.
+- [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — its injected `emit` now closes over a
+  `bindServerOrigin(live.sink, …)` wrapper bound at the composition root (#1068), not over `live.sink`
+  directly — see [Daemon-event channel plumbing](daemon-event-channel-plumbing.md) for why each of the
+  three emitters gets its own binding rather than one shared wrap of `live.sink`.
 - `docs/specs/architecture/519-live-window-indirection.md` — the full architecture spec, including the
   security review (PASS, nine categories) and rejected alternatives (a `DaemonConnection` state
   accessor, a renderer-facing invoke channel, event buffering, a `'closed'` listener).

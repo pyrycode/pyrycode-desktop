@@ -177,6 +177,9 @@ three twins whose present arm carries data). Key findings:
   both outcomes; `server`/`relay` are the two non-secret fields this channel is scoped to expose.
 - [Pairing-status signal](pairing-status-signal.md) / [#79](../codebase/79.md) — the literal
   value-free-by-construction pattern this channel relaxes to exactly two fields.
+- [Daemon-event channel plumbing](daemon-event-channel-plumbing.md) / #1068 — reuses this doc's
+  `serverId ← record.server`, never `hello_ack.server_id` ruling to stamp every daemon event with its
+  originating server's id.
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the other twin; the
   read-vs-destructive-action contrast (`load()` here, `clear()` there).
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the credential boundary that

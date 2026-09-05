@@ -262,4 +262,165 @@ describe('AssistantMarkdown', () => {
     // Negative: no real element was constructed from it.
     expect(markup).not.toContain('<b')
   })
+
+  // #1079 — the GFM table subset. Every case below is about the SUBSET being exactly one construct
+  // wide: the table renders, and the four other members of the `remark-gfm` bundle stay uninstalled.
+  //
+  // A three-column table with all three alignment markers, reused by the cases that follow so the
+  // alignment claim and the structure claim are made against the same fixture rather than two.
+  const ALIGNED_TABLE = lines(
+    '| Left | Middle | Right |',
+    '| :--- | :----: | ----: |',
+    '| a    | b      | c     |'
+  )
+
+  it('renders a table as a table, header row and body rows (#1079 AC1)', () => {
+    const markup = render(ALIGNED_TABLE)
+    // The nesting asserted as ONE string per row group, so "a table exists", "it has a head" and "the
+    // head holds a row of header cells" is a single claim rather than three that could hold apart —
+    // the `code-block` cases above set that idiom. A pipe table that failed to parse renders one <p>
+    // of raw pipes, which contains none of these.
+    expect(markup).toContain('<table><thead><tr>')
+    expect(markup).toContain('</thead><tbody><tr>')
+    // Header cells are <th> and body cells are <td>: the distinction the header row exists to make.
+    expect(markup).toContain('Left')
+    expect(markup).toContain('>a<')
+    expect(markup).toContain('<th')
+    expect(markup).toContain('<td')
+    // Negative, paired: the pipes are GONE from the rendered text — the unreadable jam this ticket is
+    // about. Asserted on the delimiter row, whose every character is markdown syntax with no text of
+    // its own, so a surviving one can only be an unparsed table.
+    expect(markup).not.toContain(':----:')
+  })
+
+  it('takes per-column alignment from the :-- / :-: / --: markers (#1079 AC1)', () => {
+    const markup = render(ALIGNED_TABLE)
+    // The three markers, in the fixture's column order. MEASURED, not assumed: mdast-util-to-hast puts
+    // the alignment on the cell as `align` and then its `tableCellAlignToStyle` option — ON by default —
+    // rewrites it into an inline `style`, which is the form that actually ships. That distinction is the
+    // security-relevant half, and the case below is where it is bounded.
+    expect(markup).toContain('style="text-align:left"')
+    expect(markup).toContain('style="text-align:center"')
+    expect(markup).toContain('style="text-align:right"')
+  })
+
+  it('confines the alignment attribute to its closed enum on a hostile delimiter row (#1079 AC1)', () => {
+    // THE SECURITY CASE, and the one the plan's review names as mandatory. The alignment `style` is the
+    // only new attribute this change lets the parser emit from daemon text — and a style string is a
+    // CSS sink, so what matters is that its value can never BE daemon text. Upstream, `Align` is
+    // 'center' | 'left' | 'none' | 'right', inferred from micromark EVENT TYPES rather than copied from
+    // the delimiter cell (micromark-extension-gfm-table/lib/infer.js) — this asserts that rather than
+    // trusting it, because "the enum is closed" is exactly the claim a dependency minor can falsify.
+    //
+    // The delimiter cells carry text that would be catastrophic if it were ever copied into an
+    // attribute: a quote to break out of one, and a url() a CSS sink would fetch.
+    const markup = render(
+      lines(
+        '| A | B |',
+        '| :--x" onload="alert(1) | ---: url(http://evil.test) |',
+        '| a | b |'
+      )
+    )
+    // Positive FIRST, because every negative below is satisfied by the empty string. GFM requires a
+    // delimiter cell to be `:?-+:?` and nothing else, so this row does not match, the block is not a
+    // table at all, and its text renders as ESCAPED characters — the quote that would have broken out
+    // of an attribute arrives as `&quot;`. That is the "escaped, not absent" discriminator the rest of
+    // this file uses, and it is the positive half this case would otherwise lack.
+    expect(markup).toContain('&quot; onload=&quot;alert(1)')
+    expect(markup).toContain('url(http://evil.test)')
+    // Negative: the text is TEXT. No attribute was named from it, and no element built out of it.
+    // Asserted as `onload="` rather than as the bare word, because the word legitimately appears in
+    // the rendered text above and forbidding it there would be forbidding the correct behaviour.
+    expect(markup).not.toContain('onload="')
+    expect(markup).not.toContain('<table')
+    expect(markup).not.toContain('style=')
+    // THE ENUM SWEEP, and the assertion that generalises past this fixture: EVERY style declaration the
+    // module emits is a `text-align` carrying one of the three values. Run over both renders in one
+    // case on purpose — this fixture proves a hostile delimiter contributes none, and the aligned one
+    // makes the sweep non-vacuous. Split across two cases, the second could quietly stop producing any
+    // and the first would still pass.
+    const styles = (source: string): string[] =>
+      [...source.matchAll(/style="([^"]*)"/g)].map((match) => match[1])
+    expect(styles(markup)).toEqual([])
+    const aligned = styles(render(ALIGNED_TABLE))
+    expect(aligned.length).toBeGreaterThan(0)
+    for (const value of aligned) {
+      expect(['text-align:left', 'text-align:center', 'text-align:right']).toContain(value)
+    }
+  })
+
+  it('renders markup-looking cell text as inert escaped characters (#1079 AC4)', () => {
+    const markup = render(
+      lines('| Cell |', '| --- |', '| <b>bold</b> and <img src=q onerror=alert(1)> |')
+    )
+    // Positive: the tag survives as escaped TEXT inside a real cell — the same escaped-not-deleted
+    // discriminator every anti-interpretation case in this file uses.
+    expect(markup).toContain('&lt;b&gt;bold&lt;/b&gt;')
+    expect(markup).toContain('&lt;img src=q onerror=alert(1)&gt;')
+    expect(markup).toContain('<td')
+    // Negative: no real element was constructed, so nothing can fire onerror.
+    expect(markup).not.toContain('<b>bold')
+    expect(markup).not.toContain('<img')
+  })
+
+  it('keeps the link and image overrides in force inside a table cell (#1079 AC4)', () => {
+    // The overrides are keyed on ELEMENT TYPE, not on ancestry, so a cell should not be a new
+    // enforcement gap — proven here rather than assumed, because the table is the first construct
+    // this file ships that puts a link inside a container it did not previously emit.
+    const markup = render(
+      lines(
+        '| Link | Denied | Image |',
+        '| --- | --- | --- |',
+        '| [ok](https://example.com/a) | [no](javascript:alert(1)) | ![alt text](https://example.com/i.png) |'
+      )
+    )
+    // The allowed link is a real anchor carrying its href verbatim, with the click mechanism intact.
+    expect(markup).toContain('<a href="https://example.com/a" target="_blank" rel="noreferrer">ok</a>')
+    // The denied link renders as its visible text, with no anchor and no href anywhere for it.
+    expect(markup).toContain('no')
+    expect(markup).not.toContain('javascript:')
+    // The image renders as alt text only — no fetching element inside a cell either.
+    expect(markup).toContain('alt text')
+    expect(markup).not.toContain('<img')
+  })
+
+  it('still renders a bare URL and a bare email as plain text, with no anchor (#1079 AC4)', () => {
+    // THE CRITERION TO PROVE RATHER THAN ASSERT. `remark-gfm` would have manufactured anchors from
+    // both; the autolink-literal extension is simply not installed, so there is nothing to suppress.
+    // Positive first — both cases would pass their negatives vacuously on an empty render.
+    const url = render('bare https://example.com here')
+    expect(url).toContain('bare ')
+    expect(url).toContain('https://example.com')
+    expect(url).toContain(' here')
+    expect(url).not.toContain('<a ')
+    expect(url).not.toContain('href')
+
+    const mail = render('mail me at a@b.com ok')
+    expect(mail).toContain('mail me at ')
+    expect(mail).toContain('a@b.com')
+    expect(mail).toContain(' ok')
+    expect(mail).not.toContain('<a ')
+    expect(mail).not.toContain('href')
+  })
+
+  it('installs the table construct only — no strikethrough, task list or footnote (#1079 AC4)', () => {
+    // The subset's whole point, asserted as the ABSENCE of the bundle's other four members. Each is
+    // paired with the positive that its literal syntax survives as visible text, so none of these can
+    // pass on a render that produced nothing.
+    const strike = render('a ~~struck~~ b')
+    expect(strike).toContain('~~struck~~')
+    expect(strike).not.toContain('<del')
+
+    const task = render(lines('- [ ] open', '- [x] done'))
+    expect(task).toContain('[ ] open')
+    expect(task).toContain('[x] done')
+    expect(task).not.toContain('type="checkbox"')
+
+    // A footnote's reference renders as text and its definition as a link reference definition whose
+    // target `allowedLinkHref` rejects — unchanged behaviour, not a regression this ticket introduces.
+    const footnote = render(lines('a ref[^1] here', '', '[^1]: the note'))
+    expect(footnote).toContain('here')
+    expect(footnote).not.toContain('footnote')
+    expect(footnote).not.toContain('<sup')
+  })
 })

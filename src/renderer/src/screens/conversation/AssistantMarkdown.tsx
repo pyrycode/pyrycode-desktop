@@ -1,5 +1,12 @@
 import { Children, isValidElement, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
+import { gfmTable } from 'micromark-extension-gfm-table'
+import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
+// TYPE-ONLY, both erased at build, and both declared in package.json rather than reached for
+// transitively — see `remarkGfmSubset` below, where the reason is the whole of why this import pair
+// exists in this shape.
+import type {} from 'remark-parse'
+import type { Processor } from 'unified'
 
 // #608: assistant-reply markdown → React elements. Daemon-supplied text may render as content
 // (operator decision, 2026-08-20), so the question here is markup handling, not provenance.
@@ -11,8 +18,13 @@ import Markdown, { type Components } from 'react-markdown'
 //     it would mean ADDING A PACKAGE to package.json — a visible, reviewable act — rather than
 //     flipping a boolean. Capability-absent, not capability-disabled; that property is why
 //     react-markdown was chosen over the far smaller markdown-to-jsx, whose HTML parser ships on.
-//   • No `remarkPlugins`. CommonMark covers every construct the ticket lists, and `remark-gfm` would
-//     manufacture anchors from bare URLs — exactly what the link rule below exists to prevent.
+//   • ONE `remarkPlugin`, `remarkGfmSubset` below, and it registers the GFM TABLE construct and nothing
+//     else. `remark-gfm` itself is still never added: it is a BUNDLE of five unrelated extensions, and
+//     the two that matter here — autolink literals and footnotes — are separate packages that are NOT
+//     INSTALLED. So bare URLs and bare email addresses still render as plain text because there is no
+//     autolinking code in the dependency graph to suppress, not because a setting turns it off. Absence,
+//     not suppression: the same property as the `rehypePlugins` line above, arrived at the same way, and
+//     the reason the subset ships as per-construct packages rather than the bundle plus an override.
 //   • No `skipHtml`. It reads like the safe option and is not: it DELETES tags and promotes their
 //     text content into the message (`<b>bold</b>` → `bold`). The default escapes instead, which
 //     matches the bubble's existing posture at ConversationScreen.tsx:493 ("HTML inside a delta
@@ -29,6 +41,53 @@ import Markdown, { type Components } from 'react-markdown'
 // ABSENCE of the declaration — and it DECLINED React.memo, with the reason stated at that call site
 // (parsing does re-run on every timeline render; nothing in this test tier can observe a skipped one).
 // #623 then added the `pre` override below: a fenced block's header bar and border (Figma 16:45).
+
+/**
+ * #1079 — registers the GFM table construct on the processor, and nothing else.
+ *
+ * BOTH IMPORTS ARE FUNCTIONS AND BOTH MUST BE CALLED. Passing one called and the other uncalled fails
+ * SILENTLY rather than throwing — a function where an extension object is expected is accepted, the
+ * source markers are eaten, and the text loses its syntax while gaining no element. If a table ever
+ * renders as neither a table nor visible pipes, this is the line to read first.
+ *
+ * WHY `this` IS TYPED THIS WAY, and why two type-only packages are declared for it. `tsconfig.web.json`
+ * is `strict`, so `noImplicitThis` rejects a bare `function` whose body calls `this.data()`. Two routes
+ * were measured against this tree and BOTH FAIL, so neither is worth rediscovering:
+ *
+ *   • `Processor` alone is not enough. `unified`'s own `Data` declares neither extension array —
+ *     `remark-parse` contributes both by module augmentation, and react-markdown's types import from
+ *     `unified` directly, so that augmentation never enters the program. Four TS2339s.
+ *   • A local structural `this` type fails CONTRAVARIANTLY. `Plugin`'s `this` is `Processor`, so
+ *     assignability runs the other way: `Processor` must satisfy the local type, and with `Data`
+ *     unaugmented the two share no properties at all — weak-type detection, TS2322.
+ *
+ * Hence the augmentation is imported from the package that OWNS it. The payoff is not merely that it
+ * compiles: `micromarkExtensions` is then typed `MicromarkExtension[]` and `gfmTable()` returns exactly
+ * that, so both pushes are type-CHECKED rather than asserted, and this file keeps its no-cast posture.
+ * Declaring the two packages is the point rather than bookkeeping — a type import satisfied only by a
+ * transitively hoisted package is what breaks on a differently resolved `npm ci`.
+ *
+ * NOT DONE: declaring the `unified.Data` augmentation here ourselves. It would work today only because
+ * `remark-parse`'s types happen to be absent from the program, and would become a hard duplicate-property
+ * error the moment anything pulls them in. A latent trap traded for one fewer package.json line.
+ */
+function remarkGfmSubset(this: Processor): undefined {
+  const data = this.data()
+  const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = [])
+  const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = [])
+  micromarkExtensions.push(gfmTable())
+  fromMarkdownExtensions.push(gfmTableFromMarkdown())
+  return undefined
+}
+
+/**
+ * The plugin list, a module constant rather than an inline array literal at the call site: a fresh array
+ * on every render would give react-markdown a new prop identity each time for no gain.
+ *
+ * ITS LENGTH IS THE SECURITY CLAIM the header makes — one entry, one construct. A second entry here is a
+ * change to what this module can parse out of untrusted daemon text, which is a security change.
+ */
+const remarkPlugins = [remarkGfmSubset]
 
 const LANGUAGE_PREFIX = 'language-'
 
@@ -209,5 +268,9 @@ const components: Components = {
  * whitespace, so a fence can never contribute more than that one token.
  */
 export function AssistantMarkdown({ text }: { text: string }): JSX.Element {
-  return <Markdown components={components}>{text}</Markdown>
+  return (
+    <Markdown components={components} remarkPlugins={remarkPlugins}>
+      {text}
+    </Markdown>
+  )
 }

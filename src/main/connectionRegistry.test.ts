@@ -471,6 +471,66 @@ describe('createConnectionRegistry', () => {
     })
   })
 
+  // The sole-entry accessor #1120 routes an ABSENT server id through. The six server-scoped commands
+  // carry no id of any kind, so they name their server — and when the window has no per-server
+  // surface to name one from yet, this is the bounded, observable fallback: exactly one entry, or the
+  // command refuses.
+  describe('the sole-entry accessor', () => {
+    it('answers the single paired server, with its id beside the connection', async () => {
+      const { factory, registry } = harness([record('alpha')])
+      await settle()
+
+      const sole = registry.soleConnection()
+      expect(sole?.serverId).toBe('alpha')
+      sole?.connection.interrupt()
+      expect(factory.for('alpha').calls.interrupt).toBe(1)
+    })
+
+    it('answers the not-paired stand-in, whose id is null, rather than null (#1120 AC4)', async () => {
+      // ONE ENTRY, NOT ONE PAIRED RECORD. With nothing paired the registry holds a single stand-in
+      // built with `serverId: null`, whose dial IS the failed(not-paired) settle. An accessor written
+      // as "exactly one paired record" would answer null here and turn today's inert no-ops into
+      // refusals on the unpaired path.
+      const { registry } = harness()
+      await settle()
+
+      const sole = registry.soleConnection()
+      expect(sole).not.toBeNull()
+      expect(sole?.serverId).toBeNull()
+      expect(() => sole?.connection.interrupt()).not.toThrow()
+    })
+
+    it('answers null while more than one server is paired, so an unnamed command refuses', async () => {
+      const { registry } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      expect(registry.soleConnection()).toBeNull()
+    })
+
+    it('starts answering again once the set falls back to one entry', async () => {
+      const { store, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      expect(registry.soleConnection()).toBeNull()
+
+      store.remove('beta')
+      registry.reconcile()
+      await settle()
+
+      expect(registry.soleConnection()?.serverId).toBe('alpha')
+    })
+
+    it('hands back a view with no lifecycle member AT RUNTIME, as `active` and `connectionFor` do', async () => {
+      const { registry } = harness([record('alpha')])
+      await settle()
+
+      const surface = registry.soleConnection()?.connection as unknown as Record<string, unknown>
+      expect(surface.start).toBeUndefined()
+      expect(surface.stop).toBeUndefined()
+      expect(surface.reconnect).toBeUndefined()
+      expect(typeof surface.send).toBe('function')
+    })
+  })
+
   describe('secrets stay put (AC5)', () => {
     it('never writes to the store', async () => {
       const { store, registry } = harness([record('alpha')])

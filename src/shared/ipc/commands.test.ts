@@ -1020,3 +1020,75 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { question_batch_id: null } })).toBe(false)
   })
 })
+
+// The optional server id (#1120). Six members are SERVER-SCOPED: they are about a whole server and
+// carry no id of any kind to route by, so the window names the server it means. The field is a
+// top-level sibling of `payload`, never a field inside it — `setSessionSettings`' `changeId` shape —
+// so the envelope builders, which consume `payload` alone, cannot put it on the wire.
+describe('the server-scoped commands name their server (#1120)', () => {
+  // Every arm in the table, with a shape-valid payload where one is owed.
+  const arms: Array<[string, Record<string, unknown>]> = [
+    ['requestConversations', {}],
+    ['requestRecentWorkspaces', {}],
+    ['interrupt', {}],
+    ['requestDebugBundle', {}],
+    ['createConversation', { payload: { is_promoted: null, name: null, cwd: null } }],
+    ['createWorkspaceFolder', { payload: { parent: '/home/op', name: 'notes' } }]
+  ]
+
+  it.each(arms)('accepts %s with an absent, an explicitly-undefined, and a string serverId', (type, rest) => {
+    // ABSENT is the ordinary case today: no renderer sender has a per-server surface to name one
+    // from yet (#1070/#1085/#1086), so every shipped sender emits the bare form.
+    expect(isRendererCommand({ type, ...rest })).toBe(true)
+    // EXPLICITLY-UNDEFINED must resolve as ABSENT, not as a non-string. Structured clone PRESERVES an
+    // own property whose value is undefined, so a sender assigning the field unconditionally (this
+    // file's `attachment_ids` idiom) puts exactly this shape on the bridge.
+    expect(isRendererCommand({ type, ...rest, serverId: undefined })).toBe(true)
+    expect(isRendererCommand({ type, ...rest, serverId: 'pyrybox' })).toBe(true)
+    // Type, not emptiness: `''` is a name that matches no held record, so the ROUTER refuses it —
+    // the guard has no entry set to check against and does not pretend to.
+    expect(isRendererCommand({ type, ...rest, serverId: '' })).toBe(true)
+  })
+
+  it.each(arms)('rejects %s with a non-string serverId', (type, rest) => {
+    for (const serverId of [42, null, {}, ['pyrybox'], true]) {
+      expect(isRendererCommand({ type, ...rest, serverId })).toBe(false)
+    }
+  })
+
+  it('leaves every command outside the table unaffected, `notify` included', () => {
+    // `notify` is main-local: fireNotification owns the copy table, no command field supplies text,
+    // and no frame results — so a server id on it would be a field nothing reads. A stray one is
+    // ignored as any extra field is (structural minimum), NOT validated.
+    const notify: unknown = { type: 'notify', payload: { kind: 'turn-complete' }, serverId: 42 }
+    expect(isRendererCommand(notify)).toBe(true)
+    expect(
+      isRendererCommand({ type: 'archiveConversation', payload: { conversation_id: 'c-1' }, serverId: 42 })
+    ).toBe(true)
+  })
+
+  it('types the optional field on each of the six members', () => {
+    const commands: RendererCommand[] = [
+      { type: 'requestConversations', serverId: 'pyrybox' },
+      { type: 'requestRecentWorkspaces', serverId: 'pyrybox' },
+      { type: 'interrupt', serverId: 'pyrybox' },
+      { type: 'requestDebugBundle', serverId: 'pyrybox' },
+      { type: 'createConversation', payload: { is_promoted: null, name: null, cwd: null }, serverId: 'pyrybox' },
+      { type: 'createWorkspaceFolder', payload: { parent: '/home/op', name: 'notes' }, serverId: 'pyrybox' }
+    ]
+    for (const command of commands) expect(isRendererCommand(command)).toBe(true)
+    // And each still type-checks without it, which is what keeps the six renderer senders untouched.
+    const bare: RendererCommand = { type: 'requestConversations' }
+    expect(isRendererCommand(bare)).toBe(true)
+  })
+
+  it('mints an interrupt for a named server, and a bare one when no id is resolved (#306)', () => {
+    expect(interruptCommand('pyrybox')).toEqual({ type: 'interrupt', serverId: 'pyrybox' })
+    // The zero-arg call keeps its shipped meaning: assigned unconditionally, so the own property is
+    // present and undefined — which the guard reads as absent and the router resolves to the sole
+    // connection.
+    const bare = interruptCommand()
+    expect(isRendererCommand(bare)).toBe(true)
+    expect(bare).toEqual({ type: 'interrupt' })
+  })
+})

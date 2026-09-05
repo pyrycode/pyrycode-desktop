@@ -4997,7 +4997,12 @@ describe('createDaemonConnection — a teardown unwedges the debug-bundle orches
 
   /** Reach the connected window with the real orchestrator wired over the real transport call. */
   async function connectedDownload(): Promise<
-    ReturnType<typeof build> & { download: DebugBundleDownload; events: DaemonEvent[] }
+    ReturnType<typeof build> & {
+      download: DebugBundleDownload
+      /** Ask, arming the transport through this connection — the argument shape since #1120. */
+      request: () => void
+      events: DaemonEvent[]
+    }
   > {
     const ctx = build()
     ctx.connection.start()
@@ -5006,11 +5011,14 @@ describe('createDaemonConnection — a teardown unwedges the debug-bundle orches
     const events: DaemonEvent[] = []
     // `save` is never reached: every path here ends in `fail`, so no archive is ever completed.
     const download = createDebugBundleDownload({
-      requestDebugBundle: (consumer) => ctx.connection.requestDebugBundle(consumer),
       save: vi.fn(async () => '/unreachable'),
       emit: (event) => events.push(event)
     })
-    return { ...ctx, download, events }
+    // The connection is resolved per ask since #1120, so it is supplied here rather than closed into
+    // the orchestrator — the wedge these tests pin is in the GATE, which is still construction-held.
+    const request = (): void =>
+      download.request((consumer) => ctx.connection.requestDebugBundle(consumer))
+    return { ...ctx, download, request, events }
   }
 
   /** How many request_debug_bundle envelopes actually reached this driver. */
@@ -5020,15 +5028,15 @@ describe('createDaemonConnection — a teardown unwedges the debug-bundle orches
   }
 
   it('clears the single-in-flight flag on a relay-link-down, so a later download still reaches the wire', async () => {
-    const { drivers, download, events } = await connectedDownload()
+    const { drivers, request, events } = await connectedDownload()
 
-    download.request()
+    request()
     drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
     drivers[0].emit({ type: 'relay-link-down', code: 1006 })
 
     expect(events).toContainEqual({ type: 'debugBundleFailed', reason: 'unavailable' })
 
-    download.request()
+    request()
 
     // Two frames on the wire: without the teardown the second request is silently short-circuited
     // by the stuck `active` flag, for the rest of the process lifetime.
@@ -5036,28 +5044,28 @@ describe('createDaemonConnection — a teardown unwedges the debug-bundle orches
   })
 
   it('clears the single-in-flight flag on a reconnect, so a later download reaches the new driver', async () => {
-    const { connection, drivers, download } = await connectedDownload()
+    const { connection, drivers, request } = await connectedDownload()
 
-    download.request()
+    request()
     drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
     connection.reconnect()
     await tick()
     drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
-    download.request()
+    request()
 
     expect(bundleRequests(drivers[1])).toBe(1)
   })
 
   it('fails a download requested before the new handshake completes, rather than wedging (AC4)', async () => {
-    const { connection, drivers, download, events } = await connectedDownload()
+    const { connection, drivers, request, events } = await connectedDownload()
 
-    download.request()
+    request()
     drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
     connection.reconnect()
     // Deliberately no `await tick()`: dial() has nulled the driver and the bootstrap reassigns it
     // only a microtask later, so this is the window where requestDebugBundle's null guard is exact.
-    download.request()
+    request()
 
     // Two terminals, both the coarse `unavailable` category: one from the re-dial teardown, one
     // from the not-connected guard. Still a terminal, still not wedged.

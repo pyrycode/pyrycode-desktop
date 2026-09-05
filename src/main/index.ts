@@ -32,7 +32,8 @@ import { createDaemonConnection } from './daemonConnection'
 import { createConnectionRegistry } from './connectionRegistry'
 import { createConversationRouter } from './conversationRouter'
 import { createCorrelationRouter } from './correlationRouter'
-import { createDebugBundleDownload } from './debugBundleDownload'
+import { createServerRouter } from './serverRouter'
+import { createDebugBundleDownload, createDebugBundleDownloads } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
 import { createLiveWindow } from './liveWindow'
@@ -343,6 +344,17 @@ app.whenReady().then(() => {
     connectionFor: (serverId) => registry.connectionFor(serverId),
     diagnosticLog
   })
+  // The server router (#1120): a command about a WHOLE server reaches the server the WINDOW named.
+  // Its two siblings learn a server id off a stamped daemon event and can trust what they hold; this
+  // one takes an untrusted hint from the renderer, so it resolves against the registry's held entry
+  // set and refuses an id no entry matches. It is not a third index — it holds no state at all and
+  // installs no observer, so the late binding below is even plainer than theirs: nothing it wires runs
+  // before the first command arrives, many ticks after this callback completes.
+  const servers = createServerRouter({
+    connectionFor: (serverId) => registry.connectionFor(serverId),
+    soleConnection: () => registry.soleConnection(),
+    diagnosticLog
+  })
   const registry = createConnectionRegistry({
     store: pairedServerStore,
     createConnection: ({ serverId, pairedServer }) =>
@@ -378,10 +390,16 @@ app.whenReady().then(() => {
   // conversation. #1119 took the next five: the modal, question and session id spaces go through
   // `correlations.route*(...)` and reach the server that RAISED the thing being answered.
   //
-  // WHAT IS LEFT ON THIS STAND-IN is everything with no id of any kind to route by — the list and create
-  // requests, the debug bundle, the attachment upload — plus #1120's `interrupt`, which carries no
-  // payload at all. Do not start those here, and do not add a sixth answer-shaped command to this list:
-  // if it correlates to something a daemon raised, it belongs on `correlations`.
+  // SINCE #1120 IT IS NO LONGER WHAT A SERVER-SCOPED COMMAND REACHES EITHER. The six entry points that
+  // are about a WHOLE server — the two list requests, the two create requests, `interrupt` and the
+  // debug bundle — carry an optional server id and go through `servers.route(...)` / `servers.resolve(...)`.
+  //
+  // WHAT IS LEFT ON THIS STAND-IN is ONE entry point: `uploadAttachment`. It arrives on its own IPC
+  // channel rather than through the `onCommand` switch, behind two request guards of its own, so naming
+  // its server is a separate contract on a separate surface — #1129, blocked by #1120 and reusing the
+  // same resolver. Do not start anything else here, and do not add a sixth answer-shaped command to
+  // this list: if it correlates to something a daemon raised, it belongs on `correlations`; if it is
+  // about a whole server, it belongs on `servers`.
   const connection = registry.active
 
   // The pairing invoke handler (#54), registered now that the registry exists so a successful
@@ -498,17 +516,26 @@ app.whenReady().then(() => {
   // result to the window; it enforces single-in-flight so a spammed command cannot orphan an
   // in-flight download's reassembler slot.
   const downloadsDir = app.getPath('downloads')
-  // #1068: the orchestrator's events come from the connection's daemon, so they carry an origin like
-  // any other daemon event — but the root does not hold the id (the connection above is bound to
-  // null), so it is null today; #1084 hands the orchestrator its own connection's id. Bound HERE, per
-  // consumer, rather than by wrapping the shared `live.sink` once: a single binding over that shared
-  // object would stamp all three emitters with one id, which is precisely what a per-server registry
-  // cannot use. The orchestrator itself stays origin-free — it takes an `emit` function, not a sink.
-  const bundleSink = bindServerOrigin(live.sink, null)
-  const downloader = createDebugBundleDownload({
-    requestDebugBundle: (consumer) => connection.requestDebugBundle(consumer),
-    save: (bytes) => saveDebugBundle(downloadsDir, bytes),
-    emit: (event) => emitDaemonEvent(bundleSink, event)
+  // PER SERVER SINCE #1120 (AC3): one orchestrator per server, built on first ask and held for the
+  // process lifetime, so two servers can download at once while one server cannot be asked twice.
+  //
+  // #1068's null binding is what this replaces. The orchestrator's events come from a connection's
+  // daemon, so they carry an origin like any other daemon event; the root could not name it while it
+  // held one connection bound to null, and now it can. The sink is bound ONCE PER SERVER, here, inside
+  // `build` — rather than by wrapping the shared `live.sink` once, which would stamp all three
+  // emitters with a single id, precisely what a per-server registry cannot use. The orchestrator
+  // itself stays origin-free: it takes an `emit` function, not a sink.
+  //
+  // `serverId` reaches the SINK and nothing else. It is deliberately NOT in the saved filename:
+  // `saveDebugBundle`'s name parts are module constants so that no untrusted input can reach a path
+  // segment, and two concurrent saves are already separated by its exclusive-create (`wx`) advance to
+  // `… (n).tar.gz`, so a per-server stem would buy nothing and would undo that guarantee in one edit.
+  const downloads = createDebugBundleDownloads((serverId) => {
+    const sink = bindServerOrigin(live.sink, serverId)
+    return createDebugBundleDownload({
+      save: (bytes) => saveDebugBundle(downloadsDir, bytes),
+      emit: (event) => emitDaemonEvent(sink, event)
+    })
   })
 
   // #1068: the third and last emitter that reaches the channel. Bound separately from `bundleSink`
@@ -548,16 +575,19 @@ app.whenReady().then(() => {
         return
       }
       case 'requestConversations':
-        // Direct to the connection method (mirrors sendMessage), no orchestrator — a list request
-        // has no consumer/reassembler. Inert no-op when not connected (#139).
-        connection.requestConversations()
+        // ROUTED BY SERVER (#1120). `servers.route` answers the connection for the server the window
+        // NAMED — resolved against the registry's held entries, never trusted as a hint — or, when the
+        // command carries no id, the sole connection if the registry holds exactly one entry. Anything
+        // else is `null` HAVING ALREADY REFUSED AND LOGGED, so the `?.` is the refusal and no frame
+        // reaches any wire. Still inert when not connected (#139): with nothing paired the registry
+        // holds exactly one entry — the stand-in — so this resolves and no-ops as it does today.
+        servers.route(command.serverId)?.requestConversations()
         return
       case 'requestRecentWorkspaces':
-        // Direct to the connection method (mirrors requestConversations), no orchestrator — a bare
-        // recent-workspaces request has no consumer/reassembler. Sends recent_workspaces; the daemon
-        // replies with one recent_workspaces_list → recentWorkspacesReceived event (consumed by #382).
-        // Inert no-op when not connected (#380).
-        connection.requestRecentWorkspaces()
+        // ROUTED BY SERVER (#1120), mirrors requestConversations — no orchestrator, no consumer. Sends
+        // recent_workspaces; the daemon replies with one recent_workspaces_list →
+        // recentWorkspacesReceived event (consumed by #382). Inert no-op when not connected (#380).
+        servers.route(command.serverId)?.requestRecentWorkspaces()
         return
       case 'answerModal':
         // ROUTED BY MODAL ID (#1119). `routeModal` answers the connection for the server that RAISED
@@ -584,17 +614,18 @@ app.whenReady().then(() => {
         correlations.routeQuestions(command.payload.question_batch_id)?.refuseQuestions(command.payload)
         return
       case 'createConversation':
-        // Direct to the connection method (mirrors sendMessage), no orchestrator — a create request
-        // has no consumer/reassembler. Sends create_conversation; the daemon replies with one
+        // ROUTED BY SERVER (#1120) — a new chat is created ON a host, so the window says which. Only
+        // `payload` is passed on, never `command`, so the routing key has no expression that could
+        // carry it onto the wire. Sends create_conversation; the daemon replies with one
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
-        connection.createConversation(command.payload)
+        servers.route(command.serverId)?.createConversation(command.payload)
         return
       case 'createWorkspaceFolder':
-        // Direct to the connection method (mirrors createConversation), no orchestrator — a create-folder
-        // request has no consumer/reassembler. Sends create_workspace_folder; the daemon replies with one
-        // workspace_folder_created → workspaceFolderCreated event (consumed by #157). Inert no-op when not
-        // connected (#381).
-        connection.createWorkspaceFolder(command.payload)
+        // ROUTED BY SERVER (#1120), mirrors createConversation — the folder is created on the named
+        // host's filesystem, which the daemon polices server-side. Sends create_workspace_folder; the
+        // daemon replies with one workspace_folder_created → workspaceFolderCreated event (consumed by
+        // #157). Inert no-op when not connected (#381).
+        servers.route(command.serverId)?.createWorkspaceFolder(command.payload)
         return
       case 'dequeueMessage':
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
@@ -603,10 +634,16 @@ app.whenReady().then(() => {
         router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
         return
       case 'interrupt':
-        // Direct to the connection method (mirrors requestConversations), no orchestrator — a bare
-        // fire-and-forget stop-the-turn frame. No reply is expected (the turn stops via the ordinary
-        // turn_end / turn_state{idle} events). Inert no-op when not connected (#306).
-        connection.interrupt()
+        // ROUTED BY SERVER (#1120), mirrors requestConversations — a bare fire-and-forget stop-the-turn
+        // frame, so the id is the only thing that could address it. No reply is expected (the turn stops
+        // via the ordinary turn_end / turn_state{idle} events). Inert no-op when not connected (#306).
+        //
+        // EXPECT THIS FIELD TO BECOME VESTIGIAL. #1092 would put the open conversation's id on the frame
+        // and re-route it through #1118's index instead; it is natively blocked on a daemon change
+        // (pyrycode#2103) that has not landed, so it will not ship first. Nothing is built around the
+        // field that would be expensive to unwind — it is one arm of the shared resolver, like its five
+        // siblings.
+        servers.route(command.serverId)?.interrupt()
         return
       case 'promoteConversation':
         // Direct to the connection method (mirrors createConversation), no orchestrator — a promote
@@ -662,10 +699,31 @@ app.whenReady().then(() => {
         // reply back to this change (never onto the wire). Inert no-op when not connected (#263).
         correlations.routeSession(command.payload.session_id)?.setSessionSettings(command.payload, command.changeId)
         return
-      case 'requestDebugBundle':
-        downloader.request()
+      case 'requestDebugBundle': {
+        // ROUTED BY SERVER (#1120) — the bundle is a whole server's, so this is the one arm that needs
+        // the routing KEY as well as the connection: the key selects that server's held orchestrator
+        // (its own in-flight gate, its own origin-bound sink) and the connection arms THIS ask.
+        //
+        // THE KEY IS THE RESOLVED ONE, NEVER `command.serverId`. Keying the orchestrator map on the
+        // renderer's string before resolution would make it renderer-driven and unbounded — one entry
+        // and one bound sink per fabricated id. After resolution it can only be an id a held entry
+        // matched, or null for the stand-in.
+        //
+        // The early return IS the refusal (already logged inside the router): no orchestrator is
+        // selected, no consumer is built, and the transport's reassembler slot is never armed.
+        const target = servers.resolve(command.serverId)
+        if (target === null) return
+        downloads
+          .for(target.serverId)
+          .request((consumer) => target.connection.requestDebugBundle(consumer))
         return
+      }
       case 'notify':
+        // NOT SERVER-SCOPED, and deliberately gains no id (#1120). It is main-local: fireNotification
+        // owns the copy table, no command field supplies text, and no frame results — so a server id
+        // here would be a field nothing reads. Host-attributed notification copy, if it turns out to be
+        // wanted, is a separate ticket with its own consumer. The event the click emits stays
+        // origin-free for the reason `windowLocalSink` gives above.
         // Main-local side effect, no connection method: raise an OS notification only when the window
         // is unfocused. Focus is queried at fire-time (one synchronous isFocused(), no stateful
         // tracker); the kind→copy mapping is owned by the module, so no command field supplies text.

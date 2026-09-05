@@ -93,6 +93,38 @@ export interface ConnectionRegistry {
    * no entry refuses HERE, whether or not that ticket's index still holds the mapping.
    */
   connectionFor(serverId: string): ActiveConnection | null
+  /**
+   * The single held entry when there is EXACTLY ONE, else `null`. #1120's bounded fallback: the six
+   * server-scoped commands carry no id of any kind to route by, so the window names its server — and
+   * until each of its senders has a per-server surface to name one from (#1070/#1085/#1086), an
+   * unnamed one reaches the sole connection, or refuses. Never an arbitrary server.
+   *
+   * ONE ENTRY, NOT ONE PAIRED RECORD, and the difference is load-bearing. The entry list is never
+   * empty: with nothing paired it holds a single stand-in built with `serverId: null`, and that
+   * stand-in's dial IS the `connecting` → `failed(not-paired)` settle. So an unpaired launch has
+   * exactly one entry and those commands stay the inert no-ops they are today. An accessor written as
+   * "exactly one paired record" would answer `null` on that path and turn a no-op into a refusal.
+   *
+   * The untrusted `server` id is not consulted at ALL here — a length check, not a lookup — so this
+   * member trivially satisfies the never-an-object-key rule its two siblings state. Its view is built
+   * by the same `viewOf` helper, so the `ActiveConnection` `Omit` is enforced by construction on all
+   * three accessors rather than by a third hand-copied literal.
+   */
+  soleConnection(): SoleConnection | null
+}
+
+/**
+ * One resolved server: the connection to speak to, and the routing key that names it. `serverId` is
+ * `null` for exactly one entry — the not-paired stand-in.
+ *
+ * The id rides beside the connection because one consumer needs both: #1120's debug bundle keys its
+ * per-server orchestrator by this id and binds that orchestrator's event sink with it. Answering the
+ * connection alone would leave the root re-deriving the key from the renderer's own string, which is
+ * the value the resolution exists to stop trusting.
+ */
+export interface SoleConnection {
+  serverId: string | null
+  connection: ActiveConnection
 }
 
 /**
@@ -354,6 +386,17 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
       // every member is a documented no-op once the connection has been `stop()`ped, so a view over a
       // dropped connection puts nothing on any wire.
       return viewOf(() => held.connection)
+    },
+    soleConnection(): SoleConnection | null {
+      // `entries` is never empty, so this is "more than one" rather than "none or more than one" —
+      // and it reads the LENGTH, never an id, so no untrusted string is compared or indexed by here
+      // at all. The stand-in is a held entry like any other, which is what makes the unpaired launch
+      // answer rather than refuse.
+      if (entries.length !== 1) return null
+      const held = entries[0]
+      // Resolves through the entry at call time, like both siblings, and built by the same `viewOf`
+      // so the lifecycle members are absent from the VALUE and not merely from its type.
+      return { serverId: held.serverId, connection: viewOf(() => held.connection) }
     }
   }
 }

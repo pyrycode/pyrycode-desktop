@@ -427,3 +427,25 @@ site count, which is the constraint that actually binds a run's turn budget, is 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-05
+
+## Revisions
+
+**2026-09-05 — Open questions resolved during implementation.** No design change; the plan as committed
+is what shipped. Recorded here so the three questions are visibly answered rather than dropped.
+
+1. **Does any fake-tier spec answer a correlation id its daemon never announced, or re-answer a settled
+   one?** No — confirmed by running the nine specs that send one of the five commands
+   (`permission-modal-answer-paths`, `question-picks`, `question-answer-continue`, `question-cancel-refuses`,
+   `run-config-settings`, `composer-model-menu`, `composer-effort-menu`, `composer-permission-mode-menu`,
+   `composer-permission-mode-auto`) against the built app: 10 passed, no edits to the suite. Each family
+   pushes its learning frame first, and the rejection path in `permission-modal-answer-paths` ends at a
+   renderer-local *Dismiss* rather than a second answer, so eviction on `modalAnswerRejected` retires
+   nothing a spec later needs.
+2. **Does `sessionSettingsUpdated` need to be a learning arm?** Kept. It costs two lines, it re-learns only
+   what `runConfigReceived` already taught in the ordinary flow (so it logs nothing, asserted by the
+   identical-re-write test), and it is the arm that would carry a session the client knew about before a
+   reconnect.
+3. **Should `sessionTransition.newSessionId` be a fourth learning arm?** No. The run-config store addresses
+   whatever `runConfigReceived` last reported, so adding a second source could only make the index name a
+   session the window is not addressing. The reasoning is now a comment on the `record` switch's session
+   arms so the next reader does not re-derive it.

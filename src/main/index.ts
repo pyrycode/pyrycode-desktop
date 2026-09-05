@@ -31,6 +31,7 @@ import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
 import { createConnectionRegistry } from './connectionRegistry'
 import { createConversationRouter } from './conversationRouter'
+import { createCorrelationRouter } from './correlationRouter'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
@@ -332,19 +333,34 @@ app.whenReady().then(() => {
     connectionFor: (serverId) => registry.connectionFor(serverId),
     diagnosticLog
   })
+  // The correlation router (#1119): an ANSWER reaches the server that RAISED the thing it answers. Its
+  // sibling above routes by a conversation id; these five commands carry none (ADR 0009 — no
+  // `conversation_id` rides an answer), so they route by the modal id, the question batch id, or the
+  // daemon's own session id, each learned off the stamped event that minted it. Declared here for the
+  // same late-binding reason as `router`, and on the same structural argument: its `observe` only WRAPS,
+  // and the recording path it installs reads the event and its own maps, never `connectionFor`.
+  const correlations = createCorrelationRouter({
+    connectionFor: (serverId) => registry.connectionFor(serverId),
+    diagnosticLog
+  })
   const registry = createConnectionRegistry({
     store: pairedServerStore,
     createConnection: ({ serverId, pairedServer }) =>
       createDaemonConnection({
         deviceKeypair: deviceKeypairStore,
         pairedServer,
-        // Evaluated once PER CONNECTION, so each producer gets its own wrapper over the one shared
-        // sink and the one shared index. The observer stamps nothing and adds no second stamping
+        // Evaluated once PER CONNECTION, so each producer gets its own wrappers over the one shared
+        // sink and the shared indexes. The observers stamp nothing and add no second stamping
         // path: `createDaemonConnection` applies `bindServerOrigin` internally over the sink it is
-        // given, so what arrives here is the ALREADY-STAMPED event and the index reads exactly what
-        // the renderer reads. It records before it forwards, which is what makes "anything the window
+        // given, so what arrives here is the ALREADY-STAMPED event and each index reads exactly what
+        // the renderer reads. They record before they forward, which is what makes "anything the window
         // can name, the index has already seen" true with no race.
-        sink: router.observe(live.sink),
+        //
+        // TWO NESTED WRAPPERS since #1119, and the nesting order is free — both only read the stamp and
+        // write their own maps, neither mutates the event, and there is ONE observation point rather
+        // than a second stamping path. The extra hop is one function call per daemon event, which is
+        // per-frame and not per-byte.
+        sink: correlations.observe(router.observe(live.sink)),
         serverId,
         deviceName,
         clientVersion,
@@ -359,10 +375,13 @@ app.whenReady().then(() => {
   //
   // SINCE #1118 IT IS NO LONGER WHAT A CONVERSATION-SCOPED COMMAND REACHES. The ten entry points that
   // carry a conversation id go through `router.route(...)` and reach the server that owns that
-  // conversation; what is left on this stand-in is everything with no conversation id to route by —
-  // the list and create requests, the debug bundle, the attachment upload — plus the id spaces #1119
-  // owns (`setSessionSettings`' session id, the modal and question ids) and #1120's `interrupt`, which
-  // carries no payload at all. Do not start those here.
+  // conversation. #1119 took the next five: the modal, question and session id spaces go through
+  // `correlations.route*(...)` and reach the server that RAISED the thing being answered.
+  //
+  // WHAT IS LEFT ON THIS STAND-IN is everything with no id of any kind to route by — the list and create
+  // requests, the debug bundle, the attachment upload — plus #1120's `interrupt`, which carries no
+  // payload at all. Do not start those here, and do not add a sixth answer-shaped command to this list:
+  // if it correlates to something a daemon raised, it belongs on `correlations`.
   const connection = registry.active
 
   // The pairing invoke handler (#54), registered now that the registry exists so a successful
@@ -541,24 +560,28 @@ app.whenReady().then(() => {
         connection.requestRecentWorkspaces()
         return
       case 'answerModal':
-        // Direct to the connection method (mirrors sendMessage), no orchestrator. The method
-        // mints the answer_token main-side and sends modal_answer. Inert no-op when not connected (#236).
-        connection.answerModal(command.payload)
+        // ROUTED BY MODAL ID (#1119). `routeModal` answers the connection for the server that RAISED
+        // this modal, learned off the stamped `modalShown`, or `null` having already refused and logged
+        // — so an answer for a modal no index knows puts no frame on ANY server's wire, and the
+        // answer_token this method would mint main-side is never minted at all. Inert no-op when not
+        // connected (#236), now by the same expression.
+        correlations.routeModal(command.payload.modal_id)?.answerModal(command.payload)
         return
       case 'cancelModal':
-        // Direct to the connection method, sends modal_cancel. Inert no-op when not connected (#236).
-        connection.cancelModal(command.payload)
+        // ROUTED BY MODAL ID (#1119), sends modal_cancel. Inert no-op when not connected (#236).
+        correlations.routeModal(command.payload.modal_id)?.cancelModal(command.payload)
         return
       case 'answerQuestions':
-        // Direct to the connection method (mirrors answerModal), no orchestrator. The method mints the
-        // answer_token main-side and sends question_answer. No reply is correlated — the daemon emits
-        // nothing for a rejected question answer. Inert no-op when not connected (#920).
-        connection.answerQuestions(command.payload)
+        // ROUTED BY QUESTION BATCH ID (#1119), learned off the stamped `questionShown` and forgotten at
+        // `questionDismissed` — a settled batch refuses, which costs nothing, since a retired batch
+        // resolves nothing daemon-side either. The method mints the answer_token main-side and sends
+        // question_answer; no reply is correlated. Inert no-op when not connected (#920).
+        correlations.routeQuestions(command.payload.question_batch_id)?.answerQuestions(command.payload)
         return
       case 'refuseQuestions':
-        // Direct to the connection method, sends question_refused. It mints a token too, unlike the
+        // ROUTED BY QUESTION BATCH ID (#1119), sends question_refused. It mints a token too, unlike the
         // cancelModal it otherwise mirrors. Inert no-op when not connected (#920).
-        connection.refuseQuestions(command.payload)
+        correlations.routeQuestions(command.payload.question_batch_id)?.refuseQuestions(command.payload)
         return
       case 'createConversation':
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a create request
@@ -630,11 +653,14 @@ app.whenReady().then(() => {
         router.route(command.payload.conversation_id)?.changeWorkspace(command.payload)
         return
       case 'setSessionSettings':
-        // Direct to the connection method (mirrors sendMessage), no orchestrator. Sends
-        // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,
-        // correlated by #261). The renderer-minted `changeId` rides through so main can match the reply
-        // back to this change (never onto the wire). Inert no-op when not connected (#263).
-        connection.setSessionSettings(command.payload, command.changeId)
+        // ROUTED BY SESSION ID (#1119) — the DAEMON's own session id, not a conversation id (#501 is the
+        // standing bug about those two being confused), learned off the stamped `runConfigReceived` and
+        // `sessionSettingsUpdated`. A `session_id` of `''` is a real daemon answer meaning "no session to
+        // address": never learned, so it refuses on the ordinary path with no separate branch owed.
+        // Sends set_session_settings; the daemon replies with one session_settings_updated (decoded by
+        // #264, correlated by #261). The renderer-minted `changeId` rides through so main can match the
+        // reply back to this change (never onto the wire). Inert no-op when not connected (#263).
+        correlations.routeSession(command.payload.session_id)?.setSessionSettings(command.payload, command.changeId)
         return
       case 'requestDebugBundle':
         downloader.request()

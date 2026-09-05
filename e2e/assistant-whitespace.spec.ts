@@ -155,7 +155,30 @@ const LANG_CODE_TEXT = ['```' + FENCE_LANGUAGE, LONG_TOKEN_TEXT, '```'].join('\n
 // the two apart — markdown would render two paragraphs and stand taller too.
 const TAIL_TEXT = ['First line.', 'Second line.', 'Third line.'].join('\n')
 
-const SETTLED_TEXTS = [CONTROL_TEXT, SPACE_RUN_TEXT, CODE_TEXT, RHYTHM_TEXT, LANG_CODE_TEXT]
+// #1079's subject: a GFM table, and DELIBERATELY WIDER THAN THE BUBBLE CAN HOLD. That width is the
+// whole fixture design — a table that fits proves nothing, because the containment assertions below
+// would then hold on a build with no overflow treatment at all. Six columns, each cell an unbreakable
+// alphanumeric token, so under the cells' `word-break: normal` the min-content width of the table is
+// six long tokens wide and cannot be squeezed into `.bubble`'s min(680px, 75%).
+//
+// APPENDED after LANG_CODE rather than inserted, which is the rule this file's header states for
+// itself: the reply stream is indexed positionally and a turn added in the middle would shift every
+// index above it. Appending shifts exactly one constant, TAIL, and TAIL stays last by construction —
+// the open, turn_end-less delta has to remain the final frame.
+//
+// All three alignment markers are present so the bubble also carries #1079's AC1 shape, though the
+// per-column alignment claim itself is the unit tier's (AssistantMarkdown.test.tsx): it is a property
+// of the emitted markup, and this tier exists for the one thing that tier cannot see — the measured box.
+const TABLE_CELL_TOKEN = 'sha256deadbeefcafe0123456789'
+const TABLE_TEXT = [
+  '| Alpha | Beta | Gamma | Delta | Epsilon | Zeta |',
+  '| :---- | ---: | :---: | ----- | :------ | ---: |',
+  ...['one', 'two'].map(
+    (row) => '| ' + Array.from({ length: 6 }, (_, i) => `${row}${i}${TABLE_CELL_TOKEN}`).join(' | ') + ' |'
+  )
+].join('\n')
+
+const SETTLED_TEXTS = [CONTROL_TEXT, SPACE_RUN_TEXT, CODE_TEXT, RHYTHM_TEXT, LANG_CODE_TEXT, TABLE_TEXT]
 const REPLY_TEXTS = [...SETTLED_TEXTS, TAIL_TEXT]
 
 // The bubble indices the assertions read, named so a comparison says which text it is about.
@@ -164,7 +187,8 @@ const SPACE_RUN = 1
 const CODE = 2
 const RHYTHM = 3
 const LANG_CODE = 4
-const TAIL = 5
+const TABLE = 5
+const TAIL = 6
 
 // A rendered box is a fractional CSS pixel; scrollWidth/clientWidth are rounded integers, so they can
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
@@ -786,6 +810,29 @@ const readLanguagelessFenceMetrics = (page: Page, index: number): Promise<Langua
       }
     })
 
+/**
+ * #1079 — the table's own horizontal extent, and the bubble's. `readCodeMetrics` one element over,
+ * which is the shape AC2 asks for; the whiteSpace field is dropped because a table declares none.
+ *
+ * BOTH BOXES, read together, are what makes this a detector. The bubble carries
+ * `max-width: min(680px, 75%)`, so its bounding box is capped by its parent whatever the table does and
+ * an assertion on that width would be inert by construction. What moves is scrollWidth: an overflowing
+ * child raises its ancestor's. So the table's own pair proves the overflow is CONTAINED, and the
+ * bubble's proves nothing ESCAPED — neither half means much alone.
+ */
+const readTableMetrics = (
+  page: Page,
+  index: number
+): Promise<{ table: { scrollWidth: number; clientWidth: number }; bubble: { scrollWidth: number; clientWidth: number } }> =>
+  assistantBubble(page, index).evaluate((bubble) => {
+    const table = bubble.querySelector('.bubble__markdown table')
+    if (table === null) throw new Error('no table in the bubble')
+    return {
+      table: { scrollWidth: table.scrollWidth, clientWidth: table.clientWidth },
+      bubble: { scrollWidth: bubble.scrollWidth, clientWidth: bubble.clientWidth }
+    }
+  })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -1217,4 +1264,40 @@ test('a fence with no language draws no bar and no line where the bar would be',
   // "No line" is about that doubled edge and not about the block losing its outline: the box itself still
   // carries its own hairline top border.
   expect(fence.blockBorderTopWidth).toBe(HAIRLINE)
+})
+
+test('a table too wide for the bubble scrolls inside itself, pushing neither the bubble nor the thread', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheReplies(page)
+
+  // #1079 AC2, and the only tier that can see it: the static renderer tier is `renderToStaticMarkup`
+  // under environment: 'node', with no DOM and no layout, so it can read that a <table> was emitted but
+  // never what the browser does with one.
+  //
+  // A table is the one markdown construct that cannot ellipsis or wrap its way out of a narrow bubble —
+  // a column of unbreakable tokens has a min-content width and that is that. So the treatment is a
+  // scroll box on the table itself (conversation.css, `.bubble__markdown table`), and these two
+  // assertions are its two halves.
+  const { table, bubble } = await readTableMetrics(page, TABLE)
+
+  // (a) THE OVERFLOW IS REAL AND IT IS CONTAINED HERE. Strictly greater, with no tolerance: the fixture
+  // is six columns of ~28-character unbreakable tokens against a bubble capped at min(680px, 75%), so
+  // this is not a subpixel question. It is also the VACUITY GUARD for (b) — were the fixture ever to
+  // start fitting, (b) would hold on a build with no overflow treatment at all and prove nothing.
+  expect(table.scrollWidth).toBeGreaterThan(table.clientWidth)
+
+  // (b) AND NOTHING ESCAPED. The bubble's own box is capped by its parent, so its bounding-box WIDTH
+  // could never redden — scrollWidth is what an overflowing descendant raises. This is the assertion
+  // that goes red when the overflow declaration is deleted, and that was checked rather than assumed:
+  // removing `overflow-x: auto` was measured to break this line and (a) together.
+  expect(bubble.scrollWidth).toBeLessThanOrEqual(bubble.clientWidth + SUBPIXEL_TOLERANCE_PX)
+
+  // The thread too, which is the over-correction guard #607 carried and every sibling assertion here
+  // keeps: a bubble that contained its own overflow while the thread grew a scrollbar would still be
+  // the defect this criterion is about.
+  const thread = await readThreadWidths(page)
+  expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
 })

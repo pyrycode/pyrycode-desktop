@@ -359,3 +359,48 @@ Each is resolved during Phase B and recorded in a `## Revisions` entry if it cha
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-05
+
+## Revisions
+
+### 2026-09-05 — the alignment sink is `style`, not the `align` attribute (measured)
+
+Mid-implementation a source read of `mdast-util-to-hast/lib/handlers/table-row.js` showed
+`properties.align = alignValue` and I briefly recorded the sink as the legacy `align` **attribute**. The
+rendered markup says otherwise: `mdast-util-to-hast`'s `tableCellAlignToStyle` option is **on by
+default** and rewrites it, so what actually ships is `<th style="text-align:left">`. The plan's security
+review had it right the first time — the sink is an inline **style string**, i.e. a CSS sink — and the
+finding stands unchanged. Only the unit assertions and their comments moved to the measured form.
+
+**What this cost, and the lesson:** a source read one file short of the end is not a measurement. The
+test is what settled it, which is the argument for writing the assertion before believing the answer.
+The closed-enum property itself is unaffected and was confirmed at its own source
+(`micromark-extension-gfm-table/lib/infer.js`: `Align = 'center' | 'left' | 'none' | 'right'`, built
+from micromark event types, never from delimiter-cell text).
+
+### 2026-09-05 — Open question 1 resolved: `display: block` overflows as designed
+
+The scroll box works and the fallback wrapper-div route was not needed, so no design changed.
+`e2e/assistant-whitespace.spec.ts`'s new case measures the table's `scrollWidth` strictly above its
+`clientWidth` while the bubble's and the thread's stay within tolerance.
+
+**AC2's redden-check, run rather than assumed.** With `overflow-x: auto` deleted from
+`.bubble__markdown table` and the app rebuilt, the spec fails on the bubble assertion with
+`scrollWidth 1778` against `clientWidth 485` — the table pushes the bubble more than three times past
+its measure. Restored, and green. The detector detects.
+
+### 2026-09-05 — Open question 2 resolved: `markdown-table` does not reach the renderer bundle
+
+Zero occurrences of `markdownTable` in `out/renderer/assets/*.js`; the built renderer chunk is 849 kB.
+It is `mdast-util-gfm-table`'s **serialiser** dependency and this path only ever parses, so tree-shaking
+drops it. It remains a real `node_modules` entry and so a real supply-chain line item — that is the
+honest count for the reviewer — but it ships no bytes.
+
+### 2026-09-05 — supply-chain check (§ Security review, mandated)
+
+None of the three added packages carries an `install`, `preinstall` or `postinstall` script; the only
+lifecycle hook is `prepack` on `mdast-util-gfm-table`, which runs at publish time for the maintainer and
+never on a consumer install. Repositories are `micromark/micromark-extension-gfm-table`,
+`syntax-tree/mdast-util-gfm-table` and `wooorm/markdown-table` — the same maintainership as the
+react-markdown tree already installed. Resolved versions: `micromark-extension-gfm-table@2.1.1`,
+`mdast-util-gfm-table@2.0.0`, `markdown-table@3.0.4`, plus the type-only `remark-parse@11.0.0` and
+`unified@11.0.5`.

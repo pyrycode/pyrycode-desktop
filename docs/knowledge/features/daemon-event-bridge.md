@@ -167,10 +167,10 @@ A `switch (event.type)` over all forty `DaemonEvent` arms with a `default: retur
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
-| `connecting` | `{ type: 'connecting' }` | — |
-| `connected` | `{ type: 'connected', ack }` | `HelloAckPayload` passed **by reference** |
-| `disconnected` | `{ type: 'disconnected' }` | — |
-| `failed` | `{ type: 'failed', error: { code, message, retryable } }` | **explicit three-field copy** of the wire `ErrorPayload` into a fresh store-owned `ConnectionError` |
+| `connecting` | `{ type: 'connecting', serverId: originOf(event) }` | — |
+| `connected` | `{ type: 'connected', ack, serverId: originOf(event) }` | `HelloAckPayload` passed **by reference** |
+| `disconnected` | `{ type: 'disconnected', serverId: originOf(event) }` | — |
+| `failed` | `{ type: 'failed', error: { code, message, retryable }, serverId: originOf(event) }` | **explicit three-field copy** of the wire `ErrorPayload` into a fresh store-owned `ConnectionError` |
 | `messageReceived` | `{ type: 'messageReceived', message }` | `MessagePayload` passed **by reference** |
 | `messagesReceived` | `{ type: 'messagesReceived', messages }` | `readonly MessagePayload[]` passed **by reference** |
 | `debugBundleProgress` | `null` | consumed by the download UI (#72), not the session store |
@@ -197,6 +197,12 @@ A `switch (event.type)` over all forty `DaemonEvent` arms with a `default: retur
 | `backgroundTaskStarted` | `null` | consumed by none of the three existing bridges; present only for exhaustiveness (#564). Ships dormant — [the roster store (#573, shipped)](../codebase/573.md) consumes only `backgroundTaskRoster`, not this arm; awaiting #574. First of three sibling frame arms (#565/#566 follow) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
+
+**The four session-lifecycle arms also carry their origin, since #1133.** Each of `connecting` / `connected` / `disconnected` / `failed` now stamps `serverId: originOf(event)` onto the action it returns, so [the session store](session-store.md#one-slot-per-server-since-1133) can file each server's status into its own slot. `originOf(event: DaemonEvent): StatusOrigin` is a module-local function reading [#1068](daemon-event-channel-plumbing.md)'s stamp with the same `in`-guard-plus-`typeof` idiom `liveWindow.ts`'s main-side `originOf` uses: `!('serverId' in event)` → `undefined` (unbound producer); `serverId === null` → `null` (the not-paired stand-in); a string → that string.
+
+`translateDaemonEvent` deliberately **keeps its bare-`DaemonEvent` parameter** rather than being re-declared to take `StampedDaemonEvent`: 51 existing test calls pass bare event literals, and a re-declared parameter would only compile at the call site through unsound method-parameter bivariance. So the stamp arrives structurally at a statically bare-union-typed parameter, and `originOf`'s `in`-guard is what reads through that hole — the renderer twin of the same hole `liveWindow.ts` documents on the main side.
+
+The origin is read **only** from the stamp, **never** from a payload field — most importantly never from `connected`'s `ack.server_id`, a distinct value the daemon supplies. The stamp itself is bound main-side at construction from a client-held paired record, so a hostile or confused daemon cannot make its own event claim another server's slot. This is asserted by a dedicated test (a `connected` event stamped for server A whose `ack.server_id` names server B must file under A, and B must read `undefined`), not merely documented.
 
 **Exhaustiveness is the AC1 guarantee.** Adding a 10th `DaemonEvent` member with no `case` makes `event` non-`never` at the `default`, so `assertNever(event)` fails `npm run typecheck`. That type error *is* "adding a variant with no mapping is a compile-time error." [#168](../codebase/168.md) proved this in practice: adding three members to `DaemonEvent` broke this switch until matching cases landed — the forced consequence the ticket's spec called out up front.
 
@@ -270,7 +276,8 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 ## Related
 
 - [Daemon-event channel](daemon-event-channel.md) — the `DaemonEvent` union + `onDaemonEvent` subscription this consumes (#18); gained three no-store-action members in [#168](../codebase/168.md)
-- [Session store](session-store.md) — the `SessionAction` write surface + app-singleton `sessionStore` this dispatches into (#2)
+- [Session store](session-store.md#one-slot-per-server-since-1133) — the `SessionAction` write surface + app-singleton `sessionStore` this dispatches into (#2); since #1133 the four status arms carry `originOf(event)` so the store can file each server's status into its own slot
+- [Live window](live-window.md#one-slot-per-server-since-1121) — #1121, the main-side precedent for the same stamp-only-origin rule, applied to the reopened-window status cache
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download the three tolerated events report on
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member this bridge tolerated as a fourth `null`-returning case (removed [#621](../codebase/621.md)), and the concrete "renderer needs zero change" correction
 - [#621 codebase notes](../codebase/621.md) — removed the `snapshotReceived`/`screenSnapshotReceived` cases this bridge tolerated, once both were unconsumed; the `assertNever` default still terminates the switch

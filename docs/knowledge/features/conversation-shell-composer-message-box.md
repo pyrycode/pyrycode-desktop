@@ -225,15 +225,45 @@ not a convention repeated at each call site.
 
 **`ContextUsageReading({ usedTokens, windowTokens })`** — the pure view, beside `ComposerErrorChip` in
 `ConversationScreen.tsx` (the exact pair this ticket clones, [Composer error chip](#composer-error-chip-797)
-above). Returns `null` when `contextUsagePercent` does; otherwise exactly one
-`<span className="composer__context">Context: {pct}%</span>`, a single template-literal text run. Every
-property `ComposerErrorChip` established carries over unedited: a `<span>` (this repo ships no global
-box-sizing/margin reset, so a `<p>`'s UA margin is a live layout hazard against the row's held height),
-no attribute beyond `className` (no `onClick`, `tabIndex`, `role`, `title`, `aria-*` — it is a reading,
-not a control), and no live region (`aria-live` would announce a percentage after every turn once #810
-made the figures live). Unlike the error chip, there is no daemon-supplied *string* on this path at all —
-the only interpolated value is an integer in `[0, 100]`, so none of #796/#797's escaping/attribute-sink
-questions apply here.
+above). Returns `null` when `contextUsagePercent` does; otherwise exactly one `<span>`, its class and text
+now stepped by severity (#1062, operator ruling 2026-09-04). Every property `ComposerErrorChip` established
+still carries over unedited: a `<span>` (this repo ships no global box-sizing/margin reset, so a `<p>`'s UA
+margin is a live layout hazard against the row's held height), no attribute beyond `className` (no
+`onClick`, `tabIndex`, `role`, `title`, `aria-*` — it is a reading, not a control), and no live region
+(`aria-live` would announce a percentage after every turn once #810 made the figures live). There is no
+daemon-supplied *string* on this path at all — the only interpolated value is an integer in `[0, 100]`, so
+none of #796/#797's escaping/attribute-sink questions apply here.
+
+**The severity ladder — `contextUsageStep(percent): 'primary' | 'warning' | 'error'`**, beside
+`contextUsagePercent` in the same file. One descending comparison (`>= 70` → `error`, `>= 50` → `warning`,
+else `primary`), both boundaries inclusive and stated exactly once: 49 is primary, 50 and 69 are warning,
+70 is error. The two literals are not exported as named constants — `contextUsage.test.ts` hard-codes them
+so a `>`/`>=` slip at either boundary reddens a test rather than passing against its own symbol. Total over
+`number`: `NaN` falls through both comparisons to `primary`, the arm the reading has always painted, though
+the caller can't reach it anyway (`contextUsagePercent` returns `null` first). The step names are the
+`--color-*` token suffixes and the `.composer__context--*` class modifiers verbatim, so the mapping from
+step to paint is nominal at every layer.
+
+The view renders three ways: the primary step's markup is byte-identical to what shipped before #1062 —
+`<span className="composer__context">Context: {pct}%</span>` — the warning step appends the modifier
+(`composer__context composer__context--warning`, base class kept leading so substring lookups elsewhere in
+this row's tests keep matching) with the same text, and the error step appends `--error` and swaps the text
+to `Context high: {pct}%`. The word rides the top step alone: below 70% the percentage is already legible
+as text, so colour is emphasis and WCAG 1.4.1 holds without a second channel; at 70% the message becomes
+actionable, which is the one step where a reader who cannot separate amber from the row's blue would lose
+something real. A word rather than a glyph, since a glyph inside a text run can't be hidden from a screen
+reader. `.composer__context--warning`/`--error` in `conversation.css` are each a single `color` declaration
+naming `--color-warning`/`--color-error` — equal specificity to the base rule, so they must stay below it
+in source order to win. **The [run-configuration context gauge](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192)
+deliberately does not follow this ladder** — `.run-config__context-fill` stays `--color-success` at every
+value, so the two surfaces can show different colours for the same number today; keeping the ladder in
+`contextUsage.ts` rather than in the stylesheet is what leaves the bar one class away from adopting it
+later.
+
+The five-character growth at the top step (`Context: 100%` → `Context high: 100%`, 13 → 18 characters, the
+`white-space: nowrap` bound `.composer__context` re-states) lands on a row that was already overflowing its
+800px-minimum-window content box before this ticket touched it — filed as its own follow-up rather than
+fixed here, since widening the row is a footer-layout change this ticket has no reason to make.
 
 **`ContextUsageControl()`** — module-private container, the single-selector-read shape #797's
 `ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963, above):

@@ -263,8 +263,11 @@ export interface HelloClientPayload {
   // The last event/message timestamp this client has already seen (RFC3339). The daemon uses
   // it for backfill-on-reconnect (daemon HelloClientPayload.LastSeenTS, *time.Time,omitempty).
   // Omitted when nothing has been seen yet — that absence is the "nothing seen" signal, so the
-  // daemon backfills nothing. Replaces the earlier `last_event_id`, which was not a field the
-  // daemon or the mobile client speaks.
+  // daemon backfills nothing. Supersedes `last_event_id` for THIS client's resume: the daemon does
+  // speak that field — it declares `LastEventID` on the handshake payload and reads it to drive
+  // replay — so the choice here is which of the two to send, not whether the other exists. (Corrected
+  // #1068; this comment previously asserted the daemon did not speak it, which is the reverse of the
+  // truth. The matching correction on the daemon side is filed on the pyrycode board.)
   last_seen_ts?: string
 }
 

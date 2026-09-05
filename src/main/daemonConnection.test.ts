@@ -7,7 +7,7 @@ import {
   type DaemonConnectionDeps
 } from './daemonConnection'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
-import type { DaemonEvent } from '../shared/ipc/events'
+import type { DaemonEvent, StampedDaemonEvent } from '../shared/ipc/events'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
 import type {
@@ -150,8 +150,23 @@ function fakeSink(): DaemonEventSink & {
   }
 }
 
+/**
+ * The events this connection emitted, WITHOUT their server origin (#1068) — the `DaemonEvent[]` this
+ * helper's signature has always promised. Every assertion in this file reads through it (directly, or
+ * through the `rejections` / `modalRejections` / `folderRejections` filters), and none of them is
+ * about the origin, so projecting the stamp away here keeps each one asserting the thing it was
+ * written to assert instead of restating `serverId: null` eighty-odd times.
+ *
+ * The field itself is not left uncovered: `stampedEvents` below exposes the raw channel payloads and
+ * the "#1068 — server origin" block asserts on those.
+ */
 function emitted(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
-  return sink.webContents.send.mock.calls.map((call) => call[1] as DaemonEvent)
+  return stampedEvents(sink).map(({ serverId: _origin, ...event }) => event as DaemonEvent)
+}
+
+/** The raw channel payloads, stamp included — what the window actually receives. */
+function stampedEvents(sink: ReturnType<typeof fakeSink>): StampedDaemonEvent[] {
+  return sink.webContents.send.mock.calls.map((call) => call[1] as StampedDaemonEvent)
 }
 
 // --- diagnostic-log capture ----------------------------------------------------------------
@@ -189,6 +204,7 @@ function build(
     diagnosticLog?: DiagnosticLog
     mintToken?: () => string
     timing?: DaemonConnectionDeps['timing']
+    serverId?: string | null
   } = {}
 ): {
   connection: DaemonConnection
@@ -201,6 +217,10 @@ function build(
   const deps: DaemonConnectionDeps = {
     ...stores,
     sink,
+    // The server-origin binding (#1068). Defaults to null — what the composition root passes today —
+    // so every pre-existing test keeps emitting exactly the events it always did, plus a null stamp
+    // that `emitted()` below projects away. The origin tests override it.
+    serverId: overrides.serverId ?? null,
     deviceName: 'my-desktop',
     clientVersion: '0.1.0',
     now: () => FIXED_TS,
@@ -7540,5 +7560,90 @@ describe('requestAttachment (#996)', () => {
       expect(line).not.toContain(RETRIEVED_CONVERSATION)
       expect(line).not.toContain(sha256Hex(new Uint8Array([8, 8, 8])))
     }
+  })
+})
+
+// --- #1068 — server origin -------------------------------------------------------------------
+// The connection is bound to one server at CONSTRUCTION and stamps every event it emits with that
+// id, so a renderer holding several live connections (#1084) can tell their events apart. These are
+// the only tests in this file that read the raw channel payloads; every other assertion reads through
+// `emitted()`, which projects the stamp away.
+describe('daemonConnection — server origin (#1068)', () => {
+  it('stamps the injected id onto every event the connection emits', async () => {
+    // Across a whole dial, so the pre-record event (`connecting`), the handshake terminal and an
+    // inbound frame are all covered — the id is bound at construction, so none of them can miss it.
+    const ctx = build({ serverId: 'srv-a' })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: messagePlaintext({
+        conversation_id: 'c1',
+        message_id: 'm1',
+        role: 'assistant',
+        text: 'hi'
+      })
+    })
+
+    const events = stampedEvents(ctx.sink)
+    expect(events.length).toBeGreaterThanOrEqual(3)
+    expect(events.map((e) => e.serverId)).toEqual(events.map(() => 'srv-a'))
+    // The stamp rides ALONGSIDE the event, never in place of it.
+    expect(events[0]).toEqual({ type: 'connecting', serverId: 'srv-a' })
+    expect(events.some((e) => e.type === 'connected')).toBe(true)
+  })
+
+  it('makes two connections with different ids distinguishable by the field alone (AC3)', async () => {
+    // Same event, same shape, two servers: `serverId` is the only thing that separates them.
+    const a = build({ serverId: 'srv-a' })
+    const b = build({ serverId: 'srv-b' })
+    a.connection.start()
+    b.connection.start()
+    await tick()
+
+    const [first] = stampedEvents(a.sink)
+    const [second] = stampedEvents(b.sink)
+    expect(first).toEqual({ type: 'connecting', serverId: 'srv-a' })
+    expect(second).toEqual({ type: 'connecting', serverId: 'srv-b' })
+    const { serverId: _a, ...firstEvent } = first
+    const { serverId: _b, ...secondEvent } = second
+    expect(firstEvent).toEqual(secondEvent)
+  })
+
+  it('stamps a null binding as a present null, on the not-paired terminal too', async () => {
+    // What production emits today, and the two events the ticket calls out as origin-free even after
+    // #1084 would have a record to read: `connecting` fires before any load, and failed(not-paired)
+    // has no record at all. Both still carry the field — as a PRESENT null, never an absent property.
+    const ctx = build({ serverId: null, load: () => Promise.resolve(null) })
+    ctx.connection.start()
+    await tick()
+
+    const events = stampedEvents(ctx.sink)
+    expect(events[0]).toEqual({ type: 'connecting', serverId: null })
+    expect(events[1].type).toBe('failed')
+    for (const event of events) {
+      expect('serverId' in event).toBe(true)
+      expect(event.serverId).toBeNull()
+    }
+  })
+
+  it('keeps the id out of every emit call site — a re-pair mid-session cannot change it', async () => {
+    // The binding is a construction dependency, not an emit-time read of the paired record: the
+    // record loads per dial, AFTER the first event. Reconnecting re-reads the record and must not
+    // re-attribute anything, which is why the composition root passes null for a connection that
+    // outlives a re-pair.
+    const ctx = build({ serverId: 'srv-a' })
+    ctx.connection.start()
+    await tick()
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[ctx.drivers.length - 1].emit({
+      type: 'handshake-complete',
+      helloAck: validHelloAck()
+    })
+
+    const ids = new Set(stampedEvents(ctx.sink).map((e) => e.serverId))
+    expect([...ids]).toEqual(['srv-a'])
   })
 })

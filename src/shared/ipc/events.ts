@@ -985,3 +985,58 @@ export type DaemonEvent =
       models: readonly WireModelOption[]
       droppedModels: number
     }
+
+/**
+ * Which server an event came from (#1068). Carried BESIDE the union rather than inside it: the app
+ * will hold several paired servers at once (#1084 builds the connection registry), and the renderer
+ * cannot tell two connections' events apart without an origin on every event.
+ *
+ * `null` means NO PAIRED RECORD WAS IN HAND when the emitter was bound — an honest unknown, and today
+ * the value on every event in production, because the one connection is constructed at launch before
+ * any record is read and it outlives a re-pair (`onPaired` reconnects the same connection rather than
+ * rebuilding it), so a launch-time literal would be right at boot and would silently mis-attribute
+ * every event after the operator pairs a different machine. It is a PRESENT null, never an absent
+ * property: `undefined` here would mean an emitter that never went through a binding at all.
+ *
+ * PROVENANCE: the paired record's `server` field (`PairedServerRecord = QrPayload`), the same value
+ * that rides the `X-Pyrycode-Server` relay header and the same one `ServerInfo.serverId` already
+ * crosses on. Deliberately NOT `hello_ack.server_id`, which is a DISTINCT value — `serverInfo.ts`
+ * ruled this already and the reason is worth restating: the id is bound at CONSTRUCTION from a record
+ * this client holds, so a hostile or confused daemon cannot make its events claim another server's
+ * identity, which a wire-sourced id would let it do.
+ *
+ * SECURITY: it is a NON-SECRET ROUTING ID, one of the two safe record fields — `token` and
+ * `server_static_pubkey` are structurally unreachable from this path, which is handed a `string | null`
+ * scalar and never a record. Like every daemon-adjacent string on this channel it is PLAIN TEXT ONLY at
+ * the render boundary: never into a raw-markup sink (no innerHTML / dangerouslySetInnerHTML), never
+ * into an attribute or a URL, and never a filename, a cache key or a lookup path — if a consumer
+ * indexes by it, THE INDEX IS A `Map` (a `__proto__` id would write through Object.prototype on a bare
+ * object). It is a REPORT, not a control input: no security-relevant behaviour may branch on it.
+ */
+interface ServerOrigin {
+  serverId: string | null
+}
+
+/**
+ * Distributes `ServerOrigin` over each arm of a union. Written as a distributive conditional rather
+ * than the plainer `DaemonEvent & ServerOrigin` so the result is a genuine 43-arm union of stamped
+ * members: `.type` narrowing and `Extract<…>` then behave for consumers exactly as they do on the bare
+ * union, which a single unnormalised intersection does not reliably give.
+ */
+type WithOrigin<E> = E extends unknown ? E & ServerOrigin : never
+
+/**
+ * What actually travels on DAEMON_EVENT_CHANNEL (#1068): a `DaemonEvent` plus the id of the server it
+ * came from. An INTERSECTION over the existing union, never a member added to each of the 43 arms —
+ * that choice is the whole reason this is one slice rather than three. It keeps the union's arms
+ * untouched, so the 33 test files that build bare `DaemonEvent` literals for the renderer bridges
+ * still compile, and it makes the two directions of assignability do the work:
+ *
+ *   - a StampedDaemonEvent IS a DaemonEvent, so every consumer typed on the bare union — the 27
+ *     renderer subscribers included — keeps compiling and receives the field as an extra property;
+ *   - a DaemonEvent is NOT a StampedDaemonEvent, so a producer cannot claim to have stamped one.
+ *
+ * The stamp is applied MAIN-SIDE, AFTER decode, by `bindServerOrigin` (emitDaemonEvent.ts), and is
+ * read by no outbound envelope builder — it cannot reach the wire.
+ */
+export type StampedDaemonEvent = WithOrigin<DaemonEvent>

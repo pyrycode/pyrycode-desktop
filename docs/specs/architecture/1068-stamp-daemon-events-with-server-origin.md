@@ -293,3 +293,24 @@ either — the field, its binding and its three emitters have no compiling inter
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-05
+
+## Revisions
+
+**2026-09-05 — Open question 1 resolved, no fallback needed.** The distributive `WithOrigin<DaemonEvent>`
+accepts `{ ...event, serverId }` when `event` is the 43-arm union, and `tsc` is green on both
+`tsconfig.node.json` and `tsconfig.web.json`. The plain `DaemonEvent & ServerOrigin` fallback is not
+used, so `.type` narrowing and `Extract<…>` keep working on the stamped union for #1084. One detail the
+plan did not anticipate: the spread has to be bound to a typed local inside `bindServerOrigin` rather
+than passed inline, because a fresh object literal in argument position is excess-property-checked
+against the parameter's bare `DaemonEvent` and `serverId` is rejected there. Noted in the function.
+
+**2026-09-05 — `daemonConnection.roundtrip.test.ts` was NOT untouched, contrary to the Testing
+strategy.** It builds its own sink and compares one whole event (`expectedModalShown`, asserted twice)
+against the raw channel payload, so it does not read through `daemonConnection.test.ts`'s `emitted()`
+projection. Fixed by the literal gaining `serverId: null` — the edit AC5 anticipates — rather than by
+stripping at that suite's sink: this is the one suite that drives the real decode/emit/guard stack end
+to end, so it is worth keeping as the witness that the stamp survives it. Its two
+`createDaemonConnection` calls also gained the now-required `serverId: null`.
+
+Open question 2 (tightening `emitDaemonEvent` / `DaemonEventSink` to `StampedDaemonEvent` so an
+unstamped event cannot reach the channel by construction) stands as filed — deferred, not resolved.

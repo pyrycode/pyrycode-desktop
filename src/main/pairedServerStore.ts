@@ -40,10 +40,12 @@ export type PairedServerRecord = QrPayload
 
 /**
  * The paired-server accessor. `save` persists the record, adding it to the collection or replacing
- * the entry that already holds its `server` id (#1069 — before that it overwrote the one slot);
- * `load` retrieves the most recently saved entry with the absent-vs-undecryptable-vs-malformed
- * semantics below. Both are main-process only. No in-memory cache: `load` reads through each call,
- * so a re-pair is observed immediately.
+ * the entry that already holds its `server` id (#1069 — before that it overwrote the one slot); a
+ * stored collection that is present but unreadable is overwritten rather than rejected, so
+ * re-pairing stays the recovery from a corrupt blob (a decrypt failure still rejects). `load`
+ * retrieves the most recently saved entry with the absent-vs-undecryptable-vs-malformed semantics
+ * below. Both are main-process only. No in-memory cache: `load` reads through each call, so a
+ * re-pair is observed immediately.
  */
 export interface PairedServerStore {
   save(record: PairedServerRecord): Promise<void>
@@ -83,11 +85,17 @@ export interface MultiPairedServerStore extends ClearablePairedServerStore {
 }
 
 /**
- * Thrown by `load` when a blob is PRESENT and decrypts, but is not a valid record — not JSON, not
- * an object, or a missing / non-string field. The message is static and carries NO field value (no
- * token, no URL, no bytes). It lets the consumer branch to a "re-pair" recovery rather than treat a
- * corrupt record as never-paired (ADR 0005: a tampered record is never silently mistaken for
- * never-paired).
+ * Thrown by every READ when a blob is PRESENT and decrypts, but is not a valid collection — not
+ * JSON, neither accepted shape, a missing / non-string field, or a repeated `server` id. The message
+ * is static and carries NO field value (no token, no URL, no bytes). It lets the consumer branch to
+ * a "re-pair" recovery rather than treat a corrupt record as never-paired (ADR 0005: a tampered
+ * record is never silently mistaken for never-paired).
+ *
+ * That recovery is real because `save` OVERWRITES an unreadable collection instead of rejecting on
+ * it (see `readForSave`): re-pairing is the exit from a corrupt blob, and the only one the app
+ * offers, since the not-paired routes reach nothing but the pairing screen. A decrypt failure is
+ * deliberately not folded in — it is a different error, it may be transient keychain state, and
+ * discarding every real pairing on it would be worse than failing.
  */
 export class MalformedPairedServerRecordError extends Error {
   constructor(message = 'stored paired-server record is malformed') {
@@ -201,8 +209,10 @@ function decodeCollection(blob: Uint8Array): PairedServerRecord[] {
  * Build a MultiPairedServerStore over the injected persistence seam. Writes go through
  * SecureStore.set (fail-closed: keychain-unavailable throws EncryptionUnavailableError before any
  * write). Reads go through SecureStore.get: absent → empty (the ONLY not-paired path), a decrypt
- * failure propagates, and a decrypted-but-malformed blob throws — never coerced to null. No cache,
- * no timers, no listeners: nothing to cancel on teardown.
+ * failure propagates, and a decrypted-but-malformed blob throws — never coerced to null — from every
+ * read. `save` is the one exception (see `readForSave`): it overwrites a malformed collection, since
+ * re-pairing is the app's only recovery from one. No cache, no timers, no listeners: nothing to
+ * cancel on teardown.
  */
 export function createPairedServerStore(deps: {
   secureStore: SecureStore
@@ -215,6 +225,26 @@ export function createPairedServerStore(deps: {
   const read = async (): Promise<PairedServerRecord[]> => {
     const blob = await secureStore.get(name)
     return blob === null ? [] : decodeCollection(blob)
+  }
+
+  // The collection as `save` alone sees it: a blob that decrypts and still cannot be read counts as
+  // empty, so the save overwrites it. Before the collection layout (#1069) `save` was a blind write
+  // and could not fail on a stored blob; giving it a read handed it the ability to reject on the one
+  // state whose only sanctioned exit IS saving. A malformed blob routes the app to welcome, welcome
+  // offers nothing but the Pair CTA, and the one consumer that erases the blob (unpairHandler →
+  // clear) sits behind Settings on the paired route — so a strict save loops the user
+  // welcome → pair → persist-failed with no in-app way out, recoverable only by deleting the file by
+  // hand. Overwriting restores exactly the pre-#1069 recovery, and nothing is lost that was readable.
+  //
+  // A DECRYPT failure is not swallowed here: it propagates, so transient keychain state (rotation, a
+  // locked keychain) fails loudly instead of silently discarding every real pairing the blob holds.
+  const readForSave = async (): Promise<PairedServerRecord[]> => {
+    try {
+      return await read()
+    } catch (error) {
+      if (error instanceof MalformedPairedServerRecordError) return []
+      throw error
+    }
   }
 
   // The mutators are read-modify-write, where `save` used to be a blind write — so two of them
@@ -241,7 +271,7 @@ export function createPairedServerStore(deps: {
       await mutate(async () => {
         // Add or replace BY KEY: an entry already holding this `server` id is dropped and the new
         // one appended, so the saved record is always the most recent — which is what load() reports.
-        const entries = await read()
+        const entries = await readForSave()
         const next = entries.filter((entry) => entry.server !== record.server)
         next.push(record)
         await secureStore.set(name, encodeCollection(next))

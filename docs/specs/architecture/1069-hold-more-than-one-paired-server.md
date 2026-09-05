@@ -319,3 +319,51 @@ entirely when no entry matched, so an idempotent no-op erase cannot fail on an u
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-05
+
+## Revisions
+
+### 2026-09-05 — `save` over an unreadable collection (verifier MUST FIX, PR #1116)
+
+**What the design missed.** § Error handling scoped every malformed / decrypt outcome to *reads*
+("`MalformedPairedServerRecordError` from every read") and never recorded that this change turns
+`save` into a read. § Security review's `[Concurrency]` bullet walked the same read-modify-write
+conversion but only for interleaving, so the error-propagation consequence went unexamined and the
+design was approved without it.
+
+**Why that is a defect, not a detail.** Before this ticket `save` was a blind write and could not
+fail on a stored blob. With a read in front of it, a corrupt or undecryptable blob makes `save`
+throw — and saving is the app's *only* recovery from that state. `pairingStatusHandler` maps the
+read failure to `{ status: 'error' }`, `routeForStatus` sends every non-`paired` status to `welcome`,
+`welcome`'s sole action is the Pair CTA, and the one consumer that erases the blob (`unpairHandler`
+→ `clear()`, which does not read) lives behind Settings on the `conversation` route, reachable only
+when already paired. A strict `save` therefore loops the user welcome → pair → `persist-failed`
+with no in-app exit, recoverable only by hand-deleting the blob under `app.getPath('userData')`.
+This slice *widens* the stakes as well: one corrupt blob now loses N pairings, and `secureStore.ts`
+names keychain rotation — not just tamper — as a cause of a propagating decrypt failure.
+
+**Resolution.** `save` alone reads through `readForSave`, which treats a
+`MalformedPairedServerRecordError` as an empty collection and overwrites the blob; every other read
+(`load`, `loadById`, `list`) stays strict. This restores the pre-#1069 recovery exactly, and nothing
+readable is discarded — the swallowed case is bytes that decrypt and still cannot be parsed.
+
+**A decrypt failure is deliberately not folded in.** It keeps propagating from `save`. It is a
+different error, it may be transient keychain state, and overwriting on it would silently discard N
+*real* pairings that are still on disk. The malformed case has nothing to preserve; the
+undecryptable case may have everything.
+
+**The by-id erase stays strict.** `clearServer` over an unreadable collection rejects rather than
+resolving: a partial erase has nothing to keep, and resolving would report a bearer token gone from
+disk while the bytes holding it are untouched — the fail-closed line the module already holds. It
+has no consumer today, so it opens no dead end, and `clear()` (which never reads) remains the total
+erase that reaches a corrupt blob.
+
+**§ Error handling, corrected.** The table's "Blob present, neither shape" and "Array with a bad
+element, or a duplicate id" rows read *from every read, and from `clearServer`; `save` overwrites*.
+The "Decrypt failure" row is unchanged and now explicitly covers `save`.
+
+**Spec coverage added** (`src/main/pairedServerStore.test.ts`): a re-pair over four corrupt-blob
+shapes lands and leaves a readable one-entry collection; `save` over an undecryptable blob rejects
+and writes nothing; `clearServer` over a corrupt blob rejects while `clear()` still empties it; the
+log-free spy spec extends over the new swallow path. The first spec is the detector — it reddens
+when `save`'s read is put back to the strict one.
+`MalformedPairedServerRecordError`'s doc comment now describes the recovery that exists.

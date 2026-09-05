@@ -289,6 +289,12 @@ describe('createPairedServerStore', () => {
           .catch(() => {})
       }
 
+      // Save-over-a-corrupt-blob recovery path: it swallows the malformed error, so it is exactly
+      // the path where a stray console.* would be tempting.
+      const corrupt = fakeSecureStore()
+      seed(corrupt.store, PAIRED_SERVER_NAME, 'not json')
+      await createPairedServerStore({ secureStore: corrupt.secureStore }).save(RECORD)
+
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally {
       for (const spy of spies) spy.mockRestore()
@@ -509,6 +515,66 @@ describe('createPairedServerStore — more than one paired server', () => {
     await paired.save(SECOND)
 
     expect(await paired.list()).toEqual([SECOND])
+  })
+
+  it('recovers a corrupt blob by re-pairing: save overwrites what no read can parse', async () => {
+    // The collection layout turned `save` from a blind write into a read-modify-write, and with it
+    // gave it the ability to reject on a stored blob. That matters because saving IS the app's only
+    // recovery from a corrupt one: a malformed blob routes to welcome, welcome offers only the Pair
+    // CTA, and clear() sits behind Settings on the paired route. A strict save would loop the user
+    // welcome → pair → persist-failed with no in-app exit.
+    const cases: Array<{ label: string; text: string }> = [
+      { label: 'non-JSON bytes', text: 'not json at all' },
+      { label: 'JSON null', text: 'null' },
+      { label: 'array with an incomplete element', text: '[{"server":"a"}]' },
+      { label: 'duplicate server ids', text: JSON.stringify([RECORD, RECORD]) }
+    ]
+
+    for (const { label, text } of cases) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, PAIRED_SERVER_NAME, text)
+      const paired = createPairedServerStore({ secureStore })
+
+      // The read still reports the corruption to whoever asks...
+      await expect(paired.load(), label).rejects.toBeInstanceOf(MalformedPairedServerRecordError)
+      // ...and the re-pair still lands, leaving a readable one-entry collection behind.
+      await expect(paired.save(SECOND), label).resolves.toBeUndefined()
+
+      expect(await paired.load(), label).toEqual(SECOND)
+      expect(readBlob(store), label).toEqual([SECOND])
+    }
+  })
+
+  it('save still rejects on a decrypt failure and persists nothing', async () => {
+    const { secureStore, store, control, writes } = fakeSecureStore()
+    seed(store, PAIRED_SERVER_NAME, JSON.stringify([RECORD]))
+    control.getError = new Error('authenticated decryption failed')
+    const paired = createPairedServerStore({ secureStore })
+
+    // Not folded into the malformed case: an undecryptable blob may be transient keychain state, so
+    // overwriting it would discard real pairings that are still there.
+    await expect(paired.save(SECOND)).rejects.toThrow('authenticated decryption failed')
+
+    expect(writes).toHaveLength(0)
+    control.getError = null
+    expect(await paired.list()).toEqual([RECORD])
+  })
+
+  it('keeps the by-id erase strict on a corrupt blob, leaving clear() as the total erase', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    seed(store, PAIRED_SERVER_NAME, 'not json at all')
+    const paired = createPairedServerStore({ secureStore })
+
+    // Unlike save, a partial erase over an unreadable collection has nothing to keep: resolving
+    // would report a token gone from disk while the bytes holding it are still there.
+    await expect(paired.clearServer(RECORD.server)).rejects.toBeInstanceOf(
+      MalformedPairedServerRecordError
+    )
+    expect(store.has(PAIRED_SERVER_NAME)).toBe(true)
+
+    // clear() never reads, so the whole-store erase reaches a corrupt blob unchanged.
+    await paired.clear()
+    expect(store.size).toBe(0)
   })
 
   it('fails closed on a partial erase: a write failure leaves the prior blob intact', async () => {

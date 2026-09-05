@@ -112,8 +112,9 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   // the arrow gone there is no control left to drive it, and the step is deleted rather than kept alive by
   // a synthetic route dispatch: that would pin a flip the thread can no longer reach. The spec's other
   // half — opening a row FILLS the pane — is step 1a above, untouched, and is what this spec is for. The
-  // empty pane is still reached and still asserted, by the shell's own entry route and by steps 6 and 8
-  // below; `paired-shell-card.spec.ts` still measures that it draws the card.
+  // empty pane is still REACHED here, by the shell's own entry route and by the `back` in steps 6 and 8
+  // below, but this spec no longer ASSERTS it is empty: those steps read `list` alone and never the pane.
+  // The surviving empty-pane assertion is `paired-shell-card.spec.ts`'s `children.length === 0`.
   //
   // 3. thread → settings (open the gear entry). It runs from the THREAD route now rather than from the
   // list, which the two-pane shell makes equivalent: the sidebar carrying the gear is mounted either way,

@@ -234,3 +234,56 @@ files as a single S ticket.
    four production files to six, over the boundary. Flagged here for the documentation phase, which owns
    `conversation-shell-chrome.md` § "Back control (#140)" and will restate that section as the history of
    a deleted control in the shape #1061 established.
+
+## Revisions
+
+### 2026-09-05 — verifier rework (PR #1110 review)
+
+The verifier passed the production change and failed the PR on one test-side finding, plus two
+comment-accuracy items and three nits. All six are addressed on the same branch. The design of the
+production change is unchanged; what changed is one e2e gate and five comments.
+
+**MUST FIX — `conversation-create-rename`'s AC3 gate went non-detecting (design error in § 5).**
+The plan classified this spec's back-arrow click as throwaway navigation, along with the other seven.
+That was wrong: in this one spec the round trip was doing a second job. It also parked the drive on
+route `list`, where `.conversation__overflow-trigger` is *absent* — and that absence is precisely what
+made the next `toBeVisible()` a create-nav gate. With the click deleted the drive never leaves the
+thread, so the trigger is mounted from `launchPairedApp` onward and the assertion resolved whether or
+not create-nav happened, while its comment still claimed it was the gate.
+
+The new contract: gate on **which conversation is open** rather than on the trigger's presence.
+`aria-current="true"` marks the open sidebar row (#1098) and tracks `activeConversation`, which
+`useConversationCreatedNav` moves onto the minted row; the created row is unnamed
+(`titleFor(null)` = `'Untitled'`) where SEED is named, so reading the marked row's title separates the
+two. A create-nav regression leaves the mark on SEED and reddens. This mirrors
+`conversation-switch-keeps-both-threads`'s `expectOnlyOpenRow` rather than inventing a locator idiom.
+
+Chosen over the review's suggested alternative (asserting the rename dialog's `"Untitled"` prefill)
+because it restores the detector *at the step it belongs to* — immediately after the FAB click, where
+AC3's claim is made — rather than several interactions downstream inside AC4's rename flow, where a
+failure would no longer name create-nav as the thing that broke.
+
+**The general lesson, recorded because the plan's per-spec analysis is what missed it:** "the deleted
+click only existed to reach the sidebar" was checked against what *follows* the click, and that is not
+sufficient. A navigation click also establishes a *route*, and an assertion after it may be gating on
+something that is only observable from that route. The sibling `conversation-archive-lifecycle` is the
+contrast case and survives untouched: its Archive round trip independently lands on `list` before its
+own FAB click, so its identical trigger auto-wait still gates.
+
+**SHOULD FIX ×2 — comment claims that overreached.**
+- `conversation.css`'s deletion note claimed the class name is "spelled nowhere in this repo any more".
+  It returns 16 hits under `docs/`, three of them live package overviews. Scoped to `src/` and `e2e/`,
+  which is what AC5 actually asks for, and the surviving `docs/` mentions are named as the
+  documentation phase's to hold.
+- `paired-shell-navigation`'s step-2 deletion note credited steps 6 and 8 with asserting the empty
+  pane. They assert `list` is visible and never read the pane. Re-worded to separate *reached* from
+  *asserted*, and to point the surviving assertion at `paired-shell-card`'s `children.length === 0`.
+
+**NIT ×3.** The AC1 detector's name claimed both arms while the body renders only the `onBack` arm
+(name corrected, not a second assertion — there is no code path left for a second arm to discriminate).
+The `#276` comment still read "gated on onBack presence exactly like BackControl" in the present tense;
+re-worded, and it explicitly declines to re-point at the surviving `SettingsScreen` / `ArchiveScreen`
+`BackControl`s, which never shared that gate. Open question 3's file-count argument for leaving symbol
+citations alone does not apply to a file this PR already edits, so this one is fixed here; the two
+untouched files stay out of scope on that argument. Four re-pointed comment lines at 136–152 chars were
+re-flowed to the surrounding ~110-char wrap.

@@ -44,6 +44,11 @@ const SEED: ConversationSummary = {
 // SEED.name so both final assertions (SEED still present / created-under-NEW_TITLE present) stay crisp.
 const NEW_TITLE = 'Created then renamed'
 
+// The FAB-created row's displayed title before the rename: it is minted unnamed (name: null), so
+// titleFor(null) = 'Untitled' — the sibling specs' convention. Used below to tell the created row apart
+// from SEED, which is named, when reading which row the sidebar marks as open.
+const UNTITLED = 'Untitled'
+
 test('create → nav into thread, rename via the Channel-info sheet, both rows re-list', async ({
   launchPairedApp
 }) => {
@@ -70,11 +75,22 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // #515's re-list lands the row in the store, still unnamed). Assert NAVIGATION into a thread, NOT list
   // membership: the list re-renders on the re-list whether or not the app navigated, so a row assertion
   // here would not separate the two. (Since #670 the list stays MOUNTED beside the thread, which only
-  // sharpens the point.) The overflow trigger is absent on the list and present on a thread, so its
-  // auto-wait IS the create-nav gate.
+  // sharpens the point.)
+  //
+  // #1064 REPLACED THIS GATE, because deleting the back arrow took its detector away. It used to read
+  // `expect('.conversation__overflow-trigger').toBeVisible()`, which gated only because the deleted round
+  // trip had parked the drive on route `list`, where that trigger is absent. With the round trip gone the
+  // drive never leaves the thread: `launchPairedApp` ends inside SEED's, `PairedShellView` passes `onBack`,
+  // so the trigger is mounted from launch onward and that assertion would resolve whether or not create-nav
+  // happened. What still separates the two is WHICH conversation is open. `aria-current="true"` marks the
+  // open row (#1098) and follows `activeConversation`, which `useConversationCreatedNav` moves onto the
+  // minted row — so the mark sits on SEED until create-nav lands and on the created row after. Reading the
+  // marked row's title tells them apart, since the created row is unnamed (UNTITLED) where SEED is named:
+  // a create-nav regression leaves the mark on SEED reading 'Seeded channel' and reddens here. The
+  // open-row read mirrors `conversation-switch-keeps-both-threads`'s `expectOnlyOpenRow`.
   await page.locator('.channel-list__fab').click()
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(UNTITLED)
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
-  await expect(overflowTrigger).toBeVisible()
 
   // Open the Channel-info sheet from the thread overflow menu. The sheet mounts reading the
   // activeConversation slice = the created payload (non-null → the Rename pill renders).

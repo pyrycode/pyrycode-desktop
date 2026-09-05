@@ -33,7 +33,9 @@
    arrow only deselected: the sidebar it "returned to" is permanently on screen. `.settings__back` is now
    the canonical statement of that 48px glyph-in-square treatment; this file's own
    `.conversation__overflow-trigger` and `.composer__send` wear it too. Its class name is deliberately
-   spelled nowhere in this repo any more, so a grep for it finds nothing rather than finding an epitaph.
+   spelled nowhere under `src/` or `e2e/` any more, so a grep across the code finds nothing rather than
+   finding an epitaph. It survives in `docs/` — the package overviews and the frozen per-ticket archive
+   record the control's history, which is theirs to keep and is what the documentation phase updates.
 
    THE THREAD STARTS HIGHER BY THE DELETED BOX — 48px plus its --space-1 margins — because this column
    has no top padding and that child was `flex: 0 0 auto`. That lift IS the change, not a regression to

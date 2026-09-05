@@ -4621,14 +4621,17 @@ describe('ConversationScreen — store binding', () => {
   //
   // The accessible name, not the class, is what the assertion reads: AC1 asks for unreachable rather
   // than merely invisible, and a `display: none` rule would still leave the name in the markup.
-  it('renders no back affordance, with or without onBack (#1064 AC1)', () => {
+  it('renders no back affordance on the shell-mounted thread (#1064 AC1)', () => {
     expect(renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)).not.toContain(
       'aria-label="Back"'
     )
   })
 
-  // #276: the thread overflow menu is gated on onBack presence exactly like BackControl — mounted only
-  // when the paired shell wires navigation. When onBack is provided the trailing more_vert trigger
+  // #276: the thread overflow menu is gated on onBack presence — mounted only when the paired shell wires
+  // navigation. That gate used to be shared with this screen's own BackControl, which is the phrasing that
+  // stood here; #1064 deleted that control, so the gate is now the overflow menu's alone. (The name is not
+  // re-pointed at the SettingsScreen / ArchiveScreen BackControls, which still exist: they are separate
+  // per-screen controls that never shared this gate.) When onBack is provided the trailing more_vert trigger
   // renders (its popup advertised via aria-haspopup="menu"); it starts closed, so no menu surface is
   // present at first paint (the open toggle is untested useState glue — effects don't run under server
   // render). The pure view's open/closed contract is proven in the ThreadOverflowMenuView describe above.

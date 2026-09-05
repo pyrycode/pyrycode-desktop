@@ -113,8 +113,9 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
 
   // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
   // (the manual Back click that used to stand here went in #653: the control was unmounted by the time it
-  // would have run, and #1064 has since deleted it outright). This 1→0 delta is the load-bearing navigation proof, and it auto-waits TWO round trips,
-  // not one: archive → conversation_updated → re-list request → conversations → exit.
+  // would have run, and #1064 has since deleted it outright). This 1→0 delta is the load-bearing
+  // navigation proof, and it auto-waits TWO round trips, not one: archive → conversation_updated →
+  // re-list request → conversations → exit.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // Nav to the Archive view. With the manual Back gone, this click can only resolve because the app
@@ -175,8 +176,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
 
   // #652 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back
   // click (the manual Back click that used to stand here went in #652: the control was unmounted by the
-  // time it would have run, and #1064 has since deleted it outright). This 1→0 delta is the navigation proof; it auto-waits the whole
-  // delete → conversation_deleted → exit round trip.
+  // time it would have run, and #1064 has since deleted it outright). This 1→0 delta is the navigation
+  // proof; it auto-waits the whole delete → conversation_deleted → exit round trip.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // AC4 — gone from the Channel List (the load-bearing "deleted from store" proof: this is the one surface

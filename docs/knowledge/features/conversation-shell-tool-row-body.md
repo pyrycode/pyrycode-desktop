@@ -27,7 +27,20 @@ than the 2px of border they actually move by.
 the body frame on a node whose header carries no padding of its own; 8 of that 12 is already the chip's
 own bottom padding (which stands in for the row's absent bottom padding on a collapsed row), so the row's
 gap supplies only the remaining 4 — `--space-1`, not `--space-3`. Collapsed height is unchanged either
-way: `1 + 8 + 20 + 8 + 1 = 38`, still what `e2e/thread-scroll-pin.spec.ts`'s row-count assertions measure.
+way: `1 + 8 + 20 + 8 + 1 = 38`, which `e2e/thread-scroll-pin.spec.ts` now measures inside an overflowing
+thread (until the follow-up below it only counted rows there).
+
+**The row must state `flex: 0 0 auto`, and the first build without it shipped.** Found in the
+running app on 2026-09-05, the afternoon #1102 merged: every tool row in a real chat had shrunk to a
+2px blue line. The clip is the cause. A flex item whose overflow is not visible has an automatic
+minimum height of 0 rather than its content, and `.conversation__thread` is a scrolling column, so
+as soon as the thread is taller than its viewport the tool rows were the one kind of child free to
+shrink and they gave up all their height, keeping only the two borders. Bubbles do not clip, so
+their content stays their floor. Before #1102 the clip sat on the chip, which is not a child of the
+thread, so nothing shrank. The fix is the stylesheet's own no-shrink idiom on `.tool-row`, and the
+guard is a collapsed-height assertion in `e2e/thread-scroll-pin.spec.ts` — the only spec whose
+thread overflows. `e2e/tool-row-toggle.spec.ts` lays out a thread that never scrolls and cannot
+observe this by construction, which is why the slice's own gate passed.
 
 **Every block in the body now fills the row's content width instead of hugging.** `.tool-row--expanded`
 drops `align-items: flex-start` — held since #722 specifically to keep the body content-sized while the

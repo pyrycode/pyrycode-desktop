@@ -81,6 +81,10 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 const REPLY_TURNS = 20
 const replyText = (turn: number): string => `Streamed reply line ${turn}`
 
+// A collapsed tool row's height: 1px border + 8px chip padding + the 20px summary line + 8 + 1. Asserted
+// below inside the overflowing thread, because that is the only layout in which a shrinkable row shrinks.
+const TOOL_ROW_COLLAPSED_HEIGHT_PX = 38
+
 // Three typed messages with distinct texts. The PRIMER is the one the fake answers with the overflow
 // stream; the other two are pure optimistic-echo plants (buildReplyFrames' non-primer arm below returns no
 // frames), so every send is unambiguous by text as well as by order.
@@ -376,6 +380,15 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // `toolCall` — a non-bubble row.
   daemon.pushFrame(toolUseFrame())
   await expect(page.locator('.tool-row')).toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
+  // ITS COLLAPSED HEIGHT, measured in the one thread in this suite that OVERFLOWS. #1102 put the design's
+  // clip on .tool-row, and a flex item that clips has an automatic minimum height of 0 rather than its
+  // content — so in this scrolling column it was the one child free to shrink, and it shrank to its two
+  // 1px borders: no text, a blue line, seen in the running app on 2026-09-05. e2e/tool-row-toggle.spec.ts
+  // measures every row in a thread that never overflows, so it cannot observe this by construction; the
+  // primer above is what makes this the right place. The expected value is the arithmetic .tool-row's own
+  // comment derives (1 + 8 + 20 + 8 + 1), and the row's flex: 0 0 auto is what holds it.
+  const toolRowBox = await page.locator('.tool-row').boundingBox()
+  expect(Math.round(toolRowBox?.height ?? 0)).toBe(TOOL_ROW_COLLAPSED_HEIGHT_PX)
   await expectPinnedToBottom(page)
 
   // `sessionBoundary` — a row carrying no data-thread-role at all.

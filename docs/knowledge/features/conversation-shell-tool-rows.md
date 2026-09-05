@@ -88,9 +88,15 @@ design, the token-provenance rationale, and patterns established.
 \#230 shipped resolved/error chip styling but deliberately did not surface `result.resultSummary` — no
 result-text slot existed in the Figma mock. #696 reversed that: `ToolRow` was extracted out of
 `TimelineRow`'s `toolCall` arm (`case 'toolCall': return <ToolRow item={item} />`, both signatures
-otherwise untouched) and gained a body, a sibling of the chip rather than a child (the chip is a
-single-line `inline-flex; overflow: hidden` pill — nesting a stacked body inside it would force a new
-wrapper and break the collapsed markup):
+otherwise untouched) and gained a body, a sibling of the chip rather than a child. At the time that was
+because the chip was a single-line `inline-flex; overflow: hidden` pill — nesting a stacked body inside it
+would have forced a new wrapper and broken the collapsed markup. That specific reason didn't survive
+[#722](conversation-shell-tool-row-layout.md#full-width-bordered-tool-row-722), which turned the chip into
+a full-width bordered box, and it left the body's border closing *above* the content it should have
+contained until [#1102](conversation-shell-tool-row-layout.md#tool-row-box-moves-outward-1102) moved that
+box treatment onto `.tool-row` itself. The sibling relationship never needed a different reason to hold:
+the chip is a `<button>`, and a `<pre>` is not phrasing content, so nesting was never available in any of
+the three designs.
 
 ```html
 <div class="tool-row tool-row--resolved tool-row--expanded">

@@ -20,8 +20,12 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
+    "mdast-util-gfm-strikethrough": "^2.0.0",
     "mdast-util-gfm-table": "^2.0.0",
+    "mdast-util-gfm-task-list-item": "^2.0.0",
+    "micromark-extension-gfm-strikethrough": "^2.1.0",
     "micromark-extension-gfm-table": "^2.1.1",
+    "micromark-extension-gfm-task-list-item": "^2.1.0",
     "noise-c.wasm": "^0.4.0",
     "react-markdown": "^10.1.0",
     "ws": "^8.21.0",

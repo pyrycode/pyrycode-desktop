@@ -18,6 +18,17 @@ const render = (markdown: string): string =>
 
 const lines = (...src: string[]): string => src.join('\n')
 
+/**
+ * Occurrences of `pattern` in the markup — the QuestionPanel.test.tsx idiom.
+ *
+ * #1080's task-list cases count class occurrences rather than matching a whole `class="…"` run, because
+ * a later shared-treatment lift would turn `class="task-mark"` into `class="shared task-mark"` and a
+ * whole-run assertion would then fail while proving nothing about the thing it was written to protect.
+ * A count says "two marks, one of them checked" whatever else joins the run. The two shape assertions
+ * that DO match a whole run are deliberate and named where they appear.
+ */
+const count = (markup: string, pattern: RegExp): number => [...markup.matchAll(pattern)].length
+
 describe('AssistantMarkdown', () => {
   it('converts every listed block construct to its element (AC1)', () => {
     const markup = render(
@@ -403,24 +414,167 @@ describe('AssistantMarkdown', () => {
     expect(mail).not.toContain('href')
   })
 
-  it('installs the table construct only — no strikethrough, task list or footnote (#1079 AC4)', () => {
-    // The subset's whole point, asserted as the ABSENCE of the bundle's other four members. Each is
-    // paired with the positive that its literal syntax survives as visible text, so none of these can
-    // pass on a render that produced nothing.
+  it('installs table, task list and strikethrough only — no autolink literal, no footnote (#1080 AC5)', () => {
+    // #1079 WROTE THIS CASE THE OTHER WAY ROUND, asserting the absence of four bundle members. #1080
+    // INVERTS two arms rather than deleting the case: strikethrough and task lists are now installed, so
+    // their arms become positive, and the "only" claim narrows to what genuinely remains uninstalled.
+    // Each positive still pairs with a negative, so none of these passes on a render that produced
+    // nothing. The two constructs' own treatment is the subject of the four cases below; this one is the
+    // SUBSET BOUNDARY — what the plugin does and does not register.
     const strike = render('a ~~struck~~ b')
-    expect(strike).toContain('~~struck~~')
-    expect(strike).not.toContain('<del')
+    expect(strike).toContain('<del>struck</del>')
+    expect(strike).not.toContain('~~')
 
+    // The brackets are CONSUMED by the construct rather than surviving as text — the discriminator that
+    // separates "parsed" from "rendered raw", which is exactly what this case asserted in reverse.
     const task = render(lines('- [ ] open', '- [x] done'))
-    expect(task).toContain('[ ] open')
-    expect(task).toContain('[x] done')
-    expect(task).not.toContain('type="checkbox"')
+    expect(task).toContain('open')
+    expect(task).toContain('done')
+    expect(task).not.toContain('[ ]')
+    expect(task).not.toContain('[x]')
 
-    // A footnote's reference renders as text and its definition as a link reference definition whose
-    // target `allowedLinkHref` rejects — unchanged behaviour, not a regression this ticket introduces.
+    // ...and the two members still NOT installed, which is what "only" now means. The autolink literal's
+    // arm is the case above (a bare URL and a bare email, both still plain text with no anchor) — kept
+    // there because it needs the paired positives that case already builds. This is the footnote's.
+    // Its reference renders as text and its definition as a link reference definition whose target
+    // `allowedLinkHref` rejects — unchanged behaviour, not a regression this ticket introduces.
     const footnote = render(lines('a ref[^1] here', '', '[^1]: the note'))
     expect(footnote).toContain('here')
     expect(footnote).not.toContain('footnote')
     expect(footnote).not.toContain('<sup')
+  })
+
+  it('renders a task list as two distinguishable marks, in both list tightnesses (#1080 AC1)', () => {
+    const markup = render(lines('- [ ] open', '- [x] done', '- plain'))
+
+    // The <li> keeps the class the hast handler emits. It hides no bullet by itself — it is a hook for
+    // github-markdown-css, which this repo does not ship — so it is the styling hook the suppression
+    // rule in conversation.css hangs on, and nothing more.
+    expect(count(markup, /class="task-list-item"/g)).toBe(2)
+
+    // The <ul> gains one too, from the LIST handler rather than the list-item one. Pinned here because
+    // conversation.css deliberately does NOT hang the bullet suppression on it: a list may mix task
+    // items with plain ones — this fixture does — and suppressing per-list would take the plain item's
+    // bullet with it. Per-item is the correct grain, and this assertion is why that is a choice.
+    expect(count(markup, /class="contains-task-list"/g)).toBe(1)
+
+    // DISTINGUISHABLE, which is the whole of AC1's first half: two marks, exactly one of them checked.
+    // Counted, not matched as a whole class run — see the `count` docstring.
+    expect(count(markup, /\btask-mark\b/g)).toBe(3) // once unchecked, twice in the checked run
+    expect(count(markup, /task-mark--checked/g)).toBe(1)
+
+    // The unmarked third item is untouched: no class, no mark, still rendered. Without it a rule that
+    // treated every <li> in the container would pass every assertion above.
+    expect(markup).toContain('<li>plain</li>')
+
+    // TIGHTNESS DECIDES WHICH ELEMENT THE MARK LANDS IN, and therefore which existing `li > *` rule
+    // reaches it — the one structural fact the stylesheet depends on. Tight: mdast-util-to-hast unwraps
+    // the paragraph it inserted the mark into, so the mark is a direct child of the <li>. These two are
+    // whole-run matches on purpose: the claim IS the element nesting, not the class alone.
+    expect(markup).toContain('<li class="task-list-item"><span class="task-mark"')
+
+    // Loose (blank lines between items): the paragraph survives and wraps the mark instead. Matched
+    // with `\s*` because a loose item is emitted across lines — the claim is the NESTING, and writing it
+    // as a literal run would make this assertion about the serialiser's newlines instead.
+    const loose = render(lines('- [x] done', '', '- [ ] open'))
+    expect(loose).toMatch(/<li class="task-list-item">\s*<p><span class="task-mark/)
+  })
+
+  it('puts no interactive element in a reply — the checkbox is overridden away (#1080 AC3)', () => {
+    const markup = render(lines('- [ ] open', '- [x] done'))
+
+    // AC3's decision, ASSERTED RATHER THAN DESCRIBED. mdast-util-to-hast emits an <input type="checkbox"
+    // disabled> for each item; the `input` override renders a <span> instead, so no form control reaches
+    // the DOM at all — nothing to keep disabled, no submission target, no autofill surface in the window
+    // that holds the transport bridge.
+    expect(markup).not.toContain('<input')
+    expect(markup).not.toContain('type="checkbox"')
+    expect(markup).not.toContain('disabled')
+
+    // ...and nothing else in the render can take a click, a focus or a keyboard toggle either. In THIS
+    // tier that is a structural claim — renderToStaticMarkup under environment: 'node', no DOM and no
+    // handlers. The behavioural half clicks a real mark, in e2e/assistant-whitespace.spec.ts.
+    expect(markup).not.toContain('<button')
+    expect(markup).not.toContain('tabindex')
+    expect(markup).not.toContain('contenteditable')
+    expect(markup).not.toContain('onclick')
+
+    // The positives that keep all seven negatives above non-vacuous, and AC1's accessibility half: the
+    // state reaches the accessibility tree as a labelled image rather than as a control or as TEXT. A
+    // visually-hidden text label would have read the same to a screen reader and put a text node inside
+    // .bubble, which is what every whole-bubble `toHaveText` in e2e/ would then have to admit.
+    expect(markup).toContain('role="img"')
+    expect(markup).toContain('aria-label="Not done"')
+    expect(markup).toContain('aria-label="Done"')
+  })
+
+  it('renders strikethrough, keeps the singleTilde default, and leaves a path pair alone (#1080 AC2)', () => {
+    const double = render('a ~~struck~~ b')
+    expect(double).toContain('<del>struck</del>')
+    expect(double).not.toContain('~~')
+
+    // `singleTilde` defaults to ON and is DELIBERATELY LEFT THERE. Disabling it would be a defence
+    // against a failure nobody has observed; the obvious candidate is pinned below instead.
+    const single = render('a ~struck~ b')
+    expect(single).toContain('<del>struck</del>')
+
+    // THE HAZARD, pinned rather than re-derived: two home-relative paths on one line are not a
+    // strikethrough run. GFM requires the closing marker to be right-flanking, and a path's tilde is
+    // followed by a slash and preceded by a space, so it can only ever open. This is the assertion that
+    // turns red if a later version changes that flanking rule — the signal to reconsider the option.
+    const paths = render('paths ~/config and ~/other are both real')
+    expect(paths).toContain('~/config')
+    expect(paths).toContain('~/other')
+    expect(paths).not.toContain('<del')
+  })
+
+  it('renders markup-looking task and struck text as inert escaped characters (#1080 AC1, AC2)', () => {
+    const markup = render(
+      lines('- [x] <b>bold</b> and <img src=q onerror=alert(1)>', '', '~~<script>alert(1)</script>~~')
+    )
+
+    // Positive: both survive as escaped TEXT inside the real new elements — the escaped-not-absent
+    // discriminator every anti-interpretation case in this file uses.
+    expect(markup).toContain('&lt;b&gt;bold&lt;/b&gt;')
+    expect(markup).toContain('&lt;script&gt;')
+    expect(markup).toContain('<del>')
+    expect(markup).toContain('task-mark--checked')
+
+    // Negative: no element was constructed out of any of it.
+    expect(markup).not.toContain('<b>bold')
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('<script')
+
+    // AND NO DAEMON TEXT REACHED AN ATTRIBUTE — the security-review finding this case exists to pin.
+    // The source's ONLY influence over the mark is a boolean (`node.checked`), which selects between
+    // client-owned constants for the class and the label; nothing interpolates the item's own text. The
+    // sweep is what turns red if a later edit ever labels a mark with what the daemon wrote.
+    expect(markup).not.toContain('style=')
+    expect(markup).not.toContain('href')
+    expect(markup).not.toContain('alert(1)"')
+  })
+
+  it('keeps the link and image overrides in force inside a task item and a <del> (#1080 AC1, AC2)', () => {
+    // The overrides are keyed on ELEMENT TYPE, not on ancestry — #1079 proved that for a table cell and
+    // the same question reopens for every container this file starts emitting. Two new ones here.
+    const markup = render(
+      lines(
+        '- [x] [ok](https://example.com/a) and ![alt text](https://example.com/i.png)',
+        '- [ ] [no](javascript:alert(1))',
+        '',
+        '~~[also ok](https://example.com/b)~~'
+      )
+    )
+    // Allowed links are real anchors carrying their href verbatim, with the click mechanism intact.
+    expect(markup).toContain('<a href="https://example.com/a" target="_blank" rel="noreferrer">ok</a>')
+    expect(markup).toContain(
+      '<a href="https://example.com/b" target="_blank" rel="noreferrer">also ok</a>'
+    )
+    // The denied link renders as its visible text, with no anchor and no href anywhere for it.
+    expect(markup).toContain('no')
+    expect(markup).not.toContain('javascript:')
+    // The image renders as alt text only — no fetching element inside a task item either.
+    expect(markup).toContain('alt text')
+    expect(markup).not.toContain('<img')
   })
 })

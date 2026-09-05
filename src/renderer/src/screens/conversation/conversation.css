@@ -1198,6 +1198,103 @@
   word-break: normal;
 }
 
+/* #1080 — the task-list item's marker suppression. GFM draws the mark INSTEAD of the bullet, and the
+   `task-list-item` class mdast-util-to-hast puts on the <li> does not do that on its own: it is emitted
+   purely as a hook for github-markdown-css, which this repo does not ship. Without this rule an item
+   draws both a bullet and a mark.
+
+   PER ITEM, NOT PER LIST, though the <ul> carries its own `contains-task-list` class and would be the
+   shorter selector. A list may MIX task items with plain ones, and suppressing per-list would take the
+   plain item's bullet with it. AssistantMarkdown.test.tsx renders exactly that mixed list and counts
+   both classes, so the grain is pinned rather than merely intended.
+
+   The `padding-inline-start` on .bubble__markdown ul/ol is untouched, so the item keeps its indent and
+   the mark opens the text column — which is what GFM's own rendering does.
+
+   MEASURED, NOT ASSUMED, the way #1079's `overflow-x` was: emptying this rule and rebuilding turns
+   e2e/assistant-whitespace.spec.ts's marker assertion red — the items compute `disc` and the paired
+   plain-item assertion still holds, which is the detector behaving as intended rather than a rule whose
+   effect arrives from somewhere else. */
+.bubble__markdown .task-list-item {
+  list-style: none;
+}
+
+/* #1080 — the mark itself: the inert <span> AssistantMarkdown.tsx renders in place of the extension's
+   <input type="checkbox">. Figma draws no task list in a reply (16:43 contains none), so this is derived
+   from the tokens rather than read off the design — the same footing as the .bubble__markdown a rule and
+   #1079's table rule, and a bespoke treatment would be a Figma-side addition to that node first.
+
+   THE GEOMETRY IS BORROWED FROM .question-panel__control--checkbox (347:6211); THE POSTURE IS
+   DELIBERATELY NOT. 14px outer with a 1px border leaves a 12px content box — that control's own 12x12
+   tick frame at its drawn size, with only the ring around it shrinking from the control's 20px to the
+   reply text's own 14px. What does NOT come across is --color-tertiary: that accent is how this app says
+   INTERACTIVE, and this mark must not. It takes --color-on-surface-variant, the muted ink this container
+   already uses. Borrow the geometry, not the posture.
+
+   inline-flex so the mark sits in the text run and centres its tick from the child's own size, with no
+   offsets to keep in step — the .question-panel__control idiom. box-sizing: border-box because this repo
+   has no global reset (.composer__input's precedent) and 14px is the OUTER size, border included. The
+   3px radius is a raw literal, structural geometry at a size no scale step reaches: --radius-xs (6px) on
+   a 14px box is nearly half its width and reads as a pill — .question-panel__cancel's 7px precedent.
+   -3px vertical-align lands the box on the cap band of the 14px/20px text; bottom-aligned it would hang
+   below the letters.
+
+   Nothing here restates an inherited value: no font, no colour on the box, no margin. The
+   .bubble__markdown li > * rhythm reaches this span in a TIGHT list and the wrapping <p> in a LOOSE one,
+   and neither disturbs it — margin-block does not apply to an inline-level box, and the mark is always
+   its parent's first child, so the `+ *` step never selects it. */
+.bubble__markdown .task-mark {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  vertical-align: -3px;
+  border: 1px solid var(--color-on-surface-variant);
+  border-radius: 3px;
+}
+
+/* #1080 — the ticked state, and the ONLY thing that separates the two marks. A pseudo-element and not a
+   character: `content: ''` contributes NO text content, so no whole-bubble text assertion in either e2e
+   tier can see it — the hazard a literal glyph inside .bubble would have created.
+
+   Drawn in CSS rather than as the inline SVG QuestionPanel.tsx uses. That component's docstring invites
+   promotion on a second call site and this is it, DECLINED: it is a 20px interactive tertiary affordance
+   and this is a 14px inert muted mark, so the two would share nothing but path data, and the import
+   would add an indirection to the one file whose value is that its emitted element set reads in place. A
+   `background-image: url(data:…)` is rejected for a harder reason — PyryMark.tsx records that this
+   window's `default-src 'self'` CSP carries no img-src, so it would fail closed and draw nothing.
+
+   The rotated two-border tick: a 4x8 box showing only its right and bottom edges, turned 45deg. Its
+   rotated extent is ~11.3px against the 12px content box, so it fits without clipping. translateY(-1px)
+   is the optical centring a rotated glyph needs — geometrically centred, it reads low. currentColor is
+   not available (the box's colour is a border, not a text colour), so the muted token is named a second
+   time; the ring and the tick are one mark and must not drift apart. */
+.bubble__markdown .task-mark--checked::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: solid var(--color-on-surface-variant);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+/* #1080 — struck text. ONE DECLARATION, AND THE OMISSION IS THE DECISION: the UA's own `line-through`
+   carries the strike, exactly as the table rule above leaves <th>'s UA `bold` to distinguish the header
+   row rather than restating a weight the scale cannot express. Declaring `text-decoration: line-through`
+   here would restate a settled value, which is how it gets lost — the argument the .bubble__markdown a
+   rule makes and #607, #623, #628, #629, #630 and #1079 all follow.
+
+   The muting is the part the design does not supply. Figma draws no struck text in a reply either, so
+   this is token-derived like the two rules above. --color-on-surface-variant is the container's muted
+   ink, and struck text at full weight reads as equal-status prose with a line through it rather than as
+   something removed. It is also the same token the mark takes, which is the point: the two constructs
+   this ticket adds read as one family, and as part of the family already around them. */
+.bubble__markdown del {
+  color: var(--color-on-surface-variant);
+}
+
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
    assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
    no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret

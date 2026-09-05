@@ -197,9 +197,14 @@ its current markup byte for byte.
 
 ## Open questions
 
-- **Does the 5-character growth overflow the footer at the 800px minimum window?** The row is a nowrap
-  flex row with six items in a 400px pane. If it already overflows there, that is a pre-existing condition
-  and this ticket does not widen into a footer-overflow fix — it would be filed as its own ticket and said
-  so in the PR. Resolution to be recorded here if the e2e run shows anything.
+- **Does the 5-character growth overflow the footer at the 800px minimum window?** **Resolved: it already
+  overflowed, by a wide margin, and this ticket does not widen into a fix.** Measured with a throwaway
+  probe (an 800×600 window, the fixture's seeds, since deleted): `.composer__footer` has a 316px content
+  box there and its content needs **429px carrying the PRE-#1062 string** `Context: 25%`, against 465px
+  carrying the longest post-#1062 one, `Context high: 100%`. So the row overflows by 113px before this
+  ticket touches it and by 149px after — the word adds 36px to a row that was already 113px over. Filed as **#1107**
+  rather than fixed here, per the ticket's own instruction. No detector was written: the
+  row's `height: 20px` makes a `boundingBox().height` assertion structurally unable to redden, and a width
+  detector would be a footer-overflow regression test, which belongs to the ticket that fixes it.
 - **Should the sheet's gauge follow the ladder?** Answered above: not here. Recorded so the divergence is
   a decision on the record rather than a discovery for the next reader.

@@ -261,8 +261,13 @@ describe('createLiveWindow — status convergence (#519 AC2)', () => {
   })
 
   it('records every status member, last write wins', () => {
-    // Table-driven over DaemonEvent's four status members (events.ts:77-81) — the set the recorder
-    // keys on. A fifth status member added upstream and not recorded here shows up as a gap.
+    // Table-driven over DaemonEvent's four status members — the set the recorder keys on. A fifth
+    // status member added upstream and not recorded here shows up as a gap.
+    //
+    // Since #1121 the recorder holds one slot PER ORIGIN, and these four literals are unstamped, so
+    // they all share the one unstamped slot: what this asserts is last-write-wins WITHIN an origin,
+    // which is the property it always asserted. That it passes unedited is the evidence that the
+    // per-server widening left the single-origin behaviour alone.
     const statuses: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'connected', ack: ACK },
@@ -314,6 +319,151 @@ describe('createLiveWindow — status convergence (#519 AC2)', () => {
     a.destroy()
 
     expect(() => live.replayStatus()).not.toThrow()
+  })
+})
+
+// One slot per server (#1121). The recorder held a single cell until now, so every connection wrote
+// the same one and each write erased the last: a reopened window learned the state of whichever
+// connection emitted most recently and nothing about the others. Since #1117 the registry holds one
+// connection per paired server, so that is a live defect rather than a prospective one.
+//
+// Every case below reuses the ONE `ACK` for two different origins on purpose. The slot is chosen by
+// the stamp `bindServerOrigin` applied from a client-held paired record — never by the payload's own
+// `ack.server_id`, which is a distinct, daemon-supplied value. Were the recorder to key on that, a
+// confused daemon could overwrite another server's cached status and a reopened window would render
+// it as that server's state; reusing an ACK whose `server_id` matches neither origin is what makes
+// keying on it fail here rather than in production.
+describe('createLiveWindow — per-server status convergence (#1121)', () => {
+  const connectedA: StampedDaemonEvent = { type: 'connected', ack: ACK, serverId: 'srv-a' }
+  const failedA: StampedDaemonEvent = { type: 'failed', error: NOT_PAIRED, serverId: 'srv-a' }
+  const connectingB: StampedDaemonEvent = { type: 'connecting', serverId: 'srv-b' }
+  const disconnectedB: StampedDaemonEvent = { type: 'disconnected', serverId: 'srv-b' }
+
+  it('replays a status for every server, each with its own origin intact', () => {
+    // The headline case, and the one the single cell cannot pass: with one cell `connectedA` is
+    // erased by `disconnectedB` and the reopened window is told nothing about srv-a at all.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+    const b = fakeWindow()
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connectedA)
+    emitDaemonEvent(live.sink, disconnectedB)
+    a.destroy()
+    live.attach(b.win)
+    b.send.mockClear()
+
+    live.replayStatus()
+
+    expect(b.send).toHaveBeenCalledTimes(2)
+    expect(b.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connectedA)
+    expect(b.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, disconnectedB)
+    // By reference, and stamped: the window is told which state AND whose.
+    const replayed = b.send.mock.calls.map((call) => call[1] as StampedDaemonEvent)
+    expect(replayed.map((event) => event.serverId)).toEqual(['srv-a', 'srv-b'])
+  })
+
+  it('replaces one server’s status and leaves every other server’s untouched', () => {
+    // srv-a transitions twice while srv-b never moves. Per-slot last-write-wins: srv-a's replay is
+    // its LATEST, and srv-b's is not collateral damage.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connectedA)
+    emitDaemonEvent(live.sink, connectingB)
+    emitDaemonEvent(live.sink, failedA)
+    a.send.mockClear()
+
+    live.replayStatus()
+
+    expect(a.send).toHaveBeenCalledTimes(2)
+    expect(a.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, failedA)
+    expect(a.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connectingB)
+    expect(a.send).not.toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connectedA)
+  })
+
+  it('replays in insertion order, and a replacement does not move its server to the back', () => {
+    // AC2's stable order. It is a property of Map — re-`set`ting an existing key leaves its position
+    // alone — rather than something this module maintains, so it is asserted rather than engineered:
+    // srv-a reported first and still replays first even though its LATEST status is the newest of
+    // the three. Ordered assertion, not a set membership one, or the property would go untested.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connectedA)
+    emitDaemonEvent(live.sink, connectingB)
+    emitDaemonEvent(live.sink, failedA)
+    a.send.mockClear()
+
+    live.replayStatus()
+
+    expect(a.send.mock.calls.map((call) => call[1])).toEqual([failedA, connectingB])
+  })
+
+  it('keeps a null origin, an unstamped event and a server id in three distinct slots', () => {
+    // `null` and absent are NOT the same thing, and events.ts's ServerOrigin header draws exactly
+    // that distinction: a present `null` is a producer bound while holding no paired record — the
+    // registry's not-paired stand-in is built that way and genuinely emits status — while an absent
+    // property is a producer that never went through a binding at all. Coalescing them here would
+    // erase the distinction in the one place it becomes observable, so each keys its own slot.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+    const nullBound: StampedDaemonEvent = { type: 'failed', error: NOT_PAIRED, serverId: null }
+    const unstamped: DaemonEvent = { type: 'connecting' }
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, nullBound)
+    emitDaemonEvent(live.sink, unstamped)
+    emitDaemonEvent(live.sink, connectedA)
+    a.send.mockClear()
+
+    live.replayStatus()
+
+    expect(a.send.mock.calls.map((call) => call[1])).toEqual([nullBound, unstamped, connectedA])
+  })
+
+  it('records a second server’s status that arrives while no window is live', () => {
+    // The gap case (#519), now per server: the recorder still sits ABOVE #518's destroyed-window
+    // guard, so a transition during the closed-window gap is recorded even though it is dropped —
+    // and it must land in ITS OWN slot rather than erasing the server that was already there.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+    const b = fakeWindow()
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connectedA)
+    a.destroy()
+    emitDaemonEvent(live.sink, disconnectedB) // into the gap: dropped, but recorded
+    live.attach(b.win)
+
+    live.replayStatus()
+
+    expect(b.send.mock.calls.map((call) => call[1])).toEqual([connectedA, disconnectedB])
+  })
+
+  it('does not open a slot for a stamped non-status event', () => {
+    // The retention rule is unchanged by the widening: a stamped `messageReceived` must not mint a
+    // slot for its server, or MessagePayload.text would be retained in main-process memory beyond
+    // its delivery — the shape the #519 security review calls a MUST FIX.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+    const chatter: StampedDaemonEvent = {
+      type: 'messageReceived',
+      message: { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'secret' },
+      serverId: 'srv-c'
+    }
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connectedA)
+    emitDaemonEvent(live.sink, chatter)
+    a.send.mockClear()
+
+    live.replayStatus()
+
+    expect(a.send).toHaveBeenCalledTimes(1)
+    expect(a.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connectedA)
   })
 })
 

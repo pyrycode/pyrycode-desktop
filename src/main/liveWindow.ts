@@ -41,7 +41,11 @@ export interface LiveWindow {
   readonly sink: DaemonEventSink
   /** The current-window stand-in for the focus query and click activation. */
   readonly window: FocusableWindow & ActivatableWindow
-  /** Re-deliver the last recorded status event into the current window. No-op if none. */
+  /**
+   * Re-deliver every server's last recorded status event into the current window, in the order the
+   * servers first reported. No-op if none has been recorded. Plural since #1121; the signature and
+   * the single call site are unchanged, so `openWindow` does not learn how many servers exist.
+   */
   replayStatus(): void
 }
 
@@ -70,16 +74,82 @@ function isStatusEvent(event: DaemonEvent): event is StatusEvent {
 }
 
 /**
- * Build the live-window holder. Exactly two mutable cells, both plain fields: the current window and
- * the last status event. No store, no timer, no listener, no async work — so there is nothing to
- * cancel and no new leak surface. Every read is a call-time query, so the answer is correct
+ * Which slot a status event is filed under (#1121). THREE kinds of key, and the distinction between
+ * the last two is deliberate rather than incidental — events.ts's ServerOrigin header draws it:
+ *
+ *   - a `string` — one slot per paired server, which is the whole point of the widening;
+ *   - `null` — a PRESENT null: a producer bound while no paired record was in hand. Live, not
+ *     hypothetical: connectionRegistry's not-paired stand-in is built with `serverId: null` and is
+ *     dialled like any other, so its `failed(not-paired)` genuinely lands here;
+ *   - `undefined` — no property at all, meaning a producer that never went through a binding.
+ *     Unreachable in production (bindServerOrigin's header: every producer is bound exactly once,
+ *     and `live.sink` is a bind target, never a producer's sink) but reachable from the tests, which
+ *     emit bare literals. Recording it keeps the recorder TOTAL — an unbound producer's status is
+ *     replayed rather than silently dropped — which is the same choice #519 made for a status
+ *     emitted before any window exists.
+ *
+ * Coalescing `undefined` into `null` would erase that distinction in the one place it is observable.
+ */
+type StatusOrigin = string | null | undefined
+
+/**
+ * Read the origin off an event that has already been through `bindServerOrigin`.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * sink's parameter as `StampedDaemonEvent`: at a `DaemonEventSink`-typed hole the static type is the
+ * BARE union (#1068 carries the stamp beside the union, not inside its arms), so the property arrives
+ * structurally while the type stays silent about it, and a re-declared parameter would compile only
+ * because method parameters are bivariant — sound-looking and unsound. `conversationRouter`'s
+ * `originOf` is the same idiom; this one keeps the three cases apart where that one folds them.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload — in particular never from
+ * `connected`'s `ack.server_id`, which is a DISTINCT, daemon-supplied value. The stamp is bound at
+ * construction from a client-held paired record, so a hostile or confused daemon cannot make its
+ * events claim another server's slot and overwrite that server's cached status; a wire-sourced id
+ * would hand it exactly that. `serverInfo.ts` and ServerOrigin's header both already rule this.
+ */
+function originOf(event: DaemonEvent): StatusOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null files under the unstamped slot: no producer
+  // can emit one (bindServerOrigin takes a `string | null` scalar), and answering with a slot rather
+  // than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
+}
+
+/**
+ * Build the live-window holder. Exactly two pieces of mutable state, both plain fields: the current
+ * window and the status index. No store, no timer, no listener, no async work — so there is nothing
+ * to cancel and no new leak surface. Every read is a call-time query, so the answer is correct
  * regardless of when the window was destroyed relative to the last event, and there is no
  * check-then-act gap (record, guard, and send are consecutive synchronous statements, and window
  * destruction happens on the same thread).
  */
 export function createLiveWindow(): LiveWindow {
   let current: WindowTarget | null = null
-  let lastStatus: StatusEvent | null = null
+  /**
+   * One slot per origin (#1121), replacing the single cell #519 shipped. That cell held one server,
+   * and since #1117 the registry holds one connection per paired server — all of them emitting into
+   * this one sink — so each write erased the last and a reopened window learned the state of
+   * whichever connection emitted most recently and nothing about the others. On a healthy connection
+   * the next status change is never, so every other server's dot stayed wrong for the window's life.
+   *
+   * A Map, NEVER a bare object. events.ts's ServerOrigin docblock rules it for any consumer that
+   * indexes by the id ("if a consumer indexes by it, THE INDEX IS A Map") — a `__proto__` id would
+   * write through Object.prototype on a `Record<string, StatusEvent>` — and this module is the first
+   * main-side consumer to index by it. `conversationRouter`'s index is the same ruling applied.
+   *
+   * Iteration is insertion-ordered and re-`set`ting an existing key leaves its position alone, so
+   * the replay order is the order the servers first reported and a server that changes state keeps
+   * its slot. That is where the stable order comes from; this module maintains nothing.
+   *
+   * Growth is bounded by the distinct-origin count — one per paired server plus at most the two
+   * non-server keys — so no daemon can mint a slot. Nothing is evicted: a torn-down server's last
+   * status is `failed` or `disconnected`, which is exactly what a reopened window should be told.
+   */
+  const statuses = new Map<StatusOrigin, StatusEvent>()
 
   /** One hop down into #518's guard, which drops the event when the current window is destroyed. */
   const forward = (event: DaemonEvent): void => {
@@ -109,7 +179,7 @@ export function createLiveWindow(): LiveWindow {
     webContents: {
       /** `channel` is re-supplied by emitDaemonEvent on the forward, so it is ignored here. */
       send: (_channel: string, event: DaemonEvent): void => {
-        if (isStatusEvent(event)) lastStatus = event
+        if (isStatusEvent(event)) statuses.set(originOf(event), event)
         forward(event)
       }
     }
@@ -138,8 +208,8 @@ export function createLiveWindow(): LiveWindow {
 
   return {
     /**
-     * Assignment only. It does NOT clear the recorded status — connection state is independent of
-     * windows, and the record surviving the gap is precisely what makes the gap case correct — and
+     * Assignment only. It does NOT clear the recorded statuses — connection state is independent of
+     * windows, and the records surviving the gap are precisely what makes the gap case correct — and
      * it does NOT replay, because at attach time (window creation) the renderer has not subscribed
      * yet. No `'closed'` listener either: a cached destroyed-flag would be a second source of truth
      * that can disagree with the object, so isDestroyed() is queried at call time instead.
@@ -149,9 +219,15 @@ export function createLiveWindow(): LiveWindow {
     },
     sink,
     window,
+    /**
+     * One forward per held server. Each goes through `forward`'s own null check and #518's guard, so
+     * a window destroyed part-way through drops the remaining events exactly as it drops a single
+     * one — no partial-state handling and nothing to unwind. Synchronous with no await, and `forward`
+     * bottoms out in a `webContents.send` that posts rather than calling back into the sink, so no
+     * slot can be added or replaced mid-iteration.
+     */
     replayStatus(): void {
-      if (lastStatus === null) return
-      forward(lastStatus)
+      for (const status of statuses.values()) forward(status)
     }
   }
 }

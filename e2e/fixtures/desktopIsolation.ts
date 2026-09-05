@@ -1,4 +1,5 @@
-import { expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import { expect, _electron as electron, type ElectronApplication, type TestInfo } from '@playwright/test'
+import type { ChildProcess } from 'node:child_process'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 
 // The one place the default tier launches Electron (#1067). Both launch sites — `launchPairedApp.ts`
@@ -29,7 +30,8 @@ import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 // secret of the run lands in. Nothing here logs, prints, or attaches either to the report, and the
 // read-back below deliberately returns `hasSwitch` booleans and integer counts rather than
 // `process.argv`, which would carry that path straight into a failure diff. `smoke.spec.ts` already
-// discards close errors unlogged for the same reason.
+// discards close errors unlogged for the same reason. The launch-fate report at the bottom of this file
+// is held to the SAME contract, by construction rather than by care — see its own note.
 //
 // `e2e/fixtures/realDaemon.ts` keeps its own launch and is deliberately NOT a caller: the `real-*` tier
 // is operator-supervised by nature, and routing it through here would put a change that can be proven
@@ -69,15 +71,25 @@ export type DesktopIsolationState = {
  * The switches are APPENDED, so `'.'` stays the first non-switch argument — the app path — exactly as
  * `--user-data-dir` is appended today. The env flag is set on a COPY, so a caller's object is never
  * mutated.
+ *
+ * `fate` is REQUIRED, not optional (#1127). `e2e/` is outside both tsconfigs and Playwright strips types
+ * with esbuild, so a type alone guarantees nothing at run time — but a required option that a site
+ * forgets makes `watch` throw at that site's first launch, loudly, instead of silently recording nothing.
+ * That is the failure mode that killed `electronApp.ts` (#546, optional → zero importers → deleted) and
+ * that #1067 needed a source guard to close. Registration happens HERE, at the one chokepoint, so a
+ * launch that reaches Electron is a launch whose fate is being tracked.
  */
 export async function launchIsolatedApp(options: {
   args: string[]
   env: Record<string, string | undefined>
+  fate: LaunchFateLog
 }): Promise<ElectronApplication> {
-  return electron.launch({
+  const app = await electron.launch({
     args: [...options.args, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
     env: { ...options.env, [HIDDEN_WINDOW_ENV_FLAG]: '1' }
   })
+  options.fate.watch(app)
+  return app
 }
 
 /**
@@ -111,4 +123,185 @@ export async function expectDesktopIsolated(app: ElectronApplication): Promise<v
   expect(state.switchesApplied).toEqual([...RENDERER_THROTTLING_SWITCHES])
   expect(state.windows).toBeGreaterThan(0)
   expect(state.visibleWindows).toBe(0)
+}
+
+// --- Launch fate (#1127) ------------------------------------------------------------------------
+//
+// The tier reddens intermittently, on a different spec each run, and once on an untouched merge-base.
+// #1067 already spent one guess at a flake of this shape and fixed a real cause; these failures are
+// post-#1067 with different signatures, so guessing again is the move that has already been made. What
+// is shippable instead is the observation that the harness ALREADY KNOWS things about a failing launch
+// and throws them all away: nothing reads the Electron process's exit code or terminating signal (so
+// `socket hang up` cannot be told from an OOM kill, a crash, or a clean early exit), nothing records
+// whether it was still alive when the test failed (so a 1.0m timeout cannot be told from "app dead" vs
+// "app alive but wedged"), and every teardown failure is swallowed by a bare `catch {}` (so an
+// `app.close()` that failed — which under `workers: 1` leaks a process into the next spec's launch —
+// leaves no trace).
+//
+// This does not fix the flake. It makes the next occurrence readable off a single failing run.
+//
+// SECRET HYGIENE, by construction rather than by care. Three independent structural guarantees, because
+// the launch argv embeds `--user-data-dir=<path>` — the run's secret store — and an Electron close error
+// can carry that argv:
+//   1. The report is built from PRIMITIVES ONLY. Booleans, integers, null, and a POSIX signal name out
+//      of Node's closed `NodeJS.Signals` set. No path, argv entry, or env value is in scope where the
+//      body is serialized.
+//   2. Every `catch` at every call site stays BINDINGLESS. The error object is not reachable from the
+//      recording code, which is why the report names the STEP and never the message.
+//   3. `TeardownStep` is a closed union of fixed literals, so the only strings that can reach the body
+//      are ones written in this repo's source.
+
+/** The attachment name a failing test carries. Fixed: the operator greps for it, and a name beginning
+ *  with `_` would be skipped by Playwright's reporter entirely. */
+export const LAUNCH_FATE_ATTACHMENT = 'launch-fate'
+
+/** How long `closeWatched` waits, after `app.close()` resolves, for Node to record the child's exit.
+ *  Normally a no-op — `close()` already waits for the app to go away — but a `null` exit code that means
+ *  "not recorded yet" would read as "never exited", and a misleading diagnostic is worse than none. */
+const EXIT_SETTLE_TIMEOUT_MS = 2_000
+
+/** The teardown steps a drain can fail at, as fixed literals. Adding a resource to a site's drain adds
+ *  its label here — which is the point: no free-form string can reach the report. */
+export type TeardownStep = 'app' | 'daemon' | 'forwarder' | 'user-data-dir'
+
+/** What the harness knows about one launched Electron process once the test is over. */
+export type LaunchFate = {
+  /** Was it still running when its close was requested — i.e. at the test's outcome? `null` means its
+   *  close was never reached at all, which is itself diagnostic: the drain did not get here. */
+  runningAtOutcome: boolean | null
+  /** Node's record of the exit code once the drain has run; `null` if it never exited. */
+  exitCode: number | null
+  /** The signal that terminated it (a POSIX name from Node's closed set); `null` if none did. */
+  signal: string | null
+}
+
+export type LaunchFateReport = {
+  /** One entry per launch, in launch order — a test may launch twice (the relaunch-persistence spec). */
+  launches: LaunchFate[]
+  /** The steps that threw, in drain order. Never an error message. */
+  teardownFailures: TeardownStep[]
+}
+
+/** The per-test log. A VALUE the caller creates and owns — this module stays plain and side-effect-free,
+ *  so nothing is module-scoped and no state can cross tests. */
+export type LaunchFateLog = {
+  /** Register a launch. Called by `launchIsolatedApp`; a site never calls this itself. */
+  watch(app: ElectronApplication): void
+  /**
+   * Close a watched app. The ONLY supported way to close one, and the reason there is no separate
+   * `observe()` step: AC1's three facts have a strict ordering — liveness must be read before the close,
+   * and the exit code only settles after it — and a separate call is one a future edit can move or drop
+   * with nothing to notice. Folding the ordering into the call that replaces `app.close()` puts it where
+   * a site already wrote one line.
+   *
+   * PROPAGATES a close failure, so a site's existing `try { … } catch { … }` shape is unchanged and the
+   * recording stays uniform across all four drain steps.
+   */
+  closeWatched(app: ElectronApplication): Promise<void>
+  /** Name a teardown step that threw. The body a bindingless `catch` gains. */
+  recordTeardownFailure(step: TeardownStep): void
+  /** The report, read after the drain. */
+  report(): LaunchFateReport
+}
+
+/** The slice of `TestInfo` the attach needs: the outcome to gate on, and the sink to write to. A `Pick`
+ *  rather than the whole interface so the cover spec can drive the real function with a recording
+ *  double and read back exactly what a failing run would carry. */
+export type LaunchFateSink = Pick<TestInfo, 'status' | 'attach'>
+
+/**
+ * Node's own bookkeeping, not a `process.kill(pid, 0)` probe: `app.process()` already exposes both
+ * fields, they are the same object the exit code and signal come from (so the triple is one consistent
+ * snapshot), and it costs no pid and no syscall. Its one weakness — a process that died microseconds
+ * ago whose `'exit'` has not been delivered — is self-correcting for a reader, because the post-drain
+ * exit code and signal then contradict the liveness. `fixture-teardown-leak.spec.ts`'s `isAlive` probe
+ * is deliberately not reused: it answers a different question (did teardown reap a pid) in a spec this
+ * ticket does not touch.
+ */
+function isRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null
+}
+
+/** Wait for Node to record the child's exit, bounded. Returns immediately when it already has. Owns one
+ *  listener and one timer and clears both on whichever settles first, so it leaves neither behind. */
+function settleExit(child: ChildProcess): Promise<void> {
+  if (!isRunning(child)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer)
+      child.off('exit', done)
+      resolve()
+    }
+    const timer = setTimeout(done, EXIT_SETTLE_TIMEOUT_MS)
+    child.once('exit', done)
+  })
+}
+
+export function createLaunchFateLog(): LaunchFateLog {
+  // Keyed by app identity so two launches in one test each get their own fate, rather than the second
+  // stamping the first. A Map preserves insertion order, which is what makes `launches` launch-ordered.
+  //
+  // The `ChildProcess` is captured HERE, at watch time, and never re-read off the app afterwards:
+  // `ElectronApplication.process()` reaches through a channel object that `close()` tears down, so a
+  // lazy read after the close throws `Cannot read properties of undefined (reading '_object')`. The
+  // handle itself stays valid and keeps reporting `exitCode`/`signalCode` long after the app is gone,
+  // which is the whole reason the exit code is readable at all.
+  const watched = new Map<
+    ElectronApplication,
+    { child: ChildProcess; runningAtOutcome: boolean | null }
+  >()
+  const teardownFailures: TeardownStep[] = []
+
+  return {
+    watch(app) {
+      watched.set(app, { child: app.process(), runningAtOutcome: null })
+    },
+    async closeWatched(app) {
+      const record = watched.get(app)
+      if (record !== undefined) record.runningAtOutcome = isRunning(record.child)
+      await app.close()
+      if (record !== undefined) await settleExit(record.child)
+    },
+    recordTeardownFailure(step) {
+      teardownFailures.push(step)
+    },
+    report() {
+      return {
+        launches: [...watched.values()].map((record) => ({
+          runningAtOutcome: record.runningAtOutcome,
+          exitCode: record.child.exitCode,
+          signal: record.child.signalCode
+        })),
+        teardownFailures: [...teardownFailures]
+      }
+    }
+  }
+}
+
+/**
+ * Attach the report — on a FAILING test only, so a green run's output and its report are byte-identical
+ * to what they were before this existed.
+ *
+ * `text/plain` is not cosmetic: Playwright's terminal reporter prints an attachment's body inline only
+ * when its content type starts with `text/`, and truncates it at 300 characters. An `application/json`
+ * body would be silently invisible in the `reporter: 'list'` output the operator actually reads. The
+ * report's size is bounded by construction — three primitives per launch plus fixed labels.
+ *
+ * Does no filesystem I/O (`attach`'s `body` form is held in memory, and is mutually exclusive with
+ * `path`), so calling it from a teardown epilogue does not reintroduce #517's hazard of a throwing
+ * `finally` replacing the causal error.
+ */
+export async function attachLaunchFate(sink: LaunchFateSink, log: LaunchFateLog): Promise<void> {
+  const status = sink.status
+  // The failure SET, not equality with 'failed': the two observed reds were one `socket hang up`
+  // (failed) and one 1.0m timeout (timedOut), and an interrupted run is the same class of evidence.
+  if (status !== 'failed' && status !== 'timedOut' && status !== 'interrupted') return
+
+  const report = log.report()
+  if (report.launches.length === 0 && report.teardownFailures.length === 0) return
+
+  await sink.attach(LAUNCH_FATE_ATTACHMENT, {
+    body: JSON.stringify(report),
+    contentType: 'text/plain'
+  })
 }

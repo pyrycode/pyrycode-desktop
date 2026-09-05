@@ -7,7 +7,12 @@ import {
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expectDesktopIsolated, launchIsolatedApp } from './fixtures/desktopIsolation'
+import {
+  attachLaunchFate,
+  createLaunchFateLog,
+  expectDesktopIsolated,
+  launchIsolatedApp
+} from './fixtures/desktopIsolation'
 
 // Smoke: the whole assembled app boots and its shell renders. On a genuinely-unpaired boot the
 // #80/#84 app-shell router sends the launch to the WelcomeScreen (#662 relocated that root off the
@@ -31,8 +36,12 @@ import { expectDesktopIsolated, launchIsolatedApp } from './fixtures/desktopIsol
 // #1067: the fixture yields the app alongside the page. This file is the tier's SECOND launch site (the
 // paired fixture is the other), so it is also the only place that can prove the shared isolation is in
 // effect on this one — hence the app handle, and the third test at the bottom.
+// #1127: this file's fixture is the tier's other drain, so it records the same launch fate — the app's
+// exit code, its terminating signal, whether it was still running at the outcome, and the name of any
+// teardown step that threw. The two `catch` blocks stay bindingless and best-effort; only their bodies
+// change, from empty to one synchronous label push that cannot throw.
 const test = base.extend<{ launched: { page: Page; app: ElectronApplication } }>({
-  launched: async ({}, use) => {
+  launched: async ({}, use, testInfo) => {
     // Mirror electronApp.ts's hardening: stripping ELECTRON_RENDERER_URL keeps createWindow on the
     // built-renderer path (loadFile) instead of loadURL-ing a dead dev-server URL and hanging.
     const env = { ...process.env }
@@ -40,29 +49,39 @@ const test = base.extend<{ launched: { page: Page; app: ElectronApplication } }>
     // `--user-data-dir` is the Electron switch that overrides app.getPath('userData'); `.` stays the
     // first non-switch arg (the app path). Isolating it guarantees a genuinely unpaired start.
     const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-smoke-'))
+    const fate = createLaunchFateLog()
     try {
       // #1067: through the shared launch, not `electron.launch` directly — the desktop isolation must be
       // identical at both of the tier's launch sites, and this is the one that used to be easy to forget.
-      const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+      const app = await launchIsolatedApp({
+        args: ['.', `--user-data-dir=${userDataDir}`],
+        env,
+        fate
+      })
       try {
         const page = await app.firstWindow()
         await use({ page, app })
       } finally {
         // Best-effort: a throwing finally would replace the causal error AND abort the unwind before
-        // the outer rm, stranding the dir. Discarded without logging — a close error can carry the
-        // launch argv, which embeds `--user-data-dir=<path>`.
+        // the outer rm, stranding the dir. Still discarded without logging — a close error can carry the
+        // launch argv, which embeds `--user-data-dir=<path>` — but the STEP is now named (#1127), and
+        // `closeWatched` reads liveness before the close so the fate is readable at all.
         try {
-          await app.close()
+          await fate.closeWatched(app)
         } catch {
-          // best-effort
+          fate.recordTeardownFailure('app')
         }
       }
     } finally {
       try {
         await rm(userDataDir, { recursive: true, force: true })
       } catch {
-        // best-effort
+        fate.recordTeardownFailure('user-data-dir')
       }
+      // Last, after both closes: the exit code only settles once the app has been closed. Attaches on a
+      // failing test only, so a green run carries nothing. No filesystem I/O, so it does not reintroduce
+      // the #517 hazard this nest exists to avoid.
+      await attachLaunchFate(testInfo, fate)
     }
   }
 })

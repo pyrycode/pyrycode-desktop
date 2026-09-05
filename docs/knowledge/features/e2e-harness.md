@@ -48,6 +48,10 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 
 `e2e/fixtures/realDaemon.ts` and `e2e/fixtures/pairingArrival.ts` are deliberately untouched — the `real-*` tier is operator-supervised by nature, and this ticket is provable without a live daemon.
 
+### Launch-fate diagnostics on a failing test
+
+[#1127](https://github.com/pyrycode/pyrycode-desktop/issues/1127) closes a related gap: the tier reddens intermittently, a different spec each run, and no failure reproduces on demand — the harness knew the failing launch's exit code, signal, and liveness, and threw all three away. `launchIsolatedApp` now takes a required `fate: LaunchFateLog` (`createLaunchFateLog()`) and registers each launch itself — required, not optional, the `electronApp.ts` (#546) lesson applied early. `closeWatched(app)` replaces `app.close()` at both drain sites: liveness read before the close, exit code settled after, off a `ChildProcess` handle captured at `watch()` time (`ElectronApplication.process()` throws once `close()` tears its channel down). Each drain thunk carries a fixed-literal `TeardownStep` label; the catch stays bindingless — a close error can carry the launch argv, embedding `--user-data-dir=<path>` — so only the step name is recorded. Only a failing test (`failed`/`timedOut`/`interrupted`) gets one `text/plain` attachment (`'launch-fate'`), printed inline by Playwright's list reporter (`text/*`, truncated at 300 chars). `closeWatched` is the supported close path *for a teardown drain*, not the only way to ever close a watched app: `push-toggle-persist-relaunch.spec.ts` still closes launch 1 directly mid-test for its `SingletonLock` barrier, and the later drain's `closeWatched` on that app still reports honestly. As with #1067, no fails-on-main test for the flake itself — see `e2e/launch-fate.spec.ts`.
+
 ## Configuration and usage
 
 - **Run the suite:** `npm run e2e` = `npm run build && playwright test`. The build is chained so e2e never runs against a stale `out/` — a silently-stale build is a worse failure than a slower run.
@@ -314,6 +318,7 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 
 ## Related
 
+- Spec: `docs/specs/architecture/1127-launch-fate-diagnostic.md` — the launch-fate diagnostic design and its `ChildProcess`-capture-at-`watch()`-time revision.
 - [Window-presentation dev affordance](window-presentation-affordance.md) / [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) — the third `isPackaged`-false-first dev-only gate, letting a non-packaged build keep its window unshown; consumed by `desktopIsolation.ts` above.
 - [App shell (router)](app-shell.md) / [#80](../codebase/80.md) — `routeForStatus`, whose unpaired outcome the smoke test now asserts (`.pairing`).
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the shell the UI scenarios ([#93](../codebase/93.md), [#94](../codebase/94.md)) drive to after pairing; no longer what smoke asserts at boot.

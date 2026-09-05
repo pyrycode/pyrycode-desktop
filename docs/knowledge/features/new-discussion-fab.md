@@ -124,9 +124,13 @@ Fill/glyph use the M3 primary-container FAB role tokens (`--color-primary-contai
 - **Radius:** Figma specifies 16px; the token scale jumps 12→20 with no 16px slot, so it maps to
   `--radius-md` (20px), a +4px delta (the `pairing.css:55` ±token-mapping precedent). No new shared
   radius token added.
-- **Elevation:** the FAB is the first elevation consumer in this codebase. The M3 level-3
+- **Elevation:** the FAB was the first elevation consumer in this codebase. The M3 level-3
   (base)/level-4 (hover) two-layer `box-shadow`s are inlined as structural literals rather than a
-  new `--elevation-*` token — deferred until a second consumer appears (evidence-based).
+  new `--elevation-*` token — deferred until a second consumer appears (evidence-based). The second
+  shadow consumer arrived on 2026-09-05 with a *different* value — the message area's single-layer
+  `--shadow-thread` ([message bubble § The shadow](conversation-shell-message-bubble.md#the-shadow-the-2026-09-05-shadow-fix)),
+  shared by four rules — so that one became a token, and the FAB's M3 pair, still single-consumer,
+  stays a literal.
 
 ## Edge cases and limitations
 

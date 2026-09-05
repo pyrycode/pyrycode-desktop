@@ -269,11 +269,20 @@
    TYPE IS title-small EMPHASIZED (14/20/0.1 at weight 600), the step the drawing sets on every message
    node — added to tokens.css by this ticket, since the theme carried no title-small family at any
    weight. The size is unchanged from the body-medium it replaces; the weight and tracking are not. If
-   the thread reads too heavy in use, the fix is a Figma-side change and a one-line restyle here. */
+   the thread reads too heavy in use, the fix is a Figma-side change and a one-line restyle here.
+
+   THE SHADOW (the 2026-09-05 shadow fix, Figma "Content" 132:4012): every element of the message area
+   casts --shadow-thread, and the bubble takes it as a box-shadow because it is a filled box with the 6px
+   corner a box-shadow follows. The design draws the effect on the message CONTAINER frame (114:3558 /
+   114:3559), which has no fill and hugs the bubble, so the container's shadow is the bubble's. It reaches
+   the queued row too, which reuses .bubble--user, where the region's 50% opacity dims the shadow with the
+   rest of the row — the design draws no queued state, and a shadow that dims with its box is the same
+   compositing the Figma effect renders. e2e/thread-shadow.spec.ts reads the computed value on both sides. */
 .bubble {
   max-width: min(680px, 75%);
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-thread);
   word-break: break-word;
   font-size: var(--text-title-small-size);
   line-height: var(--text-title-small-line);
@@ -1754,7 +1763,16 @@
    went rather than moved — it was the main-axis alignment of a ROW-direction container ("left-aligned in
    the thread"), and in a column of auto height it says nothing. The row's horizontal placement is
    unaffected: it is a stretch item of .conversation__thread's column and has always been the full
-   measure. */
+   measure.
+
+   THE SHADOW (the 2026-09-05 shadow fix, Figma "Tool use" 134:4939): --shadow-thread as a box-shadow, the
+   value every element of the message area casts. The design puts it on each single row and ONCE on the
+   grouped stack (384:7103); the app draws no group yet (#1073), so every row casts its own, and the
+   thread's 12px gap is wider than the shadow's 9px reach (4 down plus a 5px blur), so no row's shadow
+   lands on the next. NOT CLIPPED by this rule's own overflow: hidden — an element's overflow clips its
+   descendants, never its own outer shadow — and the pending row's 50% opacity dims the shadow with the
+   box, the same compositing the Figma effect renders. e2e/thread-shadow.spec.ts reads the computed value
+   on a pending row, where the dimming could pass for the shadow's absence by eye. */
 .tool-row {
   display: flex;
   flex-direction: column;
@@ -1764,6 +1782,7 @@
   background: var(--color-surface);
   border: 1px solid var(--color-primary-container);
   border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-thread);
 }
 
 /* #230 — the resolved states. When #121's reducer fills the toolCall's `result` in place, the arm adds
@@ -2348,7 +2367,13 @@
    which already separates this row from the messages above and below. 12 + this --space-1 = the 16px of
    clearance the design asks for, while the row's own content box stays the Figma's exact 16px (the
    label's line-height). Writing --space-4 here would yield 28px. Padding, not margin, as #286 used —
-   and if that container gap ever changes, this number is what silently breaks. */
+   and if that container gap ever changes, this number is what silently breaks.
+
+   NO SHADOW ON THE ROW, though the design draws its effect here: "Session reset" 119:3843 carries the
+   --shadow-thread effect on the frame (the 2026-09-05 shadow fix). That frame has no fill, and Figma
+   shadows what an unfilled frame PAINTS — the two hairlines and the label — never its box. A box-shadow
+   on this row would paint a rectangle under 16px of empty thread. So the shadow rides on the painted
+   parts below, each in its own form, and e2e/thread-shadow.spec.ts asserts `none` here on purpose. */
 .session-delimiter {
   display: flex;
   align-items: center;
@@ -2364,10 +2389,16 @@
    stray UA margins and the 16px row is unreachable without this. An untrusted long workspace path must
    wrap INSIDE the row, not overflow it — min-width: 0 lifts the flex item's automatic minimum (its
    min-content width) so the label can shrink, and word-break: break-word then breaks the unbroken
-   path; without the first, a long path squeezes both rules to their 1px floor instead. */
+   path; without the first, a long path squeezes both rules to their 1px floor instead.
+
+   THE SHADOW (2026-09-05): --shadow-thread as a TEXT-shadow, the form that shadows the glyphs rather
+   than the label's box — the label has no fill either, so a box-shadow here would be the row's rectangle
+   in miniature. text-shadow has no spread slot, which is why the token writes none (the design's is 0,
+   the default); the lengths and the colour are the hairlines' and the bubbles', unchanged. */
 .session-delimiter__title {
   min-width: 0;
   margin: 0;
+  text-shadow: var(--shadow-thread);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
@@ -2382,13 +2413,19 @@
    both is the equal-halves invariant above; min-width: 1px mirrors the Figma's min-w-px and is what a
    rule falls back to when a long label consumes the row. No border-radius: the Figma's rounding is a
    0.5px radius on a 1px band, sub-pixel and invisible. Purely decorative styled divs (aria-hidden in
-   the markup), not semantic <hr>s. */
+   the markup), not semantic <hr>s.
+
+   THE SHADOW (2026-09-05): --shadow-thread as a box-shadow. A 1px band's box IS its painted shape, so a
+   box-shadow on the band is exactly the drop shadow the design's effect casts for it, and the band's 60%
+   opacity dims the shadow with it — the same composite Figma renders, where the effect is computed over
+   the rectangle at its own opacity. See .session-delimiter above for why the ROW carries none. */
 .session-delimiter__rule {
   flex: 1 0 0;
   min-width: 1px;
   height: 1px;
   background: var(--color-inverse-primary);
   opacity: 0.6;
+  box-shadow: var(--shadow-thread);
 }
 
 /* Pinned composer — never grows or shrinks. A vertical stack holding the message box row and the input

@@ -239,4 +239,31 @@
   --radius-md: 20px;
   --radius-lg: 28px;
   --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-thread: 0 4px 5px rgba(0, 0, 0, 0.2); /* The one drop shadow on EVERY element of the desktop
+                                                    message area (the 2026-09-05 shadow fix, Figma "Content"
+                                                    132:4012 / "Message area" 132:3959): X 0, Y 4, blur 5,
+                                                    spread 0, black at 20%. The bubbles, the session-reset
+                                                    separator and the grouped tool rows carry it as an
+                                                    effect on their wrapper frame, the single tool rows on
+                                                    the row itself. Four consumers in conversation.css —
+                                                    .bubble, .tool-row and .session-delimiter__rule as a
+                                                    box-shadow, .session-delimiter__title as a text-shadow —
+                                                    which is why this is a token where the FAB's M3 level-3
+                                                    shadow (channels.css) stays an inlined literal: that one
+                                                    still has a single consumer and a different value. Not
+                                                    an M3 elevation level either, so not named --elevation-*.
+
+                                                    ⭐ READ THE BLUR OFF THE BOX-SHADOW FORM. The design's
+                                                    export prints this one effect two ways: `shadow-[0px_
+                                                    4px_5px_0px_rgba(0,0,0,0.2)]` on the filled tool row and
+                                                    `drop-shadow-[0px_4px_2.5px_rgba(0,0,0,0.2)]` on the
+                                                    unfilled wrappers. A CSS filter's drop-shadow takes its
+                                                    blur as a standard deviation and box-shadow's blur
+                                                    radius is twice that, so the export's 2.5 IS this 5 —
+                                                    copying the filter's number into a box-shadow halves
+                                                    the design's blur. No spread is written: the design's
+                                                    is 0, the default, and leaving it out is what lets the
+                                                    same token serve text-shadow, which has no spread slot. */
 }

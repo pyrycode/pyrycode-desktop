@@ -357,15 +357,23 @@ plus the drop-target rule below:
 - **`.composer--drop-target`** (#890) — `outline: 1px solid var(--color-primary); outline-offset: -1px`,
   the drop-in-progress edge. `outline`, not `border`: `.composer` has no resting border at all — it is
   padding over the pane card, with no paint of its own since #1099 — so a `border:` in the active state
-  would reflow the whole conversation column by 2px every time a file crossed it. The shipped no-reflow precedent is
-  `.composer__row:has(.composer__input:focus-visible)`, further down this file. `--color-primary` rather
-  than that rule's `--color-outline`, so the drop edge is not the focus ring's twin when a drag crosses a
-  composer whose textarea also holds focus — both tokens already exist in this stylesheet; no new colour
-  is introduced. `outline-offset: -1px` draws the edge inside the border box, since the composer is the
-  conversation column's last child and its bottom padding edge is the window's, where an outward outline
-  would be clipped. Per Juhana's ruling of 2026-09-02, this is the drop state until a treatment is drawn
-  in Figma (node `102-4` covers only the input's resting appearance) — a drawn treatment landing later
-  supersedes this rule as a Figma-side follow-up, not a redesign.
+  would reflow the whole conversation column by 2px every time a file crossed it. An outline participates
+  in no layout at all, and the argument stands on that fact directly. It used to stand on a precedent
+  instead — the message box's own focus ring, `.composer__row:has(.composer__input:focus-visible)`, made
+  the same no-reflow trade further down this file — but #1063 (2026-09-05) retired that rule (see
+  [Conversation shell — composer message box § Message box](conversation-shell-composer-message-box.md#message-box-951)),
+  so the reasoning here is restated on its own terms rather than borrowed. `--color-primary` rather than
+  `--color-outline`, this file's `:focus-visible` token, so the drop edge never reads as one of those rings
+  thickening rather than as a state of its own. Before #1063 that distinction had a sharper edge still — the
+  message box's own ring could be up at the same moment, on a drag over a composer whose textarea held
+  focus, drawing two neighbouring rings in one token; that particular collision is gone with the rule, but
+  the token choice outlives it, since a drag can still cross the composer while any of `conversation.css`'s
+  21 remaining focus rings is up. Both are tokens this stylesheet already uses; no new colour is introduced.
+  `outline-offset: -1px` draws the edge inside the border box, since the composer is the conversation
+  column's last child and its bottom padding edge is the window's, where an outward outline would be
+  clipped. Per Juhana's ruling of 2026-09-02, this is the drop state until a treatment is drawn in Figma
+  (node `102-4` covers only the input's resting appearance) — a drawn treatment landing later supersedes
+  this rule as a Figma-side follow-up, not a redesign.
 
 No glyph rule of its own, unlike the four menu chevrons — the button's only child is the glyph and the
 button itself is `flex: 0 0 auto`, so nothing can squeeze it, and adding one would grow the standing

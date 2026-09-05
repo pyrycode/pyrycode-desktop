@@ -43,10 +43,11 @@ const HOST_LABEL = 'Pyrybox-'.repeat(MAX_HOST_LABEL_LENGTH / 8)
 // label must not widen. Pinned here the way paired-shell-navigation.spec.ts pins it.
 const SIDEBAR_WIDTH_PX = 400
 
-// The host row's own horizontal padding (`.channel-list__host`, --space-4). The dots' trailing edge sits
-// exactly this far in from the row's right edge; that inset is where the 16px comes from, and is what
-// `.channel-list__host-status`'s `margin-left: auto` produces only while the label yields.
-const ROW_INSET_PX = 16
+// The dots' trailing edge sits FLUSH with the row's right edge: `.channel-list__host` carries no right
+// padding since the 2026-09-05 inset fix (the design floats the pair inside its px-16, 1px from the
+// edge, and 1px has no slot on the scale), and `.channel-list__host-status`'s `margin-left: auto` is
+// what puts the pair there — only while the label yields.
+const ROW_INSET_PX = 0
 
 // Sub-pixel tolerance for a device-pixel-ratio-scaled layout. One physical pixel of slack, no more —
 // enough that a fractional box coordinate cannot flake, far too little to hide a label that has pushed

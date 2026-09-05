@@ -218,9 +218,12 @@ describe('isAttachmentPasteRequest', () => {
   })
 
   it('accepts an ask carrying extra keys, which are never read', () => {
-    // The sibling guard's posture restated, and it costs even less here: nothing downstream reads ANY
-    // field off this ask — `uploadClipboardImage` takes no argument from it — so a smuggled field
-    // reaches nothing at all.
+    // The sibling guard's posture restated, and it costs almost as little here: nothing downstream
+    // reads any field off this ask ABOUT THE IMAGE — `uploadClipboardImage` takes no argument from it
+    // — so a smuggled field reaches nothing at all. #1129's `serverId` is the one field main does read,
+    // and it is looked up against the registry and discarded rather than acted on; it is not an
+    // unread extra and has its own rule, asserted in the routing-key describe at the bottom of this
+    // file.
     expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, path: '/etc/passwd' })).toBe(
       true
     )
@@ -287,5 +290,111 @@ describe('the two request guards, side by side', () => {
     // looked like a path would make the two asks confusable at a glance in a log or a review.
     expect(ATTACHMENT_PASTE_SOURCE).toBe('clipboard-image')
     expect(ATTACHMENT_PASTE_SOURCE).not.toContain('/')
+  })
+})
+
+// ⭐ #1129: the optional routing key, on BOTH guarded asks. The field is what lets a dropped or
+// pasted file reach the server whose chat is open rather than whichever host was paired most
+// recently, and the rule it is checked against is the one `hasValidServerId` (commands.ts) already
+// states for the six server-scoped commands: ABSENT-OR-UNDEFINED-OR-STRING. It is restated here
+// rather than imported — no production module under src/shared/ipc imports from a sibling — so
+// these assertions are what keep the two copies from drifting, and they are written against the
+// rule rather than against the helper.
+//
+// The picker's ask has no object at all and so appears nowhere below: it carries no id by
+// construction and takes the unnamed path, which is `serverRouter.resolve(undefined)`'s
+// sole-connection branch.
+describe('the optional routing key on both asks', () => {
+  it('accepts an ask that names a server, on either entry', () => {
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: 'server-a' })).toBe(true)
+    expect(
+      isAttachmentPasteRequest({
+        source: ATTACHMENT_PASTE_SOURCE,
+        serverId: 'server-a'
+      })
+    ).toBe(true)
+  })
+
+  it('accepts an ask with no serverId key, which is what every shipped sender emits', () => {
+    // The load-bearing half of "absent-or-undefined-or-string" in the REFUSAL direction: no
+    // renderer sender has a per-server surface to name a server from until #1086, so a present-key
+    // REJECTION would refuse the ordinary bare ask both current senders produce.
+    expect(isAttachmentUploadRequest({ path: '/tmp/a' })).toBe(true)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(true)
+  })
+
+  it('accepts an explicitly-undefined serverId, which is what structured clone delivers', () => {
+    // ⭐ THE OPTIONAL-FIELD TRAP, made provable rather than left in a comment. Structured clone
+    // PRESERVES an own property whose value is `undefined` across the IPC bridge, so a sender that
+    // writes `{ path, serverId }` from an absent variable puts an own `serverId: undefined` key on
+    // the wire. A bare `'serverId' in value` check would read that as a supplied value and refuse
+    // it.
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: undefined })).toBe(true)
+    expect(
+      isAttachmentPasteRequest({
+        source: ATTACHMENT_PASTE_SOURCE,
+        serverId: undefined
+      })
+    ).toBe(true)
+  })
+
+  it('accepts an empty serverId, which is refused one layer later by the resolver', () => {
+    // TYPE, NOT EMPTINESS, and not canonical shape either — commands.ts's rule inherited whole.
+    // `''` is a present string, so `serverRouter.resolve` takes its NAMED branch and refuses: no
+    // held entry's id is empty, and the not-paired stand-in's is `null`, which no string can match.
+    // Refusing it here would buy nothing the resolution does not already buy, and would put a
+    // second, weaker opinion about the id at a boundary that is not the one holding the entry set.
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: '' })).toBe(true)
+    expect(
+      isAttachmentPasteRequest({
+        source: ATTACHMENT_PASTE_SOURCE,
+        serverId: ''
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a serverId that is not a string, on either entry', () => {
+    // Table-driven so the rejected set is readable as a set, its siblings' idiom. `null` is the
+    // trap a `!== undefined` test alone would miss (`typeof null` is `'object'`); the array and the
+    // toString-carrying object are the two shapes that would coerce to a usable id if anything
+    // downstream ever interpolated one instead of looking it up.
+    const invalid: unknown[] = [
+      null,
+      42,
+      true,
+      [],
+      ['server-a'],
+      {},
+      { toString: () => 'server-a' }
+    ]
+    const drops = invalid.map((serverId) => ({ path: '/tmp/a', serverId }))
+    const pastes = invalid.map((serverId) => ({
+      source: ATTACHMENT_PASTE_SOURCE,
+      serverId
+    }))
+    expect(drops.map(isAttachmentUploadRequest)).toEqual(invalid.map(() => false))
+    expect(pastes.map(isAttachmentPasteRequest)).toEqual(invalid.map(() => false))
+  })
+
+  it('makes serverId the one extra key that is no longer free-form', () => {
+    // The two acceptances above ("accepts a request carrying extra keys, which are never read")
+    // stay true of every OTHER key, and that is the whole distinction this slice draws: `serverId`
+    // stops being an unread extra and becomes a read field, so it acquires a rule while nothing
+    // else does.
+    expect(
+      isAttachmentUploadRequest({
+        path: '/tmp/a',
+        serverIds: 42,
+        filename: 'b'
+      })
+    ).toBe(true)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, server: 42 })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: 42 })).toBe(false)
+    expect(
+      isAttachmentPasteRequest({
+        source: ATTACHMENT_PASTE_SOURCE,
+        serverId: 42
+      })
+    ).toBe(false)
   })
 })

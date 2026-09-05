@@ -149,7 +149,7 @@ markup assertion, failing only visually. **Do not "tidy" either subpath's direct
 **Colour and container closed, together with the box redraw.** The re-theme #678 deferred — both glyphs
 to `--color-primary`, the send glyph to `circle-chevron-up-solid-full`, the pill dropped to a
 hover/focus-only container — shipped in the redraw of the message box itself
-([Conversation shell — composer § Message box](conversation-shell-composer.md#message-box-951)), because
+([Conversation shell — composer § Message box](conversation-shell-composer-message-box.md#message-box-951)), because
 in the drawing the control lives *inside* the box. Both variants now render `fill="currentColor"` at
 28×28 on a `background: none` control whose colour is `--color-primary`, with a
 `--color-surface-container` step on hover — the M3 icon button's own always-invisible-at-rest posture,

@@ -64,7 +64,7 @@ second entry point to drift. The menu carries no `canSend` prop of its own for e
 gate exists in one place, and the trigger is never disabled (including while disconnected) — picking
 while the composer can't send sends nothing and writes nothing, silently, the same posture [the connection
 banner](conversation-shell-chrome.md#connection-banner-279) and, in the `error` arm, [the status row's
-chip or button](conversation-shell-composer.md#composer-error-chip-797) already explain. Through
+chip or button](conversation-shell-composer-status.md#composer-error-chip-797) already explain. Through
 [#968](../codebase/968.md) the composer also carried its own `Not connected` caption one row up for the
 same reason; that caption is retired. `window.pyry` is still dereferenced only inside `sendText`, at
 interaction time, never during render, so the container smoke test still server-renders with no bridge mock.

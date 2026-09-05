@@ -99,7 +99,7 @@ DOM, not a fetch, so a bundled asset would be the repo's first, for no gain. **N
   learned" in [#657 notes](../codebase/657.md) for the measurement that confirmed this rather than
   guessed it.
   **Moved out of this screen's module-private `PyrycodeMark` into the shared `PyryMark` in
-  `theme/PyryMark.tsx` by #796**, once the [conversation shell](conversation-shell-composer.md#composer-status-row-796)'s
+  `theme/PyryMark.tsx` by #796**, once the [conversation shell](conversation-shell-composer-status.md#composer-status-row-796)'s
   status row needed the same 12 KB path — one drifted copy of a brand mark being a real risk, not a
   hypothetical one. `PyryMark({ className, width, height })` takes the path and viewBox as given and
   renders one `<svg>` with `className` **first** in attribute order, load-bearing because
@@ -163,7 +163,7 @@ two comments that are now wrong.
   `onPair?` copied verbatim is, since #662, wired on both sides.
 - [App shell (router)](app-shell.md) — gained the launch-time route to this screen in
   [#662](../codebase/662.md); untouched by #657.
-- [Conversation shell](conversation-shell-composer.md#composer-status-row-796) — the composer status row's second
+- [Conversation shell](conversation-shell-composer-status.md#composer-status-row-796) — the composer status row's second
   consumer of the shared `PyryMark`, since
   [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796); this screen's own call site and markup
   are unchanged by that move.

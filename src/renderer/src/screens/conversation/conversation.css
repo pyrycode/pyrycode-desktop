@@ -2701,12 +2701,41 @@
    padding-right = the control's 48px + its 4px inset + 4px of clearance = the node's 56px, which is what
    stops the text running under the button. 48px is a literal for the reason .composer__send's own width
    is one two rules down: a control's own size is structural geometry, not spacing (the .composer__footer
-   / .composer-status / .conn-dot precedent in this file). --space-2 carries the two 4s. */
+   / .composer-status / .conn-dot precedent in this file). --space-2 carries the two 4s.
+
+   #1056 — THE AUTO-GROW, and it is these two declarations and nothing else. .composer__row's comment
+   above named this as the reason it must never declare a height; that reason now has an occupant, and the
+   row still declares none. No ref, no ResizeObserver, no measure-and-set, and NO CHANGE TO
+   ConversationScreen.tsx: under `field-sizing: content` the textarea's `rows={1}` becomes its MINIMUM
+   rather than its fixed size, which is exactly why the resting box is byte-identical and why the markup
+   is untouched. Chromium 123+; this app is Electron 33 (Chromium 130) and there is no second engine.
+   Measured in the built app before it was written, not predicted: 52 / 72 / 92 / 112 / 132 at one through
+   five lines, holding at 132 past them, and exactly 52 again when the draft empties.
+
+   max-height IS the ceiling, read in the border box this rule already declares: five body-medium lines
+   plus this rule's own two 4s = 108, which the row's 12 + 12 makes the 132px box. Written in the two
+   tokens the arithmetic depends on rather than as `108px` — the same form as `padding-right`'s calc() one
+   line down, and for the same reason: --text-body-medium-line IS the height the textarea lays a line out
+   at, so a literal would be a second source of truth for it and for --space-1 both.
+
+   PAST THE CEILING NOTHING IS DECLARED. The UA's own `overflow-y: auto` scrolls the draft and Chromium
+   keeps the caret in view without help. One consequence, recorded rather than corrected: at six lines the
+   scrollbar takes 15px from the CONTENT width (clientWidth 616 → 601, measured) while the border box
+   holds, so nothing outside the textarea moves but the wrapped text re-wraps once at that boundary. The
+   one declaration that removes it, `scrollbar-gutter: stable`, buys it by narrowing the RESTING text
+   column by the same 15px, which AC1 forbids — and a scrollbar is the honest signal that the draft
+   continues past the box, which is this ticket's own subject. The design draws no scrolled state.
+
+   field-sizing also makes the intrinsic WIDTH content-based. `flex: 1 1 auto; min-width: 0` above still
+   fills the row — measured at rest, at the ceiling and under a 1000-character draft, all 616px against
+   the row's 616 — and e2e/composer-message-box.spec.ts reads that box, which no shipped assertion did. */
 .composer__input {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
+  field-sizing: content;
+  max-height: calc(5 * var(--text-body-medium-line) + 2 * var(--space-1));
   padding: var(--space-1) calc(48px + var(--space-2)) var(--space-1) var(--space-4);
   background: none;
   color: var(--color-on-surface);
@@ -2750,8 +2779,23 @@
    #951 — IT SITS INSIDE THE BOX NOW (Figma `Message input button`, 347:6440, at right: 4px in a 52px
    box), so it is out of flow: absolutely positioned against .composer__row, whose padding box edge is its
    border box edge, which is what lets `right` be the drawing's own 4px. `flex: 0 0 auto` went with the
-   move — an absolutely positioned box is not a flex item. top: 50% + translateY(-50%) centres it on
-   whatever height the box derives rather than restating half of 48px as an offset.
+   move — an absolutely positioned box is not a flex item.
+
+   #1056 — PINNED TO THE BOTTOM, not centred, and `top: 50%` + `translateY(-50%)` are gone with the
+   centring. Once .composer__input auto-grows, a centred control floats ~42px above the line being typed
+   at the five-line ceiling; pinned, it sits beside that line at every height. Operator ruling of
+   2026-09-04. It mirrors the `right` already here and resolves against the same edge for the same reason
+   the sentence above gives — no border, no horizontal padding, so the row's 12px of VERTICAL padding does
+   not enter into it either.
+
+   2px, and it is the DRAWING'S OWN NUMBER on this axis rather than a compromise. Read off the node: the
+   button wrapper is top:-10px inside a `Text field` that starts at y=12, so the control's top in the 52px
+   box is 2 and its bottom gap is 52 − 2 − 48 = 2. The 4px belongs to the horizontal axis alone, so
+   `var(--space-1)` here would not be "the mirror of right" so much as a second, undrawn number — and it
+   would move the control up 2px at rest, which AC1's whole point is that nothing does. At 2px the resting
+   render is byte-identical and e2e/composer-message-box.spec.ts's `expect(gapAbove).toBe(gapBelow)` holds
+   unedited (both are 2). Measured across the growth: the gap below stays 2 while the gap above goes
+   2 → 22 → 42 → 62 → 82.
 
    NO VISIBLE CONTAINER AT REST, which is what the M3 icon button's own Figma description specifies
    ("until the button is interacted with, its container isn't visible") and why the filled
@@ -2761,8 +2805,7 @@
 .composer__send {
   position: absolute;
   right: var(--space-1);
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: 2px;
   width: 48px;
   height: 48px;
   display: flex;

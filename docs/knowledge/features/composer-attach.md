@@ -4,7 +4,7 @@ The footer's sixth and last item, right-aligned past
 [the Actions menu](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680),
 [the permission-mode menu](composer-permission-mode-menu.md), [the model menu](composer-model-menu.md),
 [the effort menu](composer-effort-menu.md) and the context reading (Figma `115:3654`). Part of
-[Conversation shell — composer](conversation-shell-composer.md#composer-footer-row-811); see that
+[Conversation shell — composer](conversation-shell-composer-message-box.md#composer-footer-row-811); see that
 document's footer-row section for the row's geometry and no-placeholder rule.
 
 It wires the renderer half of a flow that already existed headless: [#862](attachment-upload.md) shipped
@@ -26,7 +26,7 @@ The other four footer controls each read a store and render one of several state
 - **The button itself needs no disabled or in-flight state.** The composition root's `pickerOpen` flag
   (#862) already drops a second intent while a picker is open, so a double-clicked button is handled
   below the bridge. Drawing a state on the *glyph* would be exactly the placeholder
-  [#811](conversation-shell-composer.md#composer-footer-row-811) forbade — see § In-flight progress
+  [#811](conversation-shell-composer-message-box.md#composer-footer-row-811) forbade — see § In-flight progress
   (#864) below for where the in-flight state actually lives instead: the outcome line beneath the row,
   not the button.
 - **The renderer cannot correlate a click to an outcome — or to a transfer's progress.** `requestAttachmentUpload()`

@@ -2,7 +2,7 @@
 
 The footer's second live control, immediately right of [the Actions menu](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680)
 (Figma `115:3683`, x=135 in the design though not yet in the built row — see below). Part of
-[Conversation shell — composer](conversation-shell-composer.md#composer-footer-row-811); see that
+[Conversation shell — composer](conversation-shell-composer-message-box.md#composer-footer-row-811); see that
 document's footer-row section for the row's geometry and no-placeholder rule.
 
 Everything under this control was already built and dormant: the shared
@@ -135,7 +135,7 @@ and that control belongs to #682.
 The run-config snapshot is requested only on the `connected` edge — which lands before a conversation is
 active, so the request sends nothing — and at each turn end (`runConfigLive`). A fresh app launch
 therefore has **no** snapshot: `effective.model` is `''`, and this control correctly renders nothing. The
-[context-usage reading](conversation-shell-composer.md#composer-footer-row-811) beside it has the exact
+[context-usage reading](conversation-shell-composer-message-box.md#composer-footer-row-811) beside it has the exact
 same dependency and is absent for the exact same reason on a fresh launch. An e2e drive against either
 control needs a turn end first — an unsolicited `turn_state` thinking → idle pair, a frame the daemon
 sends unprovoked, keeping the "no manufactured inputs" rule intact. A lone `idle` push fires nothing:

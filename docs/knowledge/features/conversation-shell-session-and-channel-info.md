@@ -53,6 +53,17 @@ by measuring real rects at 800px and 1600px rather than only inspected. The expl
 memory-plugin subsystem neither ticket depends on. See [#286 codebase notes](../codebase/286.md) for
 \#286's original design and patterns established.
 
+**The shadow (the 2026-09-05 shadow fix).** The design draws the message area's one drop shadow on this
+row's frame too ("Session reset" 119:3843; X 0, Y 4, blur 5, black at 20%, the `--shadow-thread` token —
+see [message bubble § The shadow](conversation-shell-message-bubble.md#the-shadow-the-2026-09-05-shadow-fix)).
+The frame has no fill, and Figma shadows what an unfilled frame *paints*, the two hairlines and the label,
+never its box — so `.session-delimiter` itself carries no shadow (a box-shadow there would paint a
+rectangle under 16px of empty thread) and the painted parts carry it in their own form: each
+`.session-delimiter__rule` as a `box-shadow` (a 1px band's box is its painted shape; the 60% opacity
+dims the shadow with it, the composite Figma renders), and `.session-delimiter__title` as a
+`text-shadow`, which shadows the glyphs and has no spread slot — the reason the token writes none.
+`e2e/thread-shadow.spec.ts` asserts `none` on the row and the value on all three parts.
+
 ## Channel Info sheet (#365)
 
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new

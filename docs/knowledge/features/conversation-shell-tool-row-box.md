@@ -95,3 +95,14 @@ hold independent declarations, but the citation now points at a shape the tool-r
 See PR #846 for the full record; there is no `docs/knowledge/codebase/722.md` — that directory was frozen
 2026-08-26, and this section is #722's only home.
 
+## The shadow (the 2026-09-05 shadow fix)
+
+`.tool-row` gains `box-shadow: var(--shadow-thread)`, the one drop shadow every element of the desktop
+message area casts (Figma "Tool use" 134:4939; X 0, Y 4, blur 5, spread 0, black at 20% — the token and
+the blur-doubling trap are described under
+[message bubble § The shadow](conversation-shell-message-bubble.md#the-shadow-the-2026-09-05-shadow-fix)).
+The design puts it on each single row and once on the grouped stack (384:7103); the app draws no group
+yet (#1073), so every row casts its own, and the thread's 12px gap outreaches the shadow's 9px, so no
+row's shadow lands on the next. The row's own `overflow: hidden` does not clip it — an element's overflow
+clips descendants, never its own outer shadow — and the pending row's 50% opacity dims the shadow with the
+box. `e2e/thread-shadow.spec.ts` reads the computed value on a pending row.

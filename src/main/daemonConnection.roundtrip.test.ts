@@ -489,14 +489,15 @@ describe('createDaemonConnection debug-bundle download orchestrator round-trip (
       cleanups.push(() => rm(tmpDir, { recursive: true, force: true }))
 
       const downloader = createDebugBundleDownload({
-        requestDebugBundle: (c) => connection.requestDebugBundle(c),
         save: (b) => saveDebugBundle(tmpDir, b),
         emit: (e) => {
           events.push(e)
           waiter.notify()
         }
       })
-      downloader.request()
+      // The connection is an argument to the ask since #1120 — one orchestrator is held per server, so
+      // what it drives is resolved fresh each time rather than closed in at construction.
+      downloader.request((c) => connection.requestDebugBundle(c))
       await waiter.wait(
         () => events.some((e) => e.type === 'debugBundleSaved' || e.type === 'debugBundleFailed'),
         MESSAGE_TIMEOUT_MS

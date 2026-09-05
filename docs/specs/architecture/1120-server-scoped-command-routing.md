@@ -335,6 +335,32 @@ registry lookups and a collecting `DiagnosticLog`:
    re-take the decision at review time. Re-checked before the PR opens; noted in the PR body either
    way.
 
+## Revisions
+
+**2026-09-06, during implementation.** One departure from the plan as committed, and the three Open
+Questions resolved as planned.
+
+1. **The orchestrator's shape change reaches two more test files than the Testing strategy names.**
+   `daemonConnection.test.ts` (the #505 "a teardown unwedges the orchestrator" suite) and
+   `daemonConnection.roundtrip.test.ts` both construct a `createDebugBundleDownload` over a real
+   connection, so moving `requestDebugBundle` from `DebugBundleDownloadDeps` to `request()`'s
+   parameter is a compile-forced edit in each. Both are harness changes only — the connection is
+   supplied at the ask instead of at construction, and every assertion stands unchanged, because what
+   those suites pin is the **gate**, which is still construction-held. No production behaviour
+   changed with them, and no assertion was weakened; `npm run typecheck` is what surfaced them.
+2. **Open question 1 (memo eviction) resolved as planned: no eviction.** Confirmed while writing the
+   memo — there is no registry signal to hang one on, and an orchestrator for an unpaired server is
+   unreachable because the router refuses before it is selected. Recorded in
+   `createDebugBundleDownloads`' docblock.
+3. **Open question 2 (`interruptCommand`'s parameter) resolved as planned: added, optional.** It is
+   the only mint site for that member, so #1092 or the per-server sender tickets would otherwise
+   re-edit this file for one argument.
+4. **Open question 3 (`needs-real-claude`) resolved as planned: no.** The design did not move
+   mid-implementation the way #1119's did — nothing here depends on a live claude session or on a
+   single-daemon `/clear` sequence, and the behaviour is per-server routing, which a one-daemon
+   fixture cannot exercise. Re-taken at review time per the package overview's standing instruction,
+   which is why it is recorded here rather than only in the plan body.
+
 ## Security review
 
 **Verdict:** PASS

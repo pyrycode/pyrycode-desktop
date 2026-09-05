@@ -5,7 +5,11 @@
 // the fail-map (AC2), progress (AC3), and single-in-flight (AC4) — and, for every failure event,
 // that its `Object.keys` allowlist carries no errno / token / key / bytes.
 import { describe, it, expect, vi } from 'vitest'
-import { createDebugBundleDownload, type DebugBundleDownloadDeps } from './debugBundleDownload'
+import {
+  createDebugBundleDownload,
+  createDebugBundleDownloads,
+  type DebugBundleDownloadDeps
+} from './debugBundleDownload'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import type { DaemonEvent, DebugBundleFailure } from '../shared/ipc/events'
@@ -32,26 +36,47 @@ interface Harness {
   emitted: DaemonEvent[]
   requestDebugBundle: ReturnType<typeof vi.fn>
   save: ReturnType<typeof vi.fn>
+  /** Ask, arming the transport through this harness's `requestDebugBundle`. */
+  request(): void
   /** The most recently constructed consumer (undefined until the first admitted request). */
   consumer(): BundleConsumer | undefined
 }
 
 // Build an orchestrator over fakes. `save` defaults to a resolved stub; `requestDebugBundle` by
 // default just captures the consumer (override to model the synchronous not-connected fail).
-function setup(overrides?: Partial<DebugBundleDownloadDeps>): Harness {
+//
+// SINCE #1120 THE ARMING FUNCTION IS AN ARGUMENT TO `request`, NOT A CONSTRUCTION DEP: one
+// orchestrator is held PER SERVER for the process lifetime, so the connection it drives has to be
+// resolved fresh at every ask. `request()` here supplies the harness's own, which is what keeps every
+// assertion below reading exactly as it did.
+function setup(
+  overrides?: Partial<DebugBundleDownloadDeps> & {
+    requestDebugBundle?: (consumer: BundleConsumer) => void
+  }
+): Harness {
   const emitted: DaemonEvent[] = []
   let captured: BundleConsumer | undefined
-  const requestDebugBundle = vi.fn((consumer: BundleConsumer) => {
-    captured = consumer
-  })
+  const { requestDebugBundle: arm, ...deps } = overrides ?? {}
+  const requestDebugBundle = vi.fn(
+    arm ??
+      ((consumer: BundleConsumer) => {
+        captured = consumer
+      })
+  )
   const save = vi.fn(async () => '/downloads/pyrycode-debug-bundle.tar.gz')
   const downloader = createDebugBundleDownload({
-    requestDebugBundle,
     save,
     emit: (e) => emitted.push(e),
-    ...overrides
+    ...deps
   })
-  return { downloader, emitted, requestDebugBundle, save, consumer: () => captured }
+  return {
+    downloader,
+    emitted,
+    requestDebugBundle,
+    save,
+    request: () => downloader.request(requestDebugBundle),
+    consumer: () => captured
+  }
 }
 
 describe('createDebugBundleDownload — fail-map (AC2)', () => {
@@ -64,8 +89,8 @@ describe('createDebugBundleDownload — fail-map (AC2)', () => {
   ]
 
   it.each(cases)('maps fail(%s) → debugBundleFailed:%s and leaks nothing else', (reason, category) => {
-    const { downloader, emitted, consumer } = setup()
-    downloader.request()
+    const { request, emitted, consumer } = setup()
+    request()
     consumer()?.fail(reason)
 
     expect(emitted).toEqual([{ type: 'debugBundleFailed', reason: category }])
@@ -78,9 +103,9 @@ describe('createDebugBundleDownload — fail-map (AC2)', () => {
       code: 'EACCES',
       errno: -13
     })
-    const { downloader, emitted, consumer } = setup({ save: vi.fn(() => Promise.reject(errno)) })
+    const { request, emitted, consumer } = setup({ save: vi.fn(() => Promise.reject(errno)) })
 
-    downloader.request()
+    request()
     consumer()?.complete(new Uint8Array([1, 2, 3]))
     await flush()
 
@@ -96,10 +121,10 @@ describe('createDebugBundleDownload — fail-map (AC2)', () => {
 describe('createDebugBundleDownload — success + progress', () => {
   it('routes complete bytes to save and emits debugBundleSaved with the resolved path (no bytes)', async () => {
     const save = vi.fn(async () => '/downloads/pyrycode-debug-bundle.tar.gz')
-    const { downloader, emitted, consumer } = setup({ save })
+    const { request, emitted, consumer } = setup({ save })
     const bytes = new Uint8Array([9, 8, 7])
 
-    downloader.request()
+    request()
     consumer()?.complete(bytes)
     await flush()
 
@@ -110,8 +135,8 @@ describe('createDebugBundleDownload — success + progress', () => {
   })
 
   it('emits the running chunk count as progress and nothing else (AC3)', () => {
-    const { downloader, emitted, consumer } = setup()
-    downloader.request()
+    const { request, emitted, consumer } = setup()
+    request()
 
     consumer()?.progress?.(1)
     consumer()?.progress?.(2)
@@ -126,25 +151,25 @@ describe('createDebugBundleDownload — success + progress', () => {
   })
 
   it('progress is not terminal — a request during a stream is still short-circuited', () => {
-    const { downloader, requestDebugBundle, consumer } = setup()
-    downloader.request()
+    const { request, requestDebugBundle, consumer } = setup()
+    request()
     consumer()?.progress?.(1)
 
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('createDebugBundleDownload — single-in-flight (AC4)', () => {
   it('short-circuits a concurrent request and admits a fresh one only after the terminal', () => {
-    const { downloader, emitted, requestDebugBundle, consumer } = setup()
+    const { request, emitted, requestDebugBundle, consumer } = setup()
 
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(1)
     const first = consumer()
 
     // Second request while the first is in flight: no transport call, no new consumer, no terminal.
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(1)
     expect(consumer()).toBe(first)
     expect(emitted).toEqual([])
@@ -154,45 +179,42 @@ describe('createDebugBundleDownload — single-in-flight (AC4)', () => {
     expect(emitted).toEqual([{ type: 'debugBundleFailed', reason: 'unavailable' }])
 
     // After the first settles, a later request starts a fresh download.
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(2)
   })
 
   it('stays locked across the async save window and admits the next request only after it settles', async () => {
     const gate = deferred<string>()
-    const { downloader, requestDebugBundle, consumer } = setup({ save: vi.fn(() => gate.promise) })
+    const { request, requestDebugBundle, consumer } = setup({ save: vi.fn(() => gate.promise) })
 
-    downloader.request()
+    request()
     consumer()?.complete(new Uint8Array([1]))
 
     // Between complete and save-resolve the flag is still held — a second request is ignored.
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(1)
 
     gate.resolve('/downloads/pyrycode-debug-bundle.tar.gz')
     await flush()
 
     // Once the save terminal emits, a fresh download is admitted.
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(2)
   })
 
   it('clears the flag when requestDebugBundle fails the consumer synchronously (not-connected)', () => {
     // Models daemonConnection.requestDebugBundle failing the consumer synchronously with no driver:
     // the set-active-before-call ordering must not leave the flag stuck true.
-    const emitted: DaemonEvent[] = []
-    const requestDebugBundle = vi.fn((c: BundleConsumer) => c.fail('not-connected'))
-    const downloader = createDebugBundleDownload({
-      requestDebugBundle,
-      save: vi.fn(async () => '/x'),
-      emit: (e) => emitted.push(e)
+    const { request, emitted, requestDebugBundle } = setup({
+      requestDebugBundle: (c: BundleConsumer) => c.fail('not-connected'),
+      save: vi.fn(async () => '/x')
     })
 
-    downloader.request()
+    request()
     expect(emitted).toEqual([{ type: 'debugBundleFailed', reason: 'unavailable' }])
 
     // The flag cleared synchronously, so the next request is admitted.
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(2)
   })
 })
@@ -211,17 +233,122 @@ describe('createDebugBundleDownload — a destroyed window cannot strand the fla
         throw new Error('Object has been destroyed')
       }
     }
-    const { downloader, requestDebugBundle, consumer } = setup({
+    const { request, requestDebugBundle, consumer } = setup({
       emit: (e) => emitDaemonEvent(destroyed, e)
     })
 
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(1)
 
     // The synchronous terminal — the simplest of the three. Before the guard this threw.
     expect(() => consumer()?.fail('daemon-error')).not.toThrow()
 
-    downloader.request()
+    request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('createDebugBundleDownload — the connection is per ask, not per orchestrator (#1120)', () => {
+  it('arms the transport through the function THIS ask supplied, not the first one', () => {
+    // One orchestrator is held per server for the process lifetime, so a server unpaired and
+    // re-paired under it gets a NEW connection. If the arming function were a construction dep, the
+    // held orchestrator would keep driving the stopped one and every later bundle request for that
+    // server would fail `unavailable` with no way back short of a relaunch.
+    const emitted: DaemonEvent[] = []
+    const downloader = createDebugBundleDownload({
+      save: vi.fn(async () => '/downloads/pyrycode-debug-bundle.tar.gz'),
+      emit: (e) => emitted.push(e)
+    })
+    const first = vi.fn((c: BundleConsumer) => c.fail('daemon-error'))
+    const second = vi.fn((c: BundleConsumer) => c.fail('connection-lost'))
+
+    downloader.request(first)
+    downloader.request(second)
+
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(emitted).toHaveLength(2)
+  })
+
+  it('ignores the second ask’s arming function while one is in flight', () => {
+    const { downloader, requestDebugBundle } = setup()
+    const ignored = vi.fn()
+
+    downloader.request(requestDebugBundle)
+    downloader.request(ignored)
+
+    expect(requestDebugBundle).toHaveBeenCalledTimes(1)
+    expect(ignored).not.toHaveBeenCalled()
+  })
+})
+
+describe('createDebugBundleDownloads — one gate per server (#1120 AC3)', () => {
+  /** Count constructions per key, so "built once, held thereafter" is observable. */
+  function memo() {
+    const builds: Array<string | null> = []
+    const downloads = createDebugBundleDownloads((serverId) => {
+      builds.push(serverId)
+      return { request: vi.fn() }
+    })
+    return { builds, downloads }
+  }
+
+  it('builds one orchestrator per server id and hands the same one back on a repeat ask', () => {
+    const { builds, downloads } = memo()
+
+    const first = downloads.for('alpha')
+    const again = downloads.for('alpha')
+    const other = downloads.for('beta')
+
+    expect(first).toBe(again)
+    expect(other).not.toBe(first)
+    expect(builds).toEqual(['alpha', 'beta'])
+  })
+
+  it('keys the not-paired stand-in by null, distinct from every string key', () => {
+    const { builds, downloads } = memo()
+
+    const standIn = downloads.for(null)
+
+    expect(downloads.for(null)).toBe(standIn)
+    expect(downloads.for('null')).not.toBe(standIn)
+    expect(builds).toEqual([null, 'null'])
+  })
+
+  it('lets two servers download at once while one server cannot be asked twice', () => {
+    // The two halves of AC3 in one sequence, over the real orchestrator rather than a stub: `alpha`
+    // is armed once and its second ask is short-circuited, while `beta`'s runs concurrently.
+    const emitted: Array<[string | null, DaemonEvent]> = []
+    const arms = new Map<string | null, ReturnType<typeof vi.fn>>()
+    const downloads = createDebugBundleDownloads((serverId) =>
+      createDebugBundleDownload({
+        save: vi.fn(async () => '/downloads/pyrycode-debug-bundle.tar.gz'),
+        emit: (e) => emitted.push([serverId, e])
+      })
+    )
+    const armFor = (serverId: string): ReturnType<typeof vi.fn> => {
+      const held = arms.get(serverId)
+      if (held !== undefined) return held
+      const arm = vi.fn((_c: BundleConsumer) => {})
+      arms.set(serverId, arm)
+      return arm
+    }
+
+    downloads.for('alpha').request(armFor('alpha'))
+    downloads.for('beta').request(armFor('beta'))
+    downloads.for('alpha').request(armFor('alpha'))
+
+    expect(armFor('alpha')).toHaveBeenCalledTimes(1)
+    expect(armFor('beta')).toHaveBeenCalledTimes(1)
+
+    // Each gate settles independently: alpha's terminal admits alpha's next ask and leaves beta held.
+    armFor('alpha').mock.calls[0][0].fail('daemon-error')
+    downloads.for('alpha').request(armFor('alpha'))
+    downloads.for('beta').request(armFor('beta'))
+
+    expect(armFor('alpha')).toHaveBeenCalledTimes(2)
+    expect(armFor('beta')).toHaveBeenCalledTimes(1)
+    // Every emitted event is attributed to the server whose orchestrator produced it.
+    expect(emitted).toEqual([['alpha', { type: 'debugBundleFailed', reason: 'unavailable' }]])
   })
 })

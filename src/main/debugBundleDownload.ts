@@ -10,8 +10,15 @@
 // count (number), a local filesystem path (string), and the closed category enum — never a token,
 // key, raw frame, save errno, or bundle byte. `complete`'s bytes go only to `save` (disk).
 //
-// MAIN-PROCESS ONLY, but Electron-free and unit-testable: the composition root injects the three
-// live deps (daemonConnection.requestDebugBundle, a dir-closed saveDebugBundle, emitDaemonEvent).
+// PER SERVER SINCE #1120. The bundle is a whole SERVER's, so a request names its server and the
+// download runs against that server's connection: `createDebugBundleDownloads` below holds one
+// orchestrator per server, each with its own in-flight gate and its own origin-bound sink, so two
+// servers can download at once while one server still cannot be asked twice. What each orchestrator
+// does NOT hold is a connection — that arrives per ask, see `DebugBundleDownload.request`.
+//
+// MAIN-PROCESS ONLY, but Electron-free and unit-testable: the composition root injects the live deps
+// (a dir-closed saveDebugBundle, an origin-bound emitDaemonEvent) and supplies the connection's
+// `requestDebugBundle` at each ask.
 //
 // LOG-FREE by construction: a diagnostic here could echo the saved path or become a seam that later
 // logs the dropped errno/bytes. The save-reject errno is caught and discarded, never logged.
@@ -20,20 +27,51 @@
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import type { DaemonEvent, DebugBundleFailure } from '../shared/ipc/events'
 
-/** The injected collaborators, all Electron-free so the orchestrator unit-tests without a window. */
+/**
+ * The injected collaborators, all Electron-free so the orchestrator unit-tests without a window.
+ *
+ * PER SERVER SINCE #1120, and `requestDebugBundle` is deliberately NOT among them — see `request`.
+ * `emit` is bound to ONE server's origin (`bindServerOrigin(live.sink, serverId)`, bound once per
+ * server exactly as each connection's is), so the progress and terminal events an orchestrator emits
+ * carry the id of the server whose bundle they describe.
+ */
 export interface DebugBundleDownloadDeps {
-  /** Arm the transport reassembler + send the request frame — daemonConnection.requestDebugBundle. */
-  requestDebugBundle: (consumer: BundleConsumer) => void
   /** Persist the archive, resolving the written absolute path — a `dir`-closed saveDebugBundle. */
   save: (bytes: Uint8Array) => Promise<string>
-  /** The one path to the window — `e => emitDaemonEvent(live.sink, e)` (#519). */
+  /** The one path to the window — `e => emitDaemonEvent(bindServerOrigin(live.sink, serverId), e)`. */
   emit: (event: DaemonEvent) => void
 }
 
 /** The orchestrator handle: the one method the composition-root command switch calls. */
 export interface DebugBundleDownload {
-  /** Start a download, unless one is already in flight (single-in-flight short-circuit). */
-  request(): void
+  /**
+   * Start a download, unless one is already in flight (single-in-flight short-circuit).
+   *
+   * THE ARMING FUNCTION IS AN ARGUMENT, NOT A CONSTRUCTION DEP (#1120), and that is the whole shape
+   * of "one orchestrator per server, one connection per ask". The state this object holds — the
+   * in-flight gate, and through it the transport's reassembler slot — only means anything ACROSS asks,
+   * so it must outlive any single request; a connection must not. A server unpaired and re-paired gets
+   * a NEW `DaemonConnection` (the registry drops and `stop()`s the old entry), and a captured view over
+   * the stopped one is permanently inert, so a held orchestrator closing over its first connection
+   * would fail every later bundle request for that server as `unavailable` with no recovery short of a
+   * relaunch. Passing it in per ask removes the state that could go stale instead of documenting that
+   * it must not.
+   *
+   * A short-circuited ask's function is never called: the in-flight download keeps the connection it
+   * was armed with, exactly as it keeps its consumer.
+   */
+  request(requestDebugBundle: (consumer: BundleConsumer) => void): void
+}
+
+/**
+ * The per-server orchestrator set (#1120 AC3): one `DebugBundleDownload` per server, built on first
+ * ask and held for the process lifetime. Two servers can therefore download at once — separate gates —
+ * while one server cannot be asked twice, because a repeat ask returns the HELD gate rather than a
+ * fresh one.
+ */
+export interface DebugBundleDownloads {
+  /** The orchestrator for one server. Built on first ask; the same one thereafter. */
+  for(serverId: string | null): DebugBundleDownload
 }
 
 /** Compile-time exhaustiveness guard for the fail-map (mirrors daemonEventBridge's idiom). A
@@ -70,10 +108,10 @@ function categoryFor(reason: BundleFailReason): DebugBundleFailure {
  * from under an in-flight download — the first always runs to its single terminal (AC4).
  */
 export function createDebugBundleDownload(deps: DebugBundleDownloadDeps): DebugBundleDownload {
-  const { requestDebugBundle, save, emit } = deps
+  const { save, emit } = deps
   let active = false
 
-  function request(): void {
+  function request(requestDebugBundle: (consumer: BundleConsumer) => void): void {
     // Single-in-flight short-circuit: ignore a request while one is active (build no consumer, make
     // no transport call), so a spamming renderer cannot orphan the in-flight download's reassembler.
     if (active) return
@@ -112,4 +150,42 @@ export function createDebugBundleDownload(deps: DebugBundleDownloadDeps): DebugB
   }
 
   return { request }
+}
+
+/**
+ * Build the per-server orchestrator set (#1120 AC3). `build` is called AT MOST ONCE per id — the
+ * composition root closes the downloads directory and that server's own bound sink into it — so the
+ * gate an id resolves to is the same object across every ask for that server, which is exactly what
+ * makes "one server cannot be asked twice" true and "two servers can download at once" true at the
+ * same time.
+ *
+ * A `Map`, NEVER a bare object, for the reason every id-keyed structure in this family states: a
+ * `Record<string, …>` written through `__proto__` would be prototype pollution. `null` is a legal key
+ * here and is the not-paired stand-in's, distinct from every string.
+ *
+ * IT IS KEYED BY THE RESOLVED ID, NOT BY THE RENDERER'S HINT, and the root's call site is what keeps
+ * that true: `serverRouter.resolve` answers a `serverId` that a held registry entry matched, so the
+ * key set is bounded by the servers this process has actually held. Keying it before resolution would
+ * make the map renderer-driven and unbounded — one entry, and one bound sink, per fabricated id.
+ *
+ * Nothing is ever evicted. There is no registry signal to hang an eviction on (`reconcile()` is
+ * asynchronous, so a prune called beside it would run before the registry had dropped anything —
+ * \#1118 ruled exactly this for its own index), and an orchestrator for an unpaired server is
+ * unreachable anyway: the router refuses before it is selected.
+ */
+export function createDebugBundleDownloads(
+  build: (serverId: string | null) => DebugBundleDownload
+): DebugBundleDownloads {
+  const held = new Map<string | null, DebugBundleDownload>()
+  return {
+    for(serverId: string | null): DebugBundleDownload {
+      // Get-build-set with no `await` between the three, so two asks can never interleave into two
+      // orchestrators — and therefore two gates — for one server.
+      const existing = held.get(serverId)
+      if (existing !== undefined) return existing
+      const created = build(serverId)
+      held.set(serverId, created)
+      return created
+    }
+  }
 }

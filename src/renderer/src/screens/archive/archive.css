@@ -171,8 +171,12 @@
   font-weight: var(--text-title-medium-weight);
 }
 
-/* The "Archived <relative time>" subtitle (Figma 18:22) — muted body-small at 75% opacity. Clones
-   .channel-list__time's tokens. */
+/* The "Archived <relative time>" subtitle (Figma 18:22) — muted body-small at 75% opacity: the
+   `--text-body-small-*` quad over `--color-on-surface-variant`.
+
+   This used to cite `.channel-list__time` as the rule it cloned; #1097 deleted that rule when the sidebar
+   row dropped its last-activity time, so the tokens are named directly here. The two surfaces are now
+   independent — this one still renders a relative time (via `archivedSubtitle`), the sidebar row does not. */
 .archive__subtitle {
   white-space: nowrap;
   color: var(--color-on-surface-variant);

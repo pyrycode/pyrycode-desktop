@@ -100,7 +100,6 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
   renderToStaticMarkup(
     <ChannelListView
       conversations={conversations}
-      now={NOW}
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}
@@ -307,14 +306,27 @@ describe('ChannelListView', () => {
     expect(markup).toContain('Untitled')
   })
 
-  it('renders the last-activity bucket for a row timestamp (AC3)', () => {
+  // #1097 (AC3) — the inverse of the assertion this replaces. A row is no longer laid out as
+  // title · time: the desktop node draws a label and nothing else, so the row renders NO relative
+  // bucket and no `.channel-list__time` span at all. Two independent negatives, because either one
+  // alone can pass while the row is wrong: the class could survive holding empty text, and the bucket
+  // text could survive under a renamed class. The timestamp is seeded at a bucket boundary a working
+  // formatter would definitely render ("3h ago"), not at one it collapses to '' — a malformed seed
+  // would make this pass against the OLD markup too. `formatLastActivity` itself is untouched and
+  // still covered by channelListViewModel.test.ts for its three surviving callers.
+  it('renders no last-activity time for a row, whatever its timestamp (AC3)', () => {
     const markup = render([row({ id: 'd1', name: 'x', last_message_ts: isoAgo(3 * 3_600_000) })])
-    expect(markup).toContain('3h ago')
+    expect(markup).not.toContain('3h ago')
+    expect(markup).not.toContain('channel-list__time')
   })
 
-  it('renders a malformed timestamp as no time text, never NaN', () => {
+  // The malformed-timestamp seed keeps its own case rather than folding into the one above: with no
+  // time rendered, "never NaN" would be vacuous on its own, but a row whose OTHER fields derive from
+  // an unparseable timestamp must still render its label and no arithmetic artefact.
+  it('renders a malformed timestamp as a plain row, never NaN and never a time', () => {
     const markup = render([row({ id: 'd1', name: 'x', last_message_ts: 'not-a-date' })])
     expect(markup).not.toContain('NaN')
+    expect(markup).not.toContain('channel-list__time')
   })
 
   it('escapes markup in an untrusted name — opaque text, never live markup', () => {

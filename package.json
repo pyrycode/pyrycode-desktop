@@ -20,6 +20,8 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
+    "mdast-util-gfm-table": "^2.0.0",
+    "micromark-extension-gfm-table": "^2.1.1",
     "noise-c.wasm": "^0.4.0",
     "react-markdown": "^10.1.0",
     "ws": "^8.21.0",
@@ -36,7 +38,9 @@
     "electron-vite": "^2.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "remark-parse": "^11.0.0",
     "typescript": "^5.7.2",
+    "unified": "^11.0.5",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"
   }

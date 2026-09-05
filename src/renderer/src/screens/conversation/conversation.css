@@ -1127,6 +1127,77 @@
   text-decoration: underline;
 }
 
+/* #1079 — a GFM table in an assistant reply. Like the anchor rule above, THE MOCK DRAWS NO TABLE: no
+   node in the Figma file puts one inside a reply, so every declaration here is derived from the token
+   set rather than read off the design, and a bespoke table treatment would be a Figma-side addition to
+   16:43 first. The nearest DRAWN precedent is the fenced block (134:4809, .code-block:923), and this
+   borrows its border colour and its gutter rhythm so the two chromes read as one family.
+
+   THE OVERFLOW TREATMENT IS THE TABLE'S OWN SCROLL BOX, and stating the choice is part of the criterion.
+   A table is the one markdown construct that cannot ellipsis or wrap its way out of a narrow bubble, so
+   something has to bound it. `display: block` makes the <table> a block container that scrolls its own
+   overflow, with an anonymous inner table box laying the rows out; border-collapse is inherited, so it
+   reaches that anonymous box. The alternative — a `table` override in AssistantMarkdown.tsx wrapping it
+   in a div, mirroring components.pre -> .code-block — was DECLINED: it would open the file that is the
+   entire security boundary for markdown rendering in order to add a purely visual container, and it
+   buys nothing this does not already give. That file's contract is worth more than the symmetry.
+
+   THIS IS A LAYOUT BOUND, NOT A COSMETIC ONE. A reply with very many columns is the same shape as an
+   unbounded fence info string — the thing .code-block__header's nowrap+ellipsis exists for one
+   construct over. e2e/assistant-whitespace.spec.ts measures both halves: the table's own
+   scrollWidth > clientWidth (the overflow is CONTAINED here) and the thread's scrollWidth <=
+   clientWidth (nothing escaped). Deleting `overflow-x` turns the second red; that was checked, not
+   assumed.
+
+   NO border-radius, the one place .code-block's chrome is deliberately not followed. The
+   border-collapsing model does not round a table's outer edge, and a radius would need overflow-y
+   clipping dragged along with overflow-x — a vertical scrollbar on a box that never overflows
+   vertically. The cell borders carry the shape instead.
+
+   No font-family, no color, no margin: all inherited (--font-sans from .conversation, the ink and the
+   block rhythm from .bubble / .bubble__markdown's own gap and > * reset). Restating a settled inherited
+   value is how it gets lost — the argument made at the anchor rule above and followed by #607, #623,
+   #628, #629 and #630. The one inherited value this DOES displace is called out on the cells below. */
+.bubble__markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+/* The cells. 4/12 -> --space-1/--space-3, two exact scale steps: tighter than .code-block__header's
+   8/16 because a gutter is paid once per fence there and once per COLUMN here, so the same value would
+   spend the bubble's whole measure on padding. The edge is .code-block's own border, restated by value
+   rather than reached for by a shared class — the two constructs are one family visually, not one
+   component, and #780's lesson is that a declaration arriving indirectly is a declaration that may not
+   reach the next caller.
+
+   `word-break: normal` IS AN OVERRIDE, NOT A RESTATEMENT, and it is load-bearing. .bubble sets
+   `word-break: break-word` (:322), the legacy keyword, which per CSS Text 3 behaves as
+   `word-break: normal` PLUS `overflow-wrap: anywhere` — and `anywhere`, unlike `break-word`, lowers a
+   box's min-content size. Inherited into cells it lets every column shrink to nearly nothing, so a wide
+   table would silently squeeze itself into the bubble rather than overflow: unreadable, AND it would
+   make the overflow assertion above structurally unable to fire. This is #780's argument in the other
+   direction — a value that arrives by inheritance is not automatically right for the next element that
+   receives it. Prose in a cell still wraps at its spaces; only an unbreakable token forces width.
+
+   `text-align: start` DECIDES ONLY THE UNMARKED COLUMN. mdast-util-to-hast emits a per-cell inline
+   `style="text-align:…"` from the :-- / :-: / --: markers (its tableCellAlignToStyle option, on by
+   default), and an inline style beats a stylesheet rule whatever the specificity — so AC1's per-column
+   alignment comes from the parser and this only replaces the UA's centred <th> over left-aligned <td>
+   where the author declared nothing.
+
+   NO font-weight, and the omission is the decision. The type scale tops out at
+   --text-title-small-weight-emphasized (600), which is .bubble's own weight — so a token-sourced weight
+   would ERASE the header distinction rather than state it, and any other value would be a new literal.
+   <th>'s UA `bold` is left to distinguish the header row, alongside the cell borders. */
+.bubble__markdown th,
+.bubble__markdown td {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-primary-container);
+  text-align: start;
+  word-break: normal;
+}
+
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
    assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
    no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret

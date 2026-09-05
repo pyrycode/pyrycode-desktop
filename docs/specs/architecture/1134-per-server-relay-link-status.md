@@ -402,3 +402,14 @@ timers.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+**2026-09-06 — two existing bridge assertions to update, not three.** The Testing strategy section
+counted three `toHaveBeenCalledWith` assertions in `subscribeRelayLink`'s describe block as needing
+the new second argument. Two do (`toHaveBeenCalledWith` and `toHaveBeenNthCalledWith`); the third is a
+`not.toHaveBeenCalled()` on the unrelated-event case, which observes no arguments and needed no edit.
+No design changed. The one other departure is cosmetic and was made in the plan before it was
+committed: the write helper is `withSlot(statuses, origin, status)` returning the index, rather than a
+`withRelayStatus` returning a whole `RelayLinkState`, so the setter stays a partial `set`. Nothing
+else departed from the plan, and both Open Questions stand as answered there.

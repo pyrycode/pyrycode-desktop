@@ -10,7 +10,40 @@
 // event, retaining a closed display category, never a secret.
 import { useEffect } from 'react'
 import type { DaemonEvent, RelayLinkStatus } from '@shared/ipc/events'
-import { relayLinkStore } from './relayLinkStore'
+import { relayLinkStore, type RelayLinkOrigin } from './relayLinkStore'
+
+/**
+ * Read the server this event came from (#1134), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * `ServerOrigin.serverId` is required, so a bare `DaemonEvent` is not assignable to a
+ * `StampedDaemonEvent` — widening the parameter would fail this module's own tests, which build bare
+ * event literals and a fake bridge typed on the bare union. `daemonEventBridge.ts`'s `originOf` is
+ * the same idiom for the daemon leg and `liveWindow.ts`'s is its main-side original; a fifth copy
+ * rather than an import, because `daemonEventBridge`'s is module-private and returns `sessionStore`'s
+ * key type, and taking it would couple two deliberately independent single-arm subscribers and drag
+ * this leg's key domain back onto the session store (`correlationRouter.ts`'s header makes the same
+ * call for the same reason).
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload. On this arm that is not merely the
+ * preferred source but the only one: `relayLinkChanged` carries the closed `RelayLinkStatus` category
+ * and nothing else, so there is no `ack.server_id`-shaped field to be tempted by, unlike the daemon
+ * leg's. The stamp is bound main-side at construction from a paired record this client holds, so a
+ * hostile or confused daemon cannot make its events claim another server's slot and overwrite that
+ * server's link status; a wire-sourced id would hand it exactly that.
+ */
+function originOf(event: DaemonEvent): RelayLinkOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null files under the unstamped slot: no producer
+  // can emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot
+  // rather than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
+}
 
 /**
  * The filter: map the one owned arm to its status, every other DaemonEvent to `null`. `default: null`
@@ -32,20 +65,24 @@ export function translateRelayLink(event: DaemonEvent): RelayLinkStatus | null {
 
 /**
  * Subscribe via the injected `onDaemonEvent`; each `relayLinkChanged` writes its status verbatim into
- * the store via `setRelayLinkStatus`; every unrelated event no-ops. Returns the unsubscribe handle
- * (the daemonEventBridge off-handle idiom) so the React binding can use it as its effect cleanup. The
- * `status !== null` guard (not `if (status)`) mirrors the sibling idiom and documents "the sentinel
- * is `null`, not falsiness" — all three RelayLinkStatus values are truthy, so the two behave
- * identically today, but `!== null` is the drift-safe form. The listener only dispatches — it never
- * throws into React.
+ * the store via `setRelayLinkStatus`, under the server the event came from (#1134); every unrelated
+ * event no-ops. Returns the unsubscribe handle (the daemonEventBridge off-handle idiom) so the React
+ * binding can use it as its effect cleanup. The `status !== null` guard (not `if (status)`) mirrors
+ * the sibling idiom and documents "the sentinel is `null`, not falsiness" — all three RelayLinkStatus
+ * values are truthy, so the two behave identically today, but `!== null` is the drift-safe form. The
+ * listener only dispatches — it never throws into React.
+ *
+ * `translateRelayLink` is left alone by the keying: the origin rides beside the union rather than
+ * inside the arm, so it is read here at the event, not folded into a filter whose whole job is
+ * selecting one named field.
  */
 export function subscribeRelayLink(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  setRelayLinkStatus: (status: RelayLinkStatus) => void
+  setRelayLinkStatus: (status: RelayLinkStatus, serverId?: string | null) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const status = translateRelayLink(event)
-    if (status !== null) setRelayLinkStatus(status)
+    if (status !== null) setRelayLinkStatus(status, originOf(event))
   })
 }
 
@@ -63,9 +100,9 @@ export function RelayLinkData(): null {
   useEffect(() => {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the daemonEventBridge idiom). Each relayLinkChanged writes its
-    // status into the app-singleton store via its setter.
-    return subscribeRelayLink(window.pyry.onDaemonEvent, (status) =>
-      relayLinkStore.getState().setRelayLinkStatus(status)
+    // status into the app-singleton store via its setter, under the server it came from (#1134).
+    return subscribeRelayLink(window.pyry.onDaemonEvent, (status, serverId) =>
+      relayLinkStore.getState().setRelayLinkStatus(status, serverId)
     )
   }, [])
 

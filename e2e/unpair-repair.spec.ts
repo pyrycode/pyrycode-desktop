@@ -38,36 +38,36 @@ async function readStatusRowGeometry(page: Page): Promise<{
 }
 
 // Fake-stack UI e2e for the SESSION-EXIT path back to the app-root pairing screen (#464, split from
-// #429). Two affordances tear down a paired, connected thread and return the operator to the app-root
-// `PairingScreen`, and both funnel through the same `runUnpair` → `onUnpaired()` → App-level
-// `setRoute('pairing')` flip: the two-phase Unpair control in the thread header (#166), and the
-// terminal-error Re-pair escape hatch (#167). Only the initial pairing happy path has coverage today;
-// this exit path has none, so a routing regression could strand the operator on a dead thread. Zero
-// production code — every control already ships; this pins the exit behaviour. The Re-pair trigger adds
-// two test-only infra pieces (a fatal-close hook on the fake forwarder + exposing the forwarder on the
+// #429). ONE affordance tears down a paired, connected thread and returns the operator to the app-root
+// `PairingScreen`: the terminal-error Re-pair escape hatch (#167), funnelling through `runUnpair` →
+// `onUnpaired()` → App-level `setRoute('pairing')`. Only the initial pairing happy path has coverage
+// otherwise; this exit path had none, so a routing regression could strand the operator on a dead
+// thread. Zero production code — the control already ships; this pins the exit behaviour. It adds two
+// test-only infra pieces (a fatal-close hook on the fake forwarder + exposing the forwarder on the
 // launcher handle) so the terminal-error path is reachable on the fake stack.
 //
+// #1061 took the second affordance. The two-phase Unpair control in the thread header (#166) drove the
+// same flip and had its own test here; that control and the bare `.conversation__header` row it owned
+// are deleted — the drawing's Content frame (Figma 106:3321) has no header row of any kind — so the
+// test went with it rather than being skipped. The property this spec exists to protect is unchanged
+// and still covered: the exit path back to pairing still reddens here if the routing breaks. Unpairing
+// a HEALTHY pairing has no entry point at all until a successor lands it on a host-level surface (it is
+// host-scoped, not conversation-scoped), to be settled with #1070 — an accepted gap, operator ruling
+// 2026-09-04, not something this spec should assert about.
+//
 // The app-root PairingScreen's `Pairing code` field is the unambiguous teardown proof: while on the
-// thread the top-level pairing route is NOT mounted (both exits flip the App route, unmounting
+// thread the top-level pairing route is NOT mounted (the exit flips the App route, unmounting
 // PairedShell entirely), so `[aria-label="Pairing code"]` has count 0; after the flip it is the sole
-// pairing surface. Its VISIBILITY proves the return-to-pairing; its ABSENCE (count 0) proves the
-// session stayed intact on Cancel. This is a top-level App-route flip, not the in-shell pair-another
-// route (#465), so there is no same-component ambiguity to disambiguate here.
+// pairing surface, and its VISIBILITY is what proves the return-to-pairing. This is a top-level
+// App-route flip, not the in-shell pair-another route (#465), so there is no same-component ambiguity
+// to disambiguate here.
 //
 // That accessible name is the WHOLE locator (#664) — never the element type, never the card heading,
-// both of which #665's restyle changes. What keeps the count-0 half honest is that ONE `pairingBox`
-// binding carries both directions in the first test: a stale selector yields count 0 too, so the
-// negative would pass vacuously, and only the `toBeVisible()` sharing that same binding catches it.
-// Do not inline the selector at either site, and do not split it into a second const.
-//
-// The three Unpair/Cancel/Confirm buttons all carry the `conversation__unpair` class, so they are
-// selected by role + accessible name (never by class); only one is present at a time given the phase, so
-// the names disambiguate. The re-pair affordance was a fourth until #963 moved it into the composer
-// status row's error slot as the design's filled `Button small`: it wears `button-small
-// button-small--error` now and shares no class with those three, so it needs no disambiguation from them
-// at all. It is still located by role + accessible name, which is the whole locator (#664) — and that
-// name is now the button's full visible label, `COMPOSER_REPAIR_BUTTON_COPY`, imported rather than
-// retyped so a copy change cannot leave this spec passing against a string nothing renders.
+// both of which #665's restyle changes. The same rule governs the re-pair affordance: #963 moved it into
+// the composer status row's error slot as the design's filled `Button small`, wearing `button-small
+// button-small--error`, and it is located by role + accessible name — that name being the button's full
+// visible label, `COMPOSER_REPAIR_BUTTON_COPY`, imported rather than retyped so a copy change cannot
+// leave this spec passing against a string nothing renders.
 //
 // #963 also gives this spec the row's GEOMETRY to prove, which no renderer spec can reach: the row is
 // 24 tall with the slot empty and 32 with the button in it, and the status group stays flush with the
@@ -79,39 +79,6 @@ async function readStatusRowGeometry(page: Page): Promise<{
 // enabled-state / count only; the pairing plumbing (synthetic token, fake static key) lives inside
 // launchPairedApp and is never echoed. No failure diagnostic serialises a token, key, pairing payload,
 // or close reason.
-
-test('unpair: Cancel keeps the session, then Confirm returns to the app-root pairing screen', async ({
-  launchPairedApp
-}) => {
-  const { page } = await launchPairedApp()
-
-  const thread = page.locator('.conversation')
-  const send = page.getByRole('button', { name: 'Send' })
-  const pairingBox = page.locator('[aria-label="Pairing code"]')
-  const forgetPrompt = page.getByText('Forget this pairing?')
-  const unpair = page.getByRole('button', { name: 'Unpair', exact: true })
-
-  // Fixture end-state: on the thread, Send enabled (session live), app-root pairing route not mounted.
-  await expect(thread).toBeVisible()
-  await expect(send).toBeEnabled()
-
-  // AC2 — Cancel keeps the session. Open the confirm prompt, then back out.
-  await unpair.click()
-  await expect(forgetPrompt).toBeVisible()
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  // Session intact: thread still mounted, Send still enabled, no app-root pairing surface, control back
-  // to idle.
-  await expect(thread).toBeVisible()
-  await expect(send).toBeEnabled()
-  await expect(pairingBox).toHaveCount(0)
-  await expect(unpair).toBeVisible()
-
-  // AC3 — re-open the confirmation (same launch) and Confirm returns to the app-root PairingScreen.
-  await unpair.click()
-  await expect(forgetPrompt).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
-  await expect(pairingBox).toBeVisible()
-})
 
 test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-root pairing screen', async ({
   launchPairedApp

@@ -267,3 +267,23 @@ surviving half is the AC3 proof. The full suites are the verifier's gate.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-05
+
+## Revisions
+
+### 2026-09-05 — a third production file joined the diff (AC5)
+
+The plan's file list named two production files. Implementation found a **third** live citation of the
+deleted component that the Phase-A sweep missed, because it lives outside the conversation package and
+outside every string the ticket body sends you to grep: `ChannelList`'s container doc comment cites "the
+`Composer.handleSubmit` / `UnpairControl` discipline" as its precedent for dereferencing `window.pyry`
+only inside a click arrow. AC5 ("no surviving comment in `src/` or `e2e/` cites a rule or a row this
+ticket deleted as though it still exists") reaches it, so it is corrected in place — re-pointed at
+`Composer.handleSubmit`, which survives and makes the same point on its own.
+
+`src/renderer/src/screens/channels/ChannelList.tsx` is therefore a comment-only edit in this diff: no
+markup, no logic, no class. Three production files is still inside the size-S boundary of five, and no
+other line of the table moves.
+
+The sweep that found it was `conversation__unpair|conversation__header|UnpairControl` across
+`{src,e2e}/**/*.{ts,tsx,css}` with no package filter — worth recording as the shape of sweep this AC
+needs, since the ticket body's three named CSS comments and one named test are a subset of the real set.

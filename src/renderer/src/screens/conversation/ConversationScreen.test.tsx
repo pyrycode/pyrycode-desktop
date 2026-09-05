@@ -3582,7 +3582,8 @@ describe('WorkspaceChip — the pre-first-message workspace pill (#278)', () => 
 // prove the collapsed trigger and the opened menu surface without a store or a DOM harness. The
 // interaction shell (open/close toggle, Escape / outside-click dismiss, focus-return) lives in the
 // in-file ThreadOverflowMenu container: it is untested reviewed glue, exactly like Composer.handleKeyDown
-// and UnpairControl's phase transitions — the `node` env fires no clicks and runs no effects.
+// and Composer.handleSubmit — the `node` env fires no clicks and runs no effects. (UnpairControl's phase
+// transitions were the other example until #1061 deleted that control.)
 describe('ThreadOverflowMenuView — the thread overflow menu (#276, #962)', () => {
   const noop = (): void => {}
   const openMenu = (): string =>
@@ -4464,14 +4465,22 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain('aria-label="Send"')
   })
 
-  // #166: the conversation shell carries the unpair escape hatch — a header-row trigger with a
-  // stable accessible name. Only the idle phase is reachable under server render (the confirm-toggle
-  // and unpairing transitions are trivial useState glue, unit-tested nowhere — same discipline as
-  // Composer's `text` and PairingScreen's container wiring, which are smoke-only). window.pyry.unpair
-  // is dereferenced only in the click handler, so the container smoke-render never touches the bridge.
-  it('renders the unpair trigger (its accessible text is present in the idle-phase markup)', () => {
+  // #1061: the unpair escape hatch #166 put above the thread is gone, and with it the bare
+  // `.conversation__header` row it was the only occupant of. The drawing's Content frame (Figma
+  // 106:3321) stacks a message area straight onto an input area, so the thread now starts where that
+  // row used to.
+  //
+  // The first two assertions are the REDDENING detectors: both strings are in this container's markup
+  // before the deletion, so this test fails against the old tree and passes only once the component is
+  // gone. The third cannot redden through this route — the confirm phase is unreachable under server
+  // render, where zustand reports its initial snapshot and no click fires — and it is here as a guard
+  // against a re-introduction, not as the proof. AC2's proof is STRUCTURAL: `UnpairControl` is deleted
+  // rather than gated, so there is no phase of it left to reach.
+  it('renders no unpair control and no header row above the thread (#1061)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('>Unpair</button>')
+    expect(markup).not.toContain('conversation__header')
+    expect(markup).not.toContain('>Unpair</button>')
+    expect(markup).not.toContain('Forget this pairing?')
   })
 
   // #963: the re-pair affordance is absent in the disconnected initial state — shouldOfferRepair is
@@ -4522,9 +4531,11 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain(CONNECTION_BANNER_COPY)
   })
 
-  it('renders the banner above the message thread and below the header (top of the thread)', () => {
-    // The banner mounts between UnpairControl (the header row) and the timeline surface, so its markup
-    // precedes the thread's empty state.
+  it('renders the banner above the message thread (top of the thread)', () => {
+    // The banner mounts above the timeline surface, so its markup precedes the thread's empty state.
+    // It used to be described as sitting between UnpairControl (the header row) and the timeline;
+    // #1061 deleted that row, and the banner is now the first thing in the region. The assertion is
+    // unchanged and still means what it always meant.
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup.indexOf('conversation__banner')).toBeLessThan(markup.indexOf('conversation__empty'))
   })

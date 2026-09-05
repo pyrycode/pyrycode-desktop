@@ -27,18 +27,6 @@
   position: relative;
 }
 
-/* Slim header row — the minimal seed of the future top app bar (#166), holding the de-emphasized
-   unpair control. flex-end right-aligns the idle trigger; the confirm prompt takes margin-right:auto
-   to sit left of the Cancel/Confirm pair. Never grows or shrinks. */
-.conversation__header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-}
-
 /* #140 — the leading back affordance (Figma node 16-9's arrow_back inside a 48px frame): the seed of
    the thread's top app bar, rendered as the first child of .conversation, before the unpair header. A
    48px touch target wrapping the 24px glyph, left-aligned, on-surface content that gains a surface tint
@@ -73,55 +61,9 @@
   display: block;
 }
 
-/* The AC3 confirm-guard question. Muted, so the row reads as a quiet escape hatch, not a destructive
-   banner — there is no --color-error token on desktop and a minimal control needs none. */
-.conversation__unpair-prompt {
-  margin-right: auto;
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-/* De-emphasized text button — the muted M3 label treatment, gaining a surface tint only on hover. */
-.conversation__unpair {
-  padding: var(--space-1) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-on-surface-variant);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.conversation__unpair:hover:not(:disabled) {
-  background: var(--color-surface-container-high);
-  color: var(--color-on-surface);
-}
-
-.conversation__unpair:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-/* In-flight (unpairing): reduced-emphasis, no pointer affordance — the composer__send:disabled
-   convention (muted content, not a raw opacity literal). */
-.conversation__unpair:disabled {
-  color: var(--color-on-surface-variant);
-  cursor: not-allowed;
-}
-
-/* The confirm action gets full on-surface emphasis to read as the primary choice of the pair. */
-.conversation__unpair--confirm:not(:disabled) {
-  color: var(--color-on-surface);
-}
-
-/* #279 — the prominent, disconnected-only connection banner across the top of the thread (below the
-   header row, above the message list). It reads as a prominent band, not a caption — the distinction it
+/* #279 — the prominent, disconnected-only connection banner across the top of the thread, above the
+   message list. (It used to be described as sitting below the header row; #1061 deleted that row.)
+   It reads as a prominent band, not a caption — the distinction it
    was originally drawn against was the muted inline .composer__hint gate, which #968 retired, leaving
    this band as the only place the connection state is said in the connecting and disconnected arms.
    Follows the .modal-rejection (#249) error-accent idiom — a surface-container-high fill with a leading
@@ -197,9 +139,11 @@
   font-weight: var(--text-body-small-weight);
 }
 
-/* The "Change" affordance — a compact de-emphasized text button (the .conversation__unpair posture),
-   gaining a surface tint only on hover. This ticket ships it :disabled (the #157 picker isn't built),
-   which reads muted with no pointer affordance. */
+/* The "Change" affordance — a compact de-emphasized text button: a label-large pill of
+   on-surface-variant text with no fill and no border, gaining a surface tint only on hover. It cited
+   `.conversation__unpair` for that posture until #1061 deleted that rule; the recipe is restated here
+   rather than re-pointed, because this rule is now the one that carries it. This ticket ships it
+   :disabled (the #157 picker isn't built), which reads muted with no pointer affordance. */
 .conversation__workspace-chip-change {
   flex: 0 0 auto;
   padding: var(--space-1) var(--space-3);
@@ -3179,7 +3123,9 @@
 }
 
 /* The 40×40 close tap target wrapping the 22×22 × icon (Figma 20-105/20-106) — muted content that
-   gains a surface tint on hover, mirroring the unpair control / send-button treatment. */
+   gains a surface tint on hover, mirroring the send-button treatment. (It named the unpair control as
+   the other example of that treatment until #1061 deleted it. Deliberately NOT re-pointed at
+   `.conversation__back`, the remaining match: #1064 removes that rule too.) */
 .status-sheet__close {
   flex: 0 0 auto;
   width: 40px;
@@ -4964,7 +4910,9 @@
 }
 
 /* A tab (#915) — the same typography, worn by a <button> once there is somewhere to jump. The
-   .conversation__unpair recipe minus its pill: the design's Question label has no fill, no padding and no
+   de-emphasized text-button recipe minus its pill — `.conversation__workspace-chip-change` above carries
+   the pill form (this cited `.conversation__unpair` for it until #1061 deleted that rule): the design's
+   Question label has no fill, no padding and no
    border in either state, so this strips the UA button chrome and adds nothing back but the pointer
    affordance and the repo's focus ring. text-align: left so a header that wraps stays flush with the row
    rather than centring the way a button's content does by default.

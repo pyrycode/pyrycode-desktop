@@ -81,7 +81,7 @@ import { titleFor, partitionActive, groupByWorkspace } from './channelListViewMo
  * Node, where the store yields its initial `null` (the #218 container posture), so the pure view is
  * what the tests server-render with injected props. `onNewConversation` dereferences `window.pyry`
  * only inside the click arrow (never during render), so the server-render smoke is untouched — the
- * Composer.handleSubmit / UnpairControl discipline.
+ * Composer.handleSubmit discipline (UnpairControl was the other example until #1061 deleted it).
  */
 export function ChannelList({
   onOpen,

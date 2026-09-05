@@ -444,6 +444,13 @@ min-content *contribution* to an ancestor is still content-derived. See [Paired 
 `min-width: 0`](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
 fix, landed as its own commit so it stayed independently reviewable.
 
+**`.channel-list` paints no background of its own since #1058**, and gained `position: relative` there
+too — not for layout but to lift its subtree above the sidebar wrapper's own `::before` wash, which
+would otherwise paint over the unpositioned section headers and host row while leaving the
+already-`position: relative` rows untouched. See [Paired shell § the pane
+card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
+wash itself and the stacking reasoning.
+
 `.channel-list` deviates from the architecture spec's `flex: 1 1 auto`: it uses `height: 100%;
 box-sizing: border-box` instead. Originally because `PairedShellView` mounted this `<section>` directly
 under the block-level `#root` with no flex wrapper in between — `flex: 1 1 auto` would have been inert

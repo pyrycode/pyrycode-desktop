@@ -6,11 +6,20 @@
  * theme values.
  */
 
+/* #1058 — NO background. This used to paint --color-surface, the same colour .paired-shell paints behind
+   it, which is why the chat pane never read as a pane; the card now lives on .paired-shell__pane as a
+   wash, and a background here would paint straight over it. This class has exactly one mount site
+   (ConversationScreen.tsx, inside the shell's pane wrapper), so there is nowhere it can render without a
+   card behind it.
+
+   The `position: relative` below is what spares this pane the stacking fix .channel-list needed for the
+   same wash: it was already here for the run-config sheet, and it already lifts this whole subtree above
+   the wrapper's ::before. Its second reason is now load-bearing too — do not remove it if #177's sheet
+   ever moves. */
 .conversation {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-surface);
   color: var(--color-on-surface);
   font-family: var(--font-sans);
   /* Containing block for the Run configuration sheet overlay (#177), which is absolutely positioned

@@ -115,8 +115,14 @@ Traced from Figma node 102-4: a 1280×1024 frame, one flex row, `Sidebar 103:736
   box-sizing: border-box;   /* index.css sets no global box-sizing */
   gap: var(--space-5);      /* 20px */
   padding: var(--space-5);
-  background: var(--color-surface);
+  background-color: var(--color-surface);
+  background-image: radial-gradient(ellipse 78.8% 117% at 47.6% 29.7%,
+    var(--color-primary-container) 0%, transparent 70%);  /* the backdrop's glow, #1058 */
 }
+.paired-shell__sidebar,
+.paired-shell__pane { position: relative; border-radius: var(--radius-xs); overflow: hidden; }  /* the card box, #1058 */
+.paired-shell__sidebar::before,
+.paired-shell__pane::before { content: ''; position: absolute; inset: 0; background: var(--color-scrim); opacity: 0.3; }  /* the wash, #1058 */
 .paired-shell__sidebar { flex: 0 0 400px; min-width: 0; height: 100%; }  /* AC2 — fixed, never shrinks or grows */
 .paired-shell__pane    { flex: 1 1 0; min-width: 0; height: 100%; }  /* absorbs the remaining width */
 ```
@@ -151,11 +157,45 @@ paired-shell area," true before this ticket). The three pre-existing `position: 
 (two in `channels.css`, one in `conversation.css`) are untouched and still cover the whole window, which
 is still correct — `position: fixed` escapes its container regardless of the container's own layout.
 
-**The pane card treatment (the Figma's `rgba(0,0,0,0.3)` wash + rounded corners) is deliberately not
-built.** `.channel-list` and `.conversation` each paint `--color-surface` on themselves — the same
-colour as this shell's own backdrop — so a wash applied to the wrapper `<div>`s would be painted over
-and invisible; making it visible means editing both screen stylesheets, which would put the ticket over
-its file-count scope. It lands with the sidebar-tree and composer tickets that own each pane's interior.
+**The pane card (#1058, [architecture spec](../../specs/architecture/1058-pane-cards-and-backdrop-glow.md)).** Both wrappers now draw the Figma's card: a
+`--color-scrim` wash at 0.3 opacity on a `::before`, a `var(--radius-xs)` (6px) corner, and
+`overflow: hidden` to clip content at that corner. `.channel-list` and `.conversation` used to each
+paint `--color-surface` on themselves — the same colour as this shell's own backdrop — which is exactly
+why a wash on the wrapper `<div>`s would have been painted over; both screens dropped that background
+(one deletion each) so the wrapper's card shows through, and stayed otherwise unedited. This was #670's
+own deferral, and its file header had named the successor that never came ("lands with the sidebar-tree
+and composer tickets that own each pane's interior") — #1058 is that successor and retired the note.
+
+`.channel-list` needed a second edit beyond the deletion: `position: relative`, a stacking fix rather
+than decoration. An absolutely positioned `::before` at `z-index: auto` paints above every
+non-positioned descendant, and `.channel-list__section-header`, `.channel-list__host` and the
+workspace label were all unpositioned — left alone, the wash would have sat *over* them while the
+already-`position: relative` `.channel-list__row`s stayed bright, a worse defect than the flat sheet it
+replaced. `position: relative` lifts the whole subtree above the wrapper's `::before` in paint order,
+the same idiom `.composer__input`/`.composer__row::before` and `.pairing-field__row` already use in this
+file family; it does **not** add a `z-index`, so it doesn't turn `.channel-list` into a stacking context
+and the sticky FAB/actions cluster (`z-index: 1`) are unaffected. `.conversation` needed nothing here —
+it was already `position: relative` for the run-config sheet. Neither `position: relative` nor
+`overflow: hidden` on the wrappers touches the containing block for `position: fixed` descendants, so
+`.save-as-channel-overlay` and `.rename-conversation-overlay` (both genuinely `fixed`, on purpose) still
+escape the sidebar and cover the window — `overflow: hidden` only clips a descendant whose containing
+block is the clipping ancestor, and `fixed`'s containing block is the viewport regardless.
+
+**A corrected claim about `.paired-shell` itself, from the same ticket's build.** The plan for #1058
+reasoned that `filter`/`backdrop-filter`/`will-change`/`contain`/`clip-path` on `.paired-shell` would
+make it the containing block for those two fixed overlays and break them — which is why the backdrop's
+gradient is `background-image` rather than one of those. Measured during the build: that specific claim
+is false for `.paired-shell`, because it already spans the whole window — `contain: paint` was tried
+there and both overlays kept working, since making the containing block for a `fixed; inset: 0` box
+equal to the box it already occupies changes nothing observable. The real hazard is one level down, on
+`.paired-shell__sidebar`/`.paired-shell__pane` — a column-or-pane-sized element, where the same property
+would resize a would-be-window-covering overlay down to one pane and then `overflow: hidden` would clip
+it. `background-image` for the gradient is still the right call, but for that narrower reason; anyone
+tempted to reach for `filter`/`contain`/etc. on the two pane wrappers should read this as the reason not
+to. Detector: `e2e/paired-shell-card.spec.ts` hit-tests a point over the chat pane while
+`.rename-conversation-overlay` is open, rather than trusting `boundingBox()` — a clipped element still
+reports its full layout box, so only hit-testing (or an unclipped-position screenshot) can see the
+failure `overflow: hidden` would cause here.
 
 **The window floor.** `src/main/index.ts`'s `BrowserWindow` options gained `minWidth: 800` as a sibling
 of `width`/`height`; `webPreferences` (`sandbox`, `contextIsolation`, `preload`) is byte-identical to

@@ -7,11 +7,13 @@
  * Every value is a theme token except the sidebar's 400px, which is structural geometry the ticket
  * fixes by name (AC2), not a spacing step — the same carve-out channels.css makes for the FAB's square.
  *
- * The pane CARD treatment the Figma draws on both panes (an rgba(0,0,0,0.3) wash, rounded corners) is
- * deliberately not here: .channel-list and .conversation each paint --color-surface on themselves, the
- * same colour as this backdrop, so a wash on these wrappers would be painted over. Making it visible
- * means editing both screen stylesheets, which the ticket rules out; the visual differentiation lands
- * with the sidebar-tree and composer tickets that own each pane's interior.
+ * #1058 LANDED THE PANE CARD that #670 deferred here, and the deferral's own successor never came: this
+ * file used to say the differentiation would arrive "with the sidebar-tree and composer tickets that own
+ * each pane's interior", and those shipped without it. The blocker #670 named was real and is now paid —
+ * .channel-list and .conversation each painted --color-surface on themselves, the same colour as this
+ * backdrop, so a wash on these wrappers WAS painted over. Both screen stylesheets now drop that
+ * background and stay transparent (one deletion each), which is what makes the two ::before rules below
+ * visible at all. Do not restore either background without deleting the cards.
  */
 
 .paired-shell {
@@ -22,7 +24,100 @@
   box-sizing: border-box;
   gap: var(--space-5); /* Figma Container 103:2963 gap-[20px] */
   padding: var(--space-5); /* Figma Container 103:2963 p-[20px] */
-  background: var(--color-surface);
+
+  /* #1058 — the backdrop's glow (Figma Chat Screen 102:4), which carries a radial gradient OVER the flat
+     surface. Two longhands rather than the `background:` shorthand this used to be, and the split is what
+     keeps --color-surface a NAME: folded into the gradient as an opaque last stop it would still render,
+     but the token would be gone from the file.
+
+     EVERY NUMBER RE-DERIVED FROM THE NODE'S OWN TRANSFORM, never read off the export's fallback. 102:4
+     carries its fill as an inline SVG on a 1280x1302 viewBox, a radialGradient at cx=0 cy=0 r=10 under
+     gradientTransform matrix(100.76 -5.5583 5.1936 152.2 608.93 386.8). Mapping the r=10 unit circle
+     through that matrix gives centre (608.93, 386.8) = 47.6% across and 29.7% down; x radius
+     hypot(100.76, -5.5583)*10 = 1009.13px = 78.8% of 1280; y radius hypot(5.1936, 152.2)*10 = 1522.89px
+     = 117.0% of 1302. The percentages resolve against this element's background positioning area, which
+     is its PADDING box — no border and box-sizing: border-box, so padding box == border box == the whole
+     window, the same 1280x1302 the matrix was derived against.
+
+     THE ONE DIVERGENCE FROM THE DRAWING: the matrix also carries atan2(-5.5583, 100.76) = -3.16deg of
+     tilt, and a CSS radial-gradient cannot rotate. Reproducing it would take a pseudo-element and a
+     transform; on a haze whose near edge is already 1000px from its centre, 3 degrees is below the
+     perceptual floor and not worth an extra box.
+
+     Both stops are tokens exactly: the node's rgba(19,74,116,1) IS --color-primary-container (#134a74),
+     and its rgba(0,51,85,0) IS --color-on-primary (#003355) at zero alpha. The outer stop is written as
+     `transparent` rather than that token because there is no way to write a token AT an alpha here —
+     color-mix() is declined file-family-wide (conversation.css says so on three rules) and relative
+     colour syntax appears nowhere in this repo. MEASURED, NOT ASSUMED, the way .composer__row's
+     field-sizing was: both forms were rendered side by side at this exact geometry in the built app and
+     compared pixel-for-pixel, and they differ on 19 of ~1.25M colour channels by at most 1/255 — dither
+     noise on the ramp, not a colour. Gradient interpolation is premultiplied (CSS Images 3), so a
+     zero-alpha stop's channels are unobservable at every position and #003355 has nothing to contribute.
+
+     background-image is also the form that CANNOT make this element a containing block for fixed
+     descendants, unlike filter, backdrop-filter, will-change, contain and clip-path. That is the right
+     reason to prefer it, but the danger it avoids is NOT on this element, which is worth saying because
+     the obvious reading is wrong: .paired-shell spans the whole window, so making it the containing block
+     leaves .save-as-channel-overlay and .rename-conversation-overlay exactly where they were.
+     `contain: paint` was added here and measured, and the overlays and their hit-testing were unchanged.
+     THE HAZARD IS ON THE WRAPPERS BELOW, which are pane-sized and now carry overflow: hidden — the same
+     property there confines a fixed overlay to one column, measured as
+     `blocked by .paired-shell__pane`. */
+  background-color: var(--color-surface);
+  background-image: radial-gradient(
+    ellipse 78.8% 117% at 47.6% 29.7%,
+    var(--color-primary-container) 0%,
+    transparent 70%
+  );
+}
+
+/* #1058 — THE PANE CARD, one rule for both wrappers (Figma Channels and chats 103:2959 and Content
+   106:3321, byte-identical treatment: bg-[rgba(0,0,0,0.3)] rounded-[6px]). These two elements are the
+   card's box exactly — full height, already at the shell's 20px inset and 20px gap above, and neither is
+   a scroll container. That last point is why the card lives here and not on the screens: .channel-list is
+   overflow-y: auto, so a ::before at inset: 0 there would cover the SCROLLER'S VIEWPORT and not its
+   scrolled height, and the wash would slide with the rows.
+
+   overflow: hidden is load-bearing, not tidiness. It is what stops a row's hover rectangle or the
+   thread's content painting square over the 6px arc at either end of a column. It does NOT reach the two
+   channel-list overlays: both are position: fixed on purpose, and a fixed box's containing block is the
+   viewport, so no overflow ancestor clips it. e2e/paired-shell-card.spec.ts proves that by hit-testing a
+   point over the chat pane while the Save-as-channel dialog is up, rather than by boundingBox(), which
+   reports a clipped element's full layout box and so could never detect the failure.
+
+   ⭐ NEVER ADD filter, backdrop-filter, will-change, contain OR clip-path TO THIS RULE. Any of them makes
+   these wrappers a containing block for fixed descendants, and unlike on .paired-shell above — which
+   spans the window, so the same property there is harmless — these boxes are ONE COLUMN WIDE, so a
+   full-window overlay would be resized into a pane and then clipped by the overflow: hidden right here.
+   Measured, not predicted: `contain: paint` on this rule turns the spec's overlay hit-test into
+   `blocked by .paired-shell__pane`. If a card ever needs a shadow or a blur, that is a pseudo-element's
+   job, not this element's. */
+.paired-shell__sidebar,
+.paired-shell__pane {
+  position: relative;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+/* The wash. A pseudo-element at an opacity rather than a colour value, which is this file family's rule
+   (.composer__row::before, .question-panel__other-field::before, .pairing-field::before and the five
+   __scrim rules): opacity is a de-emphasis device, not a colour literal. Here it is also the only form
+   that WORKS — the card sits over a gradient that varies across the window, so there is no flat colour
+   for a pre-mixed equivalent to be.
+
+   NO border-radius of its own, unlike .composer__row::before. Absolute insets resolve against the
+   wrapper's padding box and overflow: hidden clips at that same padding box rounded by border-radius, so
+   the two boxes coincide and the rule above already rounds this. A restatement here would be inert.
+
+   The wrappers carry no padding, border or margin, and this pseudo-element cannot introduce one, which is
+   the whole reason the card could land without moving a single row inside either pane. */
+.paired-shell__sidebar::before,
+.paired-shell__pane::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.3;
 }
 
 /* Figma Sidebar 103:736 — w-[400px] shrink-0. Neither grows nor shrinks, so the column holds exactly

@@ -68,6 +68,13 @@ Bubbles use `max-width: min(680px, 75%)` (not a fixed width) so they reflow as t
 
 Every style references a token from `theme/tokens.css` — no color/type/spacing literal in `conversation.css`. Bare structural geometry (`100%`, flex ratios, the `48px` send button, the bubble measure) stays literal; those are layout, not theme. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
 
+**`.conversation` paints no background since #1058.** It used to paint `--color-surface`, the same
+colour the paired shell paints behind it, which is why the pane never read as a pane; the card (a
+`--color-scrim` wash + 6px corner) now lives one level out, on `.paired-shell__pane`. `.conversation`'s
+pre-existing `position: relative` (kept for the run-config sheet's containing block) already lifts this
+whole subtree above that wrapper's `::before`, so the chat pane needed no stacking fix the sidebar
+did. See [Paired shell § the pane card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
+
 ## Back control (#140)
 
 The thread's leading return-to-list affordance, added when the [paired shell](paired-shell.md) gave

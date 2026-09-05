@@ -356,8 +356,8 @@ plus the drop-target rule below:
   no `height`/`min-height` (see above) and deliberately no `white-space: nowrap`.
 - **`.composer--drop-target`** (#890) — `outline: 1px solid var(--color-primary); outline-offset: -1px`,
   the drop-in-progress edge. `outline`, not `border`: `.composer` has no resting border at all — it is
-  padding plus `background: var(--color-surface)` — so a `border:` in the active state would reflow the
-  whole conversation column by 2px every time a file crossed it. The shipped no-reflow precedent is
+  padding over the pane card, with no paint of its own since #1099 — so a `border:` in the active state
+  would reflow the whole conversation column by 2px every time a file crossed it. The shipped no-reflow precedent is
   `.composer__row:has(.composer__input:focus-visible)`, further down this file. `--color-primary` rather
   than that rule's `--color-outline`, so the drop edge is not the focus ring's twin when a drag crosses a
   composer whose textarea also holds focus — both tokens already exist in this stylesheet; no new colour

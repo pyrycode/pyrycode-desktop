@@ -165,6 +165,10 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   await composer.fill(DRAFT)
   daemon.pushFrame(questionShownFrame())
   await expect(panel).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  // #1099: the panel sits in the composer's slot and, like the composer, paints no ground of its own — the
+  // pane card shows through both. Pinned here because this tier is the only one that can put the panel on
+  // screen; paired-shell-card.spec.ts pins the composer's half.
+  expect(await panel.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
   // Non-vacuity anchor: nothing has been sent before the drive below.
   expect(captured).toHaveLength(0)
 

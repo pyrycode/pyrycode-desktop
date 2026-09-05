@@ -148,6 +148,14 @@ defines Background = Surface. Two new tokens, `--text-body-medium-weight-emphasi
 `--text-body-small-weight-emphasized` (both `500`), were minted for the question text and the button
 labels rather than a `font-weight: 500` literal at the call site.
 
+**The panel paints no ground of its own since #1099**, exactly as `.composer` no longer does. Its
+stylesheet comment had tied its `--color-surface` ground to the composer's so the slot would not change
+when a question replaced the message box; once #1058 made the pane a card and #1099 dropped the composer's
+paint, the tie pointed the other way and the panel's paint went with it, or a clarifying question would
+have brought the flat rectangle back for as long as it was on screen. The padding it shares with
+`.composer` is unchanged. `e2e/question-answer-continue.spec.ts` reads the panel's computed background as
+transparent. See [Composer message box § no background](conversation-shell-composer-message-box.md).
+
 ## Header tabs (#915)
 
 The title row (`347:6829`) went from one static `<span>` per #906 to `questions.map(…)` inside the same

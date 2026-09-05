@@ -1,7 +1,8 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
 
-// #1058 — the two panes draw a card and the backdrop draws the glow (Figma 102:4). EVERY assertion here
+// #1058 — the two panes draw a card and the backdrop draws the glow (Figma 102:4). #1099 added the one
+// paint #1058 missed: the composer block, transparent beside the two screens in section 2. EVERY assertion here
 // is computed style, geometry or hit-testing, which is why the file exists at all: vitest runs the `node`
 // environment (vitest.config.ts), so there is no layout, no CSSOM, no getComputedStyle and no
 // elementFromPoint, and the whole ticket is three stylesheets. There is no markup half to pin — not one
@@ -145,6 +146,7 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   const pane = page.locator('.paired-shell__pane')
   const list = page.locator('.channel-list')
   const thread = page.locator('.conversation')
+  const composer = page.locator('.composer')
 
   await expect(thread).toBeVisible()
 
@@ -176,9 +178,14 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
 
   // --- 2. The two screens went transparent, which is what lets the card show at all. Before this ticket
   // both painted --color-surface on themselves, the same colour as the backdrop behind them, and that is
-  // the whole defect: two panes and a shell, one flat sheet. ---
+  // the whole defect: two panes and a shell, one flat sheet. The composer joined them under #1099: it had
+  // painted the same --color-surface since #1, invisible until the card landed, and then sat on the wash
+  // as an opaque square-cornered sheet over the pane's foot. Figma's Input area (347:5408) has no fill;
+  // only the card and the message box carry paint. Pinned HERE rather than in composer-message-box.spec.ts
+  // so the whole chain — backdrop, card, composer — is owned by the spec that owns the card. ---
   expect(await list.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
   expect(await thread.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
+  expect(await composer.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
 
   // --- 3. The backdrop carries the glow over the token (AC2). background-color and background-image are
   // separate longhands on purpose: the token survives as a NAME instead of being folded into an opaque

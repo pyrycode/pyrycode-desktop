@@ -30,6 +30,7 @@ import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
 import { createConnectionRegistry } from './connectionRegistry'
+import { createConversationRouter } from './conversationRouter'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
@@ -312,16 +313,38 @@ app.whenReady().then(() => {
   // Constructed SYNCHRONOUSLY, doing its own store read afterwards, so this whole whenReady callback
   // still completes in one tick — the property the two handler-registration comments below lean on.
   //
-  // `live.sink` is passed through UNWRAPPED and this site stamps nothing: `createDaemonConnection`
-  // calls `bindServerOrigin(deps.sink, deps.serverId)` internally, and one binding over the shared
-  // sink here would stamp every producer with a single id (see bindServerOrigin's header).
+  // THIS SITE STILL STAMPS NOTHING, and that is unchanged by #1118's observer below:
+  // `createDaemonConnection` calls `bindServerOrigin(deps.sink, deps.serverId)` internally, and one
+  // binding over the shared sink here would stamp every producer with a single id (see
+  // bindServerOrigin's header). The observer sits UNDER that binding, reading the stamp rather than
+  // writing one.
+  //
+  // The conversation router (#1118): a command about a conversation reaches the server that OWNS that
+  // conversation, and no other. Declared BEFORE the registry although it reaches into it, because each
+  // needs something from the other — the registry's connection factory needs `observe`, the router
+  // needs the per-server accessor. The knot is broken by late binding, `downloader`'s
+  // `requestDebugBundle` arrow in the same shape: the arrow's body runs on a command, many ticks after
+  // `registry` is initialised, so there is no temporal-dead-zone read. That is structural, not lucky —
+  // the registry's constructor does call `router.observe` synchronously while building its stand-in,
+  // but `observe` only WRAPS, and the recording path it installs reads the event and the index and
+  // never reaches `connectionFor`.
+  const router = createConversationRouter({
+    connectionFor: (serverId) => registry.connectionFor(serverId),
+    diagnosticLog
+  })
   const registry = createConnectionRegistry({
     store: pairedServerStore,
     createConnection: ({ serverId, pairedServer }) =>
       createDaemonConnection({
         deviceKeypair: deviceKeypairStore,
         pairedServer,
-        sink: live.sink,
+        // Evaluated once PER CONNECTION, so each producer gets its own wrapper over the one shared
+        // sink and the one shared index. The observer stamps nothing and adds no second stamping
+        // path: `createDaemonConnection` applies `bindServerOrigin` internally over the sink it is
+        // given, so what arrives here is the ALREADY-STAMPED event and the index reads exactly what
+        // the renderer reads. It records before it forwards, which is what makes "anything the window
+        // can name, the index has already seen" true with no race.
+        sink: router.observe(live.sink),
         serverId,
         deviceName,
         clientVersion,
@@ -329,11 +352,17 @@ app.whenReady().then(() => {
       }),
     diagnosticLog
   })
-  // The stable stand-in every call site below reaches (#1117), bound ONCE here so those lines keep
-  // their current shape: it resolves the current connection at call time and answers for the most
-  // recently paired server, which is where they reach today after a re-pair. Its type omits
-  // start/stop/reconnect, so nothing below can drive one connection's lifecycle — the registry owns
-  // that. Routing these per server is #1118, #1119 and #1120; do not start that here.
+  // The stable stand-in the call sites below reach (#1117), bound ONCE here so those lines keep their
+  // current shape: it resolves the current connection at call time and answers for the most recently
+  // paired server. Its type omits start/stop/reconnect, so nothing below can drive one connection's
+  // lifecycle — the registry owns that.
+  //
+  // SINCE #1118 IT IS NO LONGER WHAT A CONVERSATION-SCOPED COMMAND REACHES. The ten entry points that
+  // carry a conversation id go through `router.route(...)` and reach the server that owns that
+  // conversation; what is left on this stand-in is everything with no conversation id to route by —
+  // the list and create requests, the debug bundle, the attachment upload — plus the id spaces #1119
+  // owns (`setSessionSettings`' session id, the modal and question ids) and #1120's `interrupt`, which
+  // carries no payload at all. Do not start those here.
   const connection = registry.active
 
   // The pairing invoke handler (#54), registered now that the registry exists so a successful
@@ -480,16 +509,25 @@ app.whenReady().then(() => {
   // unregisterPairing.
   const unregisterCommands = onCommand(ipcMain, (command) => {
     switch (command.type) {
+      // ROUTED BY CONVERSATION (#1118). `router.route` answers the connection for the server that owns
+      // the named conversation, or `null` HAVING ALREADY REFUSED AND LOGGED — so the `?.` is the
+      // refusal, not a silent shrug, and an id no server has claimed puts a frame on no wire at all.
+      // The decision itself lives in `conversationRouter.ts`, where a unit test can drive it; these
+      // stay the per-case one-liners they were.
       case 'sendMessage':
-        connection.send(command.payload)
+        router.route(command.payload.conversation_id)?.send(command.payload)
         return
-      case 'requestSessionSettings':
+      case 'requestSessionSettings': {
         // Direct to the connection method (mirrors sendMessage), no facade — a run-config read
         // has no orchestrator/consumer. The optional conversation id is unwrapped here rather than
         // passing the payload object on: the connection takes the scalar, and the builder rebuilds a
-        // fresh literal, so no renderer-supplied key reaches the wire (#945).
-        connection.requestSessionSettings(command.payload?.conversation_id)
+        // fresh literal, so no renderer-supplied key reaches the wire (#945). ONE local, read twice,
+        // so the id routed by and the id sent can never be two different expressions. An absent id is
+        // not a known conversation, so it refuses on the ordinary path — no separate branch is owed.
+        const conversationId = command.payload?.conversation_id
+        router.route(conversationId)?.requestSessionSettings(conversationId)
         return
+      }
       case 'requestConversations':
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a list request
         // has no consumer/reassembler. Inert no-op when not connected (#139).
@@ -539,7 +577,7 @@ app.whenReady().then(() => {
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
-        connection.dequeueMessage(command.payload)
+        router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
         return
       case 'interrupt':
         // Direct to the connection method (mirrors requestConversations), no orchestrator — a bare
@@ -552,21 +590,21 @@ app.whenReady().then(() => {
         // request has no consumer/reassembler. Sends promote_conversation; the daemon confirms with one
         // unsolicited conversation_updated broadcast → conversationUpdated event (consumed by #275).
         // Inert no-op when not connected (#273).
-        connection.promoteConversation(command.payload)
+        router.route(command.payload.conversation_id)?.promoteConversation(command.payload)
         return
       case 'archiveConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends archive_conversation; the daemon confirms by
         // replying with a conversation_updated record, decoded by the existing path and reflected in the
         // list by #275 (consumed by #366), not correlated here. Inert no-op when not connected (#363).
-        connection.archiveConversation(command.payload)
+        router.route(command.payload.conversation_id)?.archiveConversation(command.payload)
         return
       case 'unarchiveConversation':
         // Direct to the connection method (mirrors promoteConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends unarchive_conversation; the daemon confirms by
         // replying with a conversation_updated record, not correlated here (#348 reads restored state from
         // the re-list). Inert no-op when not connected (#346).
-        connection.unarchiveConversation(command.payload)
+        router.route(command.payload.conversation_id)?.unarchiveConversation(command.payload)
         return
       case 'deleteConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
@@ -574,14 +612,14 @@ app.whenReady().then(() => {
         // distinct conversation_deleted { id } record correlated to the requester (no broadcast), NOT
         // decoded or correlated here — #367 owns the reply decode + explicit re-list. Inert no-op when not
         // connected (#364).
-        connection.deleteConversation(command.payload)
+        router.route(command.payload.conversation_id)?.deleteConversation(command.payload)
         return
       case 'renameConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends rename_conversation; the daemon confirms by
         // replying with a conversation_updated record, decoded by the existing path and reflected in the
         // list by #275 (consumed by #360), not correlated here. Inert no-op when not connected (#359).
-        connection.renameConversation(command.payload)
+        router.route(command.payload.conversation_id)?.renameConversation(command.payload)
         return
       case 'changeWorkspace':
         // Direct to the connection method (mirrors renameConversation), no orchestrator — a fire-and-
@@ -589,7 +627,7 @@ app.whenReady().then(() => {
         // replying with the existing conversation_updated record, decoded by the existing path and
         // reflected in the list for free, not correlated here (the Workspace Picker reads the new
         // workspace from the re-list). Inert no-op when not connected (#379).
-        connection.changeWorkspace(command.payload)
+        router.route(command.payload.conversation_id)?.changeWorkspace(command.payload)
         return
       case 'setSessionSettings':
         // Direct to the connection method (mirrors sendMessage), no orchestrator. Sends
@@ -790,7 +828,22 @@ app.whenReady().then(() => {
   // state that only means anything ACROSS asks, so rebuilding it per ask would silently disable both.
   const attachmentDir = join(app.getPath('userData'), ATTACHMENT_DIR_NAME)
   const retrieveAttachment = createAttachmentRetrieval({
-    requestAttachment: (payload, consumer) => connection.requestAttachment(payload, consumer),
+    // ROUTED BY CONVERSATION (#1118), and the tenth of the ten entry points that carry the key they
+    // need: `AttachmentRetrievalRequest.conversationId` already survived the boundary guard, so this
+    // is a lookup rather than a new field. It is the one routed site that OWES ITS ASKER AN ANSWER —
+    // the window is waiting on a terminal — so a refusal is reported rather than dropped, on the
+    // existing `not-connected` outcome ("the ask arrived with no live session, so nothing was sent"),
+    // which the driver turns into exactly one `failed` on the asker's own emit and releases its
+    // in-flight slot. No member is added to AttachmentRetrievalFailure. Attachment UPLOAD carries no
+    // conversation id and stays on the stand-in above.
+    requestAttachment: (payload, consumer) => {
+      const owner = router.route(payload.conversation_id)
+      if (owner === null) {
+        consumer.fail('not-connected')
+        return
+      }
+      owner.requestAttachment(payload, consumer)
+    },
     store: (attachmentId, bytes) => storeAttachment(attachmentDir, attachmentId, bytes),
     diagnosticLog
   })

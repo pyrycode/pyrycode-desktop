@@ -236,12 +236,16 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
     [paneBox.x, paneBox.y, paneBox.width, paneBox.height].map(wholePixels)
   )
 
-  // --- 5. The EMPTY pane draws the card too (AC1). Back returns the route to `list`, where PairedShell
-  // renders .paired-shell__pane with null inside — #670's ruling that the right pane stays genuinely empty
-  // still stands, so what the design shows is an empty CARD, not an empty rectangle and not a placeholder.
-  // The card is on the wrapper, so this costs no markup and the assertion is that it costs none. ---
-  await page.locator('.conversation__back').click()
+  // --- 5. The EMPTY pane draws the card too (AC1). Reached VIA SETTINGS, because #1064 deleted the
+  // thread's back arrow this step used to click: `back` is ABSOLUTE in nextPairedRoute, so `.settings__back`
+  // returns the route to `list` exactly as the arrow did, and PairedShell renders .paired-shell__pane with
+  // null inside — #670's ruling that the right pane stays genuinely empty still stands, so what the design
+  // shows is an empty CARD, not an empty rectangle and not a placeholder. The card is on the wrapper, so
+  // this costs no markup and the assertion is that it costs none. The unmount gate still reddens correctly:
+  // the Settings route replaces the whole shell. ---
+  await page.locator('.channel-list__settings').click()
   await expect(thread).toHaveCount(0)
+  await page.locator('.settings__back').click()
   await expect(pane).toBeVisible()
   const emptyCard = await cardOf(pane)
   expect(emptyCard.washColor).toBe(scrim)

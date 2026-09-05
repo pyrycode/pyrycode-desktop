@@ -114,9 +114,10 @@ const recentHeader = (page: Page) =>
 test('scratch branch: Keep in scratch promotes the row in place', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(SCRATCH_SEED) })
 
-  // launchPairedApp lands IN the seeded row's thread (it clicked the non-promoted seed to reach it). Back to the
-  // list, where the app-singleton conversation-list store already holds SCRATCH_SEED (listed on the connected edge).
-  await page.locator('.conversation__back').click()
+  // launchPairedApp lands IN the seeded row's thread (it clicked the non-promoted seed to reach it). The
+  // app-singleton conversation-list store already holds SCRATCH_SEED (listed on the connected edge) and, since
+  // #670, the sidebar stays mounted beside the thread — so the baseline below reads the list where it stands.
+  // (#1064 deleted the back arrow this used to click first; the round trip reached a list that never left.)
 
   // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
   await expect(recentHeader(page)).toBeVisible()
@@ -147,8 +148,8 @@ test('scratch branch: Keep in scratch promotes the row in place', async ({ launc
 test('dedicated branch: create-folder → returned path promotes the row', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(DEDICATED_SEED) })
 
-  // Same launch + back-nav + baseline as the scratch test, with a fresh launch and single non-promoted seed.
-  await page.locator('.conversation__back').click()
+  // Same launch + baseline as the scratch test, with a fresh launch and single non-promoted seed — and the
+  // same reason there is no navigation step: the sidebar is already beside the thread (#670, #1064).
 
   // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
   await expect(recentHeader(page)).toBeVisible()

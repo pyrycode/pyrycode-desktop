@@ -53,9 +53,10 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   const { page } = await launchPairedApp({ buildReplyFrames })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
-  // with activeConversation = SEED. Back to the list, where the app-singleton conversation-list store
-  // already holds SEED (listed on the connected edge).
-  await page.locator('.conversation__back').click()
+  // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
+  // on the connected edge), and since #670 the sidebar is mounted BESIDE the thread — so the list is
+  // already on screen and the baseline below reads it where it stands. (#1064 deleted the back arrow this
+  // used to click first; that round trip only ever existed to reach a list that never left.)
 
   // AC2 — baseline list render: the seeded row renders. Scope to `.channel-list` to keep the assertion
   // off any incidental match elsewhere.
@@ -99,10 +100,18 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
 
   // Reflect on the RE-LISTED Channel List, not the thread: activeConversationStore is not rewritten by
   // conversation_updated, so the open thread's / sheet's own title may not update; the observable
-  // reflection is the re-list. The sheet is a full-surface overlay whose scrim intercepts pointer events,
-  // so close it (its Close button) before the back button is clickable, then navigate back to the list.
+  // reflection is the re-list — which #670's always-mounted sidebar puts on screen already, so there is
+  // no navigation step here at all.
+  //
+  // THE CLOSE CLICK STAYS, WITH A DIFFERENT REASON. It was justified by the sheet's full-surface scrim
+  // intercepting pointer events "before the back button is clickable"; #1064 deleted that button, and the
+  // scrim never covered the sidebar anyway (`.status-sheet-overlay` is absolute INSIDE `.conversation`),
+  // nor would it block the visibility assertions below, which do not hit-test. What earns the click its
+  // place now is that it completes the sheet's own flow: the Channel-info RENAME path does not self-close
+  // (unlike onArchive / onDeleteConfirm in the sibling spec), so without it the spec would make its
+  // closing assertions from behind a modal left open over the pane — a state no operator reaches, and a
+  // landmine for any later assertion here that does hit-test.
   await page.locator('.status-sheet__close').click()
-  await page.locator('.conversation__back').click()
 
   // AC4 — multi-row render + rename reflection: BOTH rows render, scoped to `.channel-list`, exact text —
   // SEED ("Channels" section) AND the created row under NEW_TITLE ("Chats" section). The

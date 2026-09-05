@@ -2,7 +2,7 @@
  * Settings screen styles (#333), mirrored from the mobile Figma node 17-2 (chrome + Connection header
  * only). Every color / type / spacing value references a theme token from theme/tokens.css — no
  * color/type/spacing literal lives here. The bare structural literals (100%, the 48px back-button square)
- * are layout geometry (the .conversation__back convention), not theme values. The Server row, the
+ * are layout geometry (the send-square convention), not theme values. The Server row, the
  * preference sections, and the remaining section headers are deferred to #334 / #151 / #152.
  */
 
@@ -31,10 +31,12 @@
   padding: var(--space-2) var(--space-4) var(--space-2) var(--space-1);
 }
 
-/* The leading back affordance (Figma 17:4's arrow_back inside a 48px frame) — duplicates the
-   .conversation__back treatment (a 48px touch target wrapping the 24px glyph, on-surface, gaining a
-   surface tint on hover). Duplicated rather than extracted to a shared class so this slice touches no
-   adjacent stylesheet. 48px is structural component geometry (the send-square convention). */
+/* The leading back affordance (Figma 17:4's arrow_back inside a 48px frame) — a 48px touch target
+   wrapping the 24px glyph, on-surface, gaining a surface tint on hover. It duplicated the conversation
+   screen's own back arrow rather than extracting a shared class, so that #333 touched no adjacent
+   stylesheet; #1064 deleted that arrow, so this rule is now the canonical statement of the treatment
+   rather than a copy of one — `archive.css` and `channels.css` both cite it, and it is where a future
+   extraction would start. 48px is structural component geometry (the send-square convention). */
 .settings__back {
   flex: 0 0 auto;
   width: 48px;

@@ -96,9 +96,10 @@ test('default-workspace: a Settings choice reaches the FAB create_conversation c
     buildReplyFrames: capturingDefaultWorkspaceFake(SEED, RECENTS, captured)
   })
 
-  // launchPairedApp lands IN the seeded row's thread (it clicked the row to reach it). Back to the list, where
-  // the app-singleton conversation-list store already holds SEED (listed on the connected edge).
-  await page.locator('.conversation__back').click()
+  // launchPairedApp lands IN the seeded row's thread (it clicked the row to reach it). The app-singleton
+  // conversation-list store already holds SEED (listed on the connected edge) and, since #670, the sidebar
+  // carrying the gear stays mounted beside the thread — so Settings opens straight from here. (#1064
+  // deleted the back arrow this used to click first; the round trip reached a list that never left.)
 
   // Open Settings and assert the null-store baseline: the default-workspace value reads the 'scratch'
   // placeholder, proving the localStorage key started empty (the fresh --user-data-dir).

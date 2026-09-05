@@ -4609,17 +4609,22 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('background-task-panel__row')
   })
 
-  // #140: the leading back affordance (Figma 16-9's arrow_back). Gated on the optional `onBack` prop
-  // exactly like #166's `onUnpaired`: present only when the shell wires navigation, so the existing
-  // bare `<ConversationScreen />` render is unchanged (AC3).
-  it('renders the back affordance when onBack is provided (the shell-mounted thread)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
-    expect(markup).toContain('aria-label="Back"')
-  })
-
-  it('renders no back affordance for a bare ConversationScreen (onBack absent — unchanged, AC3)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('aria-label="Back"')
+  // #1064 AC1: #140's leading back affordance is GONE. Its job since #670 was to deselect — the sidebar
+  // is permanently mounted, so the list it "returned to" was already on screen — and the desktop drawing
+  // (Figma 106:3321) has no leading affordance above the thread at all.
+  //
+  // This is #140's own `onBack`-present test INVERTED, and it is the shipped detector for the deletion.
+  // Its `onBack`-absent twin went with the control: BackControl already rendered null without the prop,
+  // so that assertion passed before this change and after it, discriminating nothing. `onBack` is passed
+  // HERE on purpose — it is still the "mounted in the paired shell" signal that gates the overflow menu
+  // below, so this is the arm on which the affordance used to render.
+  //
+  // The accessible name, not the class, is what the assertion reads: AC1 asks for unreachable rather
+  // than merely invisible, and a `display: none` rule would still leave the name in the markup.
+  it('renders no back affordance, with or without onBack (#1064 AC1)', () => {
+    expect(renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)).not.toContain(
+      'aria-label="Back"'
+    )
   })
 
   // #276: the thread overflow menu is gated on onBack presence exactly like BackControl — mounted only

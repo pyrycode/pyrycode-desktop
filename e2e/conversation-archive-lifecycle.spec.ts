@@ -68,9 +68,10 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   const { page } = await launchPairedApp({ buildReplyFrames })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it), with
-  // activeConversation = SEED. Back to the list, where the app-singleton conversation-list store already
-  // holds SEED (listed on the connected edge).
-  await page.locator('.conversation__back').click()
+  // activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed on the
+  // connected edge), and since #670 the sidebar is mounted BESIDE the thread — so the Archive entry below is
+  // already on screen and the drive acts on it directly. (#1064 deleted the back arrow this used to click
+  // first; the round trip only ever existed to reach a sidebar that had not been going anywhere since #670.)
 
   // --- Baseline: the Archive view starts empty (the observed 0 of the 0→1). The seed is never archived, so
   // both tabs read (0). This also proves the archive-view entry and the seed-exclusion up front. ---
@@ -111,8 +112,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
 
   // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
-  // (the `.conversation__back` click that used to stand here is gone: the control is unmounted by the time
-  // it would run). This 1→0 delta is the load-bearing navigation proof, and it auto-waits TWO round trips,
+  // (the manual Back click that used to stand here went in #653: the control was unmounted by the time it
+  // would have run, and #1064 has since deleted it outright). This 1→0 delta is the load-bearing navigation proof, and it auto-waits TWO round trips,
   // not one: archive → conversation_updated → re-list request → conversations → exit.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
@@ -173,8 +174,8 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
   // #652 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back
-  // click (the `.conversation__back` click that used to stand here is gone: the control is unmounted by
-  // the time it would run). This 1→0 delta is the navigation proof; it auto-waits the whole
+  // click (the manual Back click that used to stand here went in #652: the control was unmounted by the
+  // time it would have run, and #1064 has since deleted it outright). This 1→0 delta is the navigation proof; it auto-waits the whole
   // delete → conversation_deleted → exit round trip.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 

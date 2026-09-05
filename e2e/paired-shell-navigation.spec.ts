@@ -45,10 +45,10 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
 }) => {
   const { page, app } = await launchPairedApp()
 
-  // Arrival hooks (distinctive root per screen) + the controls to leave/advance. The three back buttons
-  // (thread / settings / archive) all expose the identical accessible name 'Back', so they are selected by
+  // Arrival hooks (distinctive root per screen) + the controls to leave/advance. Both remaining back
+  // buttons (settings / archive) expose the identical accessible name 'Back', so they are selected by
   // their screen-scoped class, not by role-name — self-documenting, matching the launcher's
-  // `.channel-list__row-open` idiom.
+  // `.channel-list__row-open` idiom. (There were three until #1064 deleted the thread's.)
   const thread = page.locator('.conversation')
   const list = page.locator('section[aria-label="Conversations"]')
   const settings = page.locator('section[aria-label="Settings screen"]')
@@ -107,15 +107,17 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   )
   expect(minWidth).toBe(MIN_WINDOW_WIDTH_PX)
 
-  // 2. thread → list (AC: back from thread lands on list). #670 re-pointed this assertion: the list is
-  // now ALWAYS on screen, so `expect(list).toBeVisible()` here would pass for free and prove nothing.
-  // The real signal — the one the four archive/delete specs already rely on — is the chat pane emptying
-  // (AC4: `null`, not a mounted-but-blank ConversationScreen). Back's meaning became "deselect", and
-  // this is what deselecting looks like.
-  await page.locator('.conversation__back').click()
-  await expect(thread).toHaveCount(0)
-
-  // 3. list → settings (open the gear entry).
+  // 2. #1064 DELETED THE STEP THAT STOOD HERE. It clicked the thread's back arrow and asserted the chat
+  // pane emptied to `null` — the deselect itself, which #670 had already reduced Back's meaning to. With
+  // the arrow gone there is no control left to drive it, and the step is deleted rather than kept alive by
+  // a synthetic route dispatch: that would pin a flip the thread can no longer reach. The spec's other
+  // half — opening a row FILLS the pane — is step 1a above, untouched, and is what this spec is for. The
+  // empty pane is still reached and still asserted, by the shell's own entry route and by steps 6 and 8
+  // below; `paired-shell-card.spec.ts` still measures that it draws the card.
+  //
+  // 3. thread → settings (open the gear entry). It runs from the THREAD route now rather than from the
+  // list, which the two-pane shell makes equivalent: the sidebar carrying the gear is mounted either way,
+  // and `aria-label="Settings"` is unique in the whole renderer.
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(settings).toBeVisible()
 

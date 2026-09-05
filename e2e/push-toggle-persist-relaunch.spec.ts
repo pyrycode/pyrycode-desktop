@@ -29,14 +29,12 @@ test('push-notification toggle persists across an app relaunch', async ({ launch
   // --- Launch 1: flip the toggle away from its ENABLED default. ---
   const { page, app, daemon, userDataDir } = await launchPairedApp()
 
-  // thread → list (the fixture's default drive ends on the thread; Settings is reached list-side, the
-  // #465 chain). Then list → Settings via the gear.
-  // #670 re-pointed the gate below: the two-pane shell keeps the list on screen at all times, so a
-  // list-visible assertion after a back click would pass for free and gate nothing (the `list` selector
-  // const went with it — the reuse arm at launch 2 has its own). The chat pane emptying is the real
-  // post-back signal, and it is still a genuine gate: the gear click must not race the route flip.
-  await page.locator('.conversation__back').click()
-  await expect(page.locator('.conversation')).toHaveCount(0)
+  // Straight to Settings via the gear. The fixture's default drive ends on the thread, and #670's two-pane
+  // shell keeps the sidebar — and so the gear — on screen there, so no navigation step precedes this click.
+  // #1064 deleted the back arrow that used to open this drive, and its `.conversation` count gate went with
+  // it: that gate existed only to keep the gear click from racing the arrow's route flip, and with no flip
+  // there is nothing to race. `aria-label="Settings"` is unique in the whole renderer (the sidebar gear),
+  // so the by-role query stays unambiguous with the thread mounted.
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.locator(settings)).toBeVisible()
 

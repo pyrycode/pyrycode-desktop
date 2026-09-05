@@ -205,3 +205,8 @@ Status isn't among those losses: `replayStatus()` runs at the load, after the ga
 - `docs/specs/architecture/1121-per-server-status-cache.md` — the #1121 architecture spec: the
   three-key design (`string` / present `null` / absent), the security review naming `serverId`'s
   provenance as the load-bearing trust property, and the rejected alternative of eviction on unpair.
+- [Session store](session-store.md#one-slot-per-server-since-1133) — #1133, the renderer-side second
+  application of this module's `StatusOrigin` shape: a `statuses: Map<StatusOrigin, ConnectionStatus>`
+  beside the store's existing app-wide `status` cell, following the same three-key domain and the same
+  stamp-only-origin rule. Two separate copies of the type, not a shared one — the renderer may not
+  import `src/main/`.

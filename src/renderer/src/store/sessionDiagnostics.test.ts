@@ -16,7 +16,7 @@ function msg(message_id: string, text = `text ${message_id}`): MessagePayload {
 }
 
 function stateWith(...messages: MessagePayload[]): SessionState {
-  return { status: { type: 'disconnected' }, messages }
+  return { status: { type: 'disconnected' }, statuses: new Map(), messages }
 }
 
 describe('toDiagnosticRecord — content-free record shape', () => {

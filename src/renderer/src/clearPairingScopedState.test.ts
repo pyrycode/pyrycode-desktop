@@ -262,6 +262,7 @@ describe('clearPairingScopedState', () => {
           capabilities: []
         }
       },
+      statuses: new Map(),
       messages: seededMessages
     })
     const lastReadStorage = fakeLastReadStorage(

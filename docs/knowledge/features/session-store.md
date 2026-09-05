@@ -6,9 +6,10 @@ Introduced in [#2](../codebase/2.md). Lives at `src/renderer/src/store/sessionSt
 
 ## What it does
 
-Holds two facets of one session as one state object:
+Holds three facets of one session as one state object:
 
-- **`status`** — a `ConnectionStatus` discriminated union on `type`: `disconnected` (initial), `connecting` (dialing + Noise handshake), `connected` (carries the wire `HelloAckPayload`), `error` (carries a `ConnectionError`).
+- **`status`** — a `ConnectionStatus` discriminated union on `type`: `disconnected` (initial), `connecting` (dialing + Noise handshake), `connected` (carries the wire `HelloAckPayload`), `error` (carries a `ConnectionError`). The **most recently written** status across every connection — app-wide, not per-server.
+- **`statuses`** — since [#1133](#one-slot-per-server-since-1133), a `ReadonlyMap<StatusOrigin, ConnectionStatus>`: the same status values, filed one slot per server.
 - **`messages`** — an ordered, read-only `readonly MessagePayload[]` of the active conversation, in arrival order.
 
 State changes **only** through a dispatched `SessionAction`. Components read via selectors and dispatch actions; there is no two-way binding and no exposed setter.
@@ -19,20 +20,23 @@ State changes **only** through a dispatched `SessionAction`. Components read via
 
 ```ts
 interface SessionState {
-  status: ConnectionStatus
-  messages: readonly MessagePayload[]   // wire MessagePayload, reused verbatim
+  status: ConnectionStatus                               // most recently written, across every server
+  statuses: ReadonlyMap<StatusOrigin, ConnectionStatus>   // one slot per server (#1133)
+  messages: readonly MessagePayload[]                     // wire MessagePayload, reused verbatim
 }
 
 type SessionAction =
-  | { type: 'connecting' }
-  | { type: 'connected'; ack: HelloAckPayload }
-  | { type: 'disconnected' }
-  | { type: 'failed'; error: ConnectionError }
+  | { type: 'connecting'; serverId?: string | null }
+  | { type: 'connected'; ack: HelloAckPayload; serverId?: string | null }
+  | { type: 'disconnected'; serverId?: string | null }
+  | { type: 'failed'; error: ConnectionError; serverId?: string | null }
   | { type: 'messageReceived'; message: MessagePayload }             // ← one `message` envelope
   | { type: 'messagesReceived'; messages: readonly MessagePayload[] } // ← one `message_chunk` batch
   | { type: 'messageSent'; message: MessagePayload }                  // ← a local optimistic echo (#66)
   | { type: 'reset' }                                                 // ← back to initialSessionState (#166; dispatched from clearPairingScopedState.ts since #531)
 ```
+
+The four status arms' `serverId` is **optional**, since [#1133](#one-slot-per-server-since-1133): every pre-existing arg-less status dispatch — in tests and in `clearPairingScopedState` — keeps compiling and behaving exactly as before, filing under the unstamped slot.
 
 The first two message actions mirror the two wire envelope types 1:1, so #3's translation is obvious; `messageSent` ([#66](../codebase/66.md)) is a **locally-composed** echo dispatched by the composer, given a distinct name to document intent (not a daemon delivery) though its reducer body is identical. `message_chunk` is a **batch of complete messages** (backfill), not partial-token streaming — the reducer appends whole messages; there is no per-`message_id` token accumulator.
 
@@ -44,18 +48,52 @@ The first two message actions mirror the two wire envelope types 1:1, so #3's tr
 
 | action | effect |
 |---|---|
-| `connecting` / `connected` / `disconnected` / `failed` | set `status` to the target; `messages` untouched |
+| `connecting` / `connected` / `disconnected` / `failed` | set `status` to the target **and** file it into `statuses` under `action.serverId` (#1133); `messages` untouched |
 | `messageReceived` | append one via `appendUnique` (dedupe by `message_id`) |
 | `messagesReceived` | append batch via `appendUnique`, in order |
 | `messageSent` | append one optimistic echo via `appendUnique` (#66); identical body to `messageReceived` |
-| `reset` | return `initialSessionState` — clears **both** `status` and `messages` in one step (#166) |
+| `reset` | return `initialSessionState` — clears **all three** facets, `statuses` included, in one step (#166, widened #1133) |
 
 Invariants it holds:
 
-- **Status and messages are orthogonal.** Status actions never touch `messages`; message actions never touch `status`. No status action clears history.
+- **Status and messages are orthogonal.** Status actions never touch `messages`; message actions never touch `status` or `statuses`. No status action clears history.
 - **Unconditional set, no transition guards.** Each status action sets its target regardless of the current status. Ordering is the caller's (#3's) responsibility.
-- **Purity.** Input state and its `messages` array are never mutated; every append allocates a new array. Results are built from `state.status`/`state.messages` explicitly (no `...state` spread), keeping `reduceSession` a clean `SessionState → SessionState` function independent of the store's `dispatch` field.
+- **Purity.** Input state, its `messages` array and its `statuses` map are never mutated; every append allocates a new array, every status write allocates a new map (`new Map(state.statuses)` then `set`, via a module-local `withStatus` helper). Results are built from `state.status`/`state.statuses`/`state.messages` explicitly (no `...state` spread), keeping `reduceSession` a clean `SessionState → SessionState` function independent of the store's `dispatch` field.
 - **Exhaustiveness.** A `default` arm calls `assertNever(action: never)` — a compile-time error if a `SessionAction` variant is added without a reducer case. (Compile-time only; no runtime reject branch.)
+
+### One slot per server, since #1133
+
+`status` alone reports whichever connection changed most recently and nothing about the others. Since
+[#1117](daemon-connection-routing.md) the registry dials one connection per paired server, and on a
+healthy connection the next status change is never — so a second server's leg could read wrong for the
+life of the window. `statuses` fixes that by filing every status write into its own slot as well as the
+shared cell: `withStatus` writes the *same* `ConnectionStatus` object reference to both places, so
+`selectStatus` and `selectStatusFor(origin)` can never disagree about the connection that just moved,
+and an untouched server's slot comes back by reference (no re-render for a component watching it).
+
+`status` itself is **not** reshaped into the index — it stays the single most-recently-written cell,
+byte-for-byte its pre-#1133 behaviour. This is deliberate, not an oversight: it is what the connection
+banner, the composer's status row, the sidebar's `HostConnectionDotsControl` daemon leg, and the
+conversation-list connected gate all still read via `selectStatus`, untouched. A fold ("connected if any
+server is") was considered and rejected — it would change what those consumers say today.
+
+`StatusOrigin = string | null | undefined` is the renderer-side twin of
+[`liveWindow.ts`'s same-named type](live-window.md#one-slot-per-server-since-1121) (main-side, #1121,
+the precedent this ticket mirrors) — same three cases, same reasoning, kept as two separate copies
+because the renderer may not import `src/main/` and lifting it to `src/shared/` has no third consumer
+yet to justify the move:
+
+- a **string** — one slot per paired server;
+- a **present `null`** — `connectionRegistry`'s not-paired stand-in, dialled like any other connection;
+- **absent** (`undefined`) — no origin at all; unreachable in production, reachable only from a test
+  that dispatches a bare action literal. Recording it instead of dropping it keeps the reducer total.
+
+The index is a `Map`, never a bare object — `ServerOrigin`'s header in `shared/ipc/events.ts` rules
+this for any consumer that indexes by the id, since a `__proto__` id would otherwise write through
+`Object.prototype`. The origin is read **only** from [#1068](daemon-event-bridge.md)'s stamp, in the
+bridge's `originOf` — never from a payload field, in particular never from `connected`'s
+`ack.server_id`, which is a distinct, daemon-supplied value a hostile or confused daemon could set to
+another server's id. See [Daemon-event bridge](daemon-event-bridge.md) for `originOf` itself.
 
 ### Store, singleton, hook, selectors
 
@@ -63,7 +101,8 @@ Invariants it holds:
 createSessionStore(init = initialSessionState, observe?)  // vanilla createStore — one isolated instance per test (DI seam)
 sessionStore                                                // app-wide singleton — the "one source of truth"
 useSessionStore(selector)                                   // React binding: useStore(sessionStore, selector)
-selectStatus(s) / selectMessages(s)                          // the only read surface
+selectStatus(s) / selectMessages(s)                          // the app-wide / message read surface
+selectStatusFor(origin)(s)                                   // one server's slot (#1133), or undefined if unheard-from
 ```
 
 `dispatch` is wired as `set((s) => reduceSession(s, action))` — Zustand shallow-merges the returned `{ status, messages }`, preserving the `dispatch` field (its reference stays stable across updates). The vanilla `createSessionStore` factory is the DI seam AC5 asks for: tests build an isolated store, or call `reduceSession` directly, with no global state and no React.
@@ -94,7 +133,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 ## Configuration and usage
 
 - **Import surface for #3** (dispatch): `import { sessionStore, type SessionAction } from '@renderer/store/sessionStore'`, then `sessionStore.getState().dispatch(action)` per received envelope.
-- **Import surface for the read side** (realized in [#69](../codebase/69.md)): `import { useSessionStore, selectMessages, selectStatus } from '@renderer/store/sessionStore'`.
+- **Import surface for the read side** (realized in [#69](../codebase/69.md)): `import { useSessionStore, selectMessages, selectStatus } from '@renderer/store/sessionStore'`. A per-server reader (none exists yet — see below) adds `selectStatusFor` to that import.
 - **The adapter seam (realized in [#69](../codebase/69.md)):** the store holds wire `MessagePayload` (`role: 'user'|'assistant'`, `message_id`, `text`); the shell's `Message` view model uses `type: 'user'|'daemon'`, `id`, `text`. `ConversationScreen` maps each payload through `toMessageViewModel` (`role: 'assistant'` → `'daemon'`, `message_id` → `id`, `conversation_id` dropped) at the store-read boundary — keeping the store's wire types drift-free per ADR 0004. See [conversation-shell](conversation-shell.md).
 
 ## Edge cases and limitations
@@ -105,11 +144,13 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - **Single active conversation.** `MessagePayload` carries `conversation_id`, but #2 appends all messages to one list; multi-conversation routing is out of scope.
 - **Optimistic send (realized in [#66](../codebase/66.md)).** The composer's own-message echo dispatches the dedicated `messageSent` action, appending a wire `MessagePayload { role: 'user' }` through `appendUnique`. Carrying the **same `message_id`** sent on the wire is what lets the daemon's later echo dedupe against the optimistic copy instead of double-posting. See [Composer send](composer-send.md).
 - **Synchronous only.** The store does no async work, no I/O, no subscriptions to tear down; #3/#4 own the channel, cancellation, and teardown and call `dispatch` synchronously.
+- **No whole-map selector, and no live consumer of `statuses` yet.** This ticket (#1133) ships the keyed store and its two read surfaces, deliberately with no visual change: nothing in the renderer can enumerate paired servers yet (`commands.ts` and `connectionRegistry.ts` both record that as a shipped fact), so a whole-map selector would be an unconsumed read surface. #1070 is expected to read `selectStatusFor` per row once it has a real per-server id to call it with.
 
 ## Related
 
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
-- [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store
+- [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store; its `originOf` (#1133) is the only place the per-server `serverId` on a status action is derived, from #1068's stamp
+- [Live window](live-window.md#one-slot-per-server-since-1121) — #1121, the main-side precedent for the same `Map<StatusOrigin, …>` shape, applied to the reopened-window status cache
 - [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md)); its unpair control dispatches `reset` ([#166](../codebase/166.md))
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
 - [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result triggers the pairing-ended clear ([#173](../codebase/173.md)); `runUnpair` itself no longer dispatches `reset` directly as of [#531](../codebase/531.md)

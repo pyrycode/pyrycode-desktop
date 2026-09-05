@@ -80,8 +80,12 @@ server is") was considered and rejected — it would change what those consumers
 `StatusOrigin = string | null | undefined` is the renderer-side twin of
 [`liveWindow.ts`'s same-named type](live-window.md#one-slot-per-server-since-1121) (main-side, #1121,
 the precedent this ticket mirrors) — same three cases, same reasoning, kept as two separate copies
-because the renderer may not import `src/main/` and lifting it to `src/shared/` has no third consumer
-yet to justify the move:
+because the renderer may not import `src/main/`. A third consumer of the shape did appear — #1134,
+[the relay-link store's own keying](relay-link-store.md#one-slot-per-server-since-1134) — and still
+declined a `src/shared/` lift: the lift's value is unifying all three declarations, and the third,
+`liveWindow.ts`, sits in `src/main/`, which #1134 didn't touch. The blocker is the main-side edit, not
+the consumer count, so the domain stays a third honest copy (`RelayLinkOrigin`) rather than a shared
+type with one holdout:
 
 - a **string** — one slot per paired server;
 - a **present `null`** — `connectionRegistry`'s not-paired stand-in, dialled like any other connection;
@@ -151,6 +155,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store; its `originOf` (#1133) is the only place the per-server `serverId` on a status action is derived, from #1068's stamp
 - [Live window](live-window.md#one-slot-per-server-since-1121) — #1121, the main-side precedent for the same `Map<StatusOrigin, …>` shape, applied to the reopened-window status cache
+- [Relay-link store](relay-link-store.md#one-slot-per-server-since-1134) — #1134, the third application of this shape: the relay leg the same host row reads next to this one, keyed by its own `RelayLinkOrigin` rather than an import of `StatusOrigin`
 - [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md)); its unpair control dispatches `reset` ([#166](../codebase/166.md))
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
 - [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result triggers the pairing-ended clear ([#173](../codebase/173.md)); `runUnpair` itself no longer dispatches `reset` directly as of [#531](../codebase/531.md)

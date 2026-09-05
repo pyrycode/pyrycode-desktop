@@ -487,3 +487,88 @@ declarations.
 
 See PR for the full record; there is no `docs/knowledge/codebase/856.md` — that directory was frozen
 2026-08-26, and this section is #856's only home.
+
+## Tool row box moves outward (#1102)
+
+Moves the bordered-box treatment — fill, 1px border, 6px corner, clip — from `.tool-row__chip` to
+`.tool-row` itself, so an expanded row's body (`.tool-row__body`, already the chip's sibling) falls
+*inside* the border instead of hanging beneath it. [#722](#full-width-bordered-tool-row-722) made the
+chip itself the box; #1102 moves only *where* the box lives, not that it exists. `conversation.css` and
+`e2e/tool-row-toggle.spec.ts` only — no TSX, no markup change, nothing re-parented, since the body was
+already the chip's sibling inside `.tool-row`.
+
+**The padding split.** The row carries fill, border, corner and clip — no padding of its own.
+`.tool-row__chip` keeps its `--space-2 --space-3` (8/12) padding and its hover, so a collapsed row's
+header inset and hover fill stay byte-identical; `.tool-row__body` gains `0 var(--space-3) var(--space-3)`
+(0 top / 12 sides / 12 bottom) as its own half of the design's insets. Hoisting the design's 8/12 onto the
+row instead was rejected: it would shrink the toggle's `:hover` fill to a rectangle inset 12px inside the
+border, changing a collapsed row's paint, and it would move the chip-width e2e equalities by 26px rather
+than the 2px of border they actually move by.
+
+**`.tool-row--expanded`'s gap is 4px, not the design's 12.** Figma measures 12px from the header frame to
+the body frame on a node whose header carries no padding of its own; 8 of that 12 is already the chip's
+own bottom padding (which stands in for the row's absent bottom padding on a collapsed row), so the row's
+gap supplies only the remaining 4 — `--space-1`, not `--space-3`. Collapsed height is unchanged either
+way: `1 + 8 + 20 + 8 + 1 = 38`, still what `e2e/thread-scroll-pin.spec.ts`'s row-count assertions measure.
+
+**Every block in the body now fills the row's content width instead of hugging.** `.tool-row--expanded`
+drops `align-items: flex-start` — held since #722 specifically to keep the body content-sized while the
+chip took its own `width: 100%` — because the design sizes `Body`, `Fields`, every field and the result
+block at the row's full content width. `flex-direction: column` moves off `.tool-row--expanded` onto the
+base `.tool-row` rule, since the row is a column in both states now that it is the box; only the *gap*
+stays state-dependent. This falsified two shipped comments — `.code-block`'s (reasoned from `flex-start`
+to "content-sized at this site") and `.tool-row__body`'s own (which opened by citing #696's "the chip is a
+pill and cannot hold this," the very reasoning #1102 supersedes) — both re-stated in place rather than
+left wrong.
+
+**`.tool-row--error` replaces `.tool-row--error .tool-row__chip`** as the border retint, since the chip no
+longer has a border to retint. At `.tool-row--error` alone the selector is (0,1,0) — equal specificity to
+the base `.tool-row` — so it now wins by source order rather than by outspecifying it, and must stay
+declared after the base rule.
+
+**`.tool-row__chip--toggle` gained the two declarations its own comment used to forbid: `border: none` and
+`background: none`.** With the border and fill gone from the chip, the resolved branch — a real
+`<button>` — would otherwise inherit the UA's grey 3D border and button-face background, growing relative
+to the pending `<div>` branch and breaking #722's "identical by construction" property. The comment that
+argued against ever stating `border` here is corrected in place rather than deleted, so a future reader
+sees the argument refuted rather than silently gone.
+
+**A regression caught by the slice's own security pass: the row's new clip ate the toggle's UA focus
+ring.** Once the toggle's border box coincides exactly with the row's padding box (`width: 100%` +
+`border-box`, no row padding) and the row clips (`overflow: hidden`, AC1's requirement), a UA outline —
+painted outside the border box — is clipped away on all four sides, silently removing the row's only
+keyboard affordance's indicator. Fixed with this file's own `:focus-visible` idiom, inset:
+`outline: 1px solid var(--color-outline); outline-offset: -1px`, drawn just inside the clip rather than on
+top of it.
+
+**What deliberately did not move.** The chip keeps its own `overflow: hidden` — a *second* clip, 12px
+inside the row's — because #856's chevron-safety bound measures against the chip's padding edge, not the
+row's; moving the clip outward alone would have loosened that bound by 12px. The chip keeps
+`width: 100%` + `box-sizing: border-box`, now resolving against the row's content box rather than the
+row's whole box, with an unchanged result (row width − 2 − 24, before and after). `.tool-row__body`'s
+`max-width`/`min-width` stay as belt-and-braces against a 16000-character line, though the container's
+`stretch` is now what actually bounds it.
+
+**Testing.** No unit-tier changes — `renderToStaticMarkup` sees no CSS, and this slice adds no
+element/class/attribute. In `e2e/tool-row-toggle.spec.ts`, `measureChip`'s three width equalities were
+re-derived (not deleted) against the row's *content* width rather than its bounding box, since the chip is
+now the row less 2px of border — a shift the spec's 0.5px tolerance does not absorb. A new fifth sibling
+test asserts the geometry `renderToStaticMarkup` cannot see: the 8/12/12/12 insets read against computed
+tokens (not literal pixels), every body block filling the row's content width including a shell call's
+command block, the error retint living on the row's border rather than the chip's (asserted comparatively
+against a resolved row, so a token retune can't redden it), and the focus ring's negative
+`outline-offset`. One implementation-time correction: the design's insets land on the body's *content*
+box, not its border box, since the body itself supplies the padding — the first draft measured the wrong
+box and read 0 where it expected 12.
+
+**One Figma deviation, observed and deliberately deferred to
+[#1103](https://github.com/pyrycode/pyrycode-desktop/issues/1103):** the node gives `Body` a 12px gap
+between `Fields` and the result; `.tool-row__body` still uses its existing 8px (`--space-2`). That, and
+the result's own fill and type, are #1103's — this slice only moves the box and the body's outer insets.
+
+**Unblocks [#1073](https://github.com/pyrycode/pyrycode-desktop/issues/1073)** (joining consecutive tool
+rows into one stack by overlapping their borders 1px), which wants a border on `.tool-row` and was
+natively blocked while that border lived on the chip.
+
+No `docs/knowledge/codebase/1102.md` — that directory was frozen 2026-08-26, and this section is #1102's
+only home.

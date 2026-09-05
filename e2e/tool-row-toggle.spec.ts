@@ -100,15 +100,30 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   const result = row.locator('.tool-row__result')
 
   // #722 — the chip's rendered width beside its row's. The row is a stretch item of
-  // .conversation__thread's flex column and so IS the message column's measure by construction;
-  // comparing against it rather than against the thread's clientWidth minus its computed padding is the
-  // same coverage without the arithmetic. Both elements are visible at every call site below, so a null
-  // box is a genuine failure rather than a case to handle.
-  async function measureChip(): Promise<{ chip: number; row: number }> {
+  // .conversation__thread's flex column and so IS the message column's measure by construction.
+  //
+  // #1102 RE-DERIVED IT AGAINST THE ROW'S CONTENT WIDTH, and did not delete it. The box treatment moved
+  // outward: .tool-row now carries the 1px border, so the chip is the row's BORDER box less 2px and the
+  // old comparison against the row's bounding box would be short by exactly that — well outside this
+  // spec's 0.5px tolerance, so it genuinely reddens rather than passing inside slack. The property being
+  // protected is unchanged and still worth pinning: a resolving row does not shift, and the <button> and
+  // <div> branches measure the same. The row's padding is read rather than assumed to be zero — that it
+  // has none is #1102's padding split, a decision a later slice could revisit.
+  //
+  // IT ALSO CARRIES AC2's HOVER HALF. The chip's box IS the row's content box, which is what makes
+  // .tool-row__chip--toggle:hover fill the whole box inside the border rather than a rectangle inset from
+  // it — the failure mode the alternative padding split (8/12 hoisted onto the row) would have shipped.
+  //
+  // Both elements are visible at every call site below, so a null box is a genuine failure rather than a
+  // case to handle.
+  async function measureChip(): Promise<{ chip: number; rowContent: number }> {
     const chipBox = await chip.boundingBox()
-    const rowBox = await row.boundingBox()
-    if (chipBox === null || rowBox === null) throw new Error('the tool row is not laid out')
-    return { chip: chipBox.width, row: rowBox.width }
+    if (chipBox === null) throw new Error('the tool row is not laid out')
+    const rowContent = await row.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    })
+    return { chip: chipBox.width, rowContent }
   }
 
   // --- The call lands PENDING: a chip with no toggle affordance at all (AC2).
@@ -129,7 +144,12 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   // toggle exists only on a resolved row.
   const pending = await measureChip()
   expect(pending.chip).toBeGreaterThan(0)
-  expect(Math.abs(pending.chip - pending.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(Math.abs(pending.chip - pending.rowContent)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // #1102 AC5's first half — the pending dimming, now applied to a box that has a fill rather than to a
+  // transparent wrapper. That the value still READS as pending is a visual question, checked on screen
+  // rather than here; this pins only that the declaration still reaches the row.
+  await expect(row).toHaveCSS('opacity', '0.5')
 
   // --- The result resolves the SAME row in place (correlated by tool_use_id), and the chip becomes
   // the control — closed at rest.
@@ -146,8 +166,11 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   // second equality is "a resolving row does not shift", which is the whole reason the chip's
   // box-sizing is stated once on the base rule reaching both branches.
   const resolved = await measureChip()
-  expect(Math.abs(resolved.chip - resolved.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(Math.abs(resolved.chip - resolved.rowContent)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
   expect(Math.abs(resolved.chip - pending.chip)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // #1102 AC5's second half — resolving lifts the dimming off the filled box.
+  await expect(row).toHaveCSS('opacity', '1')
 
   // --- It expands in place on click, showing the result text.
   await toggle.click()
@@ -160,7 +183,7 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   // CROSS-axis item. This is the state that would go red if the chip leaned on the container's
   // alignment instead of carrying its own width.
   const expanded = await measureChip()
-  expect(Math.abs(expanded.chip - expanded.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(Math.abs(expanded.chip - expanded.rowContent)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
   expect(Math.abs(expanded.chip - pending.chip)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 
   // --- And collapses again on a second click, withdrawing the result from the DOM (AC5's second half).
@@ -176,6 +199,24 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   await page.keyboard.press('Enter')
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(result).toContainText(RESULT_NEEDLE)
+
+  // #1102 — AND THE FOCUS RING IS STILL VISIBLE ON THAT PATH. The box moved outward, so .tool-row clips
+  // (AC1) and the toggle's border box now coincides exactly with the row's padding box; a UA outline is
+  // painted OUTSIDE the border box, so it would be clipped away on all four sides and this keyboard
+  // affordance would leave no indicator at all. .tool-row__chip--toggle:focus-visible therefore draws its
+  // own ring with a NEGATIVE offset, which is what puts it inside the clip. The negative offset is the
+  // assertion: a ring at offset 0 or greater is a ring the row's clip eats.
+  const focusRing = await toggle.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      focusVisible: element.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineOffset: parseFloat(style.outlineOffset)
+    }
+  })
+  expect(focusRing.focusVisible).toBe(true)
+  expect(focusRing.outlineStyle).not.toBe('none')
+  expect(focusRing.outlineOffset).toBeLessThan(0)
 })
 
 // #854 — the header's two groups. A SIBLING test rather than an extension of the one above: each test
@@ -701,4 +742,232 @@ test('tool row: the result count draws before the chevron and lines up down the 
   // And the headline is still readable beside it rather than collapsed to nothing.
   const hostileLeft = await boxOf(hostileRow.locator('.tool-row__left'), 'the hostile row left group')
   expect(hostileLeft.width).toBeGreaterThan(0)
+})
+
+// #1102 — the box moved outward from .tool-row__chip to .tool-row, so an opened row draws as ONE bordered
+// box with its body INSIDE it rather than as a box with a loose column hanging underneath. A FIFTH sibling
+// test with its own launchPairedApp, for the reason the four above record: more rows on any of their pages
+// would make their bare `.tool-row` locators strict-mode-ambiguous.
+//
+// Everything asserted here is COMPUTED GEOMETRY — where the body's edges sit relative to the row's padding
+// box, whether the command block fills the row's measure, and which element carries the failure tint. That
+// is exactly the half the renderToStaticMarkup unit tier structurally cannot observe, and this slice adds
+// no element, no class and no attribute, so there is nothing new for that tier to pin and its specs are
+// unedited.
+//
+// THE INSETS ARE ASSERTED AGAINST TOKENS READ OFF THE ROW, not against literal 8s and 12s: a retune of
+// --space-2 / --space-3 must move the expectation with the rule, while the one arithmetic error this slice
+// invites — copying the design's header-frame-to-body-frame 12 into .tool-row--expanded's gap, which draws
+// 20px because 8 of that 12 already sits inside the chip — must redden. Each of the five equalities below
+// was checked against the OUTGOING rules as a control and each is genuinely red there (9 not 8, 17 not 12,
+// 0 not 12 on both the leading edge and the bottom, and an arbitrary content-sized trailing edge).
+
+const BOX_PLAIN_ID = 'tool-use-1102-plain'
+const BOX_SHELL_ID = 'tool-use-1102-shell'
+
+// Drawn from the design node's own example (152:5215's second Input field), and short enough that the
+// field list cannot be what widens the body — which is what makes the fill assertions below about the
+// container rather than about the content.
+const BOX_INPUT_PATH = '.../pyrycode/internal/e2e'
+
+/** A FAILED result — AC4's row. `routedToolResultFrame` above is hardcoded to the success branch. */
+function failedToolResultFrame(toolUseId: string): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_result',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: 'turn-1102',
+      tool_use_id: toolUseId,
+      is_error: true,
+      result_summary: 'one line of failed result text'
+    }
+  })
+}
+
+type Edges = { left: number; right: number; top: number; bottom: number }
+
+/**
+ * An element's PADDING box and its CONTENT box in page coordinates — its border box inset by its own
+ * computed border widths, and then again by its own computed padding.
+ *
+ * WHICH BOX EACH INSET IS MEASURED AGAINST IS THE WHOLE SUBJECT OF THE PADDING SPLIT, so both are
+ * returned rather than one being assumed. The row carries the border and NO padding, so its padding box
+ * is where its children begin; the body carries the design's 12px itself, so what sits at those insets is
+ * the body's CONTENT box and its border box is flush. Measuring the body's bounding box against the row's
+ * would read 0 and say nothing about the design.
+ */
+async function boxesOf(locator: Locator, what: string): Promise<{ padding: Edges; content: Edges }> {
+  const box = await boxOf(locator, what)
+  const insets = await locator.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const edge = (border: string, padding: string): { border: number; padding: number } => ({
+      border: parseFloat(border),
+      padding: parseFloat(padding)
+    })
+    return {
+      left: edge(style.borderLeftWidth, style.paddingLeft),
+      right: edge(style.borderRightWidth, style.paddingRight),
+      top: edge(style.borderTopWidth, style.paddingTop),
+      bottom: edge(style.borderBottomWidth, style.paddingBottom)
+    }
+  })
+  const padding: Edges = {
+    left: box.x + insets.left.border,
+    right: box.x + box.width - insets.right.border,
+    top: box.y + insets.top.border,
+    bottom: box.y + box.height - insets.bottom.border
+  }
+  return {
+    padding,
+    content: {
+      left: padding.left + insets.left.padding,
+      right: padding.right - insets.right.padding,
+      top: padding.top + insets.top.padding,
+      bottom: padding.bottom - insets.bottom.padding
+    }
+  }
+}
+
+test('tool row: an expanded row is one box with its body inside the border', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  // Two rows land on this page, so every locator is scoped by index (#670's strict-mode collisions).
+  // Arrival order is the thread's order.
+  const rows = page.locator('.tool-row')
+  const plainRow = rows.nth(0)
+  const shellRow = rows.nth(1)
+
+  daemon.pushFrame(routedToolUseFrame(BOX_PLAIN_ID, 'read_file', { path: BOX_INPUT_PATH }))
+  daemon.pushFrame(routedToolUseFrame(BOX_SHELL_ID, 'Bash', { command: SHELL_COMMAND }))
+  daemon.pushFrame(routedToolResultFrame(BOX_PLAIN_ID))
+  daemon.pushFrame(failedToolResultFrame(BOX_SHELL_ID))
+
+  await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(rows).toHaveCount(2)
+
+  await plainRow.locator('.tool-row__chip--toggle').click()
+  await shellRow.locator('.tool-row__chip--toggle').click()
+  await expect(plainRow).toHaveClass(/tool-row--expanded/)
+  await expect(shellRow).toHaveClass(/tool-row--expanded/)
+
+  // --- AC1. Every inset the design pins, measured against the row's padding box now that the row is the
+  // box. The five equalities ARE the containment claim ("the body renders inside the border"), stated as
+  // numbers rather than as a `>=` that would hold on `main` too — the body has always been inside the
+  // row's bounding box; what it was not inside was a border, because the row had none.
+  const space = await plainRow.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      two: parseFloat(style.getPropertyValue('--space-2')),
+      three: parseFloat(style.getPropertyValue('--space-3'))
+    }
+  })
+  const rowPad = (await boxesOf(plainRow, 'the plain row')).padding
+  const bodyContent = (await boxesOf(plainRow.locator('.tool-row__body'), "the plain row's body")).content
+  const header = await boxOf(plainRow.locator('.tool-row__summary'), "the plain row's header line box")
+  const blocks = plainRow.locator('.tool-row__body > *')
+  const firstBlock = await boxOf(blocks.first(), "the plain row body's first block")
+  const lastBlock = await boxOf(blocks.last(), "the plain row body's last block")
+
+  // 8px above the header's line box — the chip's own top padding, the row carrying none.
+  expect(Math.abs(header.y - rowPad.top - space.two), 'the header sits wrong in the box').toBeLessThanOrEqual(
+    WIDTH_TOLERANCE_PX
+  )
+  // 12px between the header's line box and where the body's content starts: the chip's 8px bottom padding
+  // plus the row's 4px expanded gap. THIS is the equality that reddens if --space-3 is copied into that
+  // gap, which draws 20px.
+  expect(
+    Math.abs(bodyContent.top - (header.y + header.height) - space.three),
+    'the header-to-body distance is not the 12px the design pins'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  // 12px on each side and 12px at the bottom, all three from the body's own padding.
+  expect(
+    Math.abs(bodyContent.left - rowPad.left - space.three),
+    'the body is not inset from the leading edge'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    Math.abs(rowPad.right - bodyContent.right - space.three),
+    'the body is not inset from the trailing edge'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    Math.abs(rowPad.bottom - bodyContent.bottom - space.three),
+    'the body does not end 12px above the box'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // And the same two distances read off the BLOCKS themselves, which is how AC1 words them ("the body's
+  // first block", "the body's last block"). Equal to the content-box reads above by construction today,
+  // since the body's top padding is 0 and .tool-row__result zeroes the UA <pre> margin — which is exactly
+  // what these two catch if a block added later brings a margin of its own.
+  expect(
+    Math.abs(firstBlock.y - (header.y + header.height) - space.three),
+    "the body's first block is not 12px below the header"
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    Math.abs(rowPad.bottom - (lastBlock.y + lastBlock.height) - space.three),
+    "the body's last block does not end 12px above the box"
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC3. Every block in the body fills the body's content width. On its own this holds on `main` too
+  // (the blocks have always stretched to their container); it MEANS "fills the row's content width" only
+  // in composition with the two side insets above, which pin the body itself to the row's measure.
+  const bodyContentWidth = bodyContent.right - bodyContent.left
+  for (const [selector, what] of [
+    ['.tool-row__input', 'the input field'],
+    ['.tool-row__input-value', 'the field value box'],
+    ['.tool-row__result', 'the result block']
+  ] as const) {
+    const block = await boxOf(plainRow.locator(selector), what)
+    expect(Math.abs(block.width - bodyContentWidth), `${what} does not fill the body`).toBeLessThanOrEqual(
+      WIDTH_TOLERANCE_PX
+    )
+  }
+
+  // --- AC3's named case: a shell call's COMMAND BLOCK. Asserted against the shell row's own padding box
+  // rather than against its body, which makes it a detector on its own — under the outgoing
+  // `align-items: flex-start` the body was content-sized and the block filled a narrower box. The Figma
+  // node measures `Code` at 717 against its siblings' 851, but that frame is hidden in both the instance
+  // and the symbol and so kept a pre-instance width; the block sits in the same auto-layout stack as the
+  // siblings that do measure 851, which is what this pins.
+  const shellPad = (await boxesOf(shellRow, 'the shell row')).padding
+  const codeBlock = await boxOf(shellRow.locator('.code-block'), "the shell call's command block")
+  expect(
+    Math.abs(codeBlock.x - shellPad.left - space.three),
+    'the command block does not fill to the leading edge'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    Math.abs(shellPad.right - (codeBlock.x + codeBlock.width) - space.three),
+    'the command block does not fill to the trailing edge'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC4. The failure device followed the box outward: the ROW's border is retinted, and the chip has
+  // no border left to retint. Asserted COMPARATIVELY against the successful row rather than against a
+  // hardcoded colour, so a token retune cannot redden it — while the one mistake this consequence invites,
+  // leaving the selector at `.tool-row--error .tool-row__chip`, must: that leaves both rows' borders the
+  // same colour.
+  async function bordersOf(
+    row: Locator
+  ): Promise<{ color: string; width: string; chipWidth: number }> {
+    const rowBorder = await row.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { color: style.borderTopColor, width: style.borderTopWidth }
+    })
+    const chipWidth = await row
+      .locator('.tool-row__chip')
+      .evaluate((element) => parseFloat(getComputedStyle(element).borderTopWidth))
+    return { ...rowBorder, chipWidth }
+  }
+  const plainBorders = await bordersOf(plainRow)
+  const shellBorders = await bordersOf(shellRow)
+  expect(shellBorders.color).not.toBe(plainBorders.color)
+  // The retint is a colour change and nothing else — a failed row is the same box, not a thicker one.
+  expect(shellBorders.width).toBe(plainBorders.width)
+  expect(plainBorders.width).toBe('1px')
+  // And the chip carries no border in either row, which is what makes the row the failure device for the
+  // WHOLE row rather than for its header alone. It is also the assertion that catches the <button>
+  // branch inheriting the UA's own border once the chip stops declaring one.
+  expect(plainBorders.chipWidth).toBe(0)
+  expect(shellBorders.chipWidth).toBe(0)
 })

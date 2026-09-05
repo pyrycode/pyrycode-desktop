@@ -6,9 +6,11 @@ always-mounted sidebar of the two-pane desktop shell, shown alongside `thread` r
 [conversation list store](conversation-list-store.md), splitting the daemon's conversations into
 **Channels** (saved, `is_promoted === true`) above **Chats** (ad-hoc,
 `is_promoted === false`; labelled "Recent discussions" until the desktop-design relabel,
-[#709](../codebase/709.md)), each row showing its title and a last-activity relative time. Mirrors the
-mobile home screen (mobile #312). Replaces the throwaway `PlaceholderList` [#140](../codebase/140.md)
-shipped as a stand-in.
+[#709](../codebase/709.md)), each row showing its title alone at the desktop node's compact 24px
+height — a trailing last-activity time until
+[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) removed it, see [the row's desktop
+geometry](channel-list-desktop-row-geometry.md). Mirrors the mobile home screen (mobile #312). Replaces the throwaway `PlaceholderList`
+[#140](../codebase/140.md) shipped as a stand-in.
 
 Introduced in [#141](../codebase/141.md). Renderer-only, pure render slice — no keys, sockets, tokens,
 transport, or new store/wire code, so not security-sensitive.
@@ -21,9 +23,10 @@ transport, or new store/wire code, so not security-sensitive.
 - Splits rows by `is_promoted`, preserving the store's array order within each section (the daemon's
   order is authoritative — no client-side sort). A section with zero rows renders no header; a
   divider appears only between two present sections.
-- Each row shows a title (`name`, or `'Untitled'` when `name` is `null`/blank — never a blank row) and
-  a last-activity relative time derived from `last_message_ts` ("2m ago", "3h ago", "Yesterday", "2
-  days ago", or a short UTC date past a week).
+- Each row shows only a title (`name`, or `'Untitled'` when `name` is `null`/blank — never a blank
+  row) — a trailing last-activity time until
+  [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) deleted it; `formatLastActivity`
+  itself survives for its three other callers (§ Why the row carries no message preview below).
 - Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
   conversation. See § Edge cases.
 - A [new-discussion FAB](new-discussion-fab.md) floats bottom-right over the list, present in all
@@ -58,17 +61,24 @@ transport, or new store/wire code, so not security-sensitive.
   unread state, not just the currently-open one. Added by
   [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801); see § The row's status dot below.
 
-## Why last-activity time, not a message preview
+## Why the row carries no message preview
 
 The wire `ConversationSummary` (`src/shared/wire/types.ts`) carries **no message text** — only
 `last_message_ts` (RFC3339), `id`, `name: string | null`, `is_promoted`, `is_archived`, `cwd`,
 `last_used_at`. The Figma design's "Recent discussions" rows show a 2-line message-body preview and
-message-derived titles for unnamed discussions — neither is buildable from this wire shape. Both
-Figma row shapes (avatar-bearing channel rows, preview-bearing discussion rows) collapse to one
-title+time row here. Adding the preview needs a daemon-side wire change first (a field on
-`conversations_read.go`'s `ConversationSummary`), then a desktop decode ([#139](conversation-list-fetch.md))
-and store ([#208](conversation-list-store.md)) change — flagged to the human in the ticket, not built
+message-derived titles for unnamed discussions — neither is buildable from this wire shape. Adding the
+preview needs a daemon-side wire change first (a field on `conversations_read.go`'s
+`ConversationSummary`), then a desktop decode ([#139](conversation-list-fetch.md)) and store
+([#208](conversation-list-store.md)) change — flagged to the human in the ticket, not built
 speculatively.
+
+This gap is unrelated to the row's own last-activity time, which the mobile-mirrored row showed in
+place of the preview and which
+[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) later deleted outright — the
+**desktop** node (103:2968) draws no time and no trailing element of any kind, independent of what the
+wire can or can't supply. `formatLastActivity` itself is untouched and stays live for its three other
+callers — the Archive screen's subtitle, `WorkspacePickerSheet`, and `ConversationScreen` — see
+[the row's desktop geometry](channel-list-desktop-row-geometry.md).
 
 ## How it works
 
@@ -112,18 +122,20 @@ the store:
 
 ### The container + pure view (`ChannelList.tsx`)
 
-`ChannelList` (container) reads `useConversationListStore(selectConversations)` and captures
-`Date.now()` — its only two impurities, both safe under `renderToStaticMarkup` in Node (the store
-yields its initial `null` there). It passes both down to `ChannelListView` (pure), which always
-returns a stable `<section className="channel-list" aria-label="Conversations">` root — the test
-hook, present in every state — with content by store state (see § What it does).
+`ChannelList` (container) reads `useConversationListStore(selectConversations)` — its only impurity,
+safe under `renderToStaticMarkup` in Node (the store yields its initial `null` there). It passes the
+result down to `ChannelListView` (pure), which always returns a stable
+`<section className="channel-list" aria-label="Conversations">` root — the test hook, present in
+every state — with content by store state (see § What it does). Until
+[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) it also captured `Date.now()` and
+threaded it down as a `now` prop through four file-local signatures; that capture and the prop are
+gone along with the time span below.
 
-Each row is `<button type="button" className="channel-list__row" onClick={onOpen}>` with
-`<span className="channel-list__title">{titleFor(row.name)}</span>` and
-`<span className="channel-list__time">{formatLastActivity(row.last_message_ts, now)}</span>` — both
-auto-escaped React children (never `dangerouslySetInnerHTML`), the #203/#218 untrusted-string posture.
-React key is `row.id` — a real stable per-conversation identity (unlike the timeline's array-index
-keying).
+Each row's title renders as `<span className="channel-list__title">{titleFor(row.name)}</span>` — an
+auto-escaped React child (never `dangerouslySetInnerHTML`), the #203/#218 untrusted-string posture,
+and since #1097 the row's only text. React key is `row.id` — a real stable per-conversation identity
+(unlike the timeline's array-index keying). The row itself is not a single button — see § The row's
+save affordance below for the wrapper/open-button/affordance split #274 introduced.
 
 ### The row's save affordance (`ChannelList.tsx`, added by #274)
 
@@ -140,6 +152,13 @@ each dialog's open/name state as its own local `useState` pair, rendered as sibl
 `ChannelListView`. See [Save-as-channel dialog](save-as-channel-dialog.md) and
 [Rename dialog](rename-conversation-dialog.md) for the dialogs themselves, and
 [#274](../codebase/274.md)/[#360](../codebase/360.md) codebase notes for lessons learned.
+
+### The row's desktop geometry (`channels.css`/`ChannelList.tsx`, converged by [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097))
+
+Split out to its own page: [the row's desktop geometry](channel-list-desktop-row-geometry.md) — #1097's
+convergence on Figma node 103:2968: a derived (never declared) 24px height, shrunk trailing affordances,
+the corner moved onto the fill's painted surface, 4px between rows via an adjacent-sibling rule rather
+than a column `gap`, the body-small label, the deleted time, and the status dot's now-settled centring.
 
 ### The host row (`ChannelList.tsx`, added by #710, the operator's label by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834))
 
@@ -360,8 +379,9 @@ working or unread state correctly.
 `.channel-list__row-open` would fold "Idle" (and, live, "Assistant working") into the button's own
 accessible name, mutating it as the daemon works. `RunConfigSections.tsx:270-280` already declined exactly
 this shape for the run-config sheet's unselected radios — a named `role="img"` stays a sibling of an
-interactive row, not nested in it. As a sibling the dot is announced in reading order and the button's name
-stays `title + time`.
+interactive row, not nested in it. As a sibling the dot is announced in reading order and the button's
+name stays the row's title — since [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097)
+deleted the trailing time, that is the button's whole text, where it used to read title + time.
 
 The geometry cost of that choice is real and is paid in CSS, not layout: in the row's ordinary flex flow
 the dot would push the button's left edge to x≈22, notching the `:hover`/`:focus-visible` fill short of the
@@ -384,14 +404,24 @@ regression, but worth recording since it's the one edit here whose cost isn't lo
 **Vertical alignment is a measurement, not an inheritance — and it doesn't work the way this file's own
 prior reasoning for `.channel-list__host-dot` claimed.** The Figma frame's `Status dot` instance sits a few
 pixels below the `Channel` row title's own centre (`cy` at row-relative y=15 in a 24px frame whose centre is
-y=12); porting that 3px offset onto the shipped row would be meaningless, since the shipped row isn't the
-design's 24px frame — it carries its own vertical padding, a larger title type scale, and a trailing
-`.channel-list__time` the design node has no equivalent for. The dot is centred on the row instead
-(`top: 50%; transform: translateY(-50%)`), and the reasoning is recorded in the CSS comment so a later
-reader doesn't reopen it. [The dot's own doc](conversation-status-dot.md#edge-cases-and-limitations) records
-the matching correction: its "no wrapper needed to centre a 6px dot against the row's line box" claim,
-written for `.channel-list__host-dot`, does not hold for this node's Figma metadata and did not transfer
-here.
+y=12). At the time #801 shipped this, porting that 3px offset onto the row would have been meaningless
+anyway, since the shipped row wasn't yet the design's 24px frame — it carried its own vertical padding, a
+larger title type scale, and a trailing `.channel-list__time` the design node has no equivalent for — so
+\#801 centred the dot (`top: 50%; transform: translateY(-50%)`) and deferred the question to the pass that
+would converge the row's full geometry.
+
+[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) is that pass (see
+[the row's desktop geometry](channel-list-desktop-row-geometry.md)), and it **settles** the question
+rather than re-deferring it: the row is now the design's
+24px frame, so the excuse for not measuring expired. Measured directly, the 3px drop is an artifact of the
+Figma component's own 14px-tall, 6px-wide dot *wrapper* — its painted circle sits at `cy=11` inside that
+wrapper, landing at y=15 in a 24px row whose centre is y=12. The app draws a bare 6px dot with no such
+wrapper, so porting the offset would copy the wrapper's internal padding without the wrapper itself. The dot
+stays centred, and the CSS comment records this as a ruling rather than a deferral — cheap to flip later
+(one `top` value) if the drawn offset turns out to be wanted. [The dot's own
+doc](conversation-status-dot.md#edge-cases-and-limitations) records the matching correction: its "no
+wrapper needed to centre a 6px dot against the row's line box" claim, written for
+`.channel-list__host-dot`, does not hold for this node's Figma metadata and did not transfer here.
 
 **Testing: two traps in wiring a store into a `renderToStaticMarkup` component, not specific to this
 ticket.** Both surfaced while extending `ChannelList.test.tsx` and apply to any future row that reads a
@@ -480,8 +510,6 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   in [#440](../codebase/440.md)/[#452](../codebase/452.md)). The empty-state guard
   (`channels.length === 0 && discussions.length === 0`) is evaluated on the *active* partition, so a
   store holding only archived rows shows "No conversations yet" rather than a blank body.
-- **Relative times don't tick.** `now` is captured once per render at the container — a live-updating
-  interval is a deferred enhancement.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
   (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (The
   new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md) — see [its feature
@@ -586,6 +614,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
 - [#874 spec](../../specs/architecture/874-input-required-dot-call-site.md) — the fourth subscription
   that composes the input-required status into it.
+- [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
+  desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
+  time, the shrunk affordances, and the settled status-dot centring. See
+  [the row's desktop geometry](channel-list-desktop-row-geometry.md).
+  [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) is the sibling ticket that
+  fills the open row.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), multi-host (see § The host row), #716 (same-last-segment workspace label
   ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).

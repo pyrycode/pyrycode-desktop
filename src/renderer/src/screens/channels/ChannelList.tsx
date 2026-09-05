@@ -54,12 +54,10 @@ import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/Convers
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import { ConversationStatusDot } from './ConversationStatusDot'
-import {
-  titleFor,
-  partitionActive,
-  groupByWorkspace,
-  formatLastActivity
-} from './channelListViewModel'
+// #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
+// longer draws a last-activity time, but the helper keeps its three other callers (the Archive
+// screen's subtitle, WorkspacePickerSheet and ConversationScreen) and its own unit tests.
+import { titleFor, partitionActive, groupByWorkspace } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
 // PlaceholderList (#140). A pure render slice over the already-shipped #208 conversationListStore: the
@@ -67,16 +65,20 @@ import {
 // code is added (AC1). Mirrors the #203/#218 container-reads / pure-view split.
 //
 // The wire ConversationSummary carries no message text, so both Figma row shapes (avatar-bearing
-// channel rows, preview-bearing discussion rows) collapse to a single title + last-activity-time row;
-// the avatars, body previews, top app bar, and "See all" link are deferred to other tickets. The
-// new-discussion FAB (#242) is added here — its click dispatches the createConversation command.
+// channel rows, preview-bearing discussion rows) collapse to a single label row; the avatars, body
+// previews, top app bar, and "See all" link are deferred to other tickets. The new-discussion FAB
+// (#242) is added here — its click dispatches the createConversation command.
+//
+// #1097 converged that row on the DESKTOP node (103:2968): a 24px row carrying a body-small label and
+// nothing else. The trailing last-activity time the mobile node drew is gone — deleted, not hidden —
+// so no clock is read anywhere in this file's render path any more.
 
 /**
- * Store-bound container. The store read and `Date.now()` are its only impurities — both safe under
- * `renderToStaticMarkup` in Node, where the store yields its initial `null` (the #218 container
- * posture), so the pure view is what the tests server-render with injected props. `onNewConversation`
- * dereferences `window.pyry` only inside the click arrow (never during render), so the server-render
- * smoke is untouched — the Composer.handleSubmit / UnpairControl discipline.
+ * Store-bound container. The store read is its only impurity — safe under `renderToStaticMarkup` in
+ * Node, where the store yields its initial `null` (the #218 container posture), so the pure view is
+ * what the tests server-render with injected props. `onNewConversation` dereferences `window.pyry`
+ * only inside the click arrow (never during render), so the server-render smoke is untouched — the
+ * Composer.handleSubmit / UnpairControl discipline.
  */
 export function ChannelList({
   onOpen,
@@ -92,7 +94,6 @@ export function ChannelList({
   // value — #404 changing the default re-renders the container. Mirrors the conversations store read above;
   // safe under renderToStaticMarkup where the singleton hydrates to null (the typeof-window guard).
   const defaultWorkspace = useDefaultWorkspaceStore(selectDefaultWorkspace)
-  const now = Date.now()
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
@@ -125,7 +126,6 @@ export function ChannelList({
       <HostLabelData />
       <ChannelListView
         conversations={conversations}
-        now={now}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
@@ -171,7 +171,6 @@ export function ChannelList({
  */
 export function ChannelListView({
   conversations,
-  now,
   onOpen,
   onOpenSettings,
   onOpenArchive,
@@ -180,7 +179,6 @@ export function ChannelListView({
   onRename
 }: {
   conversations: readonly ConversationSummary[] | null
-  now: number
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -197,7 +195,7 @@ export function ChannelListView({
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
       </div>
-      {renderBody(conversations, now, onOpen, onSaveAsChannel, onRename)}
+      {renderBody(conversations, onOpen, onSaveAsChannel, onRename)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -627,7 +625,6 @@ export function CollapsibleWorkspaceGroup({
 
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
-  now: number,
   onOpen: (row: ConversationSummary) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
@@ -671,13 +668,7 @@ function renderBody(
           {groupByWorkspace(channels).map((group) => (
             <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
               {group.rows.map((c) => (
-                <Row
-                  key={c.id}
-                  row={c}
-                  now={now}
-                  onOpen={() => onOpen(c)}
-                  onRename={() => onRename(c)}
-                />
+                <Row key={c.id} row={c} onOpen={() => onOpen(c)} onRename={() => onRename(c)} />
               ))}
             </CollapsibleWorkspaceGroup>
           ))}
@@ -705,7 +696,6 @@ function renderBody(
                 <Row
                   key={d.id}
                   row={d}
-                  now={now}
                   onOpen={() => onOpen(d)}
                   onSaveAsChannel={() => onSaveAsChannel(d)}
                 />
@@ -733,7 +723,7 @@ function renderBody(
  * `conversationActivityStore`'s write path keeps every other conversation's held entry referentially
  * identical (conversationActivityStore.ts:124-127) and all three selectors hand back the HELD reference or
  * `null`, so a write for conversation A wakes A's dot and nothing else. Sitting here rather than in `Row`,
- * a status flip re-renders one <span> and not the row's title, time or icon buttons. The blink is
+ * a status flip re-renders one <span> and not the row's title or icon buttons. The blink is
  * compositor-owned, so a working dot costs zero React renders.
  *
  * Five things this must not become, none of them a type error:
@@ -790,9 +780,15 @@ function ConversationStatusDotControl({
 }
 
 // One row, identical in both sections. React key is `row.id` (a stable per-conversation identity — a
-// real key is available here, unlike the timeline's array-index keying). `name` and the time are
-// untrusted daemon-derived strings rendered as auto-escaped React children (never
-// dangerouslySetInnerHTML) — displayed as opaque text.
+// real key is available here, unlike the timeline's array-index keying). `name` is an untrusted
+// daemon-derived string rendered as an auto-escaped React child (never dangerouslySetInnerHTML) —
+// displayed as opaque text, and since #1097 the row's ONLY text child.
+//
+// #1097 — the desktop row (node 103:2968) is a label and nothing else: the trailing last-activity time
+// this row used to draw is DELETED, not hidden, so the row reads no clock and takes no `now`. The 24px
+// height is derived in `channels.css` from the label's line box plus the row's padding, never declared
+// — which is also why the two trailing affordances below carry 16px glyphs rather than 24px ones: at
+// --space-2 padding each was a 40px box that would have held the flex row open at 40.
 //
 // The open action is its own button; the optional trailing affordances (Save-as-channel #274, Rename
 // #360) are SIBLINGS, not nested controls — an interactive control cannot nest inside a <button>.
@@ -807,18 +803,15 @@ function ConversationStatusDotControl({
 // nullary onOpen prop; the map site closes over the row (the onSaveAsChannel/onRename pattern).
 function Row({
   row,
-  now,
   onOpen,
   onSaveAsChannel,
   onRename
 }: {
   row: ConversationSummary
-  now: number
   onOpen: () => void
   onSaveAsChannel?: () => void
   onRename?: () => void
 }): JSX.Element {
-  const time = formatLastActivity(row.last_message_ts, now)
   return (
     <div className="channel-list__row">
       {/* #801 — the status dot, LEADING the row and a SIBLING of the open button, not a child of it. The
@@ -826,19 +819,20 @@ function Row({
           as the daemon works, "Assistant working" — into the button's accessible name, mutating what
           should say what activating it does. RunConfigSections.tsx:270-280 already declined exactly this
           for the unselected radios. As a sibling the dot stays fully announced in reading order while the
-          button's name stays title + time. `channels.css` positions it absolutely at the design's 16px
-          inset so the button still spans the row and its hover/focus rectangles are unchanged; nothing
-          about `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
+          button's name stays the row's title — since #1097 that is the button's whole text, where it used
+          to read title + time. `channels.css` positions it absolutely at the design's 16px inset so the
+          button still spans the row and its hover/focus rectangles are unchanged; nothing about
+          `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
       <ConversationStatusDotControl conversationId={row.id} />
       <button type="button" className="channel-list__row-open" onClick={onOpen}>
         <span className="channel-list__title">{titleFor(row.name)}</span>
-        <span className="channel-list__time">{time}</span>
       </button>
       {onRename && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
-        // since the glyph alone carries no text. The 24px Material `edit` (pencil) glyph is a reasonable
+        // since the glyph alone carries no text. The Material `edit` (pencil) glyph is a reasonable
         // stand-in: no Figma node pins this row-level control (19:14 is the dialog); a specific glyph is a
-        // small architect swap, the save affordance's bookmark-glyph precedent.
+        // small architect swap, the save affordance's bookmark-glyph precedent. Drawn at 16px since
+        // #1097 — the 24 it used to carry made a 40px box that would have held the 24px row open.
         <button
           type="button"
           className="channel-list__rename"
@@ -848,8 +842,8 @@ function Row({
           <svg
             className="channel-list__rename-icon"
             viewBox="0 0 24 24"
-            width="24"
-            height="24"
+            width="16"
+            height="16"
             fill="currentColor"
             aria-hidden="true"
           >
@@ -861,6 +855,7 @@ function Row({
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__fab pattern),
         // since the glyph alone carries no text. The Material bookmark glyph is a reasonable stand-in: no
         // Figma node pins this row-level control (19:24 is the dialog); a specific glyph is a small swap.
+        // Drawn at 16px since #1097, for the reason recorded on the Rename glyph above.
         <button
           type="button"
           className="channel-list__save"
@@ -870,8 +865,8 @@ function Row({
           <svg
             className="channel-list__save-icon"
             viewBox="0 0 24 24"
-            width="24"
-            height="24"
+            width="16"
+            height="16"
             fill="currentColor"
             aria-hidden="true"
           >

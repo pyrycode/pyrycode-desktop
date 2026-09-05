@@ -5,8 +5,13 @@
  * carve-outs are structural geometry (1px dividers, the FAB's fixed 56px square) and the FAB's M3
  * elevation shadow, which has no token yet (#242, the first elevation consumer). The Figma's avatars,
  * body-preview text, top app bar, and "See all" link are deferred to other tickets; this stylesheet
- * covers the two-section list of title + last-activity-time rows, the divider, the empty state, and the
- * new-discussion FAB (#242).
+ * covers the two-section list of label rows, the divider, the empty state, and the new-discussion FAB
+ * (#242).
+ *
+ * #1097 converged the ROW on the desktop node (103:2968) — a 24px row with a body-small label, a 6px
+ * corner and 4px between consecutive rows — and deleted the mobile node's trailing last-activity time.
+ * The mobile 15-8 mirroring above still describes the rest of the screen (headers, host and workspace
+ * rows, divider, FAB), which that pass deliberately left alone.
  */
 
 /* The scroll column. Since #670 this <section> is the child of `.paired-shell__sidebar`, the shell's
@@ -288,26 +293,60 @@
   position: relative;
 }
 
-/* The open action — the old full-width row button, reset then laid out as title · time. `flex: 1 1 auto`
-   + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0 flex-shrink idiom).
+/* The open action — the old full-width row button, reset then holding the row's single label.
+   `flex: 1 1 auto` + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0
+   flex-shrink idiom).
 
    The LEFT padding is `--space-8` (32px) rather than the `--space-4` the other three sides keep: that is
    the Figma's title inset (node 103:2968, title at x=32), and the space the status dot's absolute box no
    longer reserves for itself. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the
-   archive screen's rows are untouched. */
+   archive screen's rows are untouched.
+
+   #1097 — THE DESKTOP ROW'S 24px, DERIVED AND NEVER DECLARED. `--space-1` (4px) top and bottom over
+   `.channel-list__title`'s 16px line box computes to exactly the node's 24, with no `height` anywhere in
+   this file. That is deliberate and it is what keeps the e2e height assertion a DETECTOR: a trailing
+   affordance left at its old 40px box would push this row past 24 and redden, where a hard `height: 24px`
+   would swallow the overflow silently (`.composer__footer`'s hard 20px height is the measured precedent —
+   a boundingBox().height assertion against it can never fail for that reason).
+
+   The `gap` the old title · time layout needed is GONE rather than retuned. With the time deleted there is
+   no second item for it to fall between, and the node's 10px gap is the arithmetic behind the title's x=32
+   (16 dot inset + 6 dot + 10) — already paid by the `--space-8` left padding above — not a declaration to
+   port.
+
+   `--radius-xs` is the node's 6px corner, and it belongs HERE rather than on `.channel-list__row` because
+   this is the only element in the row that paints: the wrapper is transparent at rest, so the corner is
+   observable on the `:hover` fill and the `:focus-visible` outline below. Deliberately NOT extended to the
+   wrapper to make the fill span the trailing affordances — the node draws no affordances, and #1098 ("the
+   sidebar fills the row of the chat you have open") is where the open-row fill and its surface get
+   decided. #1097 does not mark the open row at all. */
 .channel-list__row-open {
   appearance: none;
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
+  border-radius: var(--radius-xs);
   background: none;
   cursor: pointer;
   text-align: left;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-8);
+  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-8);
   font-family: var(--font-sans);
+}
+
+/* #1097 — the node's 4px between rows (its list frame 103:2985 sits its rows at y = 0, 28, 56, 84, 112,
+   140: 24px tall on a 28px pitch).
+
+   THE ADJACENT-SIBLING COMBINATOR IS THE WHOLE POINT, not a stylistic choice. Rows are FLAT siblings of
+   the section headers, host rows and workspace rows inside the single `.channel-list` flex column
+   (#703/#704 deliberately emit no per-group wrapper element), so a `gap` on that column would move every
+   one of those spacings at once — which is precisely what this ticket's AC1 forbids. `+` fires only where
+   a row's immediately preceding sibling is another row, so a group's FIRST row — whose predecessor is a
+   workspace row — keeps the zero it has today. `.channel-list__row` carries no margin of its own, so this
+   is an addition rather than a retune. */
+.channel-list__row + .channel-list__row {
+  margin-top: var(--space-1);
 }
 
 /* #801 — where the status dot SITS. Its box, ring and blink are #800's and are declared at :808 with the
@@ -322,14 +361,16 @@
    the button and would otherwise swallow it. It does not affect the accessibility tree, so the dot's
    `role="img"` and its name are still announced.
 
-   VERTICALLY CENTRED ON THE ROW, and that is a measurement rather than an inheritance (#800's review handed
-   this forward). In the Figma frame the 14px dot instance occupies y=4…18 and its circle is at cy=11 inside
-   it, so the painted dot's centre is y=15 in a 24px row whose centre is y=12 — 3px BELOW centre, and 3px
-   below the title's centre. That offset does not port: the shipped row is not the design's 24px row (it
-   carries --space-3 vertical padding, a --text-title-medium title and a trailing .channel-list__time the
-   design node has no equivalent for), so an absolute 3px drop measured against a 24px frame lands somewhere
-   arbitrary in a ~44px one. Converging the row's full geometry on node 103:2968 — its height, its
-   body-small title, dropping the time — is a separate pass. */
+   VERTICALLY CENTRED ON THE ROW, and #1097 SETTLED THAT — this is a ruling, not a deferral. #800's review
+   handed the question forward and #801 declined the drawn offset only because the shipped row was not yet
+   the design's 24px row. It is now, so the excuse expired and the measurement had to be re-read.
+
+   In the Figma frame the dot instance is a 14px-TALL, 6px-wide FRAME occupying y=4…18, and its painted
+   circle sits at cy=11 INSIDE that frame — so the circle's centre lands at y=15 in a 24px row whose centre
+   is y=12, the 3px drop. That 3px is an artifact of the component's own 14px wrapper, not a design
+   intention about where a dot sits: the app draws a BARE 6px dot with no wrapper, so reproducing the offset
+   would port the wrapper's internal padding without the wrapper. The dot stays centred. Cheap to flip later
+   if the drawn offset is what is wanted — it is one `top` value. */
 .channel-list__row > .conversation-status-dot {
   position: absolute;
   left: var(--space-4);
@@ -348,14 +389,21 @@
 
 /* The Save-as-channel affordance (#274) — an icon-only trailing button on Recent rows. De-emphasized
    vs the title (on-surface-variant); a round hover target; focus-visible outline (the file convention).
-   The icon is 24px; --space-2 padding makes a compact ~40px touch target. */
+
+   #1097 SIZED IT TO THE ROW. `.channel-list__row` is `display: flex; align-items: center`, so its tallest
+   child sets its height — and a 24px glyph in `--space-2` padding was a 40px box that would have held the
+   desktop row open at 40 and made the node's 24 unreachable. A 16px glyph in `--space-1` is 24 exactly.
+   The glyph's own size is an attribute on the <svg> in ChannelList.tsx, so the pair moves together; the
+   `viewBox="0 0 24 24"` is the coordinate system and is unaffected. A 24px pointer target is accepted: this
+   is a mouse-driven desktop window and the design's own row is 24px. `margin-right` is a HORIZONTAL inset,
+   out of scope, and unchanged. */
 .channel-list__save {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-right: var(--space-2);
-  padding: var(--space-2);
+  padding: var(--space-1);
   border: none;
   border-radius: var(--radius-full);
   background: none;
@@ -377,15 +425,17 @@
 
 /* The Rename affordance (#360) — an icon-only trailing button on saved Channel rows, the symmetric
    counterpart to Save-as-channel on Recent rows. Identical icon-button treatment: de-emphasized
-   on-surface-variant, a round hover target, a focus-visible outline, --space-2 padding for a compact
-   ~40px touch target. */
+   on-surface-variant, a round hover target, a focus-visible outline — and, since #1097, the same
+   `--space-1` padding around a 16px glyph, for the same reason recorded on `.channel-list__save` above:
+   in the row's centred flex line the tallest child decides the row's height, and the old 40px box would
+   have made the node's 24px row unreachable. */
 .channel-list__rename {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-right: var(--space-2);
-  padding: var(--space-2);
+  padding: var(--space-1);
   border: none;
   border-radius: var(--radius-full);
   background: none;
@@ -405,8 +455,15 @@
   display: block;
 }
 
-/* The title run (Figma 15:63) — title-medium, on-surface. Ellipsizes so an arbitrarily long untrusted
-   name is bounded rather than blowing out the row. */
+/* The label run — the row's only text, and since #1097 the DESKTOP node's `M3/body/small` (103:2968:
+   12/16, tracking 0.4, weight 400) in `Schemes/On Surface`, replacing the mobile node's title-medium.
+   Every one of those four values already had an exact token, so this is a token swap and adds no literal.
+   Ellipsizes so an arbitrarily long untrusted name is bounded rather than blowing out the row.
+
+   The `--text-body-small-line` (16px) here is load-bearing beyond type: it IS the row's content box, and
+   `.channel-list__row-open`'s 4px padding on top of it is where the node's 24px height comes from.
+
+   The `--text-title-medium-*` quad it stopped reading is NOT dead — `.archive__title` still uses it. */
 .channel-list__title {
   flex: 1 1 auto;
   min-width: 0;
@@ -414,24 +471,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-on-surface);
-  font-size: var(--text-title-medium-size);
-  line-height: var(--text-title-medium-line);
-  letter-spacing: var(--text-title-medium-tracking);
-  font-weight: var(--text-title-medium-weight);
-}
-
-/* The right-aligned last-activity time (Figma 15:64) — muted body-small at 75% (opacity). Never
-   shrinks or wraps. */
-.channel-list__time {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  color: var(--color-on-surface-variant);
-  opacity: 0.75;
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
 }
+
+/* #1097 deleted `.channel-list__time` — the mobile node's right-aligned last-activity run (Figma 15:64).
+   The desktop node draws no time and no trailing element of any kind. This was a REMOVAL, not a hide: the
+   span, the `now` prop threaded through four signatures in ChannelList.tsx, and this rule all went.
+   `formatLastActivity` itself survives with its unit tests for its three other callers (the Archive
+   screen's subtitle, WorkspacePickerSheet and ConversationScreen). */
 
 /* The section divider (Figma 15:85) — 1px outline-variant at 60% (opacity), between the two sections
    only. 1px is structural geometry (the .tool-row__chip border precedent). */

@@ -10,9 +10,8 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ```
 ConversationScreen            .conversation        (flex column, full height, position: relative)
-├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
-├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962)
-├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here)
+├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962; the band's last survivor since #1064 deleted the leading arrow it used to balance, and now floats alone over the thread's top-right corner)
+├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here — and, since #1064, the first thing in `.conversation` at all)
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
@@ -74,26 +73,51 @@ pre-existing `position: relative` (kept for the run-config sheet's containing bl
 whole subtree above that wrapper's `::before`, so the chat pane needed no stacking fix the sidebar
 did. See [Paired shell § the pane card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
 
-## Back control (#140)
+## Back control (#140, deleted by #1064)
 
-The thread's leading return-to-list affordance, added when the [paired shell](paired-shell.md) gave
-the conversation screen somewhere to return *to*. `ConversationScreenProps` gained an **optional**
-`onBack?: () => void` — the exact `onUnpaired?` precedent ([#166](../codebase/166.md)): a bare
-`<ConversationScreen />` with no `onBack` renders identically to before this ticket (AC3), since the
-in-file `BackControl({ onBack })` returns `null` when the prop is absent. When present, it renders a
-48px icon-only `<button aria-label="Back">` holding a 24px inline `arrow_back` SVG glyph
-(Figma node 16-11, `on-surface`) as the **first child** of `.conversation`. The [paired shell](paired-shell.md)'s
-`PairedShellView` wires it to a nav dispatch
-(`{ type: 'back' }`) that unmounts this thread. Before [#670](../codebase/670.md) that also remounted
-the list screen (`list`/`thread` were mutually exclusive); since #670 the sidebar list is permanently
-mounted alongside the thread, so `back` now only empties the chat pane — "deselect," not "navigate away."
+**Deleted outright, not gated or hidden — kept here as history.** The thread's leading return-to-list
+affordance, added when the [paired shell](paired-shell.md) gave the conversation screen somewhere to
+return *to*. `ConversationScreenProps` gained an **optional** `onBack?: () => void` — the exact
+`onUnpaired?` precedent ([#166](../codebase/166.md)): a bare `<ConversationScreen />` with no `onBack`
+rendered identically either way, since the in-file `BackControl({ onBack })` returned `null` when the
+prop was absent. When present, it rendered a 48px icon-only `<button aria-label="Back">` holding a 24px
+inline `arrow_back` SVG glyph (Figma node 16-11, `on-surface`) as the **first child** of `.conversation`.
+`PairedShellView` wired it to a nav dispatch (`{ type: 'back' }`) that unmounted this thread. Before
+[#670](../codebase/670.md) that also remounted the list screen (`list`/`thread` were mutually
+exclusive); since #670 the sidebar list is permanently mounted alongside the thread, so `back` only
+emptied the chat pane — "deselect," not "navigate away" — which is what made the control redundant: the
+list it deselected *to* was already on screen.
+
+[#1064](https://github.com/pyrycode/pyrycode-desktop/issues/1064) (operator ruling, 2026-09-04) deleted
+`BackControl`, its four CSS rules (`.conversation__back`, `:hover`, `:focus-visible`,
+`.conversation__back-icon`) and its call site — the desktop drawing's `Content` frame (Figma 106:3321)
+has no leading affordance above the thread at all, matching #1061's reading of the same frame for the
+header row below. **`onBack` itself survives the control it was named for**: it is the screen's "am I
+mounted in the paired shell" signal, and `ThreadOverflowMenu` is gated on its presence ([#276](#structure)
+above) — dropping the prop would unmount the overflow menu too, which was not the ask. Nothing inside
+`ConversationScreen` calls `onBack` any more; `PairedShellView` still wires it, unused.
+
+The empty pane `back` used to reach from inside the thread is not gone — it is still reachable three
+other ways, all landing on route `list` (`back` is absolute in `nextPairedRoute`): the shell enters at
+`list`, [Settings](#unpair-control-166-deleted-by-1061) and Archive return there through their own back
+controls, and the delete and archive exits dispatch `back` too. What went is the deselect *from inside
+the open thread* — the arrow was its only source. The thread starts ~56px higher (the deleted control's
+48px plus its `--space-1` margins, in a flex column with no top padding), and
+`.conversation__overflow` — `position: absolute`, reserving no flow space — now floats alone over the
+thread's top-right corner rather than sitting beside a control in flow. Both are expected consequences,
+not regressions to compensate for: no padding, spacer or reserved band was added to hold the old offset.
+
 The back arrow used to sit ahead of a separate unpair header row, a deliberate interim pending a future
 top-app-bar ticket that would consolidate back + title + overflow + unpair into the one bar Figma 16-9
 shows. [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted that header row rather
-than folding it into such a bar: the desktop drawing's `Content` frame (Figma 106:3321) has no header
-row of any kind, and the bar that does get drawn carries a channel title and a channel settings button,
-not unpair — see [Unpair control](#unpair-control-166-deleted-by-1061) below for where unpair goes
-instead.
+than folding it into such a bar, and #1064 finished the same reading of Figma 106:3321 by deleting the
+arrow itself: the bar that eventually gets drawn carries a channel title and a channel settings button,
+not unpair or a leading arrow — see [Unpair control](#unpair-control-166-deleted-by-1061) below for
+where unpair goes instead. Two comments elsewhere still cite `BackControl` as design provenance rather
+than as a rule (`SettingsScreen.tsx` ×2, `ChannelList.tsx` ×1, both naming it as the precedent their own
+`BackControl`s mirror) — left as-is; #1064 scoped its comment sweep to citations of the deleted
+`.conversation__back` **rule**, not the surviving symbol name that `SettingsScreen`'s and `ArchiveScreen`'s
+own, still-live `BackControl`s are named after.
 
 ## Unpair control (#166, deleted by #1061)
 

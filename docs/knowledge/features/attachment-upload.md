@@ -125,13 +125,26 @@ for the full shape.
 
 ```ts
 export const MAX_UPLOAD_PATH_LENGTH = 4096
-export interface AttachmentUploadRequest { path: string }
+export interface AttachmentUploadRequest { path: string; serverId?: string }
 export function isAttachmentUploadRequest(value: unknown): value is AttachmentUploadRequest
 ```
 
 One field, camelCase (client-internal IPC, not a wire type) — the path of a file the operator **dropped**,
 resolved in the preload by `webUtils.getPathForFile` (see § The bridge below). Extra keys are accepted and
 never read, since nothing downstream rebuilds a value from anything but `path`.
+
+**`serverId?: string` (#1129) — the last entry point to name which paired server a file is for**, and it
+retired `registry.active` (`src/main/index.ts`) outright. It is checked by a module-local
+`hasValidServerId(value: object): boolean`, shared by both guards on this channel, that accepts absent,
+explicitly-`undefined`, or a string, and rejects anything else — the same rule `hasValidServerId` in
+`src/shared/ipc/commands.ts` states for #1120's six server-scoped commands, restated rather than
+imported (no production module under `src/shared/ipc/` imports a sibling). It is a routing key, never a
+capability: resolved against the connection registry's held entry set by `servers.route`/`servers.resolve`
+and then discarded, reaching no filename, byte, path, wire field or log line. See [Daemon connection —
+per-server routing § The attachment upload names its
+server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+for the full routing design, including why the refusal for an unresolvable id is surfaced as
+`not-connected` rather than a dedicated failure literal.
 
 `isAttachmentUploadRequest` is `attachmentBytes.ts`'s `isAttachmentBytesRequest` shape, applied to a path
 instead of a byte identifier: narrow to non-null `object`, `in`-guard the key, `typeof` the value actually
@@ -188,7 +201,7 @@ two concurrent uploads and for #864's progress to correlate on.
 
 ```ts
 export const ATTACHMENT_PASTE_SOURCE = 'clipboard-image' as const
-export interface AttachmentPasteRequest { source: typeof ATTACHMENT_PASTE_SOURCE }
+export interface AttachmentPasteRequest { source: typeof ATTACHMENT_PASTE_SOURCE; serverId?: string }
 export function isAttachmentPasteRequest(value: unknown): value is AttachmentPasteRequest
 ```
 
@@ -202,9 +215,30 @@ path guard, since a renderer could otherwise invent any string. A `__proto__`-ca
 same `in`-guard: the polluting object has no *own* `source`. A named field rather than `{}`, deliberately
 — an empty object would be indistinguishable from a malformed ask and would turn "anything object-shaped
 that isn't a path ask" into an upload trigger, the guard getting *blunter* rather than sharper.
-`AttachmentPasteRequest` carries no information beyond which entry fired; `uploadClipboardImage` (below)
-reads no field off it at all. **The two guards are tried path-first in the main listener** — see §
+`AttachmentPasteRequest` carried no information beyond which entry fired until #1129; `uploadClipboardImage`
+(below) still reads no field off it at all — the routing key is read at the composition root, never inside
+the flow module. **The two guards are tried path-first in the main listener** — see §
 Composition root.
+
+**#1129 widens this ask by one field, `serverId?: string`, and that is a genuine tension with "nothing
+else" rather than a free addition — the docblock says so and amends itself in place.** The ask's central
+security property was never *literal emptiness*; it was that nothing renderer-supplied reaches *a
+filename, a byte or the wire*. A routing key is none of the three — `hasValidServerId` (§ The request
+body and its guard, above) is the whole of its rule, and it is resolved against the registry's held
+entry set and discarded, the same as on the drop ask. What is conceded, named rather than glossed: a
+compromised renderer can now choose *which already-paired* server receives a pasted image, where before
+it always landed on whichever host was paired most recently — it still cannot reach a server the
+operator never paired. The amendment is made in the three places the old "nothing else" sentence was
+asserted, all at once, so the repo does not end up contradicting itself in some but not all of them:
+this docblock, `pasteAttachmentImage`'s (`src/preload/index.ts`) "takes no argument at all", and
+`pasteImage`'s (`src/renderer/src/screens/conversation/ComposerAttach.tsx`) "IT CARRIES NOTHING" —
+plus, found on a sweep for the property's other spellings after the fact, the module header's two
+restatements above and `attachmentUpload.test.ts`'s extra-keys acceptance, which asserted the stronger
+"nothing downstream reads *any* field off this ask", now false as written. Six sites in total, not
+three. Neither shipped sender emits the field yet — see [Daemon connection — per-server routing § The
+attachment upload names its
+server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+for why, and for the picker arm, which has no ask object at all and so never carries one.
 
 **`refused` splits into two members sharing one `type`, forced by measurement rather than chosen for
 tidiness:**
@@ -248,23 +282,26 @@ flagged at review and still open.
 The dialog cannot be Electron-free, so it stays at the composition-root edge, which is what keeps the
 guard and the drive unit-testable either side of it and makes cancellation provable without a real
 dialog: `dialog.showOpenDialog({ properties: ['openFile'] })` → `canceled` or an empty `filePaths` is
-the no-op; otherwise `void uploadAttachmentFile(picked, deps)`, safe as a bare `void` because the callee
-never rejects. `ipcMain.on` registers the listener; `app.on('will-quit', ...)` removes the exact
+the no-op; otherwise `void uploadAttachmentFile(picked, pickerDeps)`, safe as a bare `void` because the
+callee never rejects. `ipcMain.on` registers the listener; `app.on('will-quit', ...)` removes the exact
 listener, symmetric with the rest of the app's `ipcMain` registrations.
 
-**One listener, three arms (#890, #1032).** `attachmentUploadListener` reads a second, `unknown`-typed
-parameter — `unknown` because the renderer is untrusted at this boundary regardless of any declared type.
-The two guarded shapes are tried **path-first**, and the ordering is load-bearing rather than stylistic:
-`isAttachmentUploadRequest(request)` is tried before `isAttachmentPasteRequest(request)`, so an ask
-carrying a valid `path` reaches the drop arm exactly as it did before a third shape existed, extras
-included — nothing an operator can produce changes arm now that a second guarded shape is accepted. A
-passing drop request calls `uploadAttachmentFile(request.path, deps)`; a passing paste request calls
-`uploadClipboardImage(readClipboardImagePng, deps)` (below). An ask that carried something and matched
-neither guard is dropped outright — no filesystem call, no clipboard read, no event, and deliberately no
-log, denying a looping renderer a way to drive the main-process logger. `request === undefined` selects
-the picker arm, byte-for-byte what #862 shipped. **`pickerOpen` stays scoped to the dialog**: neither the
-drop arm nor the paste arm opens one, so neither reads nor sets that flag, and several transfers may be
-live at once (one per arm, or several drops, or several pastes) by this flow's existing design.
+**One listener, three arms (#890, #1032, #1129).** `attachmentUploadListener` reads a second,
+`unknown`-typed parameter — `unknown` because the renderer is untrusted at this boundary regardless of
+any declared type. The two guarded shapes are tried **path-first**, and the ordering is load-bearing
+rather than stylistic: `isAttachmentUploadRequest(request)` is tried before `isAttachmentPasteRequest(request)`,
+so an ask carrying a valid `path` reaches the drop arm exactly as it did before a third shape existed,
+extras included — nothing an operator can produce changes arm now that a second guarded shape is
+accepted. A passing drop request calls `uploadAttachmentFile(request.path, buildDeps(request.serverId))`;
+a passing paste request calls `uploadClipboardImage(readClipboardImagePng, buildDeps(request.serverId))`
+(below). An ask that carried something and matched neither guard is dropped outright — no filesystem
+call, no clipboard read, no event, and deliberately no log, denying a looping renderer a way to drive
+the main-process logger — and, since #1129, no `buildDeps` call either, so it cannot reach
+`servers.route`'s own logging. `request === undefined` selects the picker arm, byte-for-byte what #862
+shipped, with `pickerDeps = buildDeps(undefined)` built after the `pickerOpen` gate so a suppressed
+second picker builds nothing. **`pickerOpen` stays scoped to the dialog**: neither the drop arm nor the
+paste arm opens one, so neither reads nor sets that flag, and several transfers may be live at once (one
+per arm, or several drops, or several pastes) by this flow's existing design.
 
 **The clipboard read is injected at the composition root, `saveDebugBundle`'s `save` seam (#1032):**
 
@@ -286,13 +323,27 @@ honouring `byteOffset`/`byteLength` — `readChosenFile`'s idiom, mattering more
 allowlist must never grow to `clipboard-read`" instruction a few lines above it in the same file — see §
 Security below.
 
-**The `deps` object moved to the top of the listener, shared by every arm — a change forced by adding the
-second entry, not a tidy-up.** It used to live inside the picker's own `.then`. Two entries each building
-their own `deps` closure is the shape that lets "one driver, one outcome channel" drift into two: a future
-edit to how progress is forwarded, or which channel an outcome lands on, would have to be made twice and
-could land once. Hoisting it keeps that structural rather than a matter of discipline — `event.sender` is
+**The `deps` object, one per ask rather than one per arm — a shape #1032 established by hoisting it and
+\#1129 kept while changing what it is.** Two entries each building their own `deps` closure is the shape
+that lets "one driver, one outcome channel" drift into two: a future edit to how progress is forwarded,
+or which channel an outcome lands on, would have to be made twice and could land once. `event.sender` is
 still closed in for [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s reason, and the
 `emitDaemonEvent`-style `sender.isDestroyed()` guard is unchanged.
+
+**Since #1129, `deps` is no longer a literal hoisted once — it is `buildDeps(serverId)`, a factory
+called exactly once per ask, from *inside* whichever arm the ask selects.** The deps now depend on the
+ask's resolved server, which is knowable only once an arm has matched, so a single object built at
+listener-construction time could no longer express them. This is *stronger* than the old hoisted
+literal, not weaker: there is still exactly one construction site and one call per ask, and having one
+body rather than one object makes it structurally impossible for two arms to be handed differently-built
+`emit`s. It is also a security property, not a style choice: `buildDeps`'s `upload` calls
+`servers.route(serverId)`, which logs `server-route-refused` on both of its refusal branches, so calling
+it before the guards discriminate would hand a looping renderer the exact lever the neither-guard-matched
+return above exists to deny. See [Daemon connection — per-server routing § The attachment upload names
+its
+server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+for the routing decision `buildDeps`'s `upload` arrow makes, including why an unresolvable route reports
+`not-connected` rather than a dedicated failure literal.
 
 ## Bridge — `src/preload/index.ts`
 
@@ -474,92 +525,26 @@ correlating the ask to a real key event) is the stated fallback if that residual
 — #1033's surface, not this one's. Full findings:
 `docs/specs/architecture/1032-paste-clipboard-image-attach.md` § Security review.
 
+**#1129's review, self-reviewed, PASS.** The one new untrusted→trusted crossing is `serverId` on both
+guarded asks, contained by `hasValidServerId` and then looked up (never trusted) against the connection
+registry's held entry set — `connectionFor` is an array scan with `===`, never an object-key access, so
+`__proto__`/`constructor`/`toString` are ordinary non-matching strings there, not a prototype-pollution
+path. **What genuinely widens:** a compromised renderer gains the ability to choose *which
+already-paired* server receives a dropped or pasted file, where before it always got whichever host was
+paired most recently — it does not gain the ability to reach a server the operator never paired. Accepted
+on the same grounds #1118 and #1120 already accepted the same choice for every conversation- and
+server-scoped command. `serverId` reaches no path segment, no filename, no map key and no log field —
+`DiagnosticEvent` stays `{ event, code? }`, so a server id is structurally unrepresentable there. Full
+findings: [Daemon connection — per-server routing § The attachment upload names its
+server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+and `docs/specs/architecture/1129-attachment-upload-server-routing.md` § Security review.
+
 ## Testing
 
-- **`src/shared/ipc/attachmentUpload.test.ts`** — the two channel constants are distinct from each other
-  and from `DAEMON_EVENT_CHANNEL` / `COMMAND_CHANNEL`; the union is value-free beyond the fields listed,
-  a positive walk over `Object.keys` rather than an absence assertion. **(#890)** `isAttachmentUploadRequest`
-  accepts a well-formed request and one carrying extra keys; rejects `null`, `undefined`, a string, a
-  number, an array, `{}`, a non-string `path`, an empty `path`, a path one over `MAX_UPLOAD_PATH_LENGTH`,
-  and a `__proto__`-carrying literal built with `JSON.parse` (never as an object literal — a literal
-  `{ __proto__: {...} }` creates no own key at all and would pass the guard vacuously). **(#1032)**
-  `isAttachmentPasteRequest` accepts the well-formed ask and one carrying extra keys; rejects the same
-  hostile shapes as above plus a wrong `source` literal, a non-string `source`, and a `{ path }` ask — and
-  **mutual exclusivity is asserted in both directions**, neither guard accepting the other's ask, which is
-  what keeps the discriminator sharp with three shapes on one channel. The field-walk gained the fifth
-  member (proving it declares `type`/`uploadId`/`reason` and nothing else — no `limitBytes`); the stale
-  `all four members` count was replaced by a compiler-forced `Record` over refusal reasons, per § The
-  paste ask above.
-- **`src/main/attachmentUpload.test.ts`** — against real temp files (the `saveDebugBundle.test.ts`
-  posture) and a fake `upload` / `emit` / `DiagnosticLog`: a small file uploads with byte-identical
-  `bytes`, a basename `filename`, a table-derived `mime_type`, and a `randomUUID`-shaped `attachment_id`;
-  a file of exactly `ATTACHMENT_MAX_UPLOAD_BYTES` uploads and one byte more is refused with `upload`
-  never called; a missing path and a directory both emit `failed: 'unreadable'` with `upload` never
-  called and the path absent from every emitted field and log record; every representative
-  `AttachmentTransferFailure` row round-trips onto `failed.reason`; two concurrent runs mint distinct
-  ids and emit two independent terminals; a >255-byte UTF-8 basename trims to ≤255 bytes and still
-  decodes cleanly, and the `completed` event's `filename` is asserted **against `uploads[0].filename`**
-  — the value the driver was actually handed — rather than a repeated literal, so a second, divergent
-  `trimToBytes` call would fail this at exactly 255 bytes where a literal comparison would not (#1038);
-  `uploadAttachmentBytes` drives the same guard and terminals without touching disk.
-  **The >255-byte trim could not be proven through the path route** — 255 bytes sits at or under every
-  host filesystem's own component limit, so no file could be created to exercise it — and is proven at
-  `uploadAttachmentBytes` instead, which both routes share.
-  **The general leak walk (`everyStringEmitted`) is split, not relaxed, since #1038 (`eventStrings`).**
-  Before, one walk ran over events and records together and asserted three checks — no `NAME_STEM`, no
-  `/`, no `\` — against every string either side emitted. Now that `completed` legitimately carries a
-  name, that walk would assert the opposite of what the channel promises, so it splits: the **record**
-  side keeps all three checks over every string, unchanged, since the log stays content-free; the
-  **event** side keeps all three checks over every string *except* `completed.filename`, which is lifted
-  out and proved a **single path component** instead — `basename(filename) === filename` — rather than
-  `not.toContain('\\')`, which a legally-named `a\b.txt` would fail (`\` is a legal filename character on
-  macOS and Linux). A name leaking into `uploadId` or a `reason` still reddens on the event side. **(#1032)**
-  `uploadClipboardImage` over the same `harness`: bytes reach the driver verbatim, `mime_type` is
-  `image/png`, `filename` matches the minted pattern, `attachment_id` is a fresh UUID each call, exactly
-  one `completed` is emitted; the three no-image inputs (`null`, zero-length, a throwing reader) each
-  produce exactly one `refused`/`no-image` with no `limitBytes` key and the driver never called. The
-  paste-side leak walk is an **exhaustive string list**, not a substring search — the first draft's
-  `not.toContain(String(bytes.length))` matched a digit inside the `uploadId` by accident, so naming
-  every string that may cross replaced it, admitting nothing at all and unable to collide.
-  **Inverted by #1038, not merely widened:** the list gains the minted name, sourced from
-  `uploads[0].filename` so the same line proves window-equals-wire; the `CLIPBOARD_IMAGE_FILENAME_PREFIX`
-  check flips from an *absence* assertion (the prefix reaching the window used to be the leak) to a
-  *presence* one, joined by a whole-string match against the minted shape
-  `^clipboard-image-\d{8}T\d{6}\.png$` — a string of exactly that shape has no room for a clipboard byte,
-  a dimension or a flavour, which is AC2's actual proof.
-- **`attachmentUploadCopy.test.ts` (#1032)** — the no-image sentence is non-blank, differs from the
-  too-large sentence and from every `ATTACHMENT_UPLOAD_FAILURE_COPY` value, names the clipboard, states no
-  byte figure, and doesn't contain the `uploadId`; the too-large arm's shipped assertions stay green,
-  proving the split didn't disturb it. See [Composer attach's copy
-  section](composer-attach.md#attachmentuploadcopyts---the-copy-is-a-selection-not-a-rendering).
-- **The whole-chain e2e proof landed with #1033, not here.** `e2e/composer-paste-image.spec.ts` seeds a
-  real bitmap on the real OS clipboard and drives a trusted `webContents.paste()`, paying
-  `e2e/message-copy.spec.ts`'s already-accepted clobber-without-restore price once for the entire chain —
-  keystroke → predicate → this ask → `uploadClipboardImage` → guard → transfer → wire → terminal. It also
-  measured what this file's design left open: a real OS-clipboard bitmap advertises `['Files']` only, with
-  no `image/png` entry. See [Composer attach § Testing the paste
-  entry](composer-attach-paste.md#testing-the-paste-entry) for the drive and its two-different-daemon-code trick
-  against a vacuous pass.
-- **No test for `index.ts`'s wiring or the preload members, `dropAttachmentFile` and `pasteAttachmentImage`
-  included (#890, #1032)** — the
-  composition root and the preload are Electron-bound and untested here by existing convention; the
-  path-carrying leg is proven instead by the shared guard's unit tests above plus this file's existing
-  real-temp-file coverage of `uploadAttachmentFile`, since a page-built `File` in the e2e tier has no real
-  path to carry across the boundary in the first place. See [Composer attach § Testing the drop
-  entry](composer-attach.md) for what the e2e tier proves about the gesture itself.
-- **The progress gate (#864)** — a fake driver reports arbitrary `(sent, total)` pairs before
-  resolving; a transfer whose total is under `ATTACHMENT_PROGRESS_MIN_CHUNKS` emits no `progress`
-  event at all (AC2); one at or above it emits `progress` then exactly one terminal (AC3); every
-  emitted `progress` event carries exactly its four declared keys, walked positively.
-- **A `queueMicrotask`-seeded "after the terminal" report proves the wrong thing.** The fixture for "no
-  progress survives the terminal" needs reports that land once the driver has already answered. The
-  first draft seeded them with `queueMicrotask`, which runs *before* the awaiting `driveUpload` resumes
-  from its own `await` — so those reports arrived while the transfer was still legitimately in flight,
-  and the test measured the in-flight case while claiming to measure the post-terminal one; it only
-  caught the missing `terminal` guard by accident. `setTimeout(..., 0)` is the fixture that actually
-  runs after the whole microtask chain that emits the terminal, and is what `reportingHarness`'s `after`
-  parameter uses in `attachmentUpload.test.ts`. The general shape: a same-tick microtask callback cannot
-  stand in for "after an async function's caller observed its resolution" — only a macrotask can.
+Split into its own document because folding #1129's routing-key coverage into this section pushed the
+parent over the size cap: see [Attachment upload — testing](attachment-upload-testing.md) for the full
+detail — the channel-contract guard tests including #1129's routing-key describe, the flow-module
+tests, the copy tests, the progress-gate tests and the e2e proof.
 
 ## Edge cases and limitations
 
@@ -608,6 +593,12 @@ correlating the ask to a real key event) is the stated fallback if that residual
 - **`completed.filename` ships with no consumer (#1038).** `attachmentUploadCopy.ts`'s `completed` arm
   still returns a constant; #1039 is the first consumer, and inherits the layout bound and the
   non-empty assumption named in the `completed` arm's own docblock.
+- **No sender names a server yet (#1129).** Both guarded asks accept `serverId`, but neither
+  `dropAttachmentFile` nor `pasteAttachmentImage` (`src/preload/index.ts`) sends one — the composer has
+  no per-server surface to source an id from until #1086 lands. Every upload today still resolves
+  through the unnamed path: the sole connection with one paired server, a refusal with more than one.
+  With two servers paired and no composer surface to pick one, an operator on a second connected server
+  cannot attach a file at all until #1086 ships.
 
 ## Related
 
@@ -648,3 +639,7 @@ correlating the ask to a real key event) is the stated fallback if that residual
   `AttachmentSaveRequest`. Ships with no consumer — #1039 wires it.
   `docs/specs/architecture/1038-completed-upload-carries-the-display-name.md` has the full plan and
   security review.
+- [Daemon connection — per-server routing](daemon-connection-routing.md) (#1129) — landed; both guarded
+  asks gain an optional `serverId`, `buildDeps` becomes a per-ask factory, and `registry.active` is
+  retired with no consumer left anywhere in the composition root. `docs/specs/architecture/1129-attachment-upload-server-routing.md`
+  has the full plan and security review.

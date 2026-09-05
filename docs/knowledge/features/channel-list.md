@@ -616,10 +616,9 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   that composes the input-required status into it.
 - [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
   desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
-  time, the shrunk affordances, and the settled status-dot centring. See
+  time, the shrunk affordances, and the settled status-dot centring.
+  [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) then filled the open row. See
   [the row's desktop geometry](channel-list-desktop-row-geometry.md).
-  [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) is the sibling ticket that
-  fills the open row.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), multi-host (see § The host row), #716 (same-last-segment workspace label
   ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).

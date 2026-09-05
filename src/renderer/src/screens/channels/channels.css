@@ -387,6 +387,61 @@
   outline: 1px solid var(--color-outline);
 }
 
+/* #1098 — THE ROW OF THE CHAT THE PANE IS SHOWING (Figma node 103:2969). The open row is the resting
+   row's box (103:2968) plus exactly two changes: the whole row is filled behind a 6px corner, and its
+   label goes one weight heavier. Every other row is unchanged.
+
+   THE FILL IS ON THE WRAPPER, WHICH IS WHAT #1097 LEFT UNDECIDED. `.channel-list__row-open` is a
+   `flex: 1 1 auto` SIBLING of the trailing Save-as-channel / Rename controls, not their parent, so a
+   fill on it would stop short and leave an unfilled tail on any row that carries one. The wrapper
+   already spans the row, so the fill spans the affordances the node itself does not draw. The corner
+   comes WITH it: at rest the wrapper paints nothing, which is why #1097 put `--radius-xs` on the button
+   for the hover fill and the focus ring and deliberately did not extend it here.
+
+   BACKGROUND AND CORNER ONLY — no padding, no border, no min-height. The row's 24px is DERIVED (4px
+   button padding over a 16px line box, no `height` anywhere), so anything that grew this box would
+   redden `e2e/sidebar-row-geometry.spec.ts`'s height assertion. That is the regression this rule could
+   most easily cause and it is covered before it is written.
+
+   `--color-on-primary` IS THE RIGHT TOKEN BY VALUE — its `#003355` is the node's fill exactly, and the
+   file's no-literals rule requires a token — but this is ITS FIRST USE AS A BACKGROUND: the token's own
+   comment scopes it to "the label/icon role on a --color-primary fill", a foreground role. Recorded
+   here rather than silently. It is NOT "corrected" to `--color-primary`, which is a different colour
+   (#9dcbfc) and would draw a pale row. The design's own fill is an unbound hex, which is why
+   `get_variable_defs` on the node returns no variable for it.
+
+   `:has()` because the STATE lives on the button (ChannelList.tsx says why) and the FILL belongs on the
+   wrapper. Two consumers already ship in `conversation.css`; Electron 33 is Chromium 130 and `:has()`
+   landed in 105. */
+.channel-list__row:has(> .channel-list__row-open[aria-current='true']) {
+  background: var(--color-on-primary);
+  border-radius: var(--radius-xs);
+}
+
+/* The open fill WINS OVER THE HOVER. Splitting the fill from the button leaves `.channel-list__row-open:hover`
+   painting `--color-surface-container` — `#1d2024`, fully opaque — on top of the wrapper's fill across the
+   button's share of an open row. Suppressing it is the whole of AC4's first clause, and this selector's
+   (0,3,0) beats the base rule's (0,2,0), so it wins on specificity rather than on source order.
+
+   MEASURED, not argued: deleting this rule alone and rebuilding reddens
+   `e2e/sidebar-row-geometry.spec.ts`'s hover assertion with `rgb(29, 32, 36)` where it wants a
+   transparent button, and reddens nothing else in the file.
+
+   `:focus-visible` is untouched, here and on every other row: it is an OUTLINE, not a fill, so the two
+   affordances still highlight independently (#274). So are the trailing controls' own hover circles —
+   that same ruling, and the node draws no trailing control at all. */
+.channel-list__row-open[aria-current='true']:hover {
+  background: none;
+}
+
+/* The open row's label is `M3/body/small-emphasized`, which differs from the body-small the resting row
+   wears in WEIGHT ALONE — same family, size, line height, tracking and colour. So this is one
+   declaration against `.channel-list__title`'s quad below, never a second type block, and the token was
+   already minted. (0,3,0) over that rule's (0,1,0), so order between them is immaterial. */
+.channel-list__row-open[aria-current='true'] > .channel-list__title {
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
 /* The Save-as-channel affordance (#274) — an icon-only trailing button on Recent rows. De-emphasized
    vs the title (on-surface-variant); a round hover target; focus-visible outline (the file convention).
 

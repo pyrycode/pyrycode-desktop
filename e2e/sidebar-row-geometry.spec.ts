@@ -42,7 +42,22 @@ const ON_SURFACE_RGB = 'rgb(224, 226, 232)'
 const LABEL_SIZE_PX = '12px'
 const LABEL_LINE_PX = '16px'
 const LABEL_TRACKING_PX = '0.4px'
-const LABEL_WEIGHT = '400'
+const LABEL_WEIGHT_RESTING = '400'
+// #1098 — the open row's label is `M3/body/small-emphasized` (node 103:2969), which differs from
+// body-small in WEIGHT ALONE. Both values live here because both are reachable in the same launch: the
+// fixture reaches the thread by CLICKING the seeded row, so that row is the open one from the first
+// paint, and the FAB further down mints a second conversation and moves the open state to it.
+const LABEL_WEIGHT_OPEN = '500'
+
+// #1098's fill — `Schemes/On Primary` #003355, worn as a background, as Chromium reports it. Read as a
+// computed colour rather than a class, so this fails if the token is swapped for the wrong one, if the
+// token's own value drifts, or if a literal is substituted.
+const OPEN_FILL_RGB = 'rgb(0, 51, 85)'
+// What an unfilled row computes to: `background: none` resolves to a transparent colour, never to the
+// window's ground, so "this row is not the open one" is an exact string and not an approximation.
+const NO_FILL_RGBA = 'rgba(0, 0, 0, 0)'
+// `--color-surface-container` #1d2024 — today's hover fill, which every row EXCEPT the open one keeps.
+const HOVER_FILL_RGB = 'rgb(29, 32, 36)'
 
 // Sub-pixel tolerance for a device-pixel-ratio-scaled layout, copied from host-label-sidebar.spec.ts.
 // One physical pixel of slack: enough that a fractional box coordinate cannot flake, far too little to
@@ -79,6 +94,16 @@ const boxOf = async (locator: Locator, role: string): Promise<Box> => {
 const computed = (locator: Locator, property: string): Promise<string> =>
   locator.evaluate(
     (el, prop) => window.getComputedStyle(el).getPropertyValue(prop),
+    property
+  )
+
+// The same read across EVERY element a locator matches, so a two-row claim can be made as a SET rather
+// than by `nth()` position or by filtering on a seed name — the two things this file's secret-hygiene
+// header rules out. Which row ends up first after the fake re-lists is not this spec's business; that
+// exactly one of them is filled, and that the filled one is the one carrying the state, is.
+const computedAll = (locator: Locator, property: string): Promise<string[]> =>
+  locator.evaluateAll((els, prop) =>
+    els.map((el) => window.getComputedStyle(el).getPropertyValue(prop)),
     property
   )
 
@@ -139,8 +164,43 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   expect(await computed(title, 'font-size')).toBe(LABEL_SIZE_PX)
   expect(await computed(title, 'line-height')).toBe(LABEL_LINE_PX)
   expect(await computed(title, 'letter-spacing')).toBe(LABEL_TRACKING_PX)
-  expect(await computed(title, 'font-weight')).toBe(LABEL_WEIGHT)
   expect(await computed(title, 'color')).toBe(ON_SURFACE_RGB)
+  // THE WEIGHT IS THE OPEN ONE HERE, and that is not a relaxation of #1097's 400 — it is where the
+  // fixture actually leaves the app. `launchPairedApp` reaches the thread by clicking this row, so the
+  // single seeded row is the OPEN row from the first paint (#1098) and its label is one weight heavier
+  // by design. The resting 400 is asserted further down, where the FAB has moved the open state to a
+  // second row and both values are on screen at once.
+  expect(await computed(title, 'font-weight')).toBe(LABEL_WEIGHT_OPEN)
+
+  // --- 3b. #1098's fill (node 103:2969), on the ROW WRAPPER rather than the open button: the button is
+  // a `flex: 1 1 auto` sibling of the trailing affordances, so a fill on it would stop short and leave
+  // an unfilled tail on the very row this block seeds (it carries Save-as-channel). The corner rides
+  // along, since at rest the wrapper paints nothing and #1097 kept `--radius-xs` on the button for its
+  // hover fill and focus ring alone. ---
+  expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
+  expect(await computed(row, 'border-top-left-radius')).toBe(`${ROW_CORNER_PX}px`)
+  expect(await computed(row, 'border-bottom-right-radius')).toBe(`${ROW_CORNER_PX}px`)
+  // AC1's first clause, stated so it can actually fail: the painted element is WIDER than the button,
+  // and the button itself paints nothing. Move the fill onto `.channel-list__row-open` and the first
+  // assertion flips to the fill and the second to transparent — this row carries a Save-as-channel
+  // control, so the two boxes really do differ.
+  expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
+  expect((await boxOf(row, 'sidebar row')).width).toBeGreaterThan(
+    (await boxOf(open, 'open button')).width
+  )
+
+  // --- 3c. AC4: hovering the OPEN row leaves its fill exactly as it is. `--color-surface-container` is
+  // opaque, so an unsuppressed `.channel-list__row-open:hover` would paint over the fill across the
+  // button's share of the row.
+  //
+  // THE FIRST ASSERTION IS THE DETECTOR AND THE SECOND IS NOT — worth saying, because the second reads
+  // like the stronger one. A wrapper's computed `background-color` is unaffected by whatever a child
+  // paints on top of it, so it would keep reporting the fill while the row visibly went grey; only the
+  // BUTTON's own computed background can tell. Measured: deleting the suppression rule and rebuilding
+  // reddens the first line here with `rgb(29, 32, 36)` and leaves the second passing. ---
+  await open.hover()
+  expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
+  expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
 
   // --- 4. AC3's negative, in the tier where the row is actually laid out: no last-activity time renders
   // anywhere in the sidebar. A count, so the failure diff prints a number rather than daemon text. The
@@ -180,11 +240,38 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
 
   expectAbout(gapBetween(firstRow, secondRow), ROW_GAP_PX)
   expectAbout(gapBetween(workspaceRow, firstRow), 0)
-  // Both rows kept the height, so the pitch really is 24-on-28 and not one row that grew.
+  // Both rows kept the height, so the pitch really is 24-on-28 and not one row that grew — and both did
+  // so with the fill present on one of them, which is what makes this the live detector for a wrapper
+  // that grew a padding or a border to carry that fill (#1098's most likely regression).
   expectAbout(firstRow.height, ROW_HEIGHT_PX)
   expectAbout(secondRow.height, ROW_HEIGHT_PX)
 
-  // --- 8. AC4, first half's other clause: the shrunken control still OPENS its dialog. Geometry that
+  // --- 8. #1098's AC2, through the CREATE activation path: minting a conversation opens it, so the fill
+  // MOVED off the seed and onto the new row. Asserted as SETS rather than by `nth()` position: which row
+  // the fake re-lists first is not this spec's business, and reading a seed name to disambiguate is what
+  // this file's hygiene header rules out. The two assertions are independent — a fill that failed to
+  // move would leave two filled rows, and one that moved without clearing would leave two 500s. ---
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveCount(1)
+  const fills = await computedAll(row, 'background-color')
+  expect(fills.filter((colour) => colour === OPEN_FILL_RGB)).toHaveLength(1)
+  expect(fills.filter((colour) => colour === NO_FILL_RGBA)).toHaveLength(1)
+
+  // AC3's two halves in one read: the open row's label is 500 and the resting one's is back at #1097's
+  // 400. Sorted, so the pair is a set and not an ordering claim.
+  const weights = await computedAll(title, 'font-weight')
+  expect([...weights].sort()).toEqual([LABEL_WEIGHT_RESTING, LABEL_WEIGHT_OPEN])
+
+  // --- 9. AC4's other half: a row that is NOT the open one keeps today's hover fill, and hovering it
+  // does not fill its wrapper. Addressed by the state attribute's ABSENCE, which needs no seed text. ---
+  const resting = page.locator('.channel-list__row-open:not([aria-current])')
+  await expect(resting).toHaveCount(1)
+  await resting.hover()
+  expect(await computed(resting, 'background-color')).toBe(HOVER_FILL_RGB)
+  const fillsWhileHovering = await computedAll(row, 'background-color')
+  expect(fillsWhileHovering.filter((colour) => colour === OPEN_FILL_RGB)).toHaveLength(1)
+  expect(fillsWhileHovering.filter((colour) => colour === NO_FILL_RGBA)).toHaveLength(1)
+
+  // --- 10. AC4, first half's other clause: the shrunken control still OPENS its dialog. Geometry that
   // silently broke the click would satisfy every assertion above. `.first()` because there are two rows
   // by now; either row's control proves the same thing. ---
   await save.first().click()
@@ -220,6 +307,16 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
 
   const renameBox = await boxOf(rename, 'Rename control')
   expect(renameBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
+
+  // #1098 on the CHANNELS tree — one `Row` serves both trees, so a per-tree special case would be a
+  // regression rather than a feature, and this seed is the only promoted row either block launches with.
+  // It also pins the fill spanning a Rename control rather than a Save-as-channel one: same clause of
+  // AC1, the other affordance.
+  expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
+  expect(await computed(page.locator('.channel-list__title'), 'font-weight')).toBe(LABEL_WEIGHT_OPEN)
+  expect((await boxOf(row, 'sidebar row')).width).toBeGreaterThan(
+    (await boxOf(page.locator('.channel-list__row-open'), 'open button')).width
+  )
 
   // AC3 holds on this tree too — the Channels rows read the same `Row` component, and a time reintroduced
   // for promoted rows only would pass the other block.

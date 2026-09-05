@@ -96,10 +96,20 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
   }
 }
 
-const render = (conversations: readonly ConversationSummary[] | null): string =>
+// `openConversationId` DEFAULTS TO NULL (#1098) so every call site written before this ticket keeps
+// rendering exactly what it rendered — the store's own hydrated value, and the "nothing opened yet"
+// state AC1's last clause names. It is a required prop on the view (the container must decide) and an
+// optional argument here, which is the whole reason the read was lifted out of `Row`: zustand v5 serves
+// `getInitialState()` under `renderToStaticMarkup`, so a store-reading row could only ever render the
+// unfilled case and this tier could prove nothing about the open one.
+const render = (
+  conversations: readonly ConversationSummary[] | null,
+  openConversationId: string | null = null
+): string =>
   renderToStaticMarkup(
     <ChannelListView
       conversations={conversations}
+      openConversationId={openConversationId}
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}
@@ -246,6 +256,30 @@ const hostDotTagsIn = (markup: string): string[] => {
 // the misattribution AC2 exists to rule out. No chunk can borrow its neighbour's dot: the split boundary
 // is the NEXT row's class attribute, and that row's dot — its first child — comes after it.
 const rowChunksIn = (markup: string): string[] => markup.split(ROW_MARKER).slice(1)
+
+// The open-state attribute the open row's button carries (#1098). React serialises the string prop
+// verbatim, and the other rows carry NO `aria-current` at all — `undefined` omits the attribute rather
+// than emitting `aria-current="false"`, the shape all four shipped consumers use
+// (ComposerOptionsPanel, ComposerModelMenu, ComposerSlashCommandTypeAhead, QuestionPanel).
+const OPEN_ROW_MARKER = 'aria-current="true"'
+
+// `workspaceRowTagsIn`'s treatment applied to the row's open button (#1098), so the open row's whole
+// opening tag can be compared against a resting row's as an EQUALITY. That equality is AC5: the state is
+// an attribute AFTER the class, so `class="channel-list__row-open"` — an exact attribute-value substring
+// whose closing quote is what keeps it from also matching `__row-open-something` — still matches on an
+// open row. A modifier class instead would stop matching it and silently zero every chunk-scoped count in
+// the #801 describe (`rowChunksIn` SPLITS on `ROW_MARKER`, so a dead marker yields zero chunks and passes
+// those `for` loops vacuously) rather than failing one. Scanning to the next `>` is exact: React escapes
+// `<` and `>` inside attribute values too.
+const rowOpenTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  for (let at = markup.indexOf(ROW_OPEN_MARKER); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(ROW_OPEN_MARKER, end)
+  }
+  return tags
+}
 
 // One dot tag's accessible name. Scanning to the next `"` is exact rather than approximate: React escapes
 // a quote inside an attribute VALUE as `&quot;`, so no label can carry the delimiter into the slice.
@@ -946,8 +980,9 @@ describe('ChannelListView', () => {
     it('lights the dot on a conversation the operator has never opened (#874 AC4)', () => {
       // The same never-opened proof the working case above makes: the seeded id is absent from BOTH the
       // timeline and the last-read stores, and the modal store is fed independently of which conversation
-      // is open — `ChannelListView` takes no active-conversation prop and this component has no
-      // open-conversation concept at all, so the open row is not a special case anywhere.
+      // is open. Since #1098 `ChannelListView` DOES take an open-conversation prop, but this describe
+      // renders with none (the helper's default), so no row is the open one here and the dot's four
+      // facts stay independent of that state — which is the claim, and it did not move.
       seedInputRequired('d2')
       expect(timelineStore.getState().timelines.has('d2')).toBe(false)
       expect(lastReadStore.getState().marks.has('d2')).toBe(false)
@@ -1031,6 +1066,110 @@ describe('CollapsibleWorkspaceGroup (#704)', () => {
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
     expect(workspaceRowTagsIn(markup)[0]).not.toContain('title=')
+  })
+})
+
+describe('the open chat’s row (#1098)', () => {
+  // The sidebar marks the row whose chat the pane is showing. This tier owns the MARKUP contract only —
+  // which button carries the state, and that nothing else about any row's markup moves. The fill's
+  // computed colour, the corner, the weight the browser resolved, the hover outcome and the fill MOVING
+  // on a switch all need a layout engine and live in e2e/sidebar-row-geometry.spec.ts and
+  // e2e/conversation-switch-keeps-both-threads.spec.ts.
+  //
+  // Reachable here at all only because the read was lifted to the container: `ChannelListView` takes the
+  // open id as a prop, so this tier can inject one. A store read inside `Row` would render
+  // `getInitialState()` forever and leave every assertion below unwritable.
+  const threeRows = (): readonly ConversationSummary[] => [
+    row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+    row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' }),
+    row({ id: 'd2', name: 'Third conversation', is_promoted: false, cwd: '/home/me/beta' })
+  ]
+
+  it('marks no row before a chat has been opened (AC1)', () => {
+    // The store hydrates to `activeConversation: null`, so this is also the production first-paint state
+    // and the state every OTHER test in this file renders — which is what keeps them all unaffected.
+    expect(countOf(render(threeRows()), OPEN_ROW_MARKER)).toBe(0)
+  })
+
+  it('marks exactly one row, and it is the open chat’s own row (AC2)', () => {
+    const markup = render(threeRows(), 'd1')
+    expect(countOf(markup, OPEN_ROW_MARKER)).toBe(1)
+    // CHUNK-SCOPED, not document-scoped: with three rows in one render a document-wide `toContain` would
+    // pass no matter WHICH row carried the state, which is precisely the misattribution AC2 rules out.
+    const chunks = rowChunksIn(markup)
+    expect(chunks).toHaveLength(3)
+    expect(chunks.filter((chunk) => chunk.includes(OPEN_ROW_MARKER))).toHaveLength(1)
+    expect(chunks.find((chunk) => chunk.includes('Help me debug auth flow'))).toContain(
+      OPEN_ROW_MARKER
+    )
+  })
+
+  it('marks the open row in EITHER tree, not just the Chats one (AC2)', () => {
+    // `c1` is promoted, so it renders under "Channels" with the Rename affordance rather than
+    // Save-as-channel. One `Row` component serves both trees, so a per-tree special case would be a
+    // regression rather than a feature — this pins that there is none.
+    const chunks = rowChunksIn(render(threeRows(), 'c1'))
+    expect(chunks.find((chunk) => chunk.includes('kitchenclaw refactor'))).toContain(OPEN_ROW_MARKER)
+    expect(chunks.filter((chunk) => chunk.includes(OPEN_ROW_MARKER))).toHaveLength(1)
+  })
+
+  it('marks nothing when the open id matches no row', () => {
+    // The reachable case, not a hypothetical: `activeConversation` survives the conversation being
+    // archived or deleted out of the list, and `clearActiveConversation` runs only on unpair / exit. The
+    // comparison is `===` against a possibly-null id and never a truthiness test, so an empty-string id
+    // stays an ordinary key rather than collapsing into "nothing open".
+    expect(countOf(render(threeRows(), 'not-a-row'), OPEN_ROW_MARKER)).toBe(0)
+    expect(countOf(render(threeRows(), ''), OPEN_ROW_MARKER)).toBe(0)
+  })
+
+  it('changes nothing but the state attribute between an open row and a resting one (AC5)', () => {
+    // AC5 stated as an EQUALITY, the `CollapsibleWorkspaceGroup` template: the open row's button tag is
+    // byte-identical to the same row's resting tag with the attribute inserted. That is what makes the
+    // three whole-attribute-run markers this file matches on survive an open row — and what a modifier
+    // class would break silently rather than loudly.
+    // Render order is Channels then Chats, so the tags line up index-for-index with
+    // [c1, d1, d2] in both renders — which is what lets this compare position by position rather than
+    // by identity (all three resting tags are the same string, so a find-based comparison would keep
+    // passing if the state landed on the wrong row).
+    const resting = rowOpenTagsIn(render(threeRows()))
+    const open = rowOpenTagsIn(render(threeRows(), 'd1'))
+    expect(resting).toHaveLength(3)
+    expect(open).toHaveLength(3)
+    expect(open[0]).toBe(resting[0])
+    expect(open[2]).toBe(resting[2])
+    expect(open[1]).not.toBe(resting[1])
+    expect(open[1].replace(` ${OPEN_ROW_MARKER}`, '')).toBe(resting[1])
+  })
+
+  it('leaves every row-family class attribute run byte-stable (AC5)', () => {
+    // The three markers whose EXACT runs the rest of this file counts and slices on, asserted equal
+    // across the two renders. `ROW_MARKER` is the one that matters most: `rowChunksIn` splits on it, so
+    // if it stopped matching, the #801 describe's `for` loops would iterate zero chunks and pass.
+    const resting = render(threeRows())
+    const open = render(threeRows(), 'd1')
+    for (const marker of [ROW_MARKER, ROW_OPEN_MARKER, TITLE_MARKER]) {
+      expect(countOf(open, marker)).toBe(countOf(resting, marker))
+      expect(countOf(open, marker)).toBe(3)
+    }
+    // And the two trailing affordances are untouched — the fill spans them, it does not replace them.
+    expect(countOf(open, SAVE_MARKER)).toBe(2)
+    expect(countOf(open, RENAME_MARKER)).toBe(1)
+  })
+
+  it('never interpolates the conversation id into the markup', () => {
+    // The id is daemon-asserted, so it stays a comparison operand: never a class-name interpolation,
+    // never an attribute VALUE, never a title, never a lookup key — the condition
+    // `ConversationStatusDotControl`'s header sets on the same value. `aria-current`'s value is the
+    // client-owned literal 'true'. The seeded ids are absent from every fixture NAME, so a leak shows up
+    // here as a substring hit and nowhere else.
+    //
+    // The inline glyphs are stripped first, and that is a correctness fix rather than a loosening: this
+    // file's seven Material `<path d>` runs are client-owned compile-time constants full of coordinate
+    // pairs like `14c1.1`, which contain a short id as a substring and made the first draft of this test
+    // fail against geometry no id can ever reach. Nothing daemon-derived renders inside an <svg> here.
+    const withoutGlyphs = (markup: string): string => markup.replace(/<svg[\s\S]*?<\/svg>/g, '')
+    const markup = withoutGlyphs(render(threeRows(), 'd1'))
+    for (const id of ['c1', 'd1', 'd2']) expect(markup).not.toContain(id)
   })
 })
 

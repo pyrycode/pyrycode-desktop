@@ -27,21 +27,68 @@ export interface LiveWindow {
 - **`sink`** — the process-lifetime channel handed to the [daemon connection](daemon-connection.md)
   and the [debug-bundle orchestrator](debug-bundle-orchestrator.md). Records the last of the four
   connection-status [`DaemonEvent`](daemon-event-channel.md) members
-  (`connecting`/`connected`/`failed`/`disconnected`), then forwards every event one hop down through
-  `emitDaemonEvent`.
+  (`connecting`/`connected`/`failed`/`disconnected`) **per server** (\#1121), then forwards every event
+  one hop down through `emitDaemonEvent`.
 - **`window`** — the current-window stand-in for [push notifications](push-notifications.md)' focus
   query and click activation.
-- **`attach(window)`** — makes `window` the current one. Assignment only: does not clear the recorded
+- **`attach(window)`** — makes `window` the current one. Assignment only: does not clear any recorded
   status (connection state is independent of windows — surviving the gap is what makes convergence
   correct) and does not replay (the renderer hasn't subscribed yet at attach time, which is window
   creation).
-- **`replayStatus()`** — re-delivers the last recorded status event into the current window. No-op if
+- **`replayStatus()`** — re-delivers every server's last recorded status event into the current window,
+  each with its own `serverId` intact, in the order the servers first reported (\#1121). No-op if
   nothing has been recorded (the first window's path).
 
-Exactly two mutable cells, both plain fields (the current window, the last status event). No store,
-no timer, no listener, no async work — every read is a call-time query, so the answer is correct
+Exactly two mutable cells, both plain fields (the current window, a `Map` of per-origin status). No
+store, no timer, no listener, no async work — every read is a call-time query, so the answer is correct
 regardless of when the window was destroyed relative to the last event, and there is no
 check-then-act gap.
+
+## One slot per server, since #1121
+
+The recorder shipped in #519 as a single cell — correct for the one-connection world it was built in.
+Since #1117 (see [Daemon connection routing](daemon-connection-routing.md)) the registry holds one
+connection per paired server, and every one of them wrote that same cell: a reopened window learned the
+state of whichever connection emitted most recently and nothing about the others, and on a healthy
+connection the next status change is never — so every other server's sidebar dot (#1070) stayed wrong
+for the life of the window. This was a live defect on any machine paired with more than one server, not
+a prospective one.
+
+The fix widens the cell into `Map<StatusOrigin, StatusEvent>`, keyed by the origin
+[#1068](daemon-event-channel-plumbing.md) already stamps onto every event before it reaches the sink.
+`StatusOrigin` is `string | null | undefined`, and the recorder is the first main-side consumer to index
+by `serverId` — so the index is a `Map`, never a bare object, per `ServerOrigin`'s standing ruling in
+`src/shared/ipc/events.ts` (a `__proto__` id would otherwise write through `Object.prototype`).
+`conversationRouter`'s `index` ([Daemon connection routing](daemon-connection-routing.md)) is the
+existing precedent for the same ruling.
+
+Three keys, deliberately, not two:
+
+- a **string** — one slot per paired server, the point of the widening;
+- a **present `null`** — a producer bound while holding no paired record. Live, not hypothetical:
+  `connectionRegistry`'s not-paired stand-in is built with `serverId: null` and is dialled like any
+  other connection, so its `failed(not-paired)` genuinely lands here;
+- **absent** (`undefined`) — a producer that never went through a binding at all. Unreachable in
+  production (every producer is bound exactly once), but reachable from tests, which emit bare
+  literals; recording it keeps the recorder total rather than silently dropping an unbound status.
+
+`null` and `undefined` stay distinct rather than being coalesced, because that is the one place
+`ServerOrigin`'s present-null-vs-absent-property distinction becomes observable in a running consumer.
+The origin is read only from the stamp (a module-local `originOf`, the same `in`-guard-plus-`typeof`
+idiom as `conversationRouter`'s), never from a payload field such as `connected`'s `ack.server_id` — a
+distinct, daemon-supplied value that would let a confused daemon overwrite another server's cached
+status if it were trusted instead.
+
+`Map` iteration is insertion order, and re-`set`ting an existing key does not move it — so replay order
+is the order the servers first reported, and a server that changes state keeps its original slot. That
+is a property of `Map` itself, not something the module maintains. Growth is bounded by the number of
+distinct origins (one per paired server, plus at most the two non-server keys), never by anything a
+daemon sends, and nothing is ever evicted: a torn-down server's last status is `failed` or
+`disconnected`, which is exactly what a reopened window should be told.
+
+Retention is otherwise unchanged: `StatusEvent` and `isStatusEvent` still enumerate the same four
+members by hand, so a stamped `messageReceived` still opens no slot and `MessagePayload.text` still
+never reaches this module's memory.
 
 ## Why two faces with opposite `isDestroyed()` contracts
 
@@ -149,6 +196,12 @@ Status isn't among those losses: `replayStatus()` runs at the load, after the ga
   `bindServerOrigin(live.sink, …)` wrapper bound at the composition root (#1068), not over `live.sink`
   directly — see [Daemon-event channel plumbing](daemon-event-channel-plumbing.md) for why each of the
   three emitters gets its own binding rather than one shared wrap of `live.sink`.
+- [Daemon connection routing](daemon-connection-routing.md) — the connection registry (#1117) that
+  turned the single-cell recorder into a live defect, and `conversationRouter`'s `index`, the existing
+  `Map`-keyed-by-`serverId` precedent this module's per-server recorder (#1121) follows.
 - `docs/specs/architecture/519-live-window-indirection.md` — the full architecture spec, including the
   security review (PASS, nine categories) and rejected alternatives (a `DaemonConnection` state
   accessor, a renderer-facing invoke channel, event buffering, a `'closed'` listener).
+- `docs/specs/architecture/1121-per-server-status-cache.md` — the #1121 architecture spec: the
+  three-key design (`string` / present `null` / absent), the security review naming `serverId`'s
+  provenance as the load-bearing trust property, and the rejected alternative of eviction on unpair.

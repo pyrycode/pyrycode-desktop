@@ -221,3 +221,25 @@ The probe was deleted; these are its numbers.
 2. **Does the thread's scroll pin visibly slip at five lines?** Expected not to — #1049's
    `ResizeObserver` watches the thread's own border box, which is what a growing composer changes. If it
    does slip, it is filed as its own ticket, not widened into this one.
+
+## Revisions
+
+### 2026-09-05 — both open questions resolved by measurement; no design change
+
+Neither answer moved a declaration, so the § Design section stands as committed. Both were measured in
+the built app rather than derived, and both probes were deleted after reading.
+
+1. **The slash-command type-ahead rides up with the box, exactly.** Measured with a `slash_command_list`
+   pushed for a 300-character command name — the only draft that is simultaneously an open fragment and
+   taller than one line, since `slashCommandTypeAhead`'s `SLASH_FRAGMENT` (`/^\/(\S*)$/`) is closed by any
+   whitespace, so an ordinary multi-line draft cannot have the panel open at all. The panel's bottom edge
+   sits on the box's top edge at both heights (box top 660 with the panel's bottom at 660; box top 580 at
+   the 132px ceiling with the panel's bottom at 580), and its x (440) and width (620) are unchanged
+   between them — which is why `e2e/composer-options-clamp.spec.ts`, which reads exactly those two,
+   correctly stays green. Nothing is owed and no assertion is added: the ticket names that spec as not a
+   detector for this, and a third copy of the placement check would only be a slower duplicate.
+2. **The scroll pin does not slip.** With a 20-message overflowing thread resting at the bottom, growing
+   the composer to the ceiling and shrinking it back leaves the reader at the bottom throughout —
+   `scrollTop` tracks the maximum exactly across 1736 → 1816 → 1736 as the thread's client height goes
+   508 → 428 → 508. No pin, hook or observer was added, and `e2e/thread-scroll-pin.spec.ts` (all seven)
+   is green against the change. Nothing to file.

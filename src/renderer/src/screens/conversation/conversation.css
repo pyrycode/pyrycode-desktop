@@ -331,6 +331,64 @@
 .bubble--user {
   background: var(--color-on-primary);
   color: var(--color-on-primary-container);
+
+  /* #1057 — the user's own message keeps the whitespace it was typed with. Shift+Enter puts a newline in
+     the message box and it survives composerSend's trim() all the way to the bubble, which then threw it
+     away at paint: .bubble declares no white-space, so it took the initial `normal` and every newline and
+     every run of spaces collapsed to a single space. A pasted stack trace arrived as one run-on line.
+
+     THE VALUE IS #607's AND ITS REASONING IS WRITTEN OUT ABOVE, under .bubble--assistant-text — `normal`
+     loses the break, `pre-line` still collapses space runs and indentation, `pre` stops wrapping so a long
+     unbroken token spills past the bubble's measure, and `break-spaces` puts preserved spaces on the next
+     line where they would contribute to the box's width instead of hanging. Cited, not re-litigated. (The
+     `pre` case is not hypothetical here: built once with it, the long-token bubble measured a scrollWidth
+     of 1765 against a clientWidth of 486.) Wrapping the long token under pre-wrap is .bubble's existing
+     word-break: break-word, and is not restated.
+
+     THIS IS #607's DEFECT IN THE ONE PLACE #607 DID NOT REACH. That ticket hung its rule on its own
+     modifier precisely because a rule on .bubble would have reached this class too — see the comment
+     above. What it did not say is that the user bubble had the same defect and wanted the same treatment.
+
+     ON .bubble--user RATHER THAN A NEW MODIFIER: this class reaches every element that draws the user's
+     own words and nothing else — the delivered timeline row, the queued row (#294 draws a pending send in
+     the same treatment, dimmed by the region), and the retired MessageBubble's user branch. That set is
+     exactly the defect. A modifier applied at the two live call sites would buy a delivered/queued
+     distinction nothing needs today and would cost a markup change at both, putting the unit tier's
+     exact-byte assertions in play; CSS-only is what keeps them untouched by construction.
+
+     NO STRAY BLANK CAN RENDER BETWEEN THE BUBBLE'S CHILDREN: the JSX transform drops a whitespace-only
+     run containing a newline, so the source's line breaks between siblings emit no text node at all
+     (#969 recorded the same reasoning for the assistant branch, where #607's rule already reaches
+     BubbleMeta). Measured rather than reasoned about — e2e/user-whitespace.spec.ts bounds the bubble's
+     whole text and its content-box height against the meta row's own box.
+
+     The queued row's text is DAEMON-supplied (QueuedItem.text over queue_state, not the local echo), so
+     this preserves whitespace a hostile daemon chose. Two bounds already cover it and that spec confirms
+     both rather than assuming them: pre-wrap hangs a trailing run past the line's end instead of letting
+     it wrap and widen the box (the reason #607 declined break-spaces), and .bubble's max-width caps the
+     box regardless. */
+  white-space: pre-wrap;
+}
+
+/* ...AND THE RULE ABOVE STOPS AT THE MESSAGE TEXT. The message is the bubble's bare text node; every
+   other thing in the box is an ELEMENT child — the attachment rows (#815, #1045), the image fallback,
+   BubbleMeta (#969) — and none of them wants preserved whitespace. This resets them in one structural
+   declaration.
+
+   NOT AN INERTNESS ARGUMENT, and not a list of the classes that exist today. Both were tried and both
+   are wrong. "Inert because the children only draw a filename and a stamp" is the reasoning #607 already
+   rejected one level up ("inert because we read the four literals" needs re-verifying every time a fifth
+   is added), and it is also false: .bubble__file-name SHIPS WITH NO RULE OF ITS OWN, deliberately and
+   measured (#815, see its comment below), so the inherited value is the only one it has —
+   e2e/attachment-file-row.spec.ts asserts a computed `normal` there and went red on the first build of
+   this ticket. Naming the two filename classes instead would fix that one case and hand the same trap to
+   the next child added to a bubble, which is a shape this repo has been bitten by before.
+
+   `> *` and not a descendant selector: the reset lands once, at the top of each child's own subtree, and
+   inherits from there — so a rule INSIDE one of those subtrees that wants something else still wins
+   normally, rather than having to out-specify a blanket override. */
+.bubble--user > * {
+  white-space: normal;
 }
 
 .bubble--daemon {

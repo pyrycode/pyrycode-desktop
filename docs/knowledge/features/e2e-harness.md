@@ -228,21 +228,24 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
   point of it.
 - **[#464](../codebase/464.md), split from #429 (sibling of #465/#466), covers the session-EXIT path** —
   the flip from a paired, connected thread back to the app-root `PairingScreen`, previously uncovered.
-  `e2e/unpair-repair.spec.ts` has two blocks: block A (one launch, since Cancel keeps the session) drives
-  the two-phase `UnpairControl` — `Cancel` keeps the thread mounted with `Send` enabled and the app-root
-  pairing field (`[aria-label="Pairing code"]` — element-agnostic since [#664](../codebase/664.md)) at
-  count 0, then re-opening and `Confirm` (same launch) flips to
-  the app-root pairing screen; block B (its own launch, since a fatal close is terminal) surfaces the
+  `e2e/unpair-repair.spec.ts` originally had two blocks: block A (one launch, since Cancel kept the
+  session) drove the two-phase `UnpairControl` — `Cancel` kept the thread mounted with `Send` enabled and
+  the app-root pairing field (`[aria-label="Pairing code"]` — element-agnostic since
+  [#664](../codebase/664.md)) at count 0, then re-opening and `Confirm` (same launch) flipped to the
+  app-root pairing screen. **[#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted
+  block A along with `UnpairControl` itself** (an operator ruling, not a test-only change — see
+  [Unpair control](conversation-shell-chrome.md#unpair-control-166-deleted-by-1061)), so the spec is down
+  to one block. That surviving block (its own launch, since a fatal close is terminal) surfaces the
   `Re-pair` affordance (#167) via a new [fake relay forwarder](fake-relay-forwarder.md) hook,
   `closeClientLeg(4401)`, and confirms it too returns to the app-root pairing screen. The field's
-  visibility is the return-to-pairing proof and its count-0 absence is the session-intact proof — a clean
-  case (no round-trip needed, unlike #465's Cancel→Settings) because both #464 exits flip the *top-level*
-  `App` route and unmount `PairedShell` entirely, so the app-root pairing route is simply not mounted while
-  on the thread. The Re-pair trigger's reachability was traced end-to-end through merged code (forwarder →
-  `relayConnection` → `relaySupervisor`'s `DEFAULT_FATAL_CLOSE_CODES` → `daemonConnection.emitFailed` →
-  `shouldOfferRepair`) before the infra was written, confirming it as the #464-first case where the fatal
-  hook is feasible rather than falling back to the ticket's own "route back instead of asserting the
-  unrealizable" escape hatch (the #440 discipline).
+  visibility is the return-to-pairing proof and its count-0 absence was the session-intact proof for the
+  deleted block — a clean case (no round-trip needed, unlike #465's Cancel→Settings) because both #464
+  exits flip the *top-level* `App` route and unmount `PairedShell` entirely, so the app-root pairing route
+  is simply not mounted while on the thread. The Re-pair trigger's reachability was traced end-to-end
+  through merged code (forwarder → `relayConnection` → `relaySupervisor`'s `DEFAULT_FATAL_CLOSE_CODES` →
+  `daemonConnection.emitFailed` → `shouldOfferRepair`) before the infra was written, confirming it as the
+  #464-first case where the fatal hook is feasible rather than falling back to the ticket's own "route
+  back instead of asserting the unrealizable" escape hatch (the #440 discipline).
 - **[#546](../codebase/546.md) deleted the retired `electronApp.ts` fixture.** Dead code with zero importers across all 26 specs — every scenario by then launched through `launchPairedApp`, `realDaemon.ts`, or its own local fixture. *(Not separately documented at the time; recorded here retroactively by [#517](../codebase/517.md)'s documentation pass.)*
 - **[#517](../codebase/517.md) closed a teardown leak in the three fixtures that predated the harness's later shared fixtures.** `realDaemon.ts`'s `page` and `relay`, and `smoke.spec.ts`'s local `page`, all registered cleanup only *after* `await use(...)` — a setup-time throw (e.g. `firstWindow()` rejecting once the process was already up) made that cleanup unreachable, leaking the Electron process and its `--user-data-dir` for the rest of the `workers: 1` run. The credential angle: that dir is where `PYRY_TEST_SECRET_BACKEND` persists the pairing record, and at the `page`/`realDaemon.ts` site the leaked record pairs against a live spawned `pyry`. Fixed with nested `try`/`finally` (see [Deterministic teardown](#deterministic-teardown)); `launchPairedApp.ts` was already immune (every resource it creates lives inside the `use()` callback, so a mid-drive failure surfaces as a test failure with `use()` still returning) and was intentionally left untouched. The `page` fixture body in `realDaemon.ts` is now also reachable directly as `withIsolatedElectronApp(run)`, letting `e2e/fixture-teardown-leak.spec.ts` drive the real converted setup path — not a re-transcription of it — to prove the fix.
 - **[#515](../codebase/515.md) closes Gap A.** `conversationListBridge.shouldRefreshList` gained a third

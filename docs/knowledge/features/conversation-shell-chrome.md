@@ -12,8 +12,7 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
 ├── ThreadOverflowMenu         .conversation__overflow (trigger + menu, gated on onBack, #276; grew from 1 to 3 items in #962)
-├── UnpairControl              .conversation__header (slim header row, #166)
-├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279)
+├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279; the first thing under the overflow menu's gate since #1061 deleted the header row that used to sit here)
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
@@ -32,7 +31,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
 
-`MessageBubble`, `Composer`, and `UnpairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ## Data shape (coarse path — retired residue since #179)
 
@@ -83,36 +82,52 @@ the conversation screen somewhere to return *to*. `ConversationScreenProps` gain
 `<ConversationScreen />` with no `onBack` renders identically to before this ticket (AC3), since the
 in-file `BackControl({ onBack })` returns `null` when the prop is absent. When present, it renders a
 48px icon-only `<button aria-label="Back">` holding a 24px inline `arrow_back` SVG glyph
-(Figma node 16-11, `on-surface`) as the **first child** of `.conversation`, ahead of `UnpairControl`'s
-header row. The [paired shell](paired-shell.md)'s `PairedShellView` wires it to a nav dispatch
+(Figma node 16-11, `on-surface`) as the **first child** of `.conversation`. The [paired shell](paired-shell.md)'s
+`PairedShellView` wires it to a nav dispatch
 (`{ type: 'back' }`) that unmounts this thread. Before [#670](../codebase/670.md) that also remounted
 the list screen (`list`/`thread` were mutually exclusive); since #670 the sidebar list is permanently
 mounted alongside the thread, so `back` now only empties the chat pane — "deselect," not "navigate away."
-The back arrow and the unpair header are two separate rows for now — a deliberate interim; a future
-top-app-bar ticket consolidates back + title + overflow + unpair into the one bar Figma 16-9 shows.
+The back arrow used to sit ahead of a separate unpair header row, a deliberate interim pending a future
+top-app-bar ticket that would consolidate back + title + overflow + unpair into the one bar Figma 16-9
+shows. [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted that header row rather
+than folding it into such a bar: the desktop drawing's `Content` frame (Figma 106:3321) has no header
+row of any kind, and the bar that does get drawn carries a channel title and a channel settings button,
+not unpair — see [Unpair control](#unpair-control-166-deleted-by-1061) below for where unpair goes
+instead.
 
-## Unpair control (#166)
+## Unpair control (#166, deleted by #1061)
 
-The escape hatch off a stale/dead conversation screen (no in-app way back to pairing existed
-before #120's split). A `.conversation__header` row above the thread, right-aligned, holding
-`UnpairControl` — a screen-local `useState<'idle' | 'confirming' | 'unpairing'>` phase machine:
-`idle` shows an `Unpair` trigger; `confirming` shows `Forget this pairing?` + `Cancel`/`Confirm`
-(the AC3 accidental-unpair guard); `unpairing` disables both buttons while the request is in
-flight.
+**Deleted outright, not gated or hidden — kept here as history.** The escape hatch off a stale/dead
+conversation screen (no in-app way back to pairing existed before #120's split). Through #1061 this was
+a `.conversation__header` row above the thread, right-aligned, holding `UnpairControl` — a screen-local
+`useState<'idle' | 'confirming' | 'unpairing'>` phase machine: `idle` showed an `Unpair` trigger;
+`confirming` showed `Forget this pairing?` + `Cancel`/`Confirm` (the AC3 accidental-unpair guard);
+`unpairing` disabled both buttons while the request was in flight. It called the pure `runUnpair` helper
+(`unpairAction.ts`, the `composerSend.ts` precedent: injected effects, spy-tested, no React), which
+invokes `window.pyry.unpair()` — the [unpair channel](unpair-channel.md) (#173) bridge — and either
+dispatches `{ type: 'reset' }` into the [session store](session-store.md) then calls `onUnpaired` (on
+`ok`), or dispatches `{ type: 'failed', error: { code: 'unpair', ... } }` and stays put (on `error` or a
+rejected invoke).
 
-`ConversationScreen` takes an **optional** `onUnpaired?: () => void` prop — mirroring
-`PairingScreen`'s `onPaired?`/`onCancel?` — so the existing bare `<ConversationScreen />`
-server-render tests stay green. Confirm calls the pure `runUnpair` helper
-(`unpairAction.ts`, the `composerSend.ts` precedent: injected effects, spy-tested, no React) which
-invokes `window.pyry.unpair()` — the [unpair channel](unpair-channel.md) (#173) bridge — and
-either dispatches `{ type: 'reset' }` into the [session store](session-store.md) then calls
-`onUnpaired` (on `ok`), or dispatches `{ type: 'failed', error: { code: 'unpair', ... } }` and
-stays put (on `error` or a rejected invoke). `window.pyry.unpair` is dereferenced only inside the
-click handler, never during render, so the server-rendered smoke test never touches the preload
-bridge. Styled with existing tokens only — no new `--color-error` (desktop has none; the mobile
-`#BA1A1A` destructive color is deliberately not carried over for this minimal control). See
-[#166 codebase notes](../codebase/166.md) for the full design and the [App shell](app-shell.md)
-for the route-flip half.
+[#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) (operator ruling, 2026-09-04) deleted
+the component, its mount, and the `.conversation__header` rule — the desktop `Content` frame (Figma
+106:3321) draws a message area straight onto an input area with no header row at all. **This removes the
+only way to unpair a *healthy* pairing from inside the app.** The one surviving `runUnpair` caller is
+[Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below,
+reachable only on a terminal pairing error; Settings can replace a pairing (`Pair another server`) but
+still has no unpair row. The gap is accepted deliberately, not closed by this ticket: a successor lands
+unpairing on a **host-level** surface instead (unpair forgets the whole server, not one conversation, so
+the conversation-scoped [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)
+is the wrong home for it), most likely the sidebar's host row, to be settled with #1070.
+
+`ConversationScreen`'s **optional** `onUnpaired?: () => void` prop — mirroring `PairingScreen`'s
+`onPaired?`/`onCancel?` — survives the deletion unchanged: its one remaining consumer is the composer
+status row's error slot below, so a bare `<ConversationScreen />` still server-renders green with no
+prop supplied. `unpairAction.ts` and `runUnpair` are untouched, byte-for-byte, and their header comment
+still reads "UnpairControl is thin glue over this" — a dead reference this ticket left rather than
+edited a file its own AC named as untouched. See [#166 codebase notes](../codebase/166.md) for the
+original control's full design, the [App shell](app-shell.md) for the route-flip half, and the
+[#1061 architecture spec](../../specs/architecture/1061-hide-the-unpair-control.md) for the deletion.
 
 ## Re-pair control (#167, folded into the composer status row's error slot by #963)
 
@@ -195,8 +210,9 @@ split exactly, before that control was retired as a separate surface by #963:
   transition, never on a timeline delta — the same narrow-slice seam the composer gate and
   `RepairControl` already use.
 
-Mounted between `<UnpairControl />` and `<Timeline />` — below the header row, above the message list,
-"the top of the thread." Styled `.conversation__banner` (`conversation.css`), token-only, following the
+Mounted directly above `<Timeline />` — the first thing under the overflow menu's gate since #1061
+deleted the header row that used to precede it — "the top of the thread." Styled
+`.conversation__banner` (`conversation.css`), token-only, following the
 `.modal-rejection` (#249) error-accent idiom: `--color-error` left border over
 `--color-surface-container-high`, sized to body-medium — deliberately a step up from a muted body-small
 caption (the distinction was originally drawn against `.composer__hint`, retired by

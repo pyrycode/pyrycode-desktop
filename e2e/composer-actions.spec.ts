@@ -162,8 +162,10 @@ test('an outside click dismisses the panel (AC1)', async ({ launchPairedApp }) =
   const panel = actionsPanel(page)
   await expect(panel).toBeVisible()
 
-  // The message thread — inert copy, and genuinely outside the anchor. (The header is avoided: its only
-  // control is Unpair.) Focus is deliberately NOT asserted back on the trigger here: on this one path
+  // The message thread — inert copy, and genuinely outside the anchor: it carries no control of its own,
+  // so the click can only read as an outside click. (It used to be justified as avoiding the header row,
+  // whose only control was Unpair; #1061 deleted that row.) Focus is deliberately NOT asserted back on
+  // the trigger here: on this one path
   // close()'s focus() runs BEFORE the browser's own mousedown focus action, so focus ends where the user
   // clicked — the documented, correct outcome at ComposerOptionsPanel.tsx:230-232.
   await page.locator('.conversation__empty-copy').click()

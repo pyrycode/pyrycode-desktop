@@ -2251,7 +2251,18 @@
    padding-top is --space-2 = the design's 8px between the status row's bottom edge and the message box's
    top edge. .composer-status is a sibling in the .conversation column (which declares no gap) and renders
    unconditionally, so that 8px is the whole distance and it is identical in all four connection states —
-   nothing between the two rows is conditional on `status`. */
+   nothing between the two rows is conditional on `status`.
+
+   NO background since #1099. This block painted --color-surface from #1 on, invisible while .conversation
+   painted the same colour around it. #1058 made the pane a card — it deleted .conversation's paint and put
+   a 30% --color-scrim wash on .paired-shell__pane — but named only the two screen rules, so this block
+   kept its sheet and sat on the card as an opaque, square-cornered rectangle over the pane's last ~100px,
+   with a seam above it where .composer-status (which paints nothing) already sat on the card. Figma's
+   Input area (347:5408) has no fill at any level: only the card behind it and the message box carry
+   paint, and the box's 41% ground (.composer__row::before below) takes its colour from whatever is behind
+   it, so the box read wrong too until this went. .question-panel, which takes this slot, dropped the same
+   paint in the same change. e2e/paired-shell-card.spec.ts pins this block transparent beside
+   .conversation. Do not restore a background here without deleting the card. */
 .composer {
   flex: 0 0 auto;
   display: flex;
@@ -2259,7 +2270,6 @@
   align-items: stretch;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-3) var(--space-3);
-  background: var(--color-surface);
 }
 
 /* #890 — the drop state, while a file is held over the composer. Juhana's ruling of 2026-09-02: the
@@ -2267,8 +2277,9 @@
    only), so an edge change on the tokens already in this file is the treatment until he draws one.
 
    outline, NOT border, and that is the whole reason this rule reads the way it does. .composer has no
-   resting border — it is padding plus a surface background — so a `border:` in the active state would add
-   2px to the block and reflow the entire conversation column every time a file crossed the composer. The
+   resting border — it is padding over the pane card, with no paint of its own since #1099 — so a
+   `border:` in the active state would add 2px to the block and reflow the entire conversation column
+   every time a file crossed the composer. The
    shipped no-reflow precedent is .composer__row:has(.composer__input:focus-visible) further down, which
    states exactly this trade for the message box's focus ring.
 
@@ -4701,9 +4712,13 @@
    token is minted: M3's dark scheme defines Background = Surface and On Background = On Surface, so the
    design's two names resolve onto tokens that already exist.
 
-   The panel carries .composer's own padding and ground rather than the design frame's zero inset, so the
-   slot's edges and background do not move when the panel replaces the message box. flex: 0 0 auto for the
-   composer's reason: it is pinned chrome and never grows or shrinks with the thread. */
+   The panel carries .composer's own padding rather than the design frame's zero inset, and since #1099 it
+   paints no ground of its own, exactly as .composer does not: both sit on the pane card, so the slot's
+   edges and ground do not move when the panel replaces the message box. Through #1058 both painted
+   --color-surface, and #1099 deleted the pair together, because leaving this one would bring the flat
+   rectangle back for as long as a question is on screen. e2e/question-answer-continue.spec.ts pins it.
+   flex: 0 0 auto for the composer's reason: it is pinned chrome and never grows or shrinks with the
+   thread. */
 .question-panel {
   flex: 0 0 auto;
   display: flex;
@@ -4711,7 +4726,6 @@
   align-items: stretch;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3) var(--space-3);
-  background: var(--color-surface);
 }
 
 /* The title row (347:6018) above the bordered box: the mark, an 8px gap, then the label row.

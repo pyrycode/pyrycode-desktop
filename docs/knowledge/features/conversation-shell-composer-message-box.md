@@ -11,6 +11,20 @@ no behaviour change to sending, Enter handling, the send→stop switch (#678), t
 queueing, or the covered state (#906). Closes the glyph/colour follow-up #678 deferred (see
 [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)).
 
+**`.composer` paints no background since #1099.** The block had painted `--color-surface` since #1,
+invisible while `.conversation` painted the same colour around it. When #1058 turned the pane into a card
+(a `--color-scrim` wash at 0.3 on `.paired-shell__pane`, see
+[Paired shell § the pane card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670)),
+that ticket deleted the two screen paints it named and this one survived, so the input area sat on the
+card as an opaque, square-cornered sheet with a seam above it where `.composer-status` (which paints
+nothing) already sat on the card. Figma's `Input area` (347:5408) has no fill at any level: only the card
+behind it and the message box carry paint. The box's own ground below is 41% translucent and so takes its
+colour from what is behind it, which is why the box read wrong too although its rule matched the drawing.
+`.question-panel`, which takes this slot, dropped the same paint in the same change.
+`e2e/paired-shell-card.spec.ts` pins `.composer` transparent beside `.channel-list` and `.conversation`;
+`e2e/question-answer-continue.spec.ts` pins the panel. Reported by the operator on 2026-09-05, the same
+day #1058 merged, and fixed by hand on `main` rather than through the pipeline.
+
 **`.composer__row` *is* the box now**, not a bare flex row holding a filled textarea beside a filled send
 disc. It keeps its class — three shipped specs and #940's type-ahead anchor depend on it — and gains the
 ground, the 6px corner (`--radius-xs`) and 12px vertical padding (`--space-3`); the textarea

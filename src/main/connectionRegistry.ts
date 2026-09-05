@@ -76,6 +76,23 @@ export interface ConnectionRegistry {
   reconcile(): void
   /** The stable stand-in the root binds once; see `ActiveConnection`. */
   readonly active: ActiveConnection
+  /**
+   * The connection for ONE named server, or `null` when no entry holds it — an unpair, or a server
+   * that was never paired. `active` answers for the most recently paired server; this answers for the
+   * one named, which is the whole difference between a command reaching the right daemon and reaching
+   * whichever was paired last (#1118).
+   *
+   * `ActiveConnection`-shaped like `active`, and by the same construction rather than by a cast: the
+   * returned object carries the 22 delegating members and NOTHING ELSE, so a routing call site cannot
+   * start, stop or re-dial one connection even by casting. That structural guarantee is this module's
+   * to keep, so the member list is written once — see `viewOf`.
+   *
+   * `serverId` is a `string`, so the not-paired stand-in (whose id is `null`) is unreachable through
+   * it: with nothing paired, every conversation-scoped command refuses rather than reaching the inert
+   * connection. That is the deterministic half of #1118's AC4 — a known conversation whose server has
+   * no entry refuses HERE, whether or not that ticket's index still holds the mapping.
+   */
+  connectionFor(serverId: string): ActiveConnection | null
 }
 
 /**
@@ -179,6 +196,42 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
 
   /** The connection every `active` member reaches. Total: `entries` is never empty. */
   const current = (): DaemonConnection => entries[entries.length - 1].connection
+
+  /**
+   * An `ActiveConnection` view over a resolver: delegation only, adding no behaviour of its own, with
+   * every member resolving its connection at CALL time.
+   *
+   * THE MEMBER LIST IS WRITTEN EXACTLY ONCE, here, and that is the point of the helper rather than a
+   * tidiness preference. `active` and `connectionFor` both hand a caller an object that must carry the
+   * 22 members and NOT the three lifecycle ones; a second hand-copied literal could drift, and
+   * returning a bare `DaemonConnection` typed as `ActiveConnection` would satisfy the type while
+   * leaving `start` / `stop` / `reconnect` reachable at runtime by a cast. A fresh object with only
+   * these members makes the `Omit` true of the value, not just of its type.
+   */
+  const viewOf = (resolve: () => DaemonConnection): ActiveConnection => ({
+    send: (payload) => resolve().send(payload),
+    requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
+    requestConversations: () => resolve().requestConversations(),
+    requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),
+    createConversation: (payload) => resolve().createConversation(payload),
+    createWorkspaceFolder: (payload) => resolve().createWorkspaceFolder(payload),
+    dequeueMessage: (payload) => resolve().dequeueMessage(payload),
+    interrupt: () => resolve().interrupt(),
+    promoteConversation: (payload) => resolve().promoteConversation(payload),
+    archiveConversation: (payload) => resolve().archiveConversation(payload),
+    unarchiveConversation: (payload) => resolve().unarchiveConversation(payload),
+    deleteConversation: (payload) => resolve().deleteConversation(payload),
+    renameConversation: (payload) => resolve().renameConversation(payload),
+    changeWorkspace: (payload) => resolve().changeWorkspace(payload),
+    setSessionSettings: (payload, changeId) => resolve().setSessionSettings(payload, changeId),
+    answerModal: (payload) => resolve().answerModal(payload),
+    cancelModal: (payload) => resolve().cancelModal(payload),
+    answerQuestions: (payload) => resolve().answerQuestions(payload),
+    refuseQuestions: (payload) => resolve().refuseQuestions(payload),
+    requestDebugBundle: (consumer) => resolve().requestDebugBundle(consumer),
+    uploadAttachment: (input, onProgress) => resolve().uploadAttachment(input, onProgress),
+    requestAttachment: (payload, consumer) => resolve().requestAttachment(payload, consumer)
+  })
 
   /** Dial a freshly built entry if the set is already dialling; otherwise `start()` will reach it. */
   const adopt = (entry: Entry): Entry => {
@@ -288,29 +341,19 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
      * binds it once and its call sites never hold a stale reference. Delegation only: this adds no
      * behaviour of its own, and no member can reach a connection's lifecycle (see `ActiveConnection`).
      */
-    active: {
-      send: (payload) => current().send(payload),
-      requestSessionSettings: (conversationId) => current().requestSessionSettings(conversationId),
-      requestConversations: () => current().requestConversations(),
-      requestRecentWorkspaces: () => current().requestRecentWorkspaces(),
-      createConversation: (payload) => current().createConversation(payload),
-      createWorkspaceFolder: (payload) => current().createWorkspaceFolder(payload),
-      dequeueMessage: (payload) => current().dequeueMessage(payload),
-      interrupt: () => current().interrupt(),
-      promoteConversation: (payload) => current().promoteConversation(payload),
-      archiveConversation: (payload) => current().archiveConversation(payload),
-      unarchiveConversation: (payload) => current().unarchiveConversation(payload),
-      deleteConversation: (payload) => current().deleteConversation(payload),
-      renameConversation: (payload) => current().renameConversation(payload),
-      changeWorkspace: (payload) => current().changeWorkspace(payload),
-      setSessionSettings: (payload, changeId) => current().setSessionSettings(payload, changeId),
-      answerModal: (payload) => current().answerModal(payload),
-      cancelModal: (payload) => current().cancelModal(payload),
-      answerQuestions: (payload) => current().answerQuestions(payload),
-      refuseQuestions: (payload) => current().refuseQuestions(payload),
-      requestDebugBundle: (consumer) => current().requestDebugBundle(consumer),
-      uploadAttachment: (input, onProgress) => current().uploadAttachment(input, onProgress),
-      requestAttachment: (payload, consumer) => current().requestAttachment(payload, consumer)
+    active: viewOf(current),
+    connectionFor(serverId: string): ActiveConnection | null {
+      // A linear scan with `===`, never an object lookup, for `runReconcile`'s reason: `server` is
+      // untrusted QR/paste input and a `Record<string, Entry>` indexed by `__proto__` would be
+      // prototype pollution reachable from a pasted payload. `null` on the stand-in too — its id is
+      // `null` and this parameter is a `string`, so the two can never match.
+      const held = entries.find((entry) => entry.serverId === serverId)
+      if (held === undefined) return null
+      // Resolves through the entry at call time, like `active`. The caller uses the view in the same
+      // tick, so it cannot go stale in practice — and a stale one is inert rather than dangerous:
+      // every member is a documented no-op once the connection has been `stop()`ped, so a view over a
+      // dropped connection puts nothing on any wire.
+      return viewOf(() => held.connection)
     }
   }
 }

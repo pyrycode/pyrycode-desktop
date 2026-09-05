@@ -416,6 +416,61 @@ describe('createConnectionRegistry', () => {
     })
   })
 
+  // The per-server accessor #1118 routes through. `active` answers for the most recently paired
+  // server; this answers for the one NAMED, which is the whole difference between a command reaching
+  // the right daemon and reaching whichever was paired last.
+  describe('the per-server accessor', () => {
+    it('reaches the named server, not the most recently paired one', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      registry.connectionFor('alpha')?.interrupt()
+
+      expect(factory.for('alpha').calls.interrupt).toBe(1)
+      expect(factory.for('beta').calls.interrupt).toBe(0)
+    })
+
+    it('answers null for an unheld server, and for every id when nothing is paired', async () => {
+      const unpaired = harness()
+      await settle()
+      expect(unpaired.registry.connectionFor('alpha')).toBeNull()
+
+      const paired = harness([record('alpha')])
+      await settle()
+      expect(paired.registry.connectionFor('beta')).toBeNull()
+      expect(paired.registry.connectionFor('__proto__')).toBeNull()
+    })
+
+    it('answers null once that server is unpaired, so nothing stays routable', async () => {
+      const { store, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      expect(registry.connectionFor('alpha')).not.toBeNull()
+
+      store.remove('alpha')
+      registry.reconcile()
+      await settle()
+
+      expect(registry.connectionFor('alpha')).toBeNull()
+      expect(registry.connectionFor('beta')).not.toBeNull()
+    })
+
+    it('hands back a view with no lifecycle member AT RUNTIME, as `active` does', async () => {
+      const { registry } = harness([record('alpha')])
+      await settle()
+
+      const view = registry.connectionFor('alpha')
+      expect(view).not.toBeNull()
+      for (const surface of [view, registry.active] as Record<string, unknown>[]) {
+        // Not merely absent from the type: absent from the object, so a cast at a routing call site
+        // recovers no way to start, stop or re-dial one connection (#1117's `ActiveConnection`).
+        expect(surface.start).toBeUndefined()
+        expect(surface.stop).toBeUndefined()
+        expect(surface.reconnect).toBeUndefined()
+        expect(typeof surface.send).toBe('function')
+      }
+    })
+  })
+
   describe('secrets stay put (AC5)', () => {
     it('never writes to the store', async () => {
       const { store, registry } = harness([record('alpha')])

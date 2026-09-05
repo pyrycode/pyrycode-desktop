@@ -62,14 +62,35 @@ Through #951 the control's vertical placement was `top: 50%; transform: translat
 the box. **#1056 replaced that with a bottom pin** (`bottom: 2px`) so the control stays beside the line
 being typed as the box grows past its resting height — see below.
 
-**The focus ring moved from the textarea to the box**: `.composer__input:focus-visible` became
-`.composer__row:has(.composer__input:focus-visible)`, same token (`--color-outline`), same 1px. Once the
-textarea is a 28px band inside a 52px box, its own outline drew a bare rectangle floating inside the
-rounded corner rather than reading as the box's focus state. `:has()` rather than `:focus-within` —
-`:focus-within` also matches while the send control holds focus, which would stack the box's ring on top
-of the button's own `:focus-visible` ring. This is the pattern's **second** consumer;
-`.question-panel__option:has(.question-panel__input:focus-visible)` (#912) is the first, and its comment
-was trued up in the same commit to name both.
+**The focus ring #951 moved from the textarea to the box was retired by #1063 (2026-09-05), not restyled.**
+`.composer__row:has(.composer__input:focus-visible)` — same token (`--color-outline`), same 1px, painted
+around the whole box once the textarea became a 28px band inside a 52px box, since its own outline drew a
+bare rectangle floating inside the rounded corner rather than reading as the box's focus state — is gone.
+The reason is the drawing: `Input large` (Figma `347:6635`) carries an `Active indicator` child (`347:6441`)
+and it is hidden in the node, so the focused message box has no visible indicator of its own by design. The
+ring was never a value that drifted from Figma; it was #951's own addition, which is why removing it reads
+as a fidelity fix rather than a regression. `.composer__input`'s own `outline: none` stays — dropping it
+would hand the box back the UA's ring, the one thing #951 already established the textarea is the wrong
+element to draw it on.
+
+The caret is the box's only focus indicator now, and that trade is deliberate rather than assumed: a text
+field's caret is a focus indicator in its own right, which is why WCAG's focus-visible requirement is
+normally read as satisfied for text inputs without a drawn ring, and `e2e/composer-message-box.spec.ts`
+pins the caret's presence (`caret-color` neither `transparent` nor `rgba(0, 0, 0, 0)`, paired with
+`document.activeElement`) alongside the ring's absence, so a later ticket cannot silently hide it and leave
+the box with no indicator at all. `caret-color` is unset anywhere in this stylesheet, so the computed value
+is the keyword `auto`, not an rgb — there is nothing to compare it against `--color-on-surface` for — and
+of the checkpoint's two negative arms only the `rgba(0, 0, 0, 0)` one actually detects: proved by adding
+`caret-color: transparent` and rebuilding, Chromium serialises that keyword to the rgba form, so the literal
+`'transparent'` arm never fires. Both arms ship anyway (the inert one costs nothing and would catch an
+engine that serialises the keyword literally), but a future trim of this checkpoint must keep the rgba arm. `conversation.css` still declares `1px solid var(--color-outline)` at 21
+other call sites — `.composer__send:focus-visible` among them — and this trade holds for a text field, not
+for a button; the retirement comment above the deleted rule is explicit that dropping it is not licence to
+drop the rest. `:has()` over `:focus-within` was the load-bearing choice while the rule lived (`:focus-within`
+also matches while the send control holds focus, which would have stacked this ring on top of the button's
+own `:focus-visible` ring) and the argument is preserved in the retirement note rather than restated here,
+since there is no rule left to attach it to. `.question-panel__option:has(.question-panel__input:focus-visible)`
+(#912) is this selector pattern's one surviving consumer.
 
 **The #940 type-ahead anchor is unmoved**, on purpose: no `overflow: hidden` was added to `.composer__row`
 (the panel paints outside the row's box at `bottom: 100%`; clipping to the new corner would erase it, and

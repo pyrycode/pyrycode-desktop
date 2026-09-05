@@ -241,6 +241,18 @@ const api = {
    * union is content-free by construction, so what comes back is "attached" or "no image", never a
    * pixel, a dimension or a length.
    *
+   * ⭐ #1129 ADMITS ONE EXCEPTION TO "NOTHING", AND EXTENDS THE REASONING RATHER THAN DROPPING IT.
+   * `AttachmentPasteRequest` now carries an optional `serverId` naming which paired server the
+   * image is for, so that a pasted file lands on the host whose chat is open rather than on
+   * whichever was paired most recently. THIS SENDER STILL SUPPLIES NONE — see the last paragraph —
+   * but the shape admits one, so the sentence above owes the qualification. It holds: a routing key
+   * is not a path, a filename, a byte or a wire value. Main resolves it against the connection
+   * registry's held entry set (`serverRouter.ts`) and discards it; the window can NAME a server it
+   * has already paired, never conjure one, and the id reaches no log line either, since
+   * `DiagnosticEvent` has no identifier-shaped field to put it in. The IMAGE is still read in the
+   * background process, after the ask arrives, and `uploadClipboardImage` still takes no field off
+   * the ask whatsoever.
+   *
    * THIS IS NOT THE `clipboard-read` PERMISSION, and must never become it. `src/main/index.ts`'s
    * permission allowlist carries a standing instruction that it must not grow to `clipboard-read` or
    * `clipboard-sanitized-read`, because reading exfiltrates whatever the user last copied — routinely a
@@ -248,9 +260,14 @@ const api = {
    * renderer gains no permission, holds no clipboard content, and cannot address the clipboard except
    * by asking for this one act. A text-flavoured secret yields an empty image and a refusal.
    *
-   * ipcRenderer does not cross the bridge and ATTACHMENT_UPLOAD_CHANNEL is fixed here, so the renderer
-   * cannot address arbitrary channels. There is nothing to throw and nothing to filter — unlike its
-   * neighbour, this function takes no argument at all.
+   * ipcRenderer does not cross the bridge and ATTACHMENT_UPLOAD_CHANNEL is fixed here, so the
+   * renderer cannot address arbitrary channels. There is nothing to throw and nothing to filter —
+   * unlike its neighbour, this function STILL takes no argument at all, which is why the ask it
+   * mints below has no `serverId` on it. That is deliberate and temporary: the composer has no
+   * per-server surface to name a server from until #1086, so every ask this sender emits takes the
+   * resolver's unnamed path — the sole connection when the registry holds exactly one entry, a
+   * refusal when it holds more. The day a caller has a server to pass, this is where the parameter
+   * goes, and it is a routing key that is looked up and discarded, never a value main acts on.
    */
   pasteAttachmentImage: (): void => {
     const request: AttachmentPasteRequest = { source: ATTACHMENT_PASTE_SOURCE }

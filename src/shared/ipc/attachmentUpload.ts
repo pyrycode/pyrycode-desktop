@@ -3,8 +3,8 @@
 // boundary guard, and one sealed outcome union, imported by both process sides. The renderer names one
 // of THREE asks — a bare INTENT ("let me attach a file", and the background process opens the picker and
 // reads the choice), a DROPPED PATH, or a PASTE ("attach the image on the clipboard", carrying nothing
-// at all). Whichever it is, the background process guards, drives #861's upload driver, and pushes back
-// exactly one terminal.
+// about the image). Whichever it is, the background process guards, drives #861's upload driver, and
+// pushes back exactly one terminal.
 //
 // This module is channel constants + a discriminated union + pure guards, with no I/O and no state —
 // attachmentBytes.ts's shape. It was constants and a union alone until #890 added the first door below.
@@ -29,10 +29,18 @@
 // bitmap the OS holds — so its ask cannot be a path, and it cannot be argument-free either, because that
 // shape is the picker's and the shipped sender cannot be given a discriminator without changing what a
 // conforming renderer puts on the wire. So the THIRD ask names itself: one client-owned literal, matched
-// against a constant by isAttachmentPasteRequest below, carrying nothing else. It is the NARROWEST of
-// the three — the picker's ask has no field, this one has a field a renderer cannot vary, and only the
-// drop's carries a value main must act on. The reverse cut #862 wanted is available for a paste and is
-// taken: the window asks, and the background process reads the clipboard itself.
+// against a constant by isAttachmentPasteRequest below, carrying nothing else about the image. It is
+// the NARROWEST of the three — the picker's ask has no field, this one has a field a renderer cannot
+// vary, and only the drop's carries a value main must ACT on. The reverse cut #862 wanted is available
+// for a paste and is taken: the window asks, and the background process reads the clipboard itself.
+//
+// BOTH GUARDED ASKS NOW NAME A SERVER (#1129), and it is the LAST entry point to do so. The optional
+// `serverId` is what makes a dropped or pasted file land on the host whose chat is open rather than on
+// whichever was paired most recently, and it retired `registry.active` (src/main/index.ts) outright.
+// It is the one field on either ask that main neither acts on nor forwards: it is resolved against the
+// connection registry's held entry set and discarded. `hasValidServerId` below is the whole of its
+// rule and states where it does and does not reach; AttachmentPasteRequest amends its own "and nothing
+// else" paragraph, since that ask's emptiness was its central security property.
 //
 // THE TWO GUARDS ARE TRIED PATH-FIRST in the main listener, and that ordering is load-bearing rather
 // than stylistic: an ask carrying a valid `path` reaches the drop arm exactly as it does today, extra
@@ -99,6 +107,9 @@ export interface AttachmentUploadRequest {
    *  never dropped. It is a CLAIM, not a capability — main opens it and refuses anything that is not a
    *  regular file, and drops the errno unexamined because it carries this same path. */
   path: string
+  /** Which paired server this file is for (#1129). See `hasValidServerId` in this module — one field,
+   *  one rule, two asks. */
+  serverId?: string
 }
 
 /**
@@ -127,7 +138,71 @@ export function isAttachmentUploadRequest(value: unknown): value is AttachmentUp
   if (typeof value !== 'object' || value === null) return false
   if (!('path' in value)) return false
   const { path } = value as Record<string, unknown>
-  return typeof path === 'string' && path.length > 0 && path.length <= MAX_UPLOAD_PATH_LENGTH
+  if (typeof path !== 'string' || path.length === 0 || path.length > MAX_UPLOAD_PATH_LENGTH) {
+    return false
+  }
+  return hasValidServerId(value)
+}
+
+/**
+ * The optional routing key both asks above carry (#1129), and the one rule both guards
+ * check it against, so the two entries cannot drift into subtly different acceptance.
+ *
+ * WHAT IT IS: the id of a server the operator has ALREADY PAIRED, naming which host this file
+ * belongs on. #1117 made the number of live connections follow the number of stored paired records,
+ * and #1118/#1119/#1120 then moved every command carrying an id of its own onto the server it is
+ * actually about. This channel is the last entry point, and it is the one that retires
+ * `registry.active`.
+ *
+ * WHAT IT IS NOT, and this is what makes it acceptable on the paste ask (see
+ * AttachmentPasteRequest): it is a ROUTING KEY, never a capability, a token, a path selector or a
+ * log field. `serverRouter.ts` resolves it against the connection registry's held entry set and
+ * hands back a connection or refuses — the window can NAME a server, it cannot conjure one — and
+ * then discards it. It reaches no filename (`driveUpload` names the file from `basename` or from
+ * `clipboardImageFilename`), no byte, no filesystem path, no wire field and no diagnostic
+ * (`DiagnosticEvent` is `{ event, code? }` and has no identifier-shaped member, so a server id is
+ * structurally unrepresentable in a log line from there).
+ *
+ * OPTIONAL, and it will stay unfilled for a while. No renderer sender has a per-server surface to
+ * source an id from until #1086 lands, so both shipped senders emit the bare ask and every upload
+ * takes the resolver's unnamed path — the sole connection when the registry holds exactly one
+ * entry, a refusal when it holds more. That is the bridge `serverRouter.ts`'s header describes:
+ * bounded and observable, today's single-server behaviour preserved, no fallback to "the first" or
+ * "the most recent" connection anywhere.
+ *
+ * ABSENT-OR-`undefined`-OR-STRING, and every word is load-bearing. `hasValidServerId` in
+ * `commands.ts` states the same rule for the six server-scoped commands, and this is a deliberate
+ * second copy rather than an import: no PRODUCTION module under src/shared/ipc imports from a
+ * sibling — each channel states its own boundary rules in full, which is why both guards above
+ * already re-implement the object/null/`in` checks every sibling guard also has. The two are kept
+ * honest by `attachmentUpload.test.ts`'s routing-key describe, which is written against the rule
+ * rather than against either helper. This is NOT the divergent-checks shape attachmentBytes.ts
+ * argues against: that is two gates on ONE value, where one can end up weaker; this is one gate
+ * each on two different values on two different channels.
+ *
+ * - `'serverId' in value` alone is wrong in BOTH directions. Structured clone PRESERVES an own property
+ *   whose value is `undefined` across the IPC bridge, so a present-key CHECK would read
+ *   `{ serverId: undefined }` as a supplied value, and a present-key REJECTION would refuse the
+ *   ordinary bare ask both current senders emit.
+ * - TYPE, NOT EMPTINESS, and not canonical shape. `''` is accepted here and refused one layer later:
+ *   it is a present string, so the resolver takes its NAMED branch, and no held entry's id is empty.
+ *   A shape check here would buy nothing the resolution does not already buy, at a boundary that is not
+ *   the one holding the entry set.
+ * - NO LENGTH BOUND, unlike `path` above, and the asymmetry is deliberate. The id is looked up and
+ *   discarded: it reaches no map key (this channel holds no per-server state; the debug bundle's memo,
+ *   the one place a server id IS a key, is keyed by the RESOLVED id for exactly this reason), no log
+ *   line, no path and no wire, so an oversized value costs one transient allocation the structured
+ *   clone has already paid for — and both guards accept unbounded UNREAD extra keys today regardless.
+ *   A bound here that `commands.ts` lacks would be the divergent-rule shape rather than depth.
+ * - `in` RATHER THAN AN OWN-PROPERTY TEST, matching its sibling. An ask whose prototype carries a
+ *   non-string `serverId` is REFUSED by this rule and would be ACCEPTED (as unnamed) by a
+ *   `hasOwnProperty` one, so `in` is the stricter of the two here. An inherited *string* is accepted and
+ *   costs nothing: a renderer that can set a prototype can set an own key, and the value is looked up
+ *   against the registry either way.
+ */
+function hasValidServerId(value: object): boolean {
+  if (!('serverId' in value)) return true
+  return value.serverId === undefined || typeof value.serverId === 'string'
 }
 
 /**
@@ -153,9 +228,38 @@ export const ATTACHMENT_PASTE_SOURCE = 'clipboard-image' as const
  * camelCase and client-internal, like its sibling. Extra keys are accepted and never read — and here
  * that costs even less, because `uploadClipboardImage` (src/main/attachmentUpload.ts) takes no field off
  * this object whatsoever; the ask's only job is to select an arm.
+ *
+ * ⭐ #1129 AMENDS "AND NOTHING ELSE" TO NAME ONE EXCEPTION, AND EXTENDS THE REASONING RATHER THAN
+ * DROPPING IT. The ask now admits an optional `serverId`, so the sentence above is no longer
+ * literally true of the shape. What the property actually asserted — and what remains true — is
+ * that nothing renderer-supplied reaches A FILENAME, A BYTE OR THE WIRE on this path. A routing key
+ * is none of the three: it is resolved against the registry's held entry set and discarded
+ * (`hasValidServerId`'s docblock below spells out where it does and does not reach), while the
+ * IMAGE is still read in the background process, from the clipboard, after this ask arrives, and
+ * `uploadClipboardImage` still takes no field off this object whatsoever. The field that SELECTS
+ * THE ARM is still one client-owned literal a renderer cannot vary, so this ask is still a
+ * selection rather than a value.
+ *
+ * WHAT THE AMENDMENT DOES CONCEDE, stated plainly rather than buried: a compromised renderer can
+ * now choose WHICH ALREADY-PAIRED server receives a pasted image, where before it got whichever
+ * host was paired most recently. It cannot reach a server the operator has not paired —
+ * `connectionFor` is the boundary. That is the same choice #1118 gave every conversation-scoped
+ * command and #1120 gave the six server-scoped ones, so it is not a new capability class; and the
+ * mitigation that would matter, the operator seeing the destination, is #1086's composer surface
+ * rather than anything expressible here.
+ *
+ * THIS ENTRY IS STILL THE NARROWEST OF THE THREE. The picker's ask has no object at all; this one
+ * has a discriminator a renderer cannot vary plus a key that is looked up and thrown away; only the
+ * drop's carries a value main must ACT on. The amendment is made in all three places the old
+ * sentence was asserted — here, `pasteAttachmentImage` (src/preload/index.ts) and `pasteImage`
+ * (src/renderer/src/screens/conversation/ComposerAttach.tsx) — so the repo does not end up
+ * contradicting itself in two files out of three.
  */
 export interface AttachmentPasteRequest {
   source: typeof ATTACHMENT_PASTE_SOURCE
+  /** Which paired server this image is for (#1129). See `hasValidServerId` in this module — one field,
+   *  one rule, two asks. */
+  serverId?: string
 }
 
 /**
@@ -176,7 +280,8 @@ export function isAttachmentPasteRequest(value: unknown): value is AttachmentPas
   if (typeof value !== 'object' || value === null) return false
   if (!('source' in value)) return false
   const { source } = value as Record<string, unknown>
-  return source === ATTACHMENT_PASTE_SOURCE
+  if (source !== ATTACHMENT_PASTE_SOURCE) return false
+  return hasValidServerId(value)
 }
 
 /**

@@ -517,6 +517,15 @@ export function useAttachmentUpload(): {
    * no clipboard content reaches renderer state, a log line, a diagnostic record or the bridge. Nothing
    * about the image — not a byte, a dimension, a length or a name — is knowable here. `window.pyry` is
    * dereferenced only in this closure and the two above, never during render.
+   *
+   * ⭐ STILL TRUE OF THE CALL, AND NOW QUALIFIED AT THE SHAPE (#1129). `AttachmentPasteRequest`
+   * admits an optional `serverId` naming which paired server the image is for, so the ask is no
+   * longer literally empty — but this sender passes none and `pasteAttachmentImage()` still takes
+   * no argument, because the composer has nothing to source a server id from until #1086. Every
+   * sentence above survives the widening regardless: a routing key is not clipboard content, it is
+   * resolved against the registry's held entry set in the background process and discarded, and
+   * nothing about the image becomes knowable here. When this composer does acquire a server, this
+   * is the call that names it.
    */
   const pasteImage = (): void => {
     setOutcome(null)

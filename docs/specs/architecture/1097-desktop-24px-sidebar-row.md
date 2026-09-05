@@ -224,3 +224,26 @@ DECLARE, never which classes are worn.
    It becomes a 24px round target rather than a 40px one. Expected fine (the radius is proportional);
    confirm against the render before opening the PR, and note any deviation rather than retuning the
    radius, which is out of this ticket's scope.
+
+## Revisions
+
+### 2026-09-05 — the two Open Questions, both resolved without a design change
+
+1. **The FAB-minted row does land in the seed's workspace group.** `requestNewConversation` sends
+   `{ is_promoted: false, name: null, cwd: defaultCwd }` with a null `defaultCwd` at first launch, which
+   `conversationStateFake` resolves to `/fake/workspace` — the seed's own cwd. Confirmed by observation
+   rather than by reading: the spec asserts `.channel-list__workspace` has count 1 after the create, so
+   a second group would redden it before the pitch assertion is reached. No second launch needed.
+2. **The affordances' `--radius-full` still reads correctly at 24px.** Verified against the rendered
+   sidebar: a proportional radius on a 24px box is a 24px circle, and the glyph is centred in it. No
+   retune, and nothing to record as a deviation.
+
+### 2026-09-05 — the height assertion was proved by breaking it, not by reasoning
+
+The plan argued that 24px must be derived so the e2e height assertion stays a detector. That argument
+was checked empirically rather than trusted: reverting BOTH halves of the affordance shrink (the
+`<svg>` back to 24px and the padding back to `--space-2`) and rebuilding turns the measured row height
+from 24 to **40**, reddening both spec blocks. So the assertion can fail, the derivation is real, and
+the affordance shrink is load-bearing rather than cosmetic. Restored and re-verified green.
+
+No design decision in this plan changed during implementation.

@@ -249,3 +249,48 @@ normalises whitespace, so preserved whitespace normalises back to the same strin
 3. **Does `composer-message-box.spec.ts` stay green?** Predicted yes, per § Blast radius. If it
    reddens on a geometry read rather than on a regression this ticket caused, the fix belongs in
    that spec's fixture (a single-line draft for the send step) and is in scope as a test-only edit.
+
+## Revisions
+
+**2026-09-05 — the rule needed a companion reset, and the plan's "inert on the other children" claim was
+wrong.** § Design argued that `pre-wrap` inherits into the attachment rows and `BubbleMeta` harmlessly,
+because their content is a filename or a stamp. The first build proved otherwise:
+`e2e/attachment-file-row.spec.ts` asserts a computed `white-space: normal` on `.bubble__file-name`, which
+**deliberately ships with no rule of its own** (#815's measured answer to its own wrapping AC), so the
+inherited value is the only one it has. That assertion went red.
+
+The fix is a second declaration beside the first, `.bubble--user > * { white-space: normal }`. It is
+structural rather than a list of the two filename classes: the message is the bubble's bare text node and
+everything else in the box is an element child, so the reset lands once at the top of each child's subtree
+and covers a child added later without anyone remembering to add it to a list. Naming the classes that
+exist today would have fixed the one red assertion and handed the same trap to the next ticket that puts a
+child in a bubble. `> *` and not a descendant selector, so a rule *inside* one of those subtrees that
+wants something else still wins on ordinary specificity instead of having to out-specify a blanket
+override.
+
+Still CSS-only, still no markup change, still one production file. `e2e/user-whitespace.spec.ts` asserts
+the reset over whatever element children the bubble actually has, rather than naming them.
+
+**Open questions, resolved.**
+
+1. *Does the flex row let the bubble widen instead of overflowing under `pre`?* **No** — the redden check
+   measured `scrollWidth` 1765 against `clientWidth` 486, so the box stayed at its measure and the content
+   spilled. AC3's overflow read is the right detector and it reddens.
+2. *Does `Range.getClientRects()` return one rect per line box?* **No.** Blink splits the range at the
+   preserved newline, so a two-line text reports **three** rects — an assertion of `count === 2` failed
+   against 3. Replaced with per-character ranges (`setStart`/`setEnd` at one offset), which are one glyph
+   position each and mean the same thing however the browser fragments around them. The indent is then
+   read as three glyph boxes: line 2's first space sits *below* line 1's first character (the break), at
+   the *same* left (a line start, not a wrap continuation), with line 2's first word to the *right* of it
+   (the indent occupying real width).
+3. *Does `composer-message-box.spec.ts` stay green?* **Yes**, unchanged, along with every other spec that
+   reads a user bubble.
+
+**One more measured surprise, recorded because it contradicts a comment in the sibling spec.** Playwright's
+`toHaveText` did **not** collapse the newlines in a multi-line bubble's text when matched against a
+`RegExp`: the collapsed expectation failed, reporting a received string that still carried both newlines.
+`assistant-whitespace.spec.ts`'s header states that `normalizeWhiteSpace: true` is set on both the string
+and the regex branch — it is, but it does not reach a RegExp's *received* text here. This costs the
+existing tier nothing (every other `toHaveText` over a user bubble reads a single-line, single-space text,
+where collapsing is a no-op either way) and it did not weaken any assertion, but a spec asserting a
+multi-line bubble's text must expect the newlines rather than the collapse.

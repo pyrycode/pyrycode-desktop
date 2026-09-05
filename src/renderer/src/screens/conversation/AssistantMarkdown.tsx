@@ -2,6 +2,10 @@ import { Children, isValidElement, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
+import { gfmTaskListItem } from 'micromark-extension-gfm-task-list-item'
+import { gfmTaskListItemFromMarkdown } from 'mdast-util-gfm-task-list-item'
+import { gfmStrikethrough } from 'micromark-extension-gfm-strikethrough'
+import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough'
 // TYPE-ONLY, both erased at build, and both declared in package.json rather than reached for
 // transitively — see `remarkGfmSubset` below, where the reason is the whole of why this import pair
 // exists in this shape.
@@ -18,13 +22,22 @@ import type { Processor } from 'unified'
 //     it would mean ADDING A PACKAGE to package.json — a visible, reviewable act — rather than
 //     flipping a boolean. Capability-absent, not capability-disabled; that property is why
 //     react-markdown was chosen over the far smaller markdown-to-jsx, whose HTML parser ships on.
-//   • ONE `remarkPlugin`, `remarkGfmSubset` below, and it registers the GFM TABLE construct and nothing
-//     else. `remark-gfm` itself is still never added: it is a BUNDLE of five unrelated extensions, and
-//     the two that matter here — autolink literals and footnotes — are separate packages that are NOT
-//     INSTALLED. So bare URLs and bare email addresses still render as plain text because there is no
-//     autolinking code in the dependency graph to suppress, not because a setting turns it off. Absence,
-//     not suppression: the same property as the `rehypePlugins` line above, arrived at the same way, and
-//     the reason the subset ships as per-construct packages rather than the bundle plus an override.
+//   • ONE `remarkPlugin`, `remarkGfmSubset` below, and it registers the GFM TABLE, TASK LIST and
+//     STRIKETHROUGH constructs and nothing else. `remark-gfm` itself is still never added: it is a
+//     BUNDLE of five unrelated extensions, and the two that matter here — autolink literals and
+//     footnotes — are separate packages that are NOT INSTALLED. So bare URLs and bare email addresses
+//     still render as plain text because there is no autolinking code in the dependency graph to
+//     suppress, not because a setting turns it off. Absence, not suppression: the same property as the
+//     `rehypePlugins` line above, arrived at the same way, and the reason the subset ships as
+//     per-construct packages rather than the bundle plus an override. THE COUNT IN THIS SENTENCE IS
+//     PART OF THE CONTRACT — a fourth construct here is a change to what this module can parse out of
+//     untrusted daemon text.
+//   • NO FORM CONTROL, and #1080 had to spend an override to keep it that way. The task-list extension's
+//     hast handler emits an `<input type="checkbox" disabled>` per item, which would have been the first
+//     element type to cross this boundary by package default rather than by decision. `components.input`
+//     below renders an inert `<span>` instead, so the window that holds the transport bridge contains no
+//     control, no submission target and no autofill surface from a reply. Inert-by-absence again, and
+//     the reason the emitted element set is still readable in this one file.
 //   • No `skipHtml`. It reads like the safe option and is not: it DELETES tags and promotes their
 //     text content into the message (`<b>bold</b>` → `bold`). The default escapes instead, which
 //     matches the bubble's existing posture at ConversationScreen.tsx:493 ("HTML inside a delta
@@ -43,12 +56,22 @@ import type { Processor } from 'unified'
 // #623 then added the `pre` override below: a fenced block's header bar and border (Figma 16:45).
 
 /**
- * #1079 — registers the GFM table construct on the processor, and nothing else.
+ * #1079 / #1080 — registers the GFM table, task-list and strikethrough constructs on the processor, and
+ * nothing else. THIS FUNCTION BODY IS THE LIST; the `remarkPlugins` array below is not (see its own
+ * docstring). Autolink literals and footnotes are the two bundle members deliberately still absent.
  *
- * BOTH IMPORTS ARE FUNCTIONS AND BOTH MUST BE CALLED. Passing one called and the other uncalled fails
- * SILENTLY rather than throwing — a function where an extension object is expected is accepted, the
- * source markers are eaten, and the text loses its syntax while gaining no element. If a table ever
- * renders as neither a table nor visible pipes, this is the line to read first.
+ * ALL SIX IMPORTS ARE FUNCTIONS AND EVERY ONE MUST BE CALLED. Passing one called and another uncalled
+ * fails SILENTLY rather than throwing — a function where an extension object is expected is accepted,
+ * the source markers are eaten, and the text loses its syntax while gaining no element. If any of the
+ * three ever renders as neither its element nor its visible source characters — a table as neither a
+ * table nor pipes, a task item as neither a mark nor brackets, struck text as neither `<del>` nor
+ * tildes — this is the line to read first.
+ *
+ * `gfmStrikethrough()` takes its `singleTilde` default (on), so `~struck~` strikes as well as
+ * `~~struck~~`. Left there on purpose: the obvious hazard is a pair of home-relative paths on one line,
+ * and it does not reproduce, because GFM requires the closing marker to be right-flanking and a path's
+ * tilde can only ever open. AssistantMarkdown.test.tsx pins that non-reproduction, so the day it turns
+ * red is the day to reconsider the option — rather than disabling it now against no observed failure.
  *
  * WHY `this` IS TYPED THIS WAY, and why two type-only packages are declared for it. `tsconfig.web.json`
  * is `strict`, so `noImplicitThis` rejects a bare `function` whose body calls `this.data()`. Two routes
@@ -75,8 +98,12 @@ function remarkGfmSubset(this: Processor): undefined {
   const data = this.data()
   const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = [])
   const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = [])
-  micromarkExtensions.push(gfmTable())
-  fromMarkdownExtensions.push(gfmTableFromMarkdown())
+  micromarkExtensions.push(gfmTable(), gfmTaskListItem(), gfmStrikethrough())
+  fromMarkdownExtensions.push(
+    gfmTableFromMarkdown(),
+    gfmTaskListItemFromMarkdown(),
+    gfmStrikethroughFromMarkdown()
+  )
   return undefined
 }
 
@@ -84,8 +111,15 @@ function remarkGfmSubset(this: Processor): undefined {
  * The plugin list, a module constant rather than an inline array literal at the call site: a fresh array
  * on every render would give react-markdown a new prop identity each time for no gain.
  *
- * ITS LENGTH IS THE SECURITY CLAIM the header makes — one entry, one construct. A second entry here is a
- * change to what this module can parse out of untrusted daemon text, which is a security change.
+ * ITS LENGTH IS NO LONGER THE CONSTRUCT COUNT, and #1080 is why this docstring says so. It read "one
+ * entry, one construct" while that happened to hold; adding two constructs inside `remarkGfmSubset`
+ * left the array at length 1, so the claim went quietly wrong with nothing to redden. What this array
+ * actually guards is narrower and still worth guarding: THIS MODULE PASSES EXACTLY ONE PLUGIN, and that
+ * plugin is defined directly above, in this file, where its whole extension list can be read at once.
+ * A second entry here would put part of the parse configuration somewhere else — including anywhere a
+ * dependency's default export could reach — which is the change the header's contract is about. The
+ * construct count lives in `remarkGfmSubset`'s body and in the header's own sentence, both of which
+ * name all three; keep the three statements in step.
  */
 const remarkPlugins = [remarkGfmSubset]
 
@@ -192,9 +226,10 @@ function allowedLinkHref(href: string | undefined): string | null {
 }
 
 /**
- * Element overrides. The link and image rules are load-bearing — neither falls out of "raw HTML
- * disabled", because a conforming CommonMark renderer emits a real `<a href>` and a real `<img src>`
- * from link and image syntax whatever the HTML setting. The `pre` rule is #623's block chrome.
+ * Element overrides. The link, image and input rules are load-bearing — none of the three falls out of
+ * "raw HTML disabled", because a conforming renderer emits a real `<a href>`, a real `<img src>` and
+ * (with the task-list extension registered above) a real `<input type="checkbox">` from ordinary
+ * markdown syntax whatever the HTML setting. The `pre` rule is #623's block chrome.
  *
  * NEVER spread `{...props}` into any of these. A spread puts `href` / `src` straight back and
  * regresses both rules silently: the visible text still renders, so a carelessly-written test keeps
@@ -228,6 +263,36 @@ const components: Components = {
       </a>
     )
   },
+  // #1080 — the task-list mark, and THE ANSWER TO "should a reply contain a checkbox": no. The task-list
+  // extension's hast handler emits `<input type="checkbox" disabled>` into the item's first paragraph;
+  // this renders an inert <span> in its place, so no form control exists in the window at all. A
+  // `disabled` checkbox would already have satisfied "not interactive" — it takes no click, no focus and
+  // no keyboard toggle — but it READS as a control the reader could tick, and a reply is a transcript.
+  // Removing the element is also what leaves nothing to keep correct later: no disabled attribute a
+  // future edit could drop, no form association, and no precedent for the next construct that wants one.
+  //
+  // THE SOURCE'S ENTIRE INFLUENCE HERE IS ONE BOOLEAN. `checked` is set by the handler behind its own
+  // `typeof node.checked === 'boolean'` gate, and it SELECTS between client-owned constants — no daemon
+  // substring is interpolated into the class or the label. That is the operator ruling's line (daemon
+  // text may be rendered; it may not reach an attribute), and the reason this override does not label a
+  // mark with the item's own text. `=== true` rather than a truthy test, so a later reader gets no
+  // impression that a string or a number could arrive here.
+  //
+  // `role="img"` with a label, and NOT visually-hidden text: both put the state in the accessibility
+  // tree, but an aria-label contributes nothing to textContent, while a text node inside .bubble is
+  // something every whole-bubble text assertion in e2e/ would then have to admit. The drawn mark is a
+  // CSS pseudo-element for the same reason (conversation.css, `.bubble__markdown .task-mark`).
+  //
+  // Bound by the never-spread rule above: only `checked` is destructured, so `type`, `disabled` and
+  // everything else react-markdown supplies is dropped. The override is TOTAL — with no HTML parser in
+  // the graph, that handler is the only thing that can produce an `input` node.
+  input: ({ checked }) => (
+    <span
+      className={checked === true ? 'task-mark task-mark--checked' : 'task-mark'}
+      role="img"
+      aria-label={checked === true ? 'Done' : 'Not done'}
+    />
+  ),
   // Image syntax must produce no element that fetches a remote resource. The CSP's absent img-src is
   // the independent second layer (deterministic policy, different fabric), but the rule here is that
   // no fetching element is CREATED — not merely that the fetch fails. Alt text renders in its place.

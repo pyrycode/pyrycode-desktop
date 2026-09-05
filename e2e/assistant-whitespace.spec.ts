@@ -178,7 +178,31 @@ const TABLE_TEXT = [
   )
 ].join('\n')
 
-const SETTLED_TEXTS = [CONTROL_TEXT, SPACE_RUN_TEXT, CODE_TEXT, RHYTHM_TEXT, LANG_CODE_TEXT, TABLE_TEXT]
+// #1080's reply: a MIXED task list — one open item, one done item, one plain item with no marker at all
+// — plus a struck run in a trailing paragraph. The mixed third item is the vacuity guard for the bullet
+// suppression: a rule written against the <ul>'s `contains-task-list` class instead of the item's own
+// would hide that item's bullet too, and only a list containing one can tell the two apart.
+//
+// APPENDED after TABLE, for the reason #1079 states above: appending shifts exactly one constant, TAIL,
+// and TAIL stays last by construction because the open turn_end-less delta has to be the final frame.
+const STRUCK_WORD = 'withdrawn'
+const TASK_TEXT = [
+  '- [ ] open item',
+  '- [x] done item',
+  '- plain item',
+  '',
+  `that plan is ~~${STRUCK_WORD}~~ now`
+].join('\n')
+
+const SETTLED_TEXTS = [
+  CONTROL_TEXT,
+  SPACE_RUN_TEXT,
+  CODE_TEXT,
+  RHYTHM_TEXT,
+  LANG_CODE_TEXT,
+  TABLE_TEXT,
+  TASK_TEXT
+]
 const REPLY_TEXTS = [...SETTLED_TEXTS, TAIL_TEXT]
 
 // The bubble indices the assertions read, named so a comparison says which text it is about.
@@ -188,7 +212,8 @@ const CODE = 2
 const RHYTHM = 3
 const LANG_CODE = 4
 const TABLE = 5
-const TAIL = 6
+const TASK = 6
+const TAIL = 7
 
 // A rendered box is a fractional CSS pixel; scrollWidth/clientWidth are rounded integers, so they can
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
@@ -833,6 +858,89 @@ const readTableMetrics = (
     }
   })
 
+interface TaskMetrics {
+  markerStyles: string[]
+  plainMarkerStyle: string
+  checkedTick: { content: string; width: string }
+  uncheckedTick: { content: string; width: string }
+  markBorderColor: string
+  delDecoration: string
+  delColor: string
+  mutedTokenRgb: string
+  markdownInteractiveCount: number
+  bubbleInteractiveCount: number
+}
+
+/**
+ * #1080's two constructs as the BROWSER has them — the half the static tier cannot reach. That tier is
+ * `renderToStaticMarkup` under environment: 'node', so it can read that a <span class="task-mark"> was
+ * emitted but never that a bullet was suppressed, that the checked state paints anything, or that <del>
+ * strikes. All four are computed style, which is why they are read here.
+ *
+ * The two ::after reads are the pair that makes "distinguishable" a measurement rather than a class
+ * name. `content` computes to `none` where no pseudo-element is generated and to `""` where one is, so
+ * reading BOTH marks in one call is its own vacuity guard: a build that drew neither, or one that drew
+ * both, fails on the comparison rather than passing on a one-sided assertion.
+ *
+ * The muted token is read from the same document rather than written down, so a retune of the palette
+ * moves both sides of the colour comparisons together — the readCodeBlockChromeMetrics idiom.
+ */
+const readTaskMetrics = (page: Page, index: number): Promise<TaskMetrics> =>
+  assistantBubble(page, index).evaluate((bubble) => {
+    // Everything that can take a click, a focus or a keyboard toggle. Declared INSIDE the closure, not
+    // as a module constant: this function is serialised into the page, so a name from the module scope
+    // would be a ReferenceError at evaluate time rather than a compile error here.
+    const INTERACTIVE = 'input, button, select, textarea, a[href], [tabindex], [contenteditable]'
+    const markdown = bubble.querySelector('.bubble__markdown')
+    if (markdown === null) throw new Error('the settled reply rendered no .bubble__markdown')
+    // Array.from and not a spread: a NodeList is ArrayLike under the bare `DOM` lib but only iterable
+    // under `DOM.Iterable`, and nothing in this repo typechecks e2e/ — no tsconfig includes it and
+    // Playwright strips types with esbuild — so the form that needs no lib setting is the honest one.
+    const items = Array.from(bubble.querySelectorAll('.bubble__markdown li.task-list-item'))
+    if (items.length !== 2) throw new Error(`expected 2 task items, found ${items.length}`)
+    const plain = bubble.querySelector('.bubble__markdown li:not(.task-list-item)')
+    if (plain === null) throw new Error('no plain item in the mixed list')
+    const checked = bubble.querySelector('.bubble__markdown .task-mark--checked')
+    const unchecked = bubble.querySelector('.bubble__markdown .task-mark:not(.task-mark--checked)')
+    if (checked === null || unchecked === null) throw new Error('both task marks must render')
+    const del = bubble.querySelector('.bubble__markdown del')
+    if (del === null) throw new Error('no del in the bubble')
+    const tick = (el: Element): { content: string; width: string } => {
+      const style = getComputedStyle(el, '::after')
+      return { content: style.content, width: style.width }
+    }
+    // readCodeBlockChromeMetrics' normaliser, and the same fail-loud posture: a computed colour
+    // serialises as `rgb(194, 199, 207)` while its token reads `#c2c7cf`, and anything not readable as
+    // 6-digit hex THROWS rather than passing through to compare two spellings of one colour by accident.
+    const rgb = (value: string): string => {
+      const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value.trim())
+      if (!match) throw new Error(`expected a 6-digit hex colour token, read ${JSON.stringify(value)}`)
+      return `rgb(${match.slice(1).map((part) => parseInt(part, 16)).join(', ')})`
+    }
+    return {
+      markerStyles: items.map((item) => getComputedStyle(item).listStyleType),
+      plainMarkerStyle: getComputedStyle(plain).listStyleType,
+      checkedTick: tick(checked),
+      uncheckedTick: tick(unchecked),
+      markBorderColor: getComputedStyle(checked).borderTopColor,
+      delDecoration: getComputedStyle(del).textDecorationLine,
+      delColor: getComputedStyle(del).color,
+      mutedTokenRgb: rgb(
+        getComputedStyle(document.documentElement).getPropertyValue('--color-on-surface-variant')
+      ),
+      // Nothing the MARKDOWN produced can take a click, a focus or a keyboard toggle — counted over the
+      // whole container rather than over the mark, so the claim covers everything the reply rendered and
+      // not just the element this ticket added.
+      markdownInteractiveCount: markdown.querySelectorAll(INTERACTIVE).length,
+      // The same query over the whole bubble, which is this assertion's VACUITY GUARD rather than a
+      // second claim. A bubble carries exactly one control of its own — .bubble__copy, the meta row's
+      // copy button (#816) — so a selector that had silently stopped matching anything would read 0 here
+      // and make the 0 above meaningless. The reply's markdown is inert; the bubble's chrome is not, and
+      // is not this ticket's subject.
+      bubbleInteractiveCount: bubble.querySelectorAll(INTERACTIVE).length
+    }
+  })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -1298,6 +1406,68 @@ test('a table too wide for the bubble scrolls inside itself, pushing neither the
   // The thread too, which is the over-correction guard #607 carried and every sibling assertion here
   // keeps: a bubble that contained its own overflow while the thread grew a scrollbar would still be
   // the defect this criterion is about.
+  const thread = await readThreadWidths(page)
+  expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
+})
+
+test('a task list draws two distinguishable inert marks, and struck text reads as struck', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheReplies(page)
+
+  const before = await readTaskMetrics(page, TASK)
+
+  // #1080 AC1's first half — the bullet is suppressed on the task items, PER ITEM. The plain third item
+  // in the same list keeps its marker, and that pairing is what makes this a detector rather than a
+  // restatement: a rule hung on the <ul>'s own `contains-task-list` class would pass the first assertion
+  // and fail the second, which is exactly the mistake conversation.css says it is avoiding.
+  expect(before.markerStyles).toEqual(['none', 'none'])
+  expect(before.plainMarkerStyle).toBe('disc')
+
+  // ...and AC1's second half, DISTINGUISHABLE, measured rather than read off a class name: the checked
+  // mark generates a tick with a real box and the unchecked one generates no pseudo-element at all.
+  // Both read in one call, so a build that drew neither fails here instead of passing one-sidedly.
+  expect(before.checkedTick.content).toBe('""')
+  expect(parseFloat(before.checkedTick.width)).toBeGreaterThan(0)
+  expect(before.uncheckedTick.content).toBe('none')
+
+  // The mark takes the container's MUTED ink and not --color-tertiary, which is the token this app uses
+  // to say interactive — the "borrow the geometry, not the posture" line, asserted. Read from the live
+  // document so a palette retune moves both sides together.
+  expect(before.markBorderColor).toBe(before.mutedTokenRgb)
+
+  // AC2 — struck text is struck in the browser, from the UA's own line-through (conversation.css
+  // declares no text-decoration), and muted by the one declaration it does make.
+  expect(before.delDecoration).toBe('line-through')
+  expect(before.delColor).toBe(before.mutedTokenRgb)
+  await expect(page.locator('.bubble__markdown del')).toHaveText(STRUCK_WORD)
+
+  // AC1's "neither is interactive", the BEHAVIOURAL half — the one claim in this ticket that only a tier
+  // with a DOM can make. The static tier asserts the emitted markup contains no control; this clicks a
+  // real mark in a real window and shows the reply is inert under it.
+  const unchecked = page.locator('.bubble__markdown .task-mark:not(.task-mark--checked)')
+  await unchecked.click()
+
+  const after = await readTaskMetrics(page, TASK)
+  expect(after.uncheckedTick.content).toBe('none')
+  expect(after.checkedTick.content).toBe('""')
+
+  // Nothing the reply rendered is focusable or clickable to begin with — the count that would have been
+  // 2 had the extension's own <input type="checkbox" disabled> been accepted verbatim rather than
+  // overridden away. The bubble's own chrome is the guard that this query still finds controls at all:
+  // exactly one, .bubble__copy in the meta row, which is #816's and not this ticket's.
+  expect(before.markdownInteractiveCount).toBe(0)
+  expect(before.bubbleInteractiveCount).toBe(1)
+  // ...and the click moved focus nowhere into the reply, so there is no keyboard target either.
+  const focusedInsideBubble = await page.evaluate(() =>
+    Boolean(document.activeElement?.closest('.bubble'))
+  )
+  expect(focusedInsideBubble).toBe(false)
+
+  // The over-correction guard every sibling assertion in this file carries: the mark is an inline box in
+  // the text column and must not have pushed the thread into a horizontal scrollbar.
   const thread = await readThreadWidths(page)
   expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
 })

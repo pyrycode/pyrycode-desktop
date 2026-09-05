@@ -349,3 +349,49 @@ strikethrough fixture whose text is markup, asserting the `&lt;` escaped-not-abs
 that the render contains no `style=`, no `href` and no `<img` — the sweep shape #1079 used for cells.
 
 **No MUST FIX.** Both SHOULD FIX items are Phase-B actions on a design that does not need to change.
+
+## Revisions
+
+### 2026-09-05 — Phase B
+
+Four departures from the plan as committed. Two are discoveries the plan was wrong about; two are the
+Open Questions resolving.
+
+1. **The `<ul>` carries a `contains-task-list` class the plan did not know about.** The plan named only
+   the `<li>`'s `task-list-item`, having read `mdast-util-to-hast`'s *list-item* handler; the class on
+   the list comes from its *list* handler. This mattered, because it offered a shorter selector for the
+   bullet suppression and the shorter selector is **wrong**: a list may mix task items with plain ones,
+   and suppressing per-list takes the plain item's bullet with it. `.bubble__markdown .task-list-item`
+   stands as planned, now for a stated reason rather than by default, and both tiers render a mixed list
+   so the grain is pinned — the unit tier counts both classes, the e2e tier asserts the plain item keeps
+   its `disc`. It changes nothing about § Security review finding 1: the class is a fixed literal in the
+   handler, not derived from source, so the set of daemon-influenced class values is still `language-*`
+   alone.
+
+2. **The interactivity count is scoped to `.bubble__markdown`, not to the whole `.bubble`.** The e2e
+   assertion as planned read every bubble, and a bubble already contains one real control — `.bubble__copy`,
+   the meta row's copy button (#816). That is pre-existing chrome and not this ticket's subject, so the
+   honest claim is that *the rendered markdown* is inert. The bubble-wide count is kept beside it as the
+   **vacuity guard**: it must be exactly 1, so a selector that had silently stopped matching anything
+   would fail there rather than making the 0 above meaningless.
+
+3. **Open question 1 (tick geometry) resolved.** A 4×8 box showing only its right and bottom 2px edges,
+   `translateY(-1px) rotate(45deg)`; rotated extent ~11.3px inside the 12px content box. The ring is as
+   planned: 14px outer, 1px border, 3px radius, `vertical-align: -3px`.
+
+4. **Open question 2 (scoping `.task-mark`) resolved as planned** — all four rules are scoped under
+   `.bubble__markdown`. `del` and `.task-list-item` must be (an element selector and a package-owned
+   class), and keeping the construct's four rules under one scope reads better than splitting them by
+   who owns the name.
+
+The **supply chain SHOULD FIX is discharged**, measured in this tree rather than taken from the ticket:
+`npm install` reported *"added 4 packages"* and a `node_modules` diff before and after shows exactly the
+four — **zero new transitives**, as claimed. Versions resolve at `micromark-extension-gfm-task-list-item@2.1.0`,
+`mdast-util-gfm-task-list-item@2.0.0`, `micromark-extension-gfm-strikethrough@2.1.0`,
+`mdast-util-gfm-strikethrough@2.0.0`. Each package's `scripts` block holds only `prepack`/`build`/
+`format`/`test*` — no `install`, `postinstall` or `prepare` — so nothing ran at install time. All four
+exports were confirmed to be functions returning objects before being called.
+
+The **second SHOULD FIX is discharged** by the case *"renders markup-looking task and struck text as
+inert escaped characters"*, which asserts the escaped-not-absent discriminator and sweeps the render for
+`style=`, `href` and `<img` — the shape #1079 used for table cells.

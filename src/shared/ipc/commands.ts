@@ -158,31 +158,50 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
+ * SIX MEMBERS CARRY AN OPTIONAL `serverId` (#1120): `requestConversations`, `requestRecentWorkspaces`,
+ * `createConversation`, `createWorkspaceFolder`, `interrupt` and `requestDebugBundle`. These are the
+ * SERVER-SCOPED commands — each is about a whole server and carries no id of any kind to route by, so
+ * with more than one server paired they reached whichever host was paired most recently. The field is a
+ * top-level string sibling of `payload`, NEVER a field inside it, exactly as `changeId` is: the envelope
+ * builders consume only `payload`, so the key stays off the wire BY CONSTRUCTION rather than by
+ * discipline, and four of the six are bare members with no payload at all, so it costs no payload type
+ * and no new wire-type import. It is a background-process ROUTING KEY, resolved against the connection
+ * registry's held entry set by `serverRouter.ts` and refused when it names no connected server; it is
+ * never a capability, a token selector, a path, or a log field.
+ *
+ * It is OPTIONAL, and that is what keeps #1120 main-only: a required field would be a compile-forced
+ * edit in six renderer senders and their fixtures, none of which has a per-server surface to source an
+ * id from until #1070/#1085/#1086 land. An absent id resolves to the sole connection when the registry
+ * holds exactly one entry, and is refused when it holds more — bounded and observable, never an
+ * arbitrary server. `notify` is deliberately NOT in this set: it is main-local (fireNotification owns
+ * the copy table, no command field supplies text, no frame results), so an id on it would be a field
+ * nothing reads.
+ *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
  * the boundary.
  */
 export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
-  | { type: 'requestDebugBundle' }
+  | { type: 'requestDebugBundle'; serverId?: string }
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
-  | { type: 'requestConversations' }
-  | { type: 'requestRecentWorkspaces' }
+  | { type: 'requestConversations'; serverId?: string }
+  | { type: 'requestRecentWorkspaces'; serverId?: string }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload }
   | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload }
-  | { type: 'createConversation'; payload: CreateConversationPayload }
+  | { type: 'createConversation'; payload: CreateConversationPayload; serverId?: string }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'archiveConversation'; payload: ArchiveConversationPayload }
   | { type: 'unarchiveConversation'; payload: UnarchiveConversationPayload }
   | { type: 'deleteConversation'; payload: DeleteConversationPayload }
   | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
-  | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload }
+  | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
-  | { type: 'interrupt' }
+  | { type: 'interrupt'; serverId?: string }
   | { type: 'notify'; payload: NotifyPayload }
 
 /**
@@ -260,9 +279,17 @@ export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCo
  * twin of a bare `requestConversations` constructor, not the payload-bearing `dequeueMessageCommand`.
  * The RendererCommand return type is the compile-time guarantee (AC4). Its caller is the render
  * affordance in #307.
+ *
+ * `serverId` (#1120) names the server whose turn to stop — a background-process routing key that never
+ * reaches the wire (the frame stays payload-free; main resolves the key and drops it). OPTIONAL,
+ * because no caller has a per-server surface to source one from yet: omitted, it reaches the sole
+ * connection when exactly one is held, and is refused when more are. Assigned UNCONDITIONALLY into the
+ * literal — this file's own `attachment_ids` idiom, whose docblock records that structured clone
+ * preserves an own property holding `undefined` and that the boundary guard therefore reads
+ * absent-or-undefined-or-string rather than present-or-absent.
  */
-export function interruptCommand(): RendererCommand {
-  return { type: 'interrupt' }
+export function interruptCommand(serverId?: string): RendererCommand {
+  return { type: 'interrupt', serverId }
 }
 
 /**
@@ -277,8 +304,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'sendMessage':
       return 'payload' in value && isSendMessagePayload(value.payload)
     case 'requestDebugBundle':
-      // Bare member: no payload to validate, so a well-formed `type` is complete acceptance.
-      return true
+      // Bare member: no payload to validate, so the optional server id (#1120) is the whole check.
+      return hasValidServerId(value)
     case 'requestSessionSettings':
       // Payload-required since #946, so this collapses to the neighbours' idiom. Both of #945's
       // acceptance arms are gone: an unnamed request addresses nothing and draws a zero-valued reply,
@@ -288,11 +315,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // value` alone would pass one straight through to the wire.
       return 'payload' in value && isRequestSessionSettingsPayload(value.payload)
     case 'requestConversations':
-      // Bare member (#139): no payload to validate, so a well-formed `type` is complete acceptance.
-      return true
+      // Bare member (#139): no payload to validate, so the optional server id (#1120) is the whole check.
+      return hasValidServerId(value)
     case 'requestRecentWorkspaces':
-      // Bare member (#380): no payload to validate, so a well-formed `type` is complete acceptance.
-      return true
+      // Bare member (#380): no payload to validate, so the optional server id (#1120) is the whole check.
+      return hasValidServerId(value)
     case 'answerModal':
       return 'payload' in value && isAnswerModalPayload(value.payload)
     case 'cancelModal':
@@ -302,7 +329,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'refuseQuestions':
       return 'payload' in value && isRefuseQuestionsPayload(value.payload)
     case 'createConversation':
-      return 'payload' in value && isCreateConversationPayload(value.payload)
+      return (
+        'payload' in value && isCreateConversationPayload(value.payload) && hasValidServerId(value)
+      )
     case 'promoteConversation':
       return 'payload' in value && isPromoteConversationPayload(value.payload)
     case 'archiveConversation':
@@ -316,7 +345,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'changeWorkspace':
       return 'payload' in value && isChangeWorkspacePayload(value.payload)
     case 'createWorkspaceFolder':
-      return 'payload' in value && isCreateWorkspaceFolderPayload(value.payload)
+      return (
+        'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
+      )
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -329,13 +360,41 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'dequeueMessage':
       return 'payload' in value && isDequeueMessagePayload(value.payload)
     case 'interrupt':
-      // Bare member (#306): no payload to validate, so a well-formed `type` is complete acceptance.
-      return true
+      // Bare member (#306): no payload to validate, so the optional server id (#1120) is the whole check.
+      return hasValidServerId(value)
     case 'notify':
       return 'payload' in value && isNotifyPayload(value.payload)
     default:
       return false
   }
+}
+
+/**
+ * The optional `serverId` arm of the guard above (#1120) — ONE helper for all six server-scoped
+ * members, so they cannot drift apart into six subtly different acceptance rules.
+ *
+ * ABSENT-OR-UNDEFINED-OR-STRING, and every word of that is load-bearing. `'serverId' in value` alone
+ * is wrong in BOTH directions here. Structured clone PRESERVES an own property whose value is
+ * `undefined` (this file's `attachment_ids` docblock records the same fact, and the
+ * `requestSessionSettings` arm records the reverse call for a REQUIRED field), so a present-key check
+ * would read `{ serverId: undefined }` as a supplied value rather than as the omission it is — and a
+ * present-key REJECTION would refuse the ordinary bare command every shipped sender emits, since none
+ * of the six renderer senders has a per-server surface to name a server from yet.
+ *
+ * TYPE, NOT EMPTINESS, and not canonical shape either. `''` is accepted here and refused one layer
+ * later: `serverRouter.ts` resolves every named id against the connection registry's held entry set,
+ * and `''` matches no record's `server`, so it takes the named branch and refuses with no frame on
+ * any wire. A shape check here would buy nothing the resolution does not already buy — the id is a
+ * routing key looked up against ids this process already holds, never a capability, a path, a cache
+ * key or a log field.
+ *
+ * Structural minimum otherwise, like every sibling: the field is read by the main-side router alone
+ * and never forwarded, and the envelope builders consume `payload` only, so it cannot reach the wire.
+ * Pure; never throws.
+ */
+function hasValidServerId(value: object): boolean {
+  if (!('serverId' in value)) return true
+  return value.serverId === undefined || typeof value.serverId === 'string'
 }
 
 function isSendMessagePayload(value: unknown): value is SendMessagePayload {

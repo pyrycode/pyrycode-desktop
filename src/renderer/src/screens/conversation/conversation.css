@@ -27,39 +27,23 @@
   position: relative;
 }
 
-/* #140 — the leading back affordance (Figma node 16-9's arrow_back inside a 48px frame): the seed of
-   the thread's top app bar, rendered as the first child of .conversation, before the unpair header. A
-   48px touch target wrapping the 24px glyph, left-aligned, on-surface content that gains a surface tint
-   on hover (the .status-sheet__close / composer__send treatment). Never grows or shrinks. 48px is
-   structural component geometry (the send-square convention). */
-.conversation__back {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: var(--space-1);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-on-surface);
-  cursor: pointer;
-}
+/* #1064 DELETED #140's LEADING BACK AFFORDANCE — the 48px arrow_back button that used to be the first
+   child of this column, together with its :hover, :focus-visible and glyph rules. The desktop drawing's
+   `Content` frame (Figma 106:3321) draws no leading affordance above the thread, and since #670 the
+   arrow only deselected: the sidebar it "returned to" is permanently on screen. `.settings__back` is now
+   the canonical statement of that 48px glyph-in-square treatment; this file's own
+   `.conversation__overflow-trigger` and `.composer__send` wear it too. Its class name is deliberately
+   spelled nowhere under `src/` or `e2e/` any more, so a grep across the code finds nothing rather than
+   finding an epitaph. It survives in `docs/` — the package overviews and the frozen per-ticket archive
+   record the control's history, which is theirs to keep and is what the documentation phase updates.
 
-.conversation__back:hover {
-  background: var(--color-surface-container-high);
-}
-
-.conversation__back:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-.conversation__back-icon {
-  display: block;
-}
+   THE THREAD STARTS HIGHER BY THE DELETED BOX — 48px plus its --space-1 margins — because this column
+   has no top padding and that child was `flex: 0 0 auto`. That lift IS the change, not a regression to
+   absorb: do not add padding, a spacer or a reserved band to hold the old offset. `.conversation__overflow`
+   is `position: absolute` and reserved no flow space, so it now floats over the thread's top-right corner
+   instead of sitting beside a control in flow — also expected, and interim: the header row comes back
+   DRAWN (a channel title and a channel settings button), and the overflow menu is itself mobile-era
+   chrome a later ticket retires once #683 lands the footer's model and effort controls. */
 
 /* #279 — the prominent, disconnected-only connection banner across the top of the thread, above the
    message list. (It used to be described as sitting below the header row; #1061 deleted that row.)
@@ -1923,8 +1907,8 @@
 /* #1102 — the focus ring, drawn INSIDE the border box. The rule above records why this rule had to stop
    inheriting the UA's: .tool-row now clips, and this button's border box coincides exactly with the row's
    padding box, so an outline at the UA's 0 offset is painted entirely outside the clip and vanishes.
-   1px solid --color-outline is this file's :focus-visible idiom at seven call sites
-   (.conversation__back, .bubble__copy, .queued-row__drop, …), and --color-outline rather than
+   1px solid --color-outline is this file's :focus-visible idiom at twenty rules, this one among them
+   (.composer__send, .bubble__copy, .queued-row__drop, …), and --color-outline rather than
    --color-primary because the latter is reserved here for an edge that must not read as the ring's twin
    (.composer__row--drop's note). outline-offset: -1px is .composer--drop-target's own device for the same
    job — the ring lands just inside the row's border rather than on top of it. (#1063: this sentence used to
@@ -1933,7 +1917,9 @@
    .composer--drop-target is the rule that does.)
    :focus-visible and not :focus, so a mouse click on the header does not draw a ring the design does not
    model. e2e/tool-row-toggle.spec.ts asserts a NEGATIVE offset on the focused toggle, which is what makes
-   "the clip does not eat it" a measured fact rather than this note's claim. */
+   "the clip does not eat it" a measured fact rather than this note's claim. (#1064: the count above read
+   "seven call sites" and named the back arrow first. The name went with the arrow; the number was
+   already wrong when #1102 wrote it — there were never seven — so it was re-counted, not decremented.) */
 .tool-row__chip--toggle:focus-visible {
   outline: 1px solid var(--color-outline);
   outline-offset: -1px;
@@ -3027,8 +3013,9 @@
    is the UA's and inherits .composer__input's `color` (--color-on-surface) — visible against the box's
    ground by construction rather than by declaration, which is exactly why it is asserted rather than
    assumed (see below). The same trade would NOT hold on a button: this file declares
-   `1px solid --color-outline` at 21 other call sites, .composer__send:focus-visible four rules below among
-   them, and #1063 is licence to drop none of them.
+   `1px solid --color-outline` at 20 other call sites, .composer__send:focus-visible four rules below among
+   them, and #1063 is licence to drop none of them. (#1064 deleted one of the 21 this used to count, the
+   back arrow's; the twin count above this rule is the same quantity and was corrected in the same pass.)
 
    .composer__input KEEPS ITS `outline: none` above. Not an oversight to tidy later: without it the UA draws
    its own ring on the textarea, which is both a ring the design does not have and a ring on the element
@@ -3193,9 +3180,9 @@
 }
 
 /* The 40×40 close tap target wrapping the 22×22 × icon (Figma 20-105/20-106) — muted content that
-   gains a surface tint on hover, mirroring the send-button treatment. (It named the unpair control as
-   the other example of that treatment until #1061 deleted it. Deliberately NOT re-pointed at
-   `.conversation__back`, the remaining match: #1064 removes that rule too.) */
+   gains a surface tint on hover, mirroring the send-button treatment. (It named two other examples of
+   that treatment in turn, the unpair control and the back arrow; #1061 and #1064 deleted both, so the
+   send button is now the whole citation.) */
 .status-sheet__close {
   flex: 0 0 auto;
   width: 40px;
@@ -3918,9 +3905,12 @@
 
 /* #276 — the thread top app bar's trailing overflow menu (Figma node 16-16): the single entry point to
    per-conversation actions, opening the Channel Info sheet first (#155). The wrapper anchors the trigger
-   to the top-right corner of .conversation (the position: relative containing block), balancing the
-   left-aligned BackControl across the top-bar band. Absolute, so it overlays rather than pushing flow;
-   the back arrow's row leaves this corner empty. NO explicit z-index by design: a positioned element
+   to the top-right corner of .conversation (the position: relative containing block). It balanced the
+   left-aligned back arrow across the top-bar band until #1064 deleted that arrow; this trigger is the
+   band's last survivor and now floats alone over the thread's top-right corner, which the deletion note
+   at the top of this file records as expected and interim. Absolute, so it overlays rather than pushing
+   flow — which is also why nothing reflowed into the deleted arrow's space, and why the thread simply
+   starts higher. NO explicit z-index by design: a positioned element
    already paints above the non-positioned message thread ("above the message list"), and the
    status-sheet / permission-modal overlays — also positioned but later in the child list — keep painting
    above this menu by DOM order ("below the sheet overlay"). A competing z-index here would lift the menu
@@ -3932,9 +3922,11 @@
   right: var(--space-1);
 }
 
-/* The trigger — the .conversation__back glyph-in-48px treatment (Figma 16-16's 48px frame around the
+/* The trigger — the .composer__send glyph-in-48px treatment (Figma 16-16's 48px frame around the
    24px more_vert 16-17): a transparent round icon button, on-surface content gaining a surface tint on
-   hover and a focus-visible outline. 48px is structural component geometry (the send-square convention). */
+   hover and a focus-visible outline. 48px is structural component geometry (the send-square convention).
+   (It cited the back arrow for this until #1064 deleted it; the send button is the surviving twin here,
+   and `.settings__back` is the one that keeps the 48px SQUARE shape outside this file.) */
 .conversation__overflow-trigger {
   width: 48px;
   height: 48px;

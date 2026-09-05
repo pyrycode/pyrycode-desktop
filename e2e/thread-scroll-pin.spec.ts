@@ -613,14 +613,20 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   const before = await readThreadMetrics(page)
   expect(before.scrollTop).toBe(0)
 
-  // Leave. Back dispatches the shell's `back` route flip and touches no store; the two-pane shell's chat
-  // pane then renders `null` in place of the ConversationScreen, so React destroys the subtree and the
-  // pin's ref and flag go with it. #670 re-pointed the gate that follows: it used to await the LIST,
-  // which was a sound unmount proof only while the list and the thread were mutually exclusive. The list
-  // is now always on screen, so that assertion would pass instantly and the re-entry below could race
-  // the unmount — reading the thread's OWN disappearance restores the gate.
-  await page.locator('.conversation__back').click()
+  // Leave — VIA SETTINGS, because #1064 deleted the thread's back arrow this step used to click. The
+  // detour is faithful rather than convenient: `back` is ABSOLUTE in nextPairedRoute, so `.settings__back`
+  // lands on route `list` exactly as the arrow did, the chat pane renders `null` in place of the
+  // ConversationScreen, React destroys the subtree, and the pin's ref and flag go with it. Neither leg
+  // touches a store, so the timeline is untouched. SWITCHING ROWS WOULD NOT DO: activateConversation
+  // resets the timeline when the active id changes, which would destroy the test rather than exercise it.
+  //
+  // #670 re-pointed the gate below: it used to await the LIST, a sound unmount proof only while the list
+  // and the thread were mutually exclusive. The list is now always on screen, so that assertion would pass
+  // instantly and the re-entry could race the unmount — reading the thread's OWN disappearance restores
+  // the gate, and it still reddens correctly here because the Settings route replaces the whole shell.
+  await page.locator('.channel-list__settings').click()
   await expect(page.locator('.conversation')).toHaveCount(0)
+  await page.locator('.settings__back').click()
 
   // Re-enter the SAME row, through the real product-UI click the fixture itself performs — never a forced
   // route dispatch or store mutation. activateConversation resets the timeline only when the active

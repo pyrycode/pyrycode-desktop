@@ -11,14 +11,14 @@ import { sessionStore } from './store/sessionStore'
 // with PairedShellView — exactly as App.test.tsx leaves the onPaired→setRoute glue to composition.
 const noop = (): void => {}
 
-// Markers that discriminate the two views: the thread carries the composer's Send control and the
-// leading back affordance; the list carries the Channel List's always-present wrapper (#141). Its
-// row content is covered by ChannelList.test.tsx, not here.
+// Markers that discriminate the two views: the thread carries the composer's Send control; the list
+// carries the Channel List's always-present wrapper (#141). Its row content is covered by
+// ChannelList.test.tsx, not here. (#1064 retired a second thread marker, `aria-label="Back"`, with the
+// leading affordance it named — CONVERSATION_MARKER already discriminated the thread on its own.)
 const CONVERSATION_MARKER = 'aria-label="Send"'
-const BACK_MARKER = 'aria-label="Back"'
 const LIST_MARKER = 'aria-label="Conversations"'
-// The settings view's root region marker (#333). A settings-UNIQUE discriminator: neither the list's
-// entry-button `aria-label="Settings"` nor the thread's `aria-label="Back"` matches it, and — unlike the
+// The settings view's root region marker (#333). A settings-UNIQUE discriminator: the list's
+// entry-button `aria-label="Settings"` does not match it, and — unlike the
 // "Connection" heading text — it does not collide with the thread's `aria-label="Connection status"`.
 const SETTINGS_MARKER = 'aria-label="Settings screen"'
 // The archive view's root region marker (#347). An archive-UNIQUE discriminator: the list's Archive
@@ -61,12 +61,11 @@ describe('PairedShellView', () => {
       sessionStore.setState({ status: { type: 'disconnected' }, messages: [] })
     })
 
-    it('shows the conversation thread with its leading back affordance', () => {
+    it('shows the conversation thread', () => {
       const markup = renderToStaticMarkup(
         <PairedShellView route="thread" paneKey={PANE_KEY} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(CONVERSATION_MARKER)
-      expect(markup).toContain(BACK_MARKER)
     })
 
     // #670 AC1: both panes at once. Opening a conversation no longer REPLACES the list — the two-pane

@@ -602,9 +602,10 @@
 
 /* The Archive entry (#347) — the leading cluster member, a desktop-invented icon button mirroring the
    gear's shape (no Figma node pins it on the list scope 15-8, like the Settings entry). The 48px
-   glyph-in-square is the .conversation__back treatment (transparent → surface-container-high on hover,
-   focus-visible outline); 48px is structural component geometry (the .conversation__back square
-   precedent). */
+   glyph-in-square is the .settings__back treatment (transparent → surface-container-high on hover,
+   focus-visible outline); 48px is structural component geometry (the .settings__back square
+   precedent). (#1064: both citations named the conversation screen's back arrow, which it deleted;
+   .settings__back is the surviving twin, carrying the identical treatment.) */
 .channel-list__archive {
   flex: 0 0 auto;
   width: 48px;
@@ -633,7 +634,7 @@
 
 /* The Settings entry affordance (#333) — the trailing cluster member (conventional gear-rightmost). Now
    a child of .channel-list__actions (#347), so the sticky positioning moved to the cluster; this rule
-   keeps only the 48px glyph-in-square box + presentation (the .conversation__back treatment: transparent
+   keeps only the 48px glyph-in-square box + presentation (the .settings__back treatment: transparent
    → surface-container-high on hover, focus-visible outline). 48px is structural component geometry. */
 .channel-list__settings {
   flex: 0 0 auto;
@@ -673,7 +674,7 @@
        and scrolls (auto margins collapse to 0 under overflow, so it sits after the last row and sticks).
    z-index lifts it above the rows; the corner offsets are spacing tokens (right --space-4, bottom
    --space-6 — the container's matching padding-bottom gives the same gap in the short state). 56px is
-   structural component geometry (the .conversation__back 48px-square precedent). */
+   structural component geometry (the .settings__back 48px-square precedent). */
 .channel-list__fab {
   position: sticky;
   bottom: var(--space-6);

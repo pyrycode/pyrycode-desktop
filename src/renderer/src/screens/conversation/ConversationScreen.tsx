@@ -151,10 +151,12 @@ export interface ConversationScreenProps {
   // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
   // clears + resets, it just doesn't navigate.
   onUnpaired?: () => void
-  // #140: return from the thread to the paired shell's list view (the leading arrow_back of Figma
-  // 16-9). Optional and gated exactly like onUnpaired: when absent, BackControl renders null, so a
-  // bare `<ConversationScreen />` keeps today's behavior with no top-bar back affordance (AC3). The
-  // PairedShell-mounted thread wires it to a nav dispatch.
+  // #140: the shell's `back` dispatch — return from the thread to route `list`. #1064 deleted the
+  // leading arrow that called it, and KEPT the prop: it is the screen's "am I mounted in the paired
+  // shell" signal, which the overflow menu is gated on, so dropping it would unmount that menu too.
+  // Optional and gated exactly like onUnpaired, so a bare `<ConversationScreen />` (no shell) shows no
+  // shell-only chrome. The PairedShell-mounted thread wires it to a nav dispatch; nothing inside this
+  // screen calls it any more.
   onBack?: () => void
 }
 
@@ -289,12 +291,12 @@ export function ConversationScreen({
   const { scrollPin, followBottom } = useThreadScrollPin()
   return (
     <div className="conversation">
-      <BackControl onBack={onBack} />
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
-          longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal
-          (BackControl's gate): a bare `<ConversationScreen />` shows neither. Gated at the mount site, not
-          self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks).
+          longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal —
+          established by #140's back affordance, which shared this gate until #1064 deleted it (see the
+          note above ThreadOverflowMenuView): a bare `<ConversationScreen />` still shows no menu. Gated at
+          the mount site, not self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks).
           #962: it now carries all three entry points. The last two setters are VERBATIM what the retired
           StatusRow and BackgroundTaskTrigger did from their own mounts in the region between the thread
           and the composer — the overlays and their open/closed state are untouched, only the affordance
@@ -3553,39 +3555,35 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
 // `.conn-dot--*` colour bindings moved to `channels.css` beside `.channel-list__host-dot` rather than
 // dying with the row's stylesheet block, since the sidebar wears them without the `.conn-dot` base.
 
-// #140: the leading back affordance of the thread's top app bar (Figma node 16-9 → arrow_back 16-11):
-// a 48px touch target holding the 24px arrow_back glyph in on-surface, returning to the paired shell's
-// list view. Optional-prop-gated exactly like #166's onUnpaired — returns null when onBack is absent,
-// so a bare `<ConversationScreen />` (no shell) is unchanged DOM-wise and only the PairedShell-mounted
-// thread shows it (AC3/AC4). Icon-only, so aria-label supplies the accessible name (the
-// .composer__send / StatusRow pattern). The title from Figma 16-9 is a future ticket; its trailing
-// overflow menu (16-16) is #276's ThreadOverflowMenu, mounted beside this control.
-function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
-  if (!onBack) return null
-  return (
-    <button type="button" className="conversation__back" aria-label="Back" onClick={onBack}>
-      <svg
-        className="conversation__back-icon"
-        viewBox="0 0 24 24"
-        width="24"
-        height="24"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
-      </svg>
-    </button>
-  )
-}
+// #1064 DELETED #140's LEADING BACK AFFORDANCE — an `aria-label="Back"` button holding the 24px
+// arrow_back glyph (Figma 16-9 → 16-11), rendered as the first child of `.conversation`. It was the
+// mobile chat screen's leading control, ported when the app showed one screen at a time. Since #670 the
+// sidebar is permanently mounted beside the thread, so the list it "returned to" was already on screen
+// and the arrow's real job had become DESELECT: flip the shell's route from `thread` to `list`, emptying
+// the right pane and leaving the sidebar exactly as it was. The desktop drawing's `Content` frame
+// (Figma 106:3321) has no leading affordance above the thread at all. Operator call, 2026-09-04.
+//
+// The empty pane is not what went — it is still reachable three ways, all landing on route `list`
+// (`back` is absolute in `nextPairedRoute`): the shell enters at `list`, Settings and Archive return
+// there through their own back controls, and the delete and archive exits dispatch `back` too. What is
+// gone is the way back to it FROM the open thread, which is the point.
+//
+// `onBack` deliberately SURVIVES the control it was named for: it is the screen's "am I mounted in the
+// paired shell" signal, and the overflow menu above is gated on it. The header row this control led is
+// also staying — #1061 deleted the bare row and Juhana will draw its replacement, carrying a channel
+// title and a channel settings button — so the overflow trigger floats over the thread's top-right
+// corner until that lands, and the thread starts higher by this control's 48px + margins. Both are
+// expected: no padding, spacer or reserved band compensates for the offset.
 
-// #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the
-// BackControl twin on the right edge, the single entry point to per-conversation actions. Props-in /
+// #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the single
+// entry point to per-conversation actions, on the right edge. Props-in /
 // markup-out with NO state and NO effects, so renderToStaticMarkup renders both the collapsed and open
 // states directly (the entire tested contract, the ComposerSendButton / ThinkingIndicator posture). The
 // interaction shell (toggle, Escape / outside-click dismiss, focus-return) lives in the container below.
 //
 // The trigger is an icon-only <button> carrying the 24px more_vert glyph (Figma 16-17) in a 48px frame,
-// the .conversation__back treatment; aria-label supplies its accessible name, aria-haspopup="menu"
+// the .composer__send treatment (it named the back arrow's until #1064 deleted that rule; outside this
+// screen .settings__back is the surviving 48px square); aria-label supplies its accessible name, aria-haspopup="menu"
 // advertises the popup, and aria-expanded tracks open/closed (React stringifies the aria boolean under
 // server render → "true"/"false", both directly assertable). When `open`, a role="menu" surface drops
 // below it holding one role="menuitem" per action — the extension slot #155 documented, which #962

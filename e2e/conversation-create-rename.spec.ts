@@ -44,6 +44,11 @@ const SEED: ConversationSummary = {
 // SEED.name so both final assertions (SEED still present / created-under-NEW_TITLE present) stay crisp.
 const NEW_TITLE = 'Created then renamed'
 
+// The FAB-created row's displayed title before the rename: it is minted unnamed (name: null), so
+// titleFor(null) = 'Untitled' — the sibling specs' convention. Used below to tell the created row apart
+// from SEED, which is named, when reading which row the sidebar marks as open.
+const UNTITLED = 'Untitled'
+
 test('create → nav into thread, rename via the Channel-info sheet, both rows re-list', async ({
   launchPairedApp
 }) => {
@@ -53,9 +58,10 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   const { page } = await launchPairedApp({ buildReplyFrames })
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
-  // with activeConversation = SEED. Back to the list, where the app-singleton conversation-list store
-  // already holds SEED (listed on the connected edge).
-  await page.locator('.conversation__back').click()
+  // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
+  // on the connected edge), and since #670 the sidebar is mounted BESIDE the thread — so the list is
+  // already on screen and the baseline below reads it where it stands. (#1064 deleted the back arrow this
+  // used to click first; that round trip only ever existed to reach a list that never left.)
 
   // AC2 — baseline list render: the seeded row renders. Scope to `.channel-list` to keep the assertion
   // off any incidental match elsewhere.
@@ -69,11 +75,22 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // #515's re-list lands the row in the store, still unnamed). Assert NAVIGATION into a thread, NOT list
   // membership: the list re-renders on the re-list whether or not the app navigated, so a row assertion
   // here would not separate the two. (Since #670 the list stays MOUNTED beside the thread, which only
-  // sharpens the point.) The overflow trigger is absent on the list and present on a thread, so its
-  // auto-wait IS the create-nav gate.
+  // sharpens the point.)
+  //
+  // #1064 REPLACED THIS GATE, because deleting the back arrow took its detector away. It used to read
+  // `expect('.conversation__overflow-trigger').toBeVisible()`, which gated only because the deleted round
+  // trip had parked the drive on route `list`, where that trigger is absent. With the round trip gone the
+  // drive never leaves the thread: `launchPairedApp` ends inside SEED's, `PairedShellView` passes `onBack`,
+  // so the trigger is mounted from launch onward and that assertion would resolve whether or not create-nav
+  // happened. What still separates the two is WHICH conversation is open. `aria-current="true"` marks the
+  // open row (#1098) and follows `activeConversation`, which `useConversationCreatedNav` moves onto the
+  // minted row — so the mark sits on SEED until create-nav lands and on the created row after. Reading the
+  // marked row's title tells them apart, since the created row is unnamed (UNTITLED) where SEED is named:
+  // a create-nav regression leaves the mark on SEED reading 'Seeded channel' and reddens here. The
+  // open-row read mirrors `conversation-switch-keeps-both-threads`'s `expectOnlyOpenRow`.
   await page.locator('.channel-list__fab').click()
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(UNTITLED)
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
-  await expect(overflowTrigger).toBeVisible()
 
   // Open the Channel-info sheet from the thread overflow menu. The sheet mounts reading the
   // activeConversation slice = the created payload (non-null → the Rename pill renders).
@@ -99,10 +116,18 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
 
   // Reflect on the RE-LISTED Channel List, not the thread: activeConversationStore is not rewritten by
   // conversation_updated, so the open thread's / sheet's own title may not update; the observable
-  // reflection is the re-list. The sheet is a full-surface overlay whose scrim intercepts pointer events,
-  // so close it (its Close button) before the back button is clickable, then navigate back to the list.
+  // reflection is the re-list — which #670's always-mounted sidebar puts on screen already, so there is
+  // no navigation step here at all.
+  //
+  // THE CLOSE CLICK STAYS, WITH A DIFFERENT REASON. It was justified by the sheet's full-surface scrim
+  // intercepting pointer events "before the back button is clickable"; #1064 deleted that button, and the
+  // scrim never covered the sidebar anyway (`.status-sheet-overlay` is absolute INSIDE `.conversation`),
+  // nor would it block the visibility assertions below, which do not hit-test. What earns the click its
+  // place now is that it completes the sheet's own flow: the Channel-info RENAME path does not self-close
+  // (unlike onArchive / onDeleteConfirm in the sibling spec), so without it the spec would make its
+  // closing assertions from behind a modal left open over the pane — a state no operator reaches, and a
+  // landmine for any later assertion here that does hit-test.
   await page.locator('.status-sheet__close').click()
-  await page.locator('.conversation__back').click()
 
   // AC4 — multi-row render + rename reflection: BOTH rows render, scoped to `.channel-list`, exact text —
   // SEED ("Channels" section) AND the created row under NEW_TITLE ("Chats" section). The

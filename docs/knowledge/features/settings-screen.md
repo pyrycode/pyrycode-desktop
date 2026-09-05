@@ -394,10 +394,13 @@ Token-only, mirroring `channels.css`'s screen-root posture (`height: 100%; overf
 direct-child-of-`#root` idiom). The one deliberate deviation from `channels.css`'s section-header
 tone: `.settings__section-header` uses `--color-primary` (#9dcbfc), not the muted
 `--color-on-surface-variant` `.channel-list__section-header` uses — the M3 settings-section-header
-color per Figma. `.settings__back` duplicates `.conversation__back`'s ~15-line treatment verbatim
-(48px square, `--radius-full`, transparent→`--color-surface-container-high` hover,
-`--color-outline` focus-visible outline) rather than extracting a shared class — an explicit
-out-of-scope call in the spec, not an oversight. `.settings__storage-row` / `-text` / `-label` / `-count` (#351) and `.settings__about-row` (`--space-3`/
+color per Figma. `.settings__back` states its own ~15-line treatment directly (48px square,
+`--radius-full`, transparent→`--color-surface-container-high` hover, `--color-outline` focus-visible
+outline) rather than sharing a class — an explicit out-of-scope call in the original spec, not an
+oversight. It duplicated `.conversation__back` verbatim until
+[#1064](conversation-shell-chrome.md#back-control-140-deleted-by-1064) deleted that rule; `.settings__back`
+is now the sole statement of the treatment, and three stylesheets' comments were re-pointed at it in the
+same ticket. `.settings__storage-row` / `-text` / `-label` / `-count` (#351) and `.settings__about-row` (`--space-3`/
 `--space-4` padding) / `.settings__about-version` (`--color-on-surface` + the four `--text-body-large-*`
 declarations) mirror the Server row's padding and label type treatment (#350/#351) — each a dedicated
 class rather than reusing `.settings__server-row*`, introducing no new token or literal.

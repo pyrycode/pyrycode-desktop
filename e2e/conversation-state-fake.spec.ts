@@ -50,10 +50,10 @@ test('rename reflects through the stateful fake: new title in the list, old gone
   const buildReplyFrames = conversationStateFake({ conversations: [SEED] })
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  // launchPairedApp lands in the thread (it clicked the seeded promoted row to reach it). Back to the
-  // list, where the app-singleton conversation-list store already holds the seed → the promoted row
-  // renders with its rename pencil.
-  await page.locator('.conversation__back').click()
+  // launchPairedApp lands in the thread (it clicked the seeded promoted row to reach it). The
+  // app-singleton conversation-list store already holds the seed and, since #670, the sidebar stays
+  // mounted beside the thread → the promoted row renders with its rename pencil right there. (#1064
+  // deleted the back arrow this used to click first; the round trip reached a list that never left.)
 
   const renamePencil = page.locator('.channel-list__rename')
   await expect(renamePencil).toBeVisible()

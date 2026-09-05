@@ -109,7 +109,14 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
   list even though the row now lands in the store) but the *reason* is different — see #515 for the
   corrected rationale — and surfaces a harness-adjacent UI lesson: the Channel-info sheet is a full-surface
   `.status-sheet-overlay` scrim that blocks `.conversation__back` until the sheet's own
-  `.status-sheet__close` is clicked first — relevant to any future scenario that opens the sheet.
+  `.status-sheet__close` is clicked first — relevant to any future scenario that opens the sheet. **Expired
+  since [#670](../codebase/670.md):** `.status-sheet-overlay` is absolute *inside* `.conversation`, so once
+  the sidebar sat permanently beside the thread the scrim never covered it — nothing on the sidebar was
+  ever hit-blocked. [#1064](conversation-shell-chrome.md#back-control-140-deleted-by-1064) deleted
+  `.conversation__back` outright and confirmed the point moot; the `.status-sheet__close` click this spec
+  still makes survives on different footing — the Channel-info rename does not self-close (unlike
+  `onArchive`/`onDeleteConfirm` just below), so skipping it would leave later assertions running behind an
+  open modal.
 - **#451's independent sibling, the destructive-lifecycle scenario, landed too.**
   [#452](../codebase/452.md) added `e2e/conversation-archive-lifecycle.spec.ts` — the fake-stack twin of
   the real-daemon lifecycle spec [#440](../codebase/440.md), driving one FAB-created conversation through

@@ -32,8 +32,9 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 //   - Fixture: `test.use({ spawnClaude:false, seedPromoted:true })` + the explicit pairing drive (from
 //     real-daemon-rename.spec.ts) instead of `launchPairedApp`.
 //   - Starting screen: the real-daemon path lands on `route='list'` post-pairing (PairedShell), NOT inside
-//     the seed thread — so there is NO opening `.conversation__back`; a `.channel-list__rename` readiness
-//     gate under HANDSHAKE_TIMEOUT_MS stands in.
+//     the seed thread — so there is no opening navigation step at all; a `.channel-list__rename` readiness
+//     gate under HANDSHAKE_TIMEOUT_MS stands in. (The fake twin opened with a Back click until #1064
+//     deleted that control; it now acts on the always-mounted sidebar directly.)
 //   - Seed title: the fixture's seedRegistry writes NO `name` (realDaemon.ts:444-448), so the seed renders
 //     titleFor(null) = "Untitled" too. The fake twin's SEED was named ("Seeded channel"), title-unique; here
 //     the title COLLIDES, so the re-entry click and the post-delete survivor assertion are scoped by SECTION
@@ -82,7 +83,7 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   // --- Readiness gate: the promoted seed's Rename pencil renders ONLY after the whole chain — handshake
   // complete → session `connected` → the auto-fired `list_conversations` returned the seeded promoted row →
   // it rendered in the Channels section. The real-daemon path lands on `route='list'` (no opening thread),
-  // so this gate replaces the fake twin's opening `.conversation__back`.
+  // so this gate replaces the fake twin's opening navigation step.
   await expect(page.locator('.channel-list__rename')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
   // --- Baseline: the Archive view starts empty (the observed 0 of the 0→1). The promoted seed is never
@@ -125,10 +126,10 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
 
   // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
-  // (the `.conversation__back` click that used to stand here is gone: the control is unmounted by the time
-  // it would run). This 1→0 delta is the load-bearing navigation proof, and it auto-waits TWO round trips
-  // against the real daemon, not one: archive → conversation_updated → re-list request → conversations →
-  // exit.
+  // (the manual Back click that used to stand here went in #653: the control was unmounted by the time it
+  // would have run, and #1064 has since deleted it outright). This 1→0 delta is the load-bearing
+  // navigation proof, and it auto-waits TWO round trips against the real daemon, not one: archive →
+  // conversation_updated → re-list request → conversations → exit.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // Nav to the Archive view. With the manual Back gone, this click can only resolve because the app
@@ -191,9 +192,10 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
   // #652 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back
-  // click (the `.conversation__back` click that used to stand here is gone: the control is unmounted by
-  // the time it would run). This 1→0 delta is the navigation proof; it auto-waits the whole
-  // delete → conversation_deleted → exit round trip against the real daemon.
+  // click (the manual Back click that used to stand here went in #652: the control was unmounted by the
+  // time it would have run, and #1064 has since deleted it outright). This 1→0 delta is the navigation
+  // proof; it auto-waits the whole delete → conversation_deleted → exit round trip against the real
+  // daemon.
   await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // AC5 — gone from the active Channel List (the load-bearing "deleted from store" proof: this is the one

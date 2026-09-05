@@ -1697,7 +1697,21 @@
    pending/unresolved dimming (opacity is a de-emphasis device here, not a color literal, like the
    .status-sheet-overlay__scrim / .status-sheet__handle precedent); #206 fills the result and owns
    whether that dimming lifts. A child of .conversation__thread's flex column, so it inherits the
-   column's gap; no flex/margin of its own.
+   column's gap; no margin of its own.
+
+   flex: 0 0 auto IS REQUIRED SINCE #1102, and it was found missing in the running app on 2026-09-05:
+   every tool row in a real chat had shrunk to a 2px blue line. The clip below is why. A flex item whose
+   overflow is not visible has an automatic minimum size of 0 in its main axis rather than its content
+   size, and .conversation__thread is a column that scrolls (flex: 1 1 auto; min-height: 0; overflow-y:
+   auto). So the moment the thread is taller than its viewport, which is any chat longer than the window,
+   the layout looks for children that can give up height, and a clipping row with the default flex-shrink:
+   1 is the only kind that can — bubbles do not clip, so their content stays their floor. Every tool row
+   gave up all of its height and kept only its two borders. Before #1102 the clip sat on the chip, which is
+   not a child of the thread, so the row's floor was its content and nothing shrank. This declaration is
+   this file's own no-shrink idiom (twenty-odd sites, .conversation__thinking and .queued-row among them)
+   and it is what e2e/thread-scroll-pin.spec.ts's collapsed-height assertion holds: that spec's thread
+   overflows on purpose, which is the one layout where a shrinkable row shrinks.
+   e2e/tool-row-toggle.spec.ts measures rows in a thread that never overflows and cannot see this.
 
    #1102 MOVED THE BOX TREATMENT HERE, from .tool-row__chip. #696 made the body the chip's SIBLING —
    the chip is a <button> and a <pre> is not phrasing content, so nesting was never available — and #722
@@ -1714,7 +1728,8 @@
    :hover fill to a rectangle inset 12px inside the border on every side — a collapsed row changed on
    screen, which AC2 forbids — and would move the chip-width equalities in e2e/tool-row-toggle.spec.ts by
    26px rather than by the 2px of border they actually moved. Collapsed height is 1 + 8 + 20 + 8 + 1 = 38
-   either way, unchanged from #722, which is what e2e/thread-scroll-pin.spec.ts's rows measure.
+   either way, unchanged from #722, and e2e/thread-scroll-pin.spec.ts now measures it inside an
+   overflowing thread (it used to count rows there and measure nothing).
 
    flex-direction: column MOVED HERE from .tool-row--expanded: the row is a column in both states once it
    is the box, and only the GAP between the two children is state-dependent. justify-content: flex-start
@@ -1725,6 +1740,7 @@
 .tool-row {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   overflow: hidden;
   opacity: 0.5;
   background: var(--color-surface);

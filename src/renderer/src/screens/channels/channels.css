@@ -10,8 +10,10 @@
  *
  * #1097 converged the ROW on the desktop node (103:2968) — a 24px row with a body-small label, a 6px
  * corner and 4px between consecutive rows — and deleted the mobile node's trailing last-activity time.
- * The mobile 15-8 mirroring above still describes the rest of the screen (headers, host and workspace
- * rows, divider, FAB), which that pass deliberately left alone.
+ * The 2026-09-05 inset fix converged the TREE'S PLACEMENT on the desktop sidebar node (103:2959): the
+ * card's 20px inset, the section header's spacing, the channel list's 20px indent, the host dots'
+ * trailing edge and the divider's 28px margins. The mobile 15-8 mirroring above still describes what is
+ * left of the mobile screen: the FAB, the actions cluster and the empty state.
  */
 
 /* The scroll column. Since #670 this <section> is the child of `.paired-shell__sidebar`, the shell's
@@ -20,6 +22,15 @@
    width rule of its own, so the sidebar's 400px is the single place that width is decided.
    box-sizing:border-box keeps the vertical padding inside that 100% so the surface fills edge-to-edge
    (Figma 15-8) and long lists scroll inside this column rather than the window.
+
+   The HORIZONTAL padding is the desktop card's inset (Figma "Channels and chats" 103:2959, p-[20px]).
+   Every level of the tree — section header, host row, workspace row, channel row, divider — is laid out
+   against this 360px content box, which is exactly the width the design draws them in, so the node's own
+   x coordinates transfer without translation (`.channel-list__host-status` below relies on that). The
+   VERTICAL pair is not the design's 20: the top 4 is the sticky actions cluster's rest position and the
+   bottom 24 matches the FAB's sticky offset (its rule says why), and both controls are interim desktop
+   chrome the design places elsewhere. When they move, the vertical pair becomes --space-5 too.
+   e2e/sidebar-tree-geometry.spec.ts pins every offset this inset produces.
 
    #1058 — NO background. This used to paint --color-surface, the same colour .paired-shell paints behind
    it, which is precisely why the sidebar never read as a pane; the card now lives on
@@ -52,15 +63,20 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: var(--space-1) 0 var(--space-6);
+  padding: var(--space-1) var(--space-5) var(--space-6);
   position: relative;
   color: var(--color-on-surface);
   font-family: var(--font-sans);
 }
 
-/* Section header (Figma 15:58) — muted label-large at 85% (opacity, not a color literal). */
+/* Section header (Figma 103:2984) — muted label-large at 85% (opacity, not a color literal). No
+   horizontal padding: the card's inset on `.channel-list` is the header's x. The 12px below is the
+   section's header→hosts gap (103:2966 gap-[12px]); the header's own box is the bare 20px line, so the
+   first host row lands 32px under the header's top, as drawn. No top padding either: the Chats header's
+   distance from the divider is the divider's own margin, and the Channels header sits directly under the
+   actions cluster until that cluster moves to the design's bottom row. */
 .channel-list__section-header {
-  padding: var(--space-3) var(--space-4) var(--space-1);
+  padding: 0 0 var(--space-3);
   color: var(--color-on-surface-variant);
   opacity: 0.85;
   font-size: var(--text-label-large-size);
@@ -70,15 +86,17 @@
 }
 
 /* The host row heading each tree (#710, Figma 106:3094) — the machine the tree's conversations live on,
-   sitting between the section label and that tree's rows. The 16px horizontal padding aligns it with both
-   (Figma px-16/py-4); centering the 12px glyph against the label's 20px line box reproduces the design's
-   20px-tall `Row icon` wrapper frame (106:3107) without needing a wrapper element. Not interactive in this
-   slice, so no radius, background, hover or focus rule — the Figma's 6px corner has nothing to clip. */
+   sitting between the section label and that tree's rows. The 16px LEFT padding is the design's px-16;
+   the right padding is 0 because the design floats its two connection dots inside that padding, 1px in
+   from the row's edge (see `.channel-list__host-status`), and 1px has no slot on the scale. Centering the
+   12px glyph against the label's 20px line box reproduces the design's 20px-tall `Row icon` wrapper
+   frame (106:3107) without needing a wrapper element. Not interactive in this slice, so no radius,
+   background, hover or focus rule — the Figma's 6px corner has nothing to clip. */
 .channel-list__host {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) var(--space-4);
+  padding: var(--space-1) 0 var(--space-1) var(--space-4);
 }
 
 /* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __fab-icon); the
@@ -121,12 +139,15 @@
 
 /* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114). `margin-left: auto` is the
    whole point of this rule: `.channel-list__host` had no trailing element before this slice, so riding its
-   `gap` alone would leave the pair sitting beside the label instead of at the row's trailing edge. The 16px
-   right inset comes from the row's own padding, which is where it must come from — the design's absolute
-   x coordinates (341 and 353) are measured in a 360-wide design row against a shipped 400px sidebar, and
-   read literally they would put the trailing dot 1px from the row's edge, contradicting the 16px inset
-   #703 deliberately aligned the workspace row to. Only the RELATIVE geometry transfers: 6px diameter, 6px
-   gap, host leg first. */
+   `gap` alone would leave the pair sitting beside the label instead of at the row's trailing edge.
+
+   The pair sits FLUSH with that edge, which since the 2026-09-05 inset fix is also the channel rows'
+   trailing edge. #718 had inset it 16px on the row's padding, reasoning that the design's absolute x
+   coordinates (341 and 353) were measured in a 360-wide design row against a 400-wide shipped one. Now
+   that `.channel-list` carries the card's 20px inset the row IS 360 wide and those coordinates read
+   literally: the design floats the pair inside the row's px-16, 1px from its edge. The 1px is below the
+   scale and the eye, so the row's right padding is 0 rather than a literal. The relative geometry is
+   unchanged: 6px diameter, 6px gap, host leg first. e2e/host-label-sidebar.spec.ts pins the flush edge. */
 .channel-list__host-status {
   margin-left: auto;
   display: flex;
@@ -281,16 +302,24 @@
   font-weight: var(--text-label-large-weight);
 }
 
-/* One row (Figma 15:59) — a flex wrapper holding the open action and the optional Save-as-channel
+/* One row (Figma 103:2968) — a flex wrapper holding the open action and the optional Save-as-channel
    affordance as SIBLINGS (an interactive control cannot nest inside the open <button>, #274). It carries
    no padding/hover itself; those live on the open action so the two children highlight independently.
 
-   `position: relative` is #801's only edit here — the containing block for the status dot below, the
-   `position: relative` parent + `position: absolute` child idiom this file already uses at :500. */
+   `position: relative` is #801's edit here — the containing block for the status dot below, the
+   `position: relative` parent + `position: absolute` child idiom this file already uses at :500.
+
+   `margin-left` is the design's channel-list indent (103:2985, pl-[20px]): the rows sit one step in from
+   the host and workspace rows, so a row is 340 wide in the 360 content box and the open row's fill
+   (#1098) starts 40px from the card's edge and ends flush with the host dots. A margin on each row
+   rather than a padding on a list wrapper because there is no list wrapper: rows are flat siblings of
+   the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click through. The
+   adjacent-row rule below sets margin-top alone and leaves this longhand as it is. */
 .channel-list__row {
   display: flex;
   align-items: center;
   position: relative;
+  margin-left: var(--space-5);
 }
 
 /* The open action — the old full-width row button, reset then holding the row's single label.
@@ -538,13 +567,17 @@
    `formatLastActivity` itself survives with its unit tests for its three other callers (the Archive
    screen's subtitle, WorkspacePickerSheet and ConversationScreen). */
 
-/* The section divider (Figma 15:85) — 1px outline-variant at 60% (opacity), between the two sections
-   only. 1px is structural geometry (the .tool-row__chip border precedent). */
+/* The section divider (Figma 103:3009) — 1px at 60% (opacity), between the two sections only. 1px is
+   structural geometry (the .tool-row__chip border precedent). It spans the card's full 360px content box
+   and carries the design's 28px on both sides (the "Channels and chats" column gap, 103:2959
+   gap-[28px]); the Chats header below has no top padding of its own, so this margin is the whole gap.
+   The colour stays outline-variant: the node draws inverse-primary, and that is a colour question the
+   2026-09-05 inset fix left alone. */
 .channel-list__divider {
   height: 1px;
   background: var(--color-outline-variant);
   opacity: 0.6;
-  margin: var(--space-3) var(--space-4) 0;
+  margin: var(--space-7) 0;
 }
 
 /* The top-right actions cluster (#347) — hosts the Archive (#347) and Settings (#333) entries side by

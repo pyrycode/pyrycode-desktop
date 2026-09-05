@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contextUsagePercent } from './contextUsage'
+import { contextUsagePercent, contextUsageStep } from './contextUsage'
 
 // #811: the ONE context-window percentage, extracted from RunConfigSections' inline expression so the
 // sheet's gauge and the composer footer's reading cannot drift. The `146000 / 200000 → 73` case below is
@@ -83,6 +83,43 @@ describe('contextUsagePercent (#811)', () => {
       const pct = contextUsagePercent(used, window)
       expect(pct).not.toBeNull()
       expect(Number.isInteger(pct)).toBe(true)
+    }
+  })
+})
+
+// #1062: the severity ladder. Every number below is HARD-CODED rather than read from an exported
+// constant, and that is the whole design of this describe: a test that named the same symbol the ladder is
+// written from would pass against any boundary at all. These pin the boundaries as VALUES, which is the
+// one thing a stylesheet could never express and the reason the ladder is a function here rather than an
+// inline conditional at the reading.
+describe('contextUsageStep (#1062)', () => {
+  // The pair that decides the lower boundary's INCLUSIVITY. 49 and 50 differ by one, so a `> 50` slip
+  // reddens here and nowhere else.
+  it('turns warning AT 50, not past it', () => {
+    expect(contextUsageStep(49)).toBe('primary')
+    expect(contextUsageStep(50)).toBe('warning')
+  })
+
+  // The upper boundary's own pair, read the same way: 69 is still the nudge, 70 is already the alarm.
+  it('turns error AT 70, not past it', () => {
+    expect(contextUsageStep(69)).toBe('warning')
+    expect(contextUsageStep(70)).toBe('error')
+  })
+
+  // The ends of contextUsagePercent's own range — an empty session and a full one. Together with the two
+  // pairs above this is the whole of [0, 100] at every arm, so no step can be unreachable.
+  it('reads an empty session as primary and a full one as error', () => {
+    expect(contextUsageStep(0)).toBe('primary')
+    expect(contextUsageStep(100)).toBe('error')
+  })
+
+  // Total over `number`, not merely over [0, 100]. The caller only ever passes an integer in range —
+  // contextUsagePercent clamps and returns `null` for everything else — but a ladder with a hole would be
+  // a defect waiting for a second caller, and the descending form is what makes the absence of one
+  // structural rather than asserted.
+  it('is total: every number lands on a step', () => {
+    for (const value of [-1, -Infinity, 49.9, 50.1, 69.9, 101, Infinity, NaN]) {
+      expect(['primary', 'warning', 'error']).toContain(contextUsageStep(value))
     }
   })
 })

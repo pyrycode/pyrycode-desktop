@@ -400,7 +400,11 @@ own inline expression — `Math.min(100, Math.max(0, Math.round((usedTokens / wi
 behind `windowTokens > 0` — is now `contextUsagePercent(usedTokens, windowTokens)`, in the new
 `src/renderer/src/screens/conversation/contextUsage.ts`, so this gauge and the
 [composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811)'s "Context: N%" reading share one guard and one clamp
-rather than two that could drift apart. `ContextWindowSection` calls it and derives nothing itself —
+rather than two that could drift apart. `#1062` added a severity ladder (`contextUsageStep`, in the same
+file) to the footer reading alone — `.run-config__context-fill` stays `--color-success` at every value on
+purpose, so this gauge and that reading can show different colours for the same number today; the shared
+function is what leaves the bar one class away from following the ladder in a later ticket.
+`ContextWindowSection` calls it and derives nothing itself —
 `pct !== null` replaces the old `available` ternary — and every other line in the section (the usage
 string, the `role="progressbar"` triple, the inline fill width, the unavailable line) is byte-identical
 to before the extraction; `RunConfigSections.test.tsx`'s existing assertions pass unedited, which is the

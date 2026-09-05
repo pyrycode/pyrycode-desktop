@@ -3384,11 +3384,41 @@ describe('ContextUsageReading — the composer footer’s context percentage (#8
   // control: no click handler, not focusable") is structural in a string this short — no onclick, no
   // tabindex, no role, no href, no <button> and nothing else can hide in it. Do not relax this to a
   // substring check; the exactness IS the assertion.
+  //
+  // #1062 turned ONE exact pin into THREE, one per severity step, and that is the tripwire this
+  // component's own comment promised working rather than an obstacle to route around: the reading now has
+  // three renderings and each one is pinned whole. The primary arm below is byte-identical to the string
+  // this file pinned before #1062 — the step that reads "nothing to see" must not have moved at all.
   it('renders the percentage as a single bare text run — no handler, no tabindex, no role (AC1, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ContextUsageReading usedTokens={146000} windowTokens={200000} />
+      <ContextUsageReading usedTokens={98000} windowTokens={200000} />
     )
-    expect(markup).toBe('<span class="composer__context">Context: 73%</span>')
+    expect(markup).toBe('<span class="composer__context">Context: 49%</span>')
+  })
+
+  // #1062 AC2/AC4: the middle step wears the modifier and NOTHING else changes — same prefix, same single
+  // run, same base class LEADING (which is what keeps the five footer-order assertions further down this
+  // file, all of which locate the reading by substring, honest). The 50 here is the boundary itself:
+  // contextUsageStep's own tests pin 49/50 as values, and this pins that the view actually asks it.
+  it('wears the warning modifier from 50%, with the text unchanged (AC2, AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={100000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      '<span class="composer__context composer__context--warning">Context: 50%</span>'
+    )
+  })
+
+  // #1062 AC2/AC4: the top step, where the string itself changes. The word is the non-colour channel for
+  // the one step that means "act now", and it is a WORD rather than a glyph because a glyph inside a text
+  // run cannot be hidden from a screen reader. Still one run, still nothing but a class attribute.
+  it('wears the error modifier and says "high" from 70% (AC2, AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={140000} windowTokens={200000} />
+    )
+    expect(markup).toBe(
+      '<span class="composer__context composer__context--error">Context high: 70%</span>'
+    )
   })
 
   // AC2's whole surface, in the STRICT form the ComposerErrorChip describe above uses: an exact-empty
@@ -3409,11 +3439,14 @@ describe('ContextUsageReading — the composer footer’s context percentage (#8
     expect(markup).not.toContain('NaN')
   })
 
+  // An over-full session is the top step by definition, so #1062's word rides the clamp too — this is the
+  // longest string the reading can ever produce (18 characters, the bound .composer__context's nowrap
+  // comment now states).
   it('clamps an over-full session to 100% rather than running past it', () => {
     const markup = renderToStaticMarkup(
       <ContextUsageReading usedTokens={250000} windowTokens={200000} />
     )
-    expect(markup).toContain('Context: 100%')
+    expect(markup).toContain('Context high: 100%')
     expect(markup).not.toContain('Infinity')
   })
 
@@ -4214,7 +4247,10 @@ describe('ConversationScreen — store binding', () => {
     })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      expect(markup).toContain('Context: 84%')
+      // 84% is the top step since #1062, so the mounted reading says "high" — the seeded figures are the
+      // design's own (Figma 110:3497) and are left as they are, because a mount proof is stronger when it
+      // reads the string the shipped surface actually shows.
+      expect(markup).toContain('Context high: 84%')
       // In the ROW, not loose in the composer: the reading follows .composer__footer's opening tag.
       expect(markup.indexOf('composer__context')).toBeGreaterThan(
         markup.indexOf('class="composer__footer"')

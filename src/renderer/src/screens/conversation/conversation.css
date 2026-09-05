@@ -2576,8 +2576,12 @@
 
    white-space: nowrap because the row has a hard height — a wrapped reading would overflow it rather
    than grow it (the .composer-status__error ruling). It needs NO truncation chain, unlike
-   .composer-status__label--tool: the string is client-owned and at most 13 characters ("Context: 100%"),
-   so it cannot blow the row out however hostile the daemon's figures are. */
+   .composer-status__label--tool: the string is client-owned and, since #1062 added the top step's word,
+   at most 18 characters ("Context high: 100%") — five more than before and still a constant-length bound,
+   because the only interpolated value is an integer in [0, 100]. It cannot blow the row out however
+   hostile the daemon's figures are.
+
+   The colour here is the PRIMARY STEP's, and the two rules below override it (#1062). */
 .composer__context {
   color: var(--color-primary);
   font-size: var(--text-body-small-size);
@@ -2585,6 +2589,32 @@
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
   white-space: nowrap;
+}
+
+/* #1062 — the severity steps: amber from 50%, red from 70%. Emphasis on a fact the reading already
+   states in words, never the sole carrier of it, and at the top step the string itself says "high" so the
+   one actionable state does not depend on colour perception at all (ContextUsageReading's ruling).
+
+   The two boundaries are NOT here. They live in contextUsageStep, where a test can assert them as values;
+   this file only paints what the ladder decided, which is why these rules are one declaration each.
+
+   Both tokens are named, never their hex. --color-warning is the app's only warm-warning role, minted for
+   the in-progress connection dot (#330) and chosen there to be colour-separable from --color-success and
+   --color-error, which is exactly the separability this reading needs; --color-error is the M3 dark error
+   role the status row's error chip already wears. The standing --color-primary warning above applies to
+   both: the export's fallback would be the LIGHT scheme's value, and desktop is dark-only (ADR 0003).
+
+   EQUAL SPECIFICITY to the base rule (0,1,0), so SOURCE ORDER is what makes these win. They must stay
+   below .composer__context; moving either above it silently restores the primary colour at every step.
+
+   Nothing but `color`: the type ramp, the nowrap and the row's spacing are the reading's at every step —
+   a severity that also moved the metrics would shift the row's items as the session filled. */
+.composer__context--warning {
+  color: var(--color-warning);
+}
+
+.composer__context--error {
+  color: var(--color-error);
 }
 
 /* #988 — the shared footer-button treatment, extracted on its SECOND consumer exactly as the comment

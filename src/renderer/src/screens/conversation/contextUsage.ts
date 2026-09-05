@@ -37,3 +37,34 @@ export function contextUsagePercent(usedTokens: number, windowTokens: number): n
   if (!Number.isFinite(windowTokens) || windowTokens <= 0) return null
   return Math.min(100, Math.max(0, Math.round((usedTokens / windowTokens) * 100)))
 }
+
+/**
+ * #1062: how full is full enough to say so. The reading's severity as a coarse step, named for the ROLE
+ * rather than for the colour — `warning` and `error` are exactly the `--color-*` token suffixes and
+ * exactly the `.composer__context--*` class modifiers, so the mapping from step to paint is nominal at
+ * every layer and a fourth step would be one obvious edit rather than three lookups.
+ *
+ * Beside `contextUsagePercent` rather than inline at the reading, and not in the stylesheet at all,
+ * because the two boundaries are VALUES: a `.ts` + `.test.ts` pair can assert 49 → primary and 50 →
+ * warning directly, where a CSS rule could only be asserted through a rendered colour. It is also what
+ * leaves the run-configuration sheet's gauge one class away from following the same ladder later — that
+ * bar is deliberately still `--color-success` at every value, and #1062 did not change it.
+ *
+ * ONE DESCENDING LADDER, so each boundary is written exactly once and no gap between the arms is
+ * expressible. Inclusive at both: 49 is primary, 50 is warning, 69 is warning, 70 is error. The literals
+ * stay literals and are NOT exported as named constants — a test naming the same symbol the ladder is
+ * written from would pin nothing, so `contextUsage.test.ts` hard-codes both pairs instead.
+ *
+ * `number`, not `number | null`: the absent reading is already resolved by `contextUsagePercent`'s return
+ * type one line earlier at the only call site, and taking a nullable here would re-open a guard that is
+ * deliberately a type rather than a convention. Total over its input all the same — `NaN` fails both
+ * comparisons and falls through to `primary`, the same arm the shipped colour has always used — so a
+ * second caller cannot find a hole, even though the first one cannot reach one.
+ */
+export type ContextUsageStep = 'primary' | 'warning' | 'error'
+
+export function contextUsageStep(percent: number): ContextUsageStep {
+  if (percent >= 70) return 'error'
+  if (percent >= 50) return 'warning'
+  return 'primary'
+}

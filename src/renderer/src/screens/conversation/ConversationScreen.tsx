@@ -65,7 +65,7 @@ import {
   useComposerFileDrop
 } from './ComposerAttach'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
-import { contextUsagePercent } from './contextUsage'
+import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
@@ -3420,9 +3420,29 @@ function ComposerErrorSlotControl({ onUnpaired }: { onUnpaired?: () => void }): 
 // .composer-status__label discipline: one run has one predictable serialisation, which is what makes the
 // exact-markup assertion stable. The prefix is a client-owned literal and the only interpolated value is
 // an integer in [0, 100], so no daemon-supplied STRING reaches this surface at all — there is nothing to
-// escape and nothing to length-bound. No copy constant for a 13-character string with one call site: the
+// escape and nothing to length-bound. No copy constant for an 18-character string with one call site: the
 // module's copy constants exist for strings asserted across files or that must be provably free of
 // daemon text, and neither applies.
+//
+// #1062 — THE SEVERITY LADDER. The colour is emphasis on a fact the reader can already read, so the
+// arithmetic stays where it was and only the presentation branches. Two derived values, both from
+// contextUsageStep (the boundaries live there as values, never here as inline conditionals):
+//
+//   CLASS. The base token stays LEADING and the modifier is APPENDED, never swapped in — six assertions
+//   in this file's footer-order describes locate the reading by `composer__context` as a substring, and
+//   all of them survive a suffix. The primary arm emits the bare class, byte-identical to the markup
+//   this component shipped before #1062: the step that means "nothing to see" must not move at all.
+//
+//   TEXT. The word rides the TOP step alone. Below 70% the percentage is already legible as text, so
+//   amber is emphasis and WCAG 1.4.1 is satisfied without a second channel; at 70% the message becomes
+//   actionable ("you are running out"), which is the one step where a reader who cannot separate amber
+//   from the row's blue would lose something real. A WORD, not a glyph: a glyph inside a text run cannot
+//   be hidden from a screen reader. NOT an aria-label — name-from-author is not supported on a generic
+//   role — and still no live region, for the reason stated above.
+//
+// The copy stays HERE rather than in contextUsage.ts: that module maps a number to a step, and the step
+// is a role, not a string. Everything the ruling above forbids is still forbidden and still structural —
+// the three renderings are each pinned as exact markup, so nothing can be added to any of them silently.
 export function ContextUsageReading({
   usedTokens,
   windowTokens
@@ -3432,7 +3452,11 @@ export function ContextUsageReading({
 }): JSX.Element | null {
   const pct = contextUsagePercent(usedTokens, windowTokens)
   if (pct === null) return null
-  return <span className="composer__context">{`Context: ${pct}%`}</span>
+  const step = contextUsageStep(pct)
+  const className =
+    step === 'primary' ? 'composer__context' : `composer__context composer__context--${step}`
+  const label = step === 'error' ? `Context high: ${pct}%` : `Context: ${pct}%`
+  return <span className={className}>{label}</span>
 }
 
 // The store-bound container for the reading (#811) — the ComposerErrorChipControl shape. A container

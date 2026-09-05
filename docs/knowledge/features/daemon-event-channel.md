@@ -138,6 +138,14 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
 
+Since #1068, every event carries `serverId: string | null` — the id of the paired server it came from,
+or `null` where no paired record was in hand when the emitter was bound. This rides beside the union
+(`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside it, so the 43 arms below are
+unchanged; see [Emit and subscribe](daemon-event-channel-plumbing.md) for `bindServerOrigin` and the
+full design. It is a no-op for every bridge today — nothing keys state on it yet — laid down for a
+future per-server connection registry (#1084) that needs a way to tell two live connections' events
+apart.
+
 ## How it works
 
 Three pieces, three layers:
@@ -231,6 +239,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
   none of the three exhaustive bridges; ships dormant no longer — [the announced-model store (#588,
   shipped)](announced-model-store.md) is the first consumer, still dormant pending #560's render
   surface.
+- [Emit and subscribe](daemon-event-channel-plumbing.md) / #1068 — `StampedDaemonEvent`, `bindServerOrigin`, and why the field rides beside the union rather than as a 44th touch on each of the 43 arms
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

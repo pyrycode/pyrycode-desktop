@@ -142,6 +142,7 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — secret-at-rest via `safeStorage`, fail-closed, "recovery is a consumer decision".
 - [Unpair channel](unpair-channel.md) / [#173 codebase notes](../codebase/173.md) — the renderer-triggered IPC channel + preload method that calls `clear()`.
 - [Server-info channel](server-info-channel.md) / [#339 codebase notes](../codebase/339.md) — the renderer-triggered IPC channel that reads `record.server`/`record.relay` via `load()`, never `token`/`server_static_pubkey`.
+- [Daemon connection](daemon-connection.md) / [Daemon-event channel plumbing](daemon-event-channel-plumbing.md) — #1068 stamps every daemon event with `record.server` (as `DaemonConnectionDeps.serverId`), the same field and the same never-`token`/`server_static_pubkey` containment as the server-info channel above.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile).
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including `QrPayload`, that `PairedServerRecord` aliases.
 - [Host label store](host-label-store.md) / [#822](../codebase/822.md) — the sidebar host nickname, deliberately **not** a field here: since `PairedServerRecord` aliases `QrPayload`, adding a label the daemon never sees would drift a wire type, so it persists through its own secure-store-backed module instead.

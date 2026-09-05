@@ -69,7 +69,7 @@ import {
   type BundleReassembler
 } from './transport/bundleReassembler'
 import { base64StdDecode } from './transport/codec'
-import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
+import { emitDaemonEvent, bindServerOrigin, type DaemonEventSink } from './emitDaemonEvent'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
@@ -137,6 +137,22 @@ export interface DaemonConnectionDeps {
   pairedServer: PairedServerStore
   /** The emitDaemonEvent target — a BrowserWindow satisfies it structurally. */
   sink: DaemonEventSink
+  /**
+   * Which server this connection speaks to (#1068), stamped onto every event it emits so a renderer
+   * holding several live connections can tell their events apart. Bound ONCE here, at construction,
+   * and never re-read: it CANNOT be sourced inside the connection, because the paired record loads per
+   * dial in `loadDialConfig` and events fire before it.
+   *
+   * The value is the paired record's `server` — never `hello_ack.server_id` (a distinct value; see
+   * `shared/ipc/serverInfo.ts`, which ruled this for the same field) and never the record's `token`,
+   * which is the same `string` type and only the construction site can tell apart.
+   *
+   * REQUIRED, not optional: a connection that forgets its own identity is exactly what the registry
+   * (#1084) must not be able to build. `null` is a real value meaning "no paired record was in hand" —
+   * what the single connection at the composition root passes today, since it is constructed before
+   * any record is read and outlives a re-pair.
+   */
+  serverId: string | null
   /** Device identity carried inside the encrypted `hello` (display/audit, not auth). */
   deviceName: string
   /** Client version, carried in the `hello` and the relay User-Agent header. */
@@ -544,7 +560,14 @@ export function relayClientDialUrl(relay: string): string {
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection {
-  const { deviceKeypair, pairedServer, sink, deviceName, clientVersion } = deps
+  const { deviceKeypair, pairedServer, deviceName, clientVersion } = deps
+  // The origin binding (#1068), and the only line of this module that knows the server id. Every
+  // `emitDaemonEvent(sink, …)` below emits into the BOUND sink, so all 39 of them carry the origin
+  // without naming it and none of them can vary it — origin-free by construction, not by discipline.
+  // `deps.sink` is deliberately dropped from the destructure above so that this `sink` — the bound
+  // one — is the only binding by that name in the factory, and the unbound sink can be reached only
+  // by naming `deps.sink` again, which nothing below does.
+  const sink = bindServerOrigin(deps.sink, deps.serverId)
   const now = deps.now ?? ((): string => new Date().toISOString())
   const createDriver = deps.createDriver ?? createNoiseRelayDriver
   // The main-side answer_token mint (#236). Default: crypto.randomUUID (Node CSPRNG). A DI seam like

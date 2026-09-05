@@ -214,6 +214,9 @@ async function standUpRoundTrip(
     deviceKeypair: { ensure: async () => devicePair },
     pairedServer: { load: async () => record, save: async () => {} },
     sink,
+    // #1068: the origin binding. Null, as the composition root passes today — this suite asserts on
+    // the wire round-trip, not on attribution.
+    serverId: null,
     deviceName: 'roundtrip-desktop',
     clientVersion: '0',
     now: () => FIXED_TS
@@ -627,8 +630,12 @@ describe('createDaemonConnection reconnect modal reconcile (in-process fake targ
   const modalFrame = encodeEnvelope({ id: 500, type: 'modal_shown', ts: FIXED_TS, payload: modalPayload })
   // The DaemonEvent the assembled stack emits for that frame (snake→camel at the transport). The
   // renderer store folds exactly this into `outstanding` (mirrored in modalBridge.test.ts, #416).
+  // `serverId` rides along from #1068's construction binding — null here, matching the connection
+  // this suite builds. It is the one end-to-end witness that the stamp survives the REAL stack:
+  // decode, emit and the destroyed-window guard, not just the wrapper in isolation.
   const expectedModalShown = {
     type: 'modalShown',
+    serverId: null,
     conversationId: 'conv-reconnect-1',
     modalId: MODAL_ID,
     class: 'permission',
@@ -799,6 +806,7 @@ describe.skipIf(!live)(
           deviceKeypair: { ensure: async () => devicePair },
           pairedServer: { load: async () => record, save: async () => {} },
           sink,
+          serverId: null, // #1068 — see the fake-relay construction above.
           deviceName: cfg.deviceName,
           clientVersion: '0'
           // now omitted → real wall clock (the live daemon may validate ts).

@@ -35,6 +35,7 @@ export interface DaemonConnectionDeps {
   deviceKeypair: DeviceKeypairStore   // .ensure() → device static private key (the initiator `s`)
   pairedServer: PairedServerStore     // .load()   → record | null
   sink: DaemonEventSink               // the emitDaemonEvent target — a BrowserWindow satisfies it structurally
+  serverId: string | null             // #1068: which server this connection speaks to; bound once, stamped on every event this connection emits — see the daemon-event-channel-plumbing.md `bindServerOrigin` section
   deviceName: string                  // sourced at the root (os.hostname()); rides in the hello for display/audit
   clientVersion: string               // sourced at the root (app.getVersion()); hello + relay User-Agent
   now?: () => string                  // RFC3339 clock for the hello ts; default () => new Date().toISOString()
@@ -235,6 +236,14 @@ never crosses to the renderer.
 - **A missed early `connecting` is benign.** The store's initial state is already `disconnected`, so if the synchronous `connecting` marginally precedes the renderer's bridge subscription, only a brief moment of the send control staying disabled for the wrong reason is skipped; the load-bearing `connected` arrives after a network round-trip and is safe. (Through [#968](../codebase/968.md) the composer also rendered a "Connecting…" caption on this arm, so the miss used to skip a visible flash of that text too; the caption is retired and `disconnected`/`connecting` now render identically in the composer.) Full status-sync-on-mount is [#34](https://github.com/pyrycode/pyrycode-desktop/issues/34)/[#35](https://github.com/pyrycode/pyrycode-desktop/issues/35).
 - **macOS re-activation.** `app.on('activate')` re-creates a window without re-wiring the connection (the sink still points at the destroyed `webContents`). Single-window is the milestone assumption; multi-window / re-activation lifecycle is deferred (pre-existing in `createWindow`'s `activate` handler, not introduced here).
 - **Reusing the same `hello` across reconnects is safe.** This consumer injects a fixed key/`hello` set once; the driver's fresh-handshake-per-connect invariant means no `(key, nonce)` is ever reused. Noise provides per-handshake freshness and v2 does not replay-check the hello `ts`.
+- **`serverId` is `null` in production today, and that is correct, not a stopgap (#1068).** The
+  composition root constructs its one connection at launch, before any paired record is read, and the
+  connection *outlives* a re-pair (`onPaired` calls `reconnect()` on the same object rather than
+  rebuilding it) — so a launch-time literal would be right at boot and would silently mis-attribute
+  every event once the operator pairs a different machine. `null` stays honest until a per-server
+  connection registry constructs one connection per stored record and passes each its own
+  `record.server`. The dependency is **required**, not optional, precisely so that registry cannot
+  build a connection that forgets its own identity.
 
 ## Related
 
@@ -249,6 +258,9 @@ never crosses to the renderer.
   reset. No new method on this factory — `createWorkspaceFolder` (#381) is unchanged besides the
   pending-add after send.
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
+- [Daemon-event channel plumbing](daemon-event-channel-plumbing.md) — `bindServerOrigin`, the stamping
+  sink `createDaemonConnection` binds from `deps.serverId`, and why all 39 `emitDaemonEvent(sink, …)`
+  call sites in this module stay origin-free by construction (#1068).
 - [#504 codebase notes](../codebase/504.md) / [Unpair channel](unpair-channel.md) — teardown-on-unpair: `reconnect()`'s second caller, wired from the unpair handler's new `onUnpaired` trigger. Zero changes to this file — the existing generation fence and driver-stop already covered it.
 - [#82 codebase notes](../codebase/82.md) / [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — connect-on-pair: the `reconnect()` re-arm + generation fence added here, fired by the pairing handler's `onPaired` trigger a confirm-success wires to `connection.reconnect()`.
 - [#83 codebase notes](../codebase/83.md) — reload-per-dial: the `loadDialConfig` provider constructed here and threaded to the driver so the supervisor's *automatic* reconnect re-sources the record too (see § Reload-per-dial).

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'
+import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
 import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
 import {
@@ -150,9 +150,18 @@ const api = {
    * remounts. The raw IpcRendererEvent (exposing .sender/.ports) is stripped before the
    * listener runs, and removeListener uses the exact handler registered so the handle
    * removes precisely the listener it added.
+   *
+   * StampedDaemonEvent, not DaemonEvent (#1068): every event on this channel now carries the id of
+   * the server it came from, and typing the listener on the bare union would leave the field readable
+   * only through a cast. Still a PURE FORWARD — the widening is a type claim about what the three
+   * main-side emitters produce, not a transform added here.
+   *
+   * It cascades into nothing. A subscriber whose listener takes the bare `DaemonEvent` is still
+   * accepted (a handler of the supertype accepts the subtype), so all 27 renderer bridges and their
+   * tests are untouched and each simply ignores the field until it needs it.
    */
-  onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
-    const handler = (_event: IpcRendererEvent, event: DaemonEvent): void => listener(event)
+  onDaemonEvent: (listener: (event: StampedDaemonEvent) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => listener(event)
     ipcRenderer.on(DAEMON_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(DAEMON_EVENT_CHANNEL, handler)
   },

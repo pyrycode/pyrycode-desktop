@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { createLiveWindow, type WindowTarget } from './liveWindow'
 import { emitDaemonEvent } from './emitDaemonEvent'
 import { activateWindow, windowHasFocus } from './fireNotification'
-import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'
+import {
+  DAEMON_EVENT_CHANNEL,
+  type DaemonEvent,
+  type StampedDaemonEvent
+} from '../shared/ipc/events'
 import type { ErrorPayload, HelloAckPayload } from '../shared/wire/types'
 
 // A structural stand-in for a real BrowserWindow across all three interfaces WindowTarget
@@ -175,6 +179,28 @@ describe('createLiveWindow — status convergence (#519 AC2)', () => {
     expect(b.send).toHaveBeenCalledTimes(1)
     expect(b.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connected)
     expect(b.send.mock.calls[0][1]).toBe(connected)
+  })
+
+  it('replays a stamped status with its server origin intact (#1068)', () => {
+    // The recorder is the ONE place an event is stored and re-sent, so it is the one place a stamp
+    // could be silently lost. It sits DOWNSTREAM of every binding — the connection stamps, then
+    // forwards into this sink — so what it records is already stamped and must replay that way. A
+    // reopened window learning `connected` with no origin would be told which state, but not whose.
+    const live = createLiveWindow()
+    const a = fakeWindow()
+    const b = fakeWindow()
+    const connected: StampedDaemonEvent = { type: 'connected', ack: ACK, serverId: 'srv-a' }
+
+    live.attach(a.win)
+    emitDaemonEvent(live.sink, connected)
+    a.destroy()
+    live.attach(b.win)
+    b.send.mockClear()
+
+    live.replayStatus()
+
+    expect(b.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, connected)
+    expect((b.send.mock.calls[0][1] as StampedDaemonEvent).serverId).toBe('srv-a')
   })
 
   it('replays the status that changed WHILE no window was live, not the one before it', () => {

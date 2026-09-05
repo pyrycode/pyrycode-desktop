@@ -31,7 +31,7 @@ import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
-import { emitDaemonEvent } from './emitDaemonEvent'
+import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
 import { createLiveWindow } from './liveWindow'
 import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
 import { createDiagnosticLog } from './diagnosticLog'
@@ -295,6 +295,13 @@ app.whenReady().then(() => {
     deviceKeypair: deviceKeypairStore,
     pairedServer: pairedServerStore,
     sink: live.sink,
+    // The server-origin binding (#1068), and NULL here on purpose rather than as a stopgap. This one
+    // connection is constructed at launch, before any paired record has been read, and it OUTLIVES a
+    // re-pair — `onPaired` below calls `reconnect()` on this same object rather than rebuilding it —
+    // so a launch-time literal would be right at boot and would silently mis-attribute every event
+    // after the operator pairs a different machine. Null is the honest answer until #1084 constructs
+    // one connection per stored record and passes each one its own `record.server`.
+    serverId: null,
     deviceName: hostname(),
     clientVersion: app.getVersion(),
     diagnosticLog
@@ -400,11 +407,25 @@ app.whenReady().then(() => {
   // result to the window; it enforces single-in-flight so a spammed command cannot orphan an
   // in-flight download's reassembler slot.
   const downloadsDir = app.getPath('downloads')
+  // #1068: the orchestrator's events come from the connection's daemon, so they carry an origin like
+  // any other daemon event — but the root does not hold the id (the connection above is bound to
+  // null), so it is null today; #1084 hands the orchestrator its own connection's id. Bound HERE, per
+  // consumer, rather than by wrapping the shared `live.sink` once: a single binding over that shared
+  // object would stamp all three emitters with one id, which is precisely what a per-server registry
+  // cannot use. The orchestrator itself stays origin-free — it takes an `emit` function, not a sink.
+  const bundleSink = bindServerOrigin(live.sink, null)
   const downloader = createDebugBundleDownload({
     requestDebugBundle: (consumer) => connection.requestDebugBundle(consumer),
     save: (bytes) => saveDebugBundle(downloadsDir, bytes),
-    emit: (event) => emitDaemonEvent(live.sink, event)
+    emit: (event) => emitDaemonEvent(bundleSink, event)
   })
+
+  // #1068: the third and last emitter that reaches the channel. Bound separately from `bundleSink`
+  // despite both being null today, because the two are null for DIFFERENT and permanent reasons:
+  // notificationActivated is window-local and NO DAEMON ORIGINATED IT, so it stays null after #1084,
+  // while the bundle's id arrives with the registry. Collapsing them would erase that distinction at
+  // exactly the moment it starts to matter.
+  const windowLocalSink = bindServerOrigin(live.sink, null)
 
   // The single onCommand registration for the app lifetime (#17 deferred this wiring). The command
   // is already validated by isRendererCommand at the boundary; route each member to its entry point.
@@ -563,7 +584,7 @@ app.whenReady().then(() => {
           Notification,
           onClick: () => {
             activateWindow(live.window)
-            emitDaemonEvent(live.sink, { type: 'notificationActivated' })
+            emitDaemonEvent(windowLocalSink, { type: 'notificationActivated' })
           }
         })
         return

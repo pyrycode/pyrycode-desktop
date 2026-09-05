@@ -192,7 +192,10 @@
   --text-label-small-weight: 500;
 
   --text-code-body-line: 20px; /* The fenced code body's leading (#721, Figma node 134:4809), and the one
-                                  value in that design with no scale step behind it: there is no 12/20
+                                  value in that design with no scale step behind it. SINCE #1103 IT HAS A
+                                  SECOND SITE, the expanded tool row's field values and result (Figma
+                                  152:5215), which the design draws at the same mono 12/20 because its
+                                  body leads with an instance of that same Code component: there is no 12/20
                                   pairing here — body-small is 12/16 and both 20px lines belong to 14px
                                   steps (body-medium, label-large). Deliberately NOT a fifth member of any
                                   quartet, and there is no --text-code-body-size, because the size still

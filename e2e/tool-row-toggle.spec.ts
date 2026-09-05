@@ -971,3 +971,221 @@ test('tool row: an expanded row is one box with its body inside the border', asy
   expect(plainBorders.chipWidth).toBe(0)
   expect(shellBorders.chipWidth).toBe(0)
 })
+
+// #1103 — the expanded body's own drawing, the thing #722 deferred and #774/#1102 kept deferring: a field
+// value in its own filled box, and the result as BARE TEXT under it rather than as a second identical grey
+// box. A SIXTH sibling test with its own launchPairedApp, for the reason the five above record: more rows
+// on any of their pages would make their bare `.tool-row` locators strict-mode-ambiguous.
+//
+// EVERY ASSERTION HERE IS A COMPUTED VALUE — a fill, a padding, a corner, a leading, a distance between two
+// boxes, and (AC2/AC4) the ABSENCE of a fill and of a border. That is exactly the half the
+// renderToStaticMarkup unit tier structurally cannot observe: it sees no CSS at all. This slice adds no
+// element, class or attribute, so the only thing that tier gains is AC3's structural guard.
+//
+// COLOURS AND LENGTHS ARE READ AS TOKENS OFF THE ROW, never as literal `#272a2f`/`16px`, so a retune moves
+// the expectation with the rule (#1102's convention). The two exceptions are deliberate and are not token
+// values at all: `rgba(0, 0, 0, 0)` and `0px` are CSS's own initial values, and asserting them literally is
+// the whole of "the result carries no fill and no box of its own".
+
+const BODY_PLAIN_ID = 'tool-use-1103-plain'
+const BODY_SHELL_ID = 'tool-use-1103-shell'
+
+// TWO fields, because AC3's tighter 8px rhythm falls only BETWEEN consecutive fields — one field cannot
+// show it. Both values are short, so neither is what sets any measured width.
+const BODY_INPUT_FIELDS = { pattern: 'window_tokens|WindowTokens', path: '.../pyrycode/internal/e2e' }
+
+/**
+ * A `#rrggbb` token value as the `rgb(r, g, b)` string getComputedStyle returns. Every colour token in
+ * tokens.css is plain six-digit hex, so the one form is all this needs; a token that ever grew an alpha
+ * channel would fail loudly here rather than silently comparing unequal.
+ */
+function rgbOf(hex: string): string {
+  const digits = hex.trim().replace('#', '')
+  if (!/^[0-9a-fA-F]{6}$/.test(digits)) throw new Error(`expected a #rrggbb token value, got "${hex}"`)
+  const channel = (at: number): number => parseInt(digits.slice(at, at + 2), 16)
+  return `rgb(${channel(0)}, ${channel(2)}, ${channel(4)})`
+}
+
+/** The subset of an element's computed style these five ACs are about. */
+async function styleOf(
+  locator: Locator,
+  what: string
+): Promise<Record<string, string>> {
+  const found = await locator.count()
+  if (found !== 1) throw new Error(`expected exactly one ${what}, found ${found}`)
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const read = (property: string): string => style.getPropertyValue(property)
+    return {
+      background: read('background-color'),
+      color: read('color'),
+      radius: read('border-top-left-radius'),
+      padTop: read('padding-top'),
+      padRight: read('padding-right'),
+      padBottom: read('padding-bottom'),
+      padLeft: read('padding-left'),
+      borderTop: read('border-top-width'),
+      borderRight: read('border-right-width'),
+      borderBottom: read('border-bottom-width'),
+      borderLeft: read('border-left-width'),
+      fontFamily: read('font-family'),
+      fontSize: read('font-size'),
+      lineHeight: read('line-height'),
+      maxHeight: read('max-height'),
+      overflowX: read('overflow-x'),
+      overflowY: read('overflow-y'),
+      whiteSpace: read('white-space')
+    }
+  })
+}
+
+test('tool row: the expanded body draws boxed field values and a bare result', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  const rows = page.locator('.tool-row')
+  const plainRow = rows.nth(0)
+  const shellRow = rows.nth(1)
+
+  daemon.pushFrame(routedToolUseFrame(BODY_PLAIN_ID, 'read_file', BODY_INPUT_FIELDS))
+  daemon.pushFrame(routedToolUseFrame(BODY_SHELL_ID, 'Bash', { command: SHELL_COMMAND }))
+  daemon.pushFrame(routedToolResultFrame(BODY_PLAIN_ID))
+  daemon.pushFrame(failedToolResultFrame(BODY_SHELL_ID))
+
+  await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(rows).toHaveCount(2)
+
+  await plainRow.locator('.tool-row__chip--toggle').click()
+  await shellRow.locator('.tool-row__chip--toggle').click()
+  await expect(plainRow).toHaveClass(/tool-row--expanded/)
+  await expect(shellRow).toHaveClass(/tool-row--expanded/)
+
+  // The design's values, resolved from the row's own custom properties rather than retyped as literals.
+  const token = await plainRow.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const read = (property: string): string => style.getPropertyValue(property).trim()
+    return {
+      space2: read('--space-2'),
+      space3: read('--space-3'),
+      space4: read('--space-4'),
+      radiusXs: read('--radius-xs'),
+      fillHigh: read('--color-surface-container-high'),
+      onSurface: read('--color-on-surface'),
+      bodySmallSize: read('--text-body-small-size'),
+      codeBodyLine: read('--text-code-body-line')
+    }
+  })
+
+  const values = plainRow.locator('.tool-row__input-value')
+  await expect(values).toHaveCount(2)
+  const value = await styleOf(values.first(), "the plain row's first field value")
+  const result = await styleOf(plainRow.locator('.tool-row__result'), "the plain row's result")
+
+  // --- AC1. The value box takes the design's box: the surface-container-high fill, 12 vertical / 16
+  // horizontal, a 6px corner, and mono 12/20 inside it. Each of the four paddings is asserted separately
+  // rather than through the `padding` shorthand, since the design's two axes differ and a single-value
+  // regression must redden on the axis it lands on.
+  expect(value.background, 'the value box lost the design fill').toBe(rgbOf(token.fillHigh))
+  expect(value.padTop, 'the value box is not 12px on the block axis').toBe(token.space3)
+  expect(value.padBottom, 'the value box is not 12px on the block axis').toBe(token.space3)
+  // 16, not the --space-bubble-x 14 the outgoing shared rule took: this is the one that reddens if the
+  // horizontal padding is left on the old token.
+  expect(value.padLeft, 'the value box is not 16px on the inline axis').toBe(token.space4)
+  expect(value.padRight, 'the value box is not 16px on the inline axis').toBe(token.space4)
+  // 6px, not the --radius-sm 12 chosen back when the body had to read as one object with a 12px chip.
+  expect(value.radius, 'the value box kept the old 12px corner').toBe(token.radiusXs)
+  expect(value.fontFamily, 'the value box is not mono').toContain('Roboto Mono')
+  expect(value.fontSize, 'the value box is not 12px type').toBe(token.bodySmallSize)
+  // 20, not body-small's 16. --text-code-body-line is the token #721 minted for exactly this pairing.
+  expect(value.lineHeight, 'the value box did not take the 20px code leading').toBe(token.codeBodyLine)
+
+  // --- AC2. The result is BARE TEXT across the body's full content width: same mono 12/20 and the same
+  // ink as the value, and none of the box. `rgba(0, 0, 0, 0)` and `0px` are CSS initial values, not
+  // tokens — asserting them literally IS the claim.
+  expect(result.background, 'the result still carries a fill').toBe('rgba(0, 0, 0, 0)')
+  expect(result.radius, 'the result still carries a corner').toBe('0px')
+  for (const [side, drawn] of [
+    ['top', result.padTop],
+    ['right', result.padRight],
+    ['bottom', result.padBottom],
+    ['left', result.padLeft]
+  ] as const) {
+    expect(drawn, `the result still carries ${side} padding of its own`).toBe('0px')
+  }
+  expect(result.color, 'the result is not on-surface ink').toBe(rgbOf(token.onSurface))
+  expect(result.fontFamily, 'the result is not mono').toContain('Roboto Mono')
+  expect(result.fontSize, 'the result is not 12px type').toBe(token.bodySmallSize)
+  expect(result.lineHeight, 'the result did not take the 20px code leading').toBe(token.codeBodyLine)
+  // "Across the body's full content width" — the same equality #1102's test states for every block, kept
+  // here because the result is the block whose box this slice changes most.
+  const bodyContent = (await boxesOf(plainRow.locator('.tool-row__body'), "the plain row's body")).content
+  const resultBox = await boxOf(plainRow.locator('.tool-row__result'), "the plain row's result")
+  expect(
+    Math.abs(resultBox.width - (bodyContent.right - bodyContent.left)),
+    'the result does not fill the body'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC3. The two rhythms, measured between adjacent boxes rather than read off a `gap` declaration —
+  // which is what makes the assertion indifferent to whether the distances come from a wrapper element or
+  // from the body's gap plus a correction.
+  const firstField = await boxOf(plainRow.locator('.tool-row__input').nth(0), 'the first input field')
+  const secondField = await boxOf(plainRow.locator('.tool-row__input').nth(1), 'the second input field')
+  expect(
+    Math.abs(secondField.y - (firstField.y + firstField.height) - parseFloat(token.space2)),
+    'consecutive input fields do not sit 8px apart'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    Math.abs(resultBox.y - (secondField.y + secondField.height) - parseFloat(token.space3)),
+    "the body's blocks do not sit 12px apart"
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC4. A failed tool's result carries NO box of its own — the red rectangle around bare text that
+  // the outgoing `.tool-row__body--error .tool-row__result` rule would now draw. The row's retinted
+  // border stays the single failure device, asserted comparatively against the successful row so a token
+  // retune cannot redden it.
+  const failedBody = shellRow.locator('.tool-row__body--error')
+  await expect(failedBody, 'the failed body lost its modifier class').toHaveCount(1)
+  const failedResult = await styleOf(failedBody.locator('.tool-row__result'), "the failed row's result")
+  for (const [side, drawn] of [
+    ['top', failedResult.borderTop],
+    ['right', failedResult.borderRight],
+    ['bottom', failedResult.borderBottom],
+    ['left', failedResult.borderLeft]
+  ] as const) {
+    expect(drawn, `the failed result still draws a ${side} border of its own`).toBe('0px')
+  }
+  const borderColorOf = (row: Locator): Promise<string> =>
+    row.evaluate((element) => getComputedStyle(element).borderTopColor)
+  expect(
+    await borderColorOf(shellRow),
+    'the row-level failure device went with the result border'
+  ).not.toBe(await borderColorOf(plainRow))
+
+  // --- AC5. Nothing that bounds a hostile payload moved. The 240px cap and its scroll are what keep one
+  // 64KB result from eating the thread viewport, and `white-space: pre` is what keeps machine output's
+  // column position rather than reflowing it at the row's measure. Asserted on BOTH classes: the split
+  // takes three declarations off the shared selector, and dropping the cap from the value box with them
+  // would leave a hostile 4000-rune input value unbounded.
+  for (const [style, what] of [
+    [value, 'the value box'],
+    [result, 'the result']
+  ] as const) {
+    expect(style.maxHeight, `${what} lost the 240px cap`).toBe('240px')
+    expect(style.overflowY, `${what} lost its vertical scroll`).toBe('auto')
+    expect(style.overflowX, `${what} lost its horizontal scroll`).toBe('auto')
+    expect(style.whiteSpace, `${what} reflows instead of keeping its shape`).toBe('pre')
+  }
+  // And a shell call's command block still LEADS the body in today's .code-block treatment — the block
+  // this slice must leave alone, whose wrapping pair is the deliberate opposite of the pair above.
+  const shellBlocks = shellRow.locator('.tool-row__body > *')
+  await expect(
+    shellBlocks.first(),
+    "the command block no longer leads the shell call's body"
+  ).toHaveClass(/code-block/)
+  const commandBody = await styleOf(shellRow.locator('.code-block__body'), "the shell call's command")
+  expect(commandBody.padTop, 'the command block was restyled').toBe(token.space3)
+  expect(commandBody.padLeft, 'the command block was restyled').toBe(token.space4)
+  expect(commandBody.whiteSpace, 'the command block stopped wrapping').toBe('pre-wrap')
+  expect(commandBody.maxHeight, 'the command block gained a cap it never had').toBe('none')
+})

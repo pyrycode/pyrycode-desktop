@@ -91,9 +91,9 @@ result-text slot existed in the Figma mock. #696 reversed that: `ToolRow` was ex
 otherwise untouched) and gained a body, a sibling of the chip rather than a child. At the time that was
 because the chip was a single-line `inline-flex; overflow: hidden` pill — nesting a stacked body inside it
 would have forced a new wrapper and broken the collapsed markup. That specific reason didn't survive
-[#722](conversation-shell-tool-row-layout.md#full-width-bordered-tool-row-722), which turned the chip into
+[#722](conversation-shell-tool-row-box.md#full-width-bordered-tool-row-722), which turned the chip into
 a full-width bordered box, and it left the body's border closing *above* the content it should have
-contained until [#1102](conversation-shell-tool-row-layout.md#tool-row-box-moves-outward-1102) moved that
+contained until [#1102](conversation-shell-tool-row-body.md#tool-row-box-moves-outward-1102) moved that
 box treatment onto `.tool-row` itself. The sibling relationship never needed a different reason to hold:
 the chip is a `<button>`, and a `<pre>` is not phrasing content, so nesting was never available in any of
 the three designs.
@@ -248,7 +248,7 @@ Every entry of `item.input`, name above value, in arrival order, above the uncha
 </div>
 ```
 
-`listedInputFields(item)` — since [#780](conversation-shell-tool-row-layout.md#shell-command-code-block-780) moved the entries call out of the
+`listedInputFields(item)` — since [#780](conversation-shell-tool-row-code-block.md#shell-command-code-block-780) moved the entries call out of the
 render tree and into `toolBody.ts` — is `Object.entries(item.input ?? NO_INPUT_FIELDS)`, filtered for a
 `Bash` call only (below). No `.sort()`, no path shortening, no salience pick, and — for every tool but
 `Bash` — no skipping the field #705's headline already promoted: literal is the whole point, since a field
@@ -265,7 +265,7 @@ second condition that could drift from the render — #643's absent-vs-`{}` dist
 item, and the *display* decision that all three draw nothing is made once, in `listedInputFields`.
 
 **One carve-out, added by #780, that does not weaken the rule above.** A `Bash` call's list drops
-`description` and `command` — see [Shell command code block (#780)](conversation-shell-tool-row-layout.md#shell-command-code-block-780) for why
+`description` and `command` — see [Shell command code block (#780)](conversation-shell-tool-row-code-block.md#shell-command-code-block-780) for why
 that is "promoted elsewhere in the body," not "silently missing from it," and why the carve-out is keyed
 on the tool name and not on which field the headline happened to pick.
 

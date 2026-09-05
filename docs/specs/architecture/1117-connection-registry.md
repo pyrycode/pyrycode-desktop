@@ -344,6 +344,34 @@ two-daemon fixture is \#1091 and is blocked on this ticket.
 3. **Should the drop be fenced so a dropped connection can emit nothing?** Resolved: no — see §
    Error handling. Recorded here so the decision is visible rather than absent.
 
+## Revisions
+
+### 2026-09-05 — implementation
+
+Two departures from the design above, both found by tests the plan already called for.
+
+1. **`started` became `dialling`, and it latches inside the deferred callback rather than in
+   `start()`.** The plan had `start()` set the flag and then schedule the dials. That double-starts:
+   with the flag set synchronously, the initial reconcile's newly built entries dial through the
+   build arm, and the deferred callback then dials them again. Splitting it into two flags would have
+   worked; one flag flipped in the single place any connection is dialled at the transition is
+   simpler, and it also makes a second `did-finish-load` scheduled before the first store read answers
+   return early instead of re-dialling. Each connection's own `start()` is idempotent, so neither
+   defect was observable in production — but the registry's own plural start is now idempotent in its
+   own right, which is what tests 4 and 5 assert. Found by those two tests.
+
+2. **An already-held stand-in is reused rather than rebuilt.** The plan said "if the new list is
+   empty, install a fresh unpaired stand-in", which on the common unpaired launch — construct a
+   stand-in, then reconcile to the same empty set — built a second one and stopped the first. Since
+   the first is the connection whose dial *is* the not-paired settle, rebuilding it there is not
+   merely wasteful. `reconcile` now keeps the held stand-in when the record set is empty and builds a
+   fresh one only when the last record has just been cleared (a stopped connection can never be
+   reused). The `install` helper the plan named is gone; the never-empty invariant is restored inline
+   at the one site that can break it.
+
+Neither changes the contract, the store surface, the logged fields or any security property, so the
+review below stands as written.
+
 ## Security review
 
 **Verdict:** PASS (after revision — the concurrency finding below was a MUST FIX against the first

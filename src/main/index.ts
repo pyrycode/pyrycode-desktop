@@ -29,6 +29,7 @@ import { registerHostLabelHandler } from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
+import { createConnectionRegistry } from './connectionRegistry'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
@@ -290,29 +291,61 @@ app.whenReady().then(() => {
   // every bundle — attributing the bundle to this client build + wire-protocol identity. `whenReady`
   // runs once per process, so the banner is fire-once; it must NOT be re-emitted from the transport
   // start/reconnect/dial paths (AC3), which is why it lives at the root, not inside the connection.
-  logSessionStart(diagnosticLog, app.getVersion())
-  const connection = createDaemonConnection({
-    deviceKeypair: deviceKeypairStore,
-    pairedServer: pairedServerStore,
-    sink: live.sink,
-    // The server-origin binding (#1068), and NULL here on purpose rather than as a stopgap. This one
-    // connection is constructed at launch, before any paired record has been read, and it OUTLIVES a
-    // re-pair — `onPaired` below calls `reconnect()` on this same object rather than rebuilding it —
-    // so a launch-time literal would be right at boot and would silently mis-attribute every event
-    // after the operator pairs a different machine. Null is the honest answer until #1084 constructs
-    // one connection per stored record and passes each one its own `record.server`.
-    serverId: null,
-    deviceName: hostname(),
-    clientVersion: app.getVersion(),
+  // Read once each and closed into the factory below, rather than per connection: with more than one
+  // connection these would otherwise be re-queried per server for a value that cannot differ.
+  const deviceName = hostname()
+  const clientVersion = app.getVersion()
+  logSessionStart(diagnosticLog, clientVersion)
+  // The connection registry (#1117): ONE connection per stored paired record, so every machine the
+  // operator has paired is connected at once instead of only the one paired most recently. It
+  // replaces the single `createDaemonConnection` that stood here — that call is now this factory's
+  // body, reached once per record.
+  //
+  // The `serverId: null` this site used to pass (#1068) survives only for the registry's not-paired
+  // STAND-IN: with nothing stored, the registry holds exactly one connection built with a null id
+  // over the whole store, which is byte-for-byte the connection built here before, so today's
+  // `connecting` → `failed(not-paired)` settle is produced by running the same code rather than
+  // re-emitted from somewhere else. Every connection for a real record is stamped with that record's
+  // own `server` and reads that record by id, so a second pairing can no longer re-point the first
+  // connection at the new record.
+  //
+  // Constructed SYNCHRONOUSLY, doing its own store read afterwards, so this whole whenReady callback
+  // still completes in one tick — the property the two handler-registration comments below lean on.
+  //
+  // `live.sink` is passed through UNWRAPPED and this site stamps nothing: `createDaemonConnection`
+  // calls `bindServerOrigin(deps.sink, deps.serverId)` internally, and one binding over the shared
+  // sink here would stamp every producer with a single id (see bindServerOrigin's header).
+  const registry = createConnectionRegistry({
+    store: pairedServerStore,
+    createConnection: ({ serverId, pairedServer }) =>
+      createDaemonConnection({
+        deviceKeypair: deviceKeypairStore,
+        pairedServer,
+        sink: live.sink,
+        serverId,
+        deviceName,
+        clientVersion,
+        diagnosticLog
+      }),
     diagnosticLog
   })
+  // The stable stand-in every call site below reaches (#1117), bound ONCE here so those lines keep
+  // their current shape: it resolves the current connection at call time and answers for the most
+  // recently paired server, which is where they reach today after a re-pair. Its type omits
+  // start/stop/reconnect, so nothing below can drive one connection's lifecycle — the registry owns
+  // that. Routing these per server is #1118, #1119 and #1120; do not start that here.
+  const connection = registry.active
 
-  // The pairing invoke handler (#54), registered now that `connection` exists so a successful
+  // The pairing invoke handler (#54), registered now that the registry exists so a successful
   // confirm can dial the just-persisted pairing with no manual step (#82). ipcMain.handle allows
   // one handler per channel — this is the sole registration site, held for the app lifetime.
-  // `onPaired` fires only after a confirm persists the record; `reconnect()` is synchronous, void,
-  // and non-throwing (it bumps a fence, stops any live driver, and emits into the must-not-throw
-  // sink), so it satisfies onPaired's must-not-throw contract. Registering here is safe: the whole
+  // `onPaired` fires only after a confirm persists the record; `reconcile()` is synchronous, void,
+  // and non-throwing (it appends to the registry's own chain and returns), so it satisfies onPaired's
+  // must-not-throw contract exactly as `connection.reconnect()` did. The signal stays VALUE-FREE
+  // (#1117): the callback carries no record, so the registry RE-READS the store and makes the
+  // connection set match it — building and dialling one connection for a server that had none, or
+  // re-dialling the single connection whose record just changed under it, and leaving every other
+  // connection live and un-handshaken either way. Registering here is safe: the whole
   // whenReady callback runs to completion in one tick, while an operator-driven pairing invoke
   // (paste + click) arrives many ticks later, after first paint — well after this handler is up.
   // The relay policy the pairing gate runs (#97). Effectful choice made ONCE, here, false-first on
@@ -325,7 +358,7 @@ app.whenReady().then(() => {
   const unregisterPairing = registerPairingHandler(ipcMain, {
     parse: (pasted) => parsePairingPayload(pasted, relayPolicy),
     confirmation,
-    onPaired: () => connection.reconnect(),
+    onPaired: () => registry.reconcile(),
     hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterPairing())
@@ -334,13 +367,17 @@ app.whenReady().then(() => {
   // so the renderer can ask to erase the stored pairing and return to a clean, not-paired state. Its
   // ClearablePairedServerStore.clear() (#172) is fail-closed; the handler maps every throw to a
   // value-free `error`, never reporting success while a live token may remain on disk. Registered
-  // here, below `connection` and beside the pairing handler, because #504 gave it the mirror-image
+  // here, below the registry and beside the pairing handler, because #504 gave it the mirror-image
   // dependency: `onUnpaired` fires only after the erase succeeds and tears the live daemon session
   // down, so an authenticated session can never outlive the record that authorised it. The same
-  // `reconnect()` — synchronous, void, non-throwing — serves both callbacks; with the record gone it
-  // stops the driver, fences its in-flight events, and settles at failed(not-paired) without
-  // constructing a replacement. It never sets the permanent `stopped` flag, so a later re-pair still
-  // connects. Registering this late is safe for the same reason the pairing handler is (above): the
+  // `reconcile()` — synchronous, void, non-throwing — serves both callbacks, which is the whole point
+  // of reconciling against the store rather than against a value the signal carries (#1117): with
+  // every record gone it stops and drops every connection and installs the not-paired stand-in, whose
+  // dial settles at failed(not-paired) exactly as the single connection's `reconnect()` did. It never
+  // sets the registry's permanent stopped flag, so a later re-pair still connects. `clear()` still
+  // erases the WHOLE collection here — the per-server erase is #1090's UI over `clearServer`, and the
+  // registry already answers it by dropping that one connection alone.
+  // Registering this late is safe for the same reason the pairing handler is (above): the
   // whole whenReady callback runs to completion in one tick, and no caller races it — the visible
   // unpair UI is #166/#167, many ticks later, after first paint. `will-quit` removes the handler,
   // symmetric with unregisterPairing.
@@ -352,7 +389,7 @@ app.whenReady().then(() => {
   // record is gone — see the listener's comment for the full argument.
   const unregisterUnpair = registerUnpairHandler(ipcMain, {
     store: pairedServerStore,
-    onUnpaired: () => connection.reconnect(),
+    onUnpaired: () => registry.reconcile(),
     hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterUnpair())
@@ -392,13 +429,19 @@ app.whenReady().then(() => {
     // webContents, so the dev-HMR-reload concern `.once` guarded against is now answered by start()'s
     // proven idempotence instead — and `.on` additionally converges a window that reloads (HMR, or
     // Cmd-R via the default View menu), whose renderer store is just as empty as a new window's.
+    // Plural since #1117: `registry.start()` dials EVERY held connection, and a connection built
+    // later by a pairing reconcile dials as it is built. Its idempotence is what keeps `.on` safe —
+    // it is deferred behind the registry's first store read and then latched, so a second window's
+    // load, or an HMR reload, re-dials nothing.
     window.webContents.on('did-finish-load', () => {
       live.replayStatus()
-      connection.start()
+      registry.start()
     })
   }
   openWindow()
-  app.on('will-quit', () => connection.stop())
+  // Plural since #1117: quitting must reach every connection, or a second paired server's relay
+  // socket outlives the app. It also latches, so a reconcile still in flight builds nothing after.
+  app.on('will-quit', () => registry.stop())
 
   // The debug-bundle download orchestrator (#169): the sole slice that touches Electron + IPC for
   // this feature. `app.getPath('downloads')` — this slice's one Electron touch — is closed into the

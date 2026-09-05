@@ -268,3 +268,36 @@ Within `size:s` on every boundary, re-counted against this written plan:
 
 The edit fan-out check does not apply: no symbol changes name or signature, and the two class names that
 gain a declaration each have exactly one mount site.
+
+## Revisions
+
+### 2026-09-05 — both Open questions resolved, and one of them corrected the design's stated reasoning
+
+**Open question 1 — does the pane's clip reach a popover?** No. `composer-options-clamp`,
+`composer-effort-menu`, `composer-model-menu`, `composer-actions`, `slash-command-type-ahead`,
+`conversation-create-rename`, `save-as-channel-promote`, `permission-modal-answer-paths`,
+`thread-scroll-pin` and `paired-shell-navigation` — 21 tests — all pass against the built change.
+`.conversation__overflow-menu` opens downward from a header at the pane's top and `.composer-options`
+opens upward from the footer, both bounded by the pane. No narrowing of the clip was needed and the
+design is unchanged.
+
+**Open question 2 — is `transparent` renderable-identical to the drawing's zero-alpha `#003355`?** Yes.
+Both stop forms were rendered side by side at this exact gradient geometry in Electron and compared
+pixel-for-pixel: they differ on 19 of ~1.25M colour channels, by at most 1/255 — dither noise on the
+ramp. Premultiplied interpolation confirmed; the design is unchanged and the measurement is recorded in
+`pairedShell.css`.
+
+**Correction to the Design section's containing-block reasoning.** The plan said, following the ticket,
+that `filter` / `backdrop-filter` / `will-change` / `contain` / `clip-path` on `.paired-shell` "would
+drop `.save-as-channel-overlay` and `.rename-conversation-overlay` out of the window and into the shell's
+box". That is measurably false: `contain: paint` was added to `.paired-shell` and the overlays and their
+hit-testing were unchanged, because `.paired-shell` *spans the window*, so making it the containing block
+for a `position: fixed; inset: 0` box leaves that box exactly where it was.
+
+The hazard is real but it lives one level down, on `.paired-shell__sidebar` / `.paired-shell__pane` —
+which this ticket newly gives `overflow: hidden`, and which are one column wide. The same property there
+resizes a full-window overlay into a pane and then clips it: measured as `blocked by
+.paired-shell__pane`. Both stylesheet comments now say this, and it is what makes the spec's checkpoint 6
+a detector rather than a restatement — the design's choice of `background-image` over `filter` for the
+gradient is still correct, but for the weaker reason that it keeps the shell free of a property whose
+danger only shows up if the rule is ever copied downward.

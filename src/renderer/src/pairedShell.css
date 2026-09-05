@@ -54,10 +54,15 @@
      noise on the ramp, not a colour. Gradient interpolation is premultiplied (CSS Images 3), so a
      zero-alpha stop's channels are unobservable at every position and #003355 has nothing to contribute.
 
-     background-image is ALSO the only way to paint this that keeps the fixed overlays working. filter,
-     backdrop-filter, will-change, contain and clip-path would each make .paired-shell a containing block
-     for fixed descendants, which would drop .save-as-channel-overlay and .rename-conversation-overlay out
-     of the window and into this box. Do not reach for any of them here. */
+     background-image is also the form that CANNOT make this element a containing block for fixed
+     descendants, unlike filter, backdrop-filter, will-change, contain and clip-path. That is the right
+     reason to prefer it, but the danger it avoids is NOT on this element, which is worth saying because
+     the obvious reading is wrong: .paired-shell spans the whole window, so making it the containing block
+     leaves .save-as-channel-overlay and .rename-conversation-overlay exactly where they were.
+     `contain: paint` was added here and measured, and the overlays and their hit-testing were unchanged.
+     THE HAZARD IS ON THE WRAPPERS BELOW, which are pane-sized and now carry overflow: hidden — the same
+     property there confines a fixed overlay to one column, measured as
+     `blocked by .paired-shell__pane`. */
   background-color: var(--color-surface);
   background-image: radial-gradient(
     ellipse 78.8% 117% at 47.6% 29.7%,
@@ -78,7 +83,15 @@
    channel-list overlays: both are position: fixed on purpose, and a fixed box's containing block is the
    viewport, so no overflow ancestor clips it. e2e/paired-shell-card.spec.ts proves that by hit-testing a
    point over the chat pane while the Save-as-channel dialog is up, rather than by boundingBox(), which
-   reports a clipped element's full layout box and so could never detect the failure. */
+   reports a clipped element's full layout box and so could never detect the failure.
+
+   ⭐ NEVER ADD filter, backdrop-filter, will-change, contain OR clip-path TO THIS RULE. Any of them makes
+   these wrappers a containing block for fixed descendants, and unlike on .paired-shell above — which
+   spans the window, so the same property there is harmless — these boxes are ONE COLUMN WIDE, so a
+   full-window overlay would be resized into a pane and then clipped by the overflow: hidden right here.
+   Measured, not predicted: `contain: paint` on this rule turns the spec's overlay hit-test into
+   `blocked by .paired-shell__pane`. If a card ever needs a shadow or a blur, that is a pseudo-element's
+   job, not this element's. */
 .paired-shell__sidebar,
 .paired-shell__pane {
   position: relative;

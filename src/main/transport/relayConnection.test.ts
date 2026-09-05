@@ -279,8 +279,18 @@ describe('createRelayConnection', () => {
     })
     cleanups.push(() => handle.close())
 
-    const closed = await sink.waitFor((e) => e.type === 'closed', 500)
-    expect(closed).toMatchObject({ type: 'closed', code: 1009 })
+    // The raw ws close code is deliberately NOT asserted here, and re-adding it re-opens a flake
+    // (#1123). `ws`'s own client-side code for an oversized inbound frame is 1006 — the 1009 goes
+    // only to the peer (ws 8.21) — and the module's normalisation to 1009 lands only if 'error'
+    // reaches it before 'close', which is a `ws` internal, not a contract this repo owns. Under
+    // full-suite load this case observed 1006 once on the #1122 gate run. What is asserted is the
+    // order-independent half the package overview mandates (§ Edge cases: "assert oversize by
+    // terminal close + no message emitted, never by the raw ws close code") — and it is what proves
+    // the `maxPayload` cap actually dropped the frame rather than delivering it truncated, which is
+    // a real-socket property no mock can witness. The 1009 / max-frame-exceeded normalisation is
+    // pinned deterministically in relayConnection.oversize.test.ts.
+    await sink.waitFor((e) => e.type === 'closed', 500)
+    expect(sink.events.filter((e) => e.type === 'closed')).toHaveLength(1)
     expect(sink.events.some((e) => e.type === 'message')).toBe(false)
   })
 

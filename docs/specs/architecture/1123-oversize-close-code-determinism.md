@@ -134,6 +134,18 @@ included in the run precisely because ticket AC4 requires it to pass unmodified.
    library's behaviour. Confirm in Phase B that the two are not redundant, and record the answer
    in `## Revisions` if it changes the design.
 
+## Revisions
+
+**2026-09-05 — open question 1 resolved, design unchanged.** The narrowed real-socket case does
+earn its place, and the two specs are not redundant. Confirmed by running both mutations against
+the deterministic spec: deleting the `pending = {1009, 'max-frame-exceeded'}` assignment reddens
+it 5 times out of 5 (ticket AC2's detector), and widening `isMaxFrameError` to a bare truthy
+check reddens only the third case — so the mocked spec is a complete detector for the module's
+*classification*. Neither mutation touches `maxPayload`, whose drop-the-frame behaviour belongs
+to `ws` itself and is witnessed only by the real-socket case's "no `message` escapes" assertion.
+Deleting that case would have left the memory-exhaustion defence untested, which is the finding
+recorded under [Network & I/O] below. No design change follows.
+
 ## Security review
 
 **Verdict:** PASS

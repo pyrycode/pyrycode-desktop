@@ -1910,8 +1910,11 @@
    1px solid --color-outline is this file's :focus-visible idiom at seven call sites
    (.conversation__back, .bubble__copy, .queued-row__drop, …), and --color-outline rather than
    --color-primary because the latter is reserved here for an edge that must not read as the ring's twin
-   (.composer__row--drop's note). outline-offset: -1px is .composer__row:has(.composer__input:focus-visible)'s
-   own device for the same job — the ring lands just inside the row's border rather than on top of it.
+   (.composer__row--drop's note). outline-offset: -1px is .composer--drop-target's own device for the same
+   job — the ring lands just inside the row's border rather than on top of it. (#1063: this sentence used to
+   cite .composer__row:has(.composer__input:focus-visible), which #1063 retired — and the citation was
+   already wrong before that, because the composer's focus rule carried no outline-offset at all.
+   .composer--drop-target is the rule that does.)
    :focus-visible and not :focus, so a mouse click on the header does not draw a ring the design does not
    model. e2e/tool-row-toggle.spec.ts asserts a NEGATIVE offset on the focused toggle, which is what makes
    "the clip does not eat it" a measured fact rather than this note's claim. */
@@ -2407,14 +2410,19 @@
    outline, NOT border, and that is the whole reason this rule reads the way it does. .composer has no
    resting border — it is padding over the pane card, with no paint of its own since #1099 — so a
    `border:` in the active state would add 2px to the block and reflow the entire conversation column
-   every time a file crossed the composer. The
-   shipped no-reflow precedent is .composer__row:has(.composer__input:focus-visible) further down, which
-   states exactly this trade for the message box's focus ring.
+   every time a file crossed the composer. An outline participates in no layout at all, which is the
+   property being bought here; the argument stands on that fact directly. (#1063: it used to stand on a
+   precedent instead — .composer__row:has(.composer__input:focus-visible), the message box's focus ring,
+   which made the same trade further down this file. #1063 retired that rule, so the precedent is gone and
+   the reasoning is stated on its own terms. Nothing about this rule changed with it.)
 
-   --color-primary rather than that rule's --color-outline, so the drop edge is not the focus ring's twin:
-   the two can be up at the same moment (a drag over a composer whose textarea holds focus), and drawing
-   them alike would read as one ring thickening rather than as two different states. Both are tokens this
-   stylesheet already uses; no new colour is introduced.
+   --color-primary rather than the --color-outline this file's focus rings wear, so the drop edge never
+   reads as one of them thickening rather than as a state of its own. Before #1063 that distinction had a
+   sharper edge still — the message box's own ring could be up at the same moment, on a drag over a composer
+   whose textarea held focus, drawing two neighbouring rings in one token. That particular collision is gone
+   with that rule; the token choice outlives it, because a drag can cross the composer while any of this
+   file's 21 remaining focus rings is up. Both are tokens this stylesheet already uses; no new colour is
+   introduced.
 
    outline-offset: -1px draws the edge INSIDE the border box. The composer is the conversation column's
    last child and its bottom padding edge is the window's, where an outward outline is clipped by the
@@ -2989,22 +2997,38 @@
   color: var(--color-on-surface-variant);
 }
 
-/* #951 — THE SHIPPED FOCUS RING, MOVED FROM THE TEXTAREA TO THE BOX. Same treatment, same token, same
-   1px: only the element it paints on changed, and it had to. The textarea is now 28px tall inside a 52px
-   box, so its own outline would draw a bare rectangle floating inside the rounded box — visible, but
-   reading as an artefact rather than as "this box has focus". On the row it follows --radius-xs and is
-   the box's ring, which is what AC3 asks for.
+/* #1063 RETIRED THE MESSAGE BOX'S FOCUS RING — `.composer__row:has(.composer__input:focus-visible)`, which
+   painted this file's `1px solid --color-outline` around the whole 52px box. #951 had moved that ring off
+   the textarea and onto the box; #1063 took it off the box too, and nothing replaced it. The drawing is the
+   reason: `Input large` (Figma 347:6635) carries an `Active indicator` child (347:6441) and it is HIDDEN in
+   the node, so the design gives the focused message box no visible indicator of its own. Operator call of
+   2026-09-04. The ring was never a design value that drifted — it was #951's own addition — which is why
+   deleting it is a fidelity fix rather than a regression.
 
-   :has() rather than :focus-within, and .question-panel__option:has(.question-panel__input:focus-visible)
-   is the shipped precedent for exactly this shape. :focus-within would also match while the SEND CONTROL
-   holds focus, stacking this ring around the box on top of the button's own :focus-visible ring two rules
-   down — two rings for one focused control. :has() names the textarea and nothing else.
+   THE CARET IS THE INDICATOR NOW, and that trade is the whole of why this is defensible. A text field's
+   caret appears on focus, is absent without it, and is the reason WCAG's focus-visible requirement is
+   normally read as satisfied for text inputs. `caret-color` is set nowhere in this stylesheet, so the caret
+   is the UA's and inherits .composer__input's `color` (--color-on-surface) — visible against the box's
+   ground by construction rather than by declaration, which is exactly why it is asserted rather than
+   assumed (see below). The same trade would NOT hold on a button: this file declares
+   `1px solid --color-outline` at 21 other call sites, .composer__send:focus-visible four rules below among
+   them, and #1063 is licence to drop none of them.
 
-   .composer__input keeps `outline: none` above, so the UA ring is still suppressed and this is the whole
-   keyboard indicator for the message box. */
-.composer__row:has(.composer__input:focus-visible) {
-  outline: 1px solid var(--color-outline);
-}
+   .composer__input KEEPS ITS `outline: none` above. Not an oversight to tidy later: without it the UA draws
+   its own ring on the textarea, which is both a ring the design does not have and a ring on the element
+   #951 already established is the wrong one to draw it on — a bare rectangle floating inside the rounded
+   box, reading as an artefact rather than as "this box has focus".
+
+   IF THIS EVER COMES BACK, IT MUST NOT COME BACK AS `:focus-within`. That is the one part of #951's
+   reasoning worth more than the rule it justified, and the diff does not carry it: :focus-within also
+   matches while the SEND CONTROL holds focus, so it would stack a ring around the box on top of that
+   button's own :focus-visible ring two rules down — two rings for one focused control. :has() named the
+   textarea and nothing else. .question-panel__option:has(.question-panel__input:focus-visible) is now that
+   selector's one consumer again, and its comment carries the argument.
+
+   The absence is pinned, not merely deleted: e2e/composer-message-box.spec.ts asserts under focus that the
+   box paints no outline, no border and no shadow, that the textarea's own ring is still suppressed, that
+   the caret is neither transparent nor hidden, and that .composer__send still rings. */
 
 /* #678 — the chrome BOTH variants of the composer's one control share (send and stop), with no modifier
    class: the 48px M3 icon button. The rules below already behave for the never-disabled stop variant —
@@ -5040,8 +5064,10 @@
    distinction that container flattens by intent — not as a ban. Here there is no other way to reach the
    row from the state of the input inside it, the renderer is one known Chromium, and the alternative is a
    focus indicator a keyboard user cannot see. #951 took this rule as the precedent for the message box's
-   own ring (.composer__row:has(.composer__input:focus-visible)), so the selector now has two consumers
-   and the same argument twice. */
+   own ring and the selector briefly had two consumers; #1063 retired that ring, so this is the one
+   consumer again and the argument above is made once, here. The message box's retirement note keeps the
+   half that is not about this row — why a restore must not reach for :focus-within — because that half is
+   about the composer's send control and is not recoverable from this rule. */
 .question-panel__option:has(.question-panel__input:focus-visible) {
   outline: 1px solid var(--color-outline);
 }

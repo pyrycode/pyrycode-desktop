@@ -193,3 +193,26 @@ against the un-deleted rule and must fail on the box's outline before the styles
 
 Both are resolved in Phase B and any resolution that changes the design above is recorded under
 `## Revisions`.
+
+## Revisions
+
+### 2026-09-05 — Phase B
+
+**Both open questions resolved as the design assumed; nothing above changed.**
+
+1. **Tab from the focused textarea lands on `.composer__send`.** Asserted directly
+   (`el === document.activeElement` on the control) rather than taken on trust, so the fallback in the
+   question was not needed and a future change to the composer's tab order reddens this rather than
+   silently making the send-ring assertion read a different element.
+2. **`.composer__row` carries no border and no `box-shadow`** at rest or under focus. The `none`
+   assertions hold as written.
+
+**One finding the plan did not anticipate, and it changes an assertion's shape rather than the design.**
+The caret checkpoint was specified as two negative arms — not `transparent`, not `rgba(0, 0, 0, 0)`. Proved
+by deletion (`caret-color: transparent` added to `.composer__input`, rebuilt, run): the block reddens on the
+**rgba arm only**, because Chromium serialises the keyword to `rgba(0, 0, 0, 0)` and the `'transparent'` arm
+therefore never fires. Both arms are kept — the second costs nothing and catches an engine that serialises
+the keyword — but the spec now names which one is the detector, so a later edit cannot trim the working half
+and leave a pair of assertions that no longer prove the caret is visible. This is the ticket's load-bearing
+new assertion (the caret is the entire justification for removing the ring), which is why it was proved
+rather than assumed.

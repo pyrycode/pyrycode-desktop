@@ -160,26 +160,104 @@ test('the message box is the design Input large, with the control inside its rig
   expect(paddingLeft).toBe(`${TEXT_LEFT_INSET_PX}px`)
   expect(Number.parseFloat(paddingRight)).toBeGreaterThanOrEqual(TEXT_RIGHT_INSET_PX)
 
-  // --- 6. AC3's focus clause: the ring paints on the BOX, not on the textarea, and on the shipped
-  // --color-outline treatment. A focused text field always matches :focus-visible, pointer or keyboard, so
-  // focus() alone is enough to arm the :has() selector. ---
+  // --- 6. #1063's ring clause: with the textarea focused, the box paints NO ring — and neither does the
+  // textarea. #951 moved a ring from the textarea onto the box; #1063 retired it, because the drawing's
+  // `Active indicator` (347:6441) is HIDDEN in the node and the box's focus indicator is the caret below.
+  // This is #951's own checkpoint INVERTED rather than deleted: read the other way it is the same proof,
+  // and without it the ring's absence is unpinned and free to drift back. A focused text field always
+  // matches :focus-visible, pointer or keyboard, so focus() alone is enough to arm anything that still
+  // would paint. ---
   await input.focus()
-  const [boxOutlineStyle, boxOutlineWidth, boxOutlineColor, inputOutlineStyle] = await Promise.all([
-    box.evaluate((el) => getComputedStyle(el).outlineStyle),
-    box.evaluate((el) => getComputedStyle(el).outlineWidth),
-    box.evaluate((el) => getComputedStyle(el).outlineColor),
-    input.evaluate((el) => getComputedStyle(el).outlineStyle)
-  ])
-  expect(boxOutlineStyle).toBe('solid')
-  expect(boxOutlineWidth).toBe('1px')
-  expect(boxOutlineColor).toBe(await tokenColor(page, '--color-outline'))
-  // And nowhere else: the textarea's own ring stays suppressed, so the box wears the only one.
-  expect(inputOutlineStyle).toBe('none')
+  const focusedBox = await box.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return {
+      outlineStyle: style.outlineStyle,
+      borderStyle: style.borderTopStyle,
+      boxShadow: style.boxShadow,
+      radius: style.borderTopLeftRadius
+    }
+  })
+  expect(focusedBox.outlineStyle).toBe('none')
+  // Not the outline alone: the criterion is that NOTHING paints a ring, and an outline is only one of the
+  // ways to draw one. A border or a shadow arriving in its place would sail past a bare outlineStyle check
+  // while putting the pale edge straight back — and a border would also reflow, which section 8 catches.
+  expect(focusedBox.borderStyle).toBe('none')
+  expect(focusedBox.boxShadow).toBe('none')
+  // The textarea's own ring stays suppressed (.composer__input keeps `outline: none`). That declaration is
+  // deliberately KEPT by #1063 and this assertion is unchanged from #951 — it is now the more load-bearing
+  // of the two, because dropping it hands the box back the UA's own ring, the opposite of the ask.
+  expect(await input.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('none')
+
+  // --- 7. The caret, which is what the retired ring was traded FOR: "the blinking cursor is enough" is the
+  // whole justification for removing it, and before #1063 no spec asserted a caret existed at all. NEGATIVE
+  // assertions on purpose. caret-color is set nowhere in this stylesheet, so the caret is the UA's and
+  // inherits the input's `color` — the computed value is the keyword `auto` and there is no rgb here to
+  // compare against, which is why this is "not hidden" and not "equals --color-on-surface". No spec can see
+  // a caret blink. What this pins is that a later ticket cannot silently hide it and leave the most
+  // prominent focusable thing in the app with no focus indicator at all. ---
+  const caret = await input.evaluate((el) => ({
+    color: getComputedStyle(el).caretColor,
+    isFocused: el === document.activeElement
+  }))
+  //
+  // THE SECOND ARM IS THE DETECTOR, measured: `caret-color: transparent` on .composer__input reddens this
+  // block on the rgba() line, because Chromium serialises the keyword to `rgba(0, 0, 0, 0)` and the
+  // `'transparent'` arm above never fires. That arm is kept anyway — it costs nothing and the day a
+  // computed value serialises as the keyword it is the one that catches it — but it is not what proves
+  // this checkpoint works, and a future edit that keeps only one must keep the rgba one. ---
+  expect(caret.isFocused).toBe(true)
+  expect(caret.color).not.toBe('transparent')
+  expect(caret.color).not.toBe('rgba(0, 0, 0, 0)')
+
+  // --- 8. Nothing reflowed when focus arrived. This is not a regression check on the DELETED rule — an
+  // outline never participated in layout — it is the check that nothing replaced it with something that
+  // does, which a border in its place is exactly. Section 1's resting numbers, re-read under focus rather
+  // than restated. ---
+  const focusedGeometry = await box.boundingBox()
+  if (!focusedGeometry) throw new Error('the message box lost its layout box on focus')
+  expect(wholePixels(focusedGeometry.height)).toBe(BOX_HEIGHT_PX)
+  expect(wholePixels(focusedGeometry.width - boxBox.width)).toBe(0)
+  expect(focusedBox.radius).toBe(`${BOX_RADIUS_PX}px`)
+
+  // --- 9. The deletion was SURGICAL: .composer__send:focus-visible still paints this file's shipped
+  // `1px solid --color-outline`, four rules below the one that went. #1063 removed one of 22 focus rings in
+  // conversation.css and is not licence to drop the other 21 — the trade it makes is a text field's, whose
+  // caret is an indicator in its own right, and it would not hold on a button like this one.
+  //
+  // TAB rather than control.focus(): :focus-visible matches after a KEY PRESS in this tier and not reliably
+  // after a programmatic focus() on a button — e2e/attachment-file-row.spec.ts states that rule and this
+  // copies it. The control is in the tab order here because `canSend` derives from the connection status
+  // rather than from the draft (composerAvailability), so a paired launch has it enabled with an empty box. ---
+  await page.keyboard.press('Tab')
+  expect(await control.evaluate((el) => el === document.activeElement)).toBe(true)
+  const controlRing = await control.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor }
+  })
+  expect(controlRing.style).toBe('solid')
+  expect(controlRing.width).toBe('1px')
+  expect(controlRing.color).toBe(await tokenColor(page, '--color-outline'))
+
+  // Focus has now LEFT the box, and it is unchanged again — the second half of "nothing reflows when focus
+  // arrives or leaves". The box wears no ring in either state, which is also what keeps the retired rule
+  // from coming back as a :focus-within variant: that selector would still match right now, with the send
+  // control holding focus, and would draw a second ring around the box on top of the button's own.
+  const blurredGeometry = await box.boundingBox()
+  if (!blurredGeometry) throw new Error('the message box lost its layout box on blur')
+  expect(wholePixels(blurredGeometry.height)).toBe(BOX_HEIGHT_PX)
+  expect(await box.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('none')
 })
 
-// #1056 — the grown box. The block above is AC1's detector and stays UNEDITED: its whole contract is that
-// the resting render is byte-stable, and an edit to it would be the thing it exists to catch. These two
-// blocks join it rather than replacing anything.
+// #1056 — the grown box. The block above is AC1's detector and its RESTING-GEOMETRY checkpoints stay
+// UNEDITED: their whole contract is that the resting render is byte-stable, and an edit to one of them
+// would be the thing they exist to catch. These two blocks join them rather than replacing anything.
+//
+// #1063 — THAT INSTRUCTION IS ABOUT THE RESTING-GEOMETRY CHECKPOINTS AND NOT ABOUT THE FOCUS ONE, which
+// #1063 rewrote on purpose when it retired the box's focus ring. Read as a blanket ban it would have left
+// section 6 asserting a rule that no longer exists — a red gate, not a preserved contract — and deleting it
+// instead would have left the ring's absence pinned by nothing. The resting numbers themselves are
+// untouched by that rewrite: sections 8 and 9 now re-read them under focus and after blur, so the
+// byte-stability contract above came out of #1063 stricter rather than weaker.
 //
 // The split between them is a FIXTURE FACT, not taste. launchPairedApp lands on an EMPTY conversation,
 // where `.conversation__empty` renders and `.conversation__thread` does not exist at all — so AC5 has to

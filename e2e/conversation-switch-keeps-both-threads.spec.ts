@@ -2,6 +2,7 @@ import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import type { ConversationSummary } from '../src/shared/wire/types'
+import type { Page } from '@playwright/test'
 
 // Fake-stack UI e2e for the READER CUTOVER (#758): the chat pane renders the OPEN conversation's own
 // retained timeline (conversationTimelineStore) instead of the flat, single-thread `timelineStore` that
@@ -53,6 +54,21 @@ const SENT_IN_CREATED = 'a message typed in the created discussion'
 // for a cold runner.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 
+// #1098: exactly one sidebar row is marked open, and it is the one showing `title`. Both halves matter
+// and they fail in opposite directions — a mark that never moved leaves the count at 1 on the WRONG row,
+// and one that was added without clearing leaves the count at 2. `aria-current` rather than a computed
+// colour on purpose: which row is marked is this spec's question, and what that mark is painted as is
+// the geometry spec's.
+const expectOnlyOpenRow = async (page: Page, title: string): Promise<void> => {
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveCount(1)
+  await expect(
+    page
+      .locator('.channel-list__row')
+      .filter({ hasText: title })
+      .locator('.channel-list__row-open[aria-current="true"]')
+  ).toHaveCount(1)
+}
+
 test("switching away from a chat and back shows that chat's own thread", async ({
   launchPairedApp
 }) => {
@@ -103,6 +119,13 @@ test("switching away from a chat and back shows that chat's own thread", async (
     .locator('.channel-list__row-open')
     .click()
   await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_SEED)])
+  // #1098 rides this drive because it is the only one that reaches a SECOND conversation and switches
+  // by clicking a row — the sibling geometry spec covers the create path, not this one. The sidebar
+  // marks the chat the pane is showing, so the fill followed the click: exactly one row is marked, and
+  // it is the row that was just clicked. The colour and the weight are the geometry spec's; what is
+  // asserted here is WHICH row, which is why this reads the state attribute rather than a computed
+  // style. `.channel-list` is rendered on the thread route too, so both rows are on screen.
+  await expectOnlyOpenRow(page, 'Seeded channel')
 
   // --- 5. And back the other way, so the proof is not one-way: the created discussion's own row is still
   // held too. Both threads survived the round trip — "switching costs me nothing". ---
@@ -112,4 +135,6 @@ test("switching away from a chat and back shows that chat's own thread", async (
     .locator('.channel-list__row-open')
     .click()
   await expect(userRows).toHaveText([bubbleTextExactly(SENT_IN_CREATED)])
+  // And the mark came back the other way too, so it is a follow rather than a one-way latch.
+  await expectOnlyOpenRow(page, UNTITLED)
 })

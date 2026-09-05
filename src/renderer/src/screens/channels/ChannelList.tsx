@@ -40,6 +40,9 @@ import {
 // RE-EXPORTED at modalStore.ts:45 precisely so consumers take the read surface from one site
 // (PermissionModal.tsx:192-194 is the shipped precedent).
 import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
+// #1098's whole read: which chat the pane is showing. The store has held it since #278 and the sidebar
+// simply did not read it — no new store, no IPC, no wire type.
+import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
 // #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
@@ -94,6 +97,29 @@ export function ChannelList({
   // value — #404 changing the default re-renders the container. Mirrors the conversations store read above;
   // safe under renderToStaticMarkup where the singleton hydrates to null (the typeof-window guard).
   const defaultWorkspace = useDefaultWorkspaceStore(selectDefaultWorkspace)
+  // #1098 — the open chat's id, read HERE rather than per row. `activateConversation` calls
+  // `setActiveConversation` unconditionally on both its branches before navigating (#448), so this is
+  // correct for a sidebar row click and for a FAB-minted conversation alike.
+  //
+  // The FIELD IS `id`. `ConversationCreatedPayload` is a 5-field shape (`id, is_promoted, cwd, name,
+  // last_used_at`) and carries no `conversation_id` — the same read ships at ConversationScreen's
+  // `activeConversationId`, inline arrow included. It returns a primitive `string | null`, so it is
+  // value-stable under `useSyncExternalStore` and is none of the merged-object selectors
+  // `ConversationStatusDotControl`'s header bans; the fresh closure per render costs one allocation and
+  // one `Object.is`, never a re-subscription.
+  //
+  // WHY NOT A READ INSIDE `Row`. That is the smaller diff and the tighter re-render boundary (only the
+  // two rows whose answer flips would re-render), and it is what `ConversationStatusDotControl` does one
+  // component over. It is declined for one reason: zustand v5 serves `getInitialState()` under
+  // `renderToStaticMarkup`, so a store-reading row can only ever render `activeConversation: null` — the
+  // renderer tier could prove the UNFILLED case and nothing else, leaving the whole marked state to e2e.
+  // Read here, the state reaches `ChannelListView` as an injectable prop, which is the seam the unit tier
+  // already has a `render()` helper for — where this file's twice-shipped answer to the same problem
+  // (HostRow/HostRowControl, HostConnectionDots/HostConnectionDotsControl) costs a component and an
+  // export. The honest cost, stated rather than hidden: a switch re-renders the whole sidebar where a
+  // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
+  // is the prop path #1097 freed by deleting `now`.
+  const openConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
@@ -126,6 +152,7 @@ export function ChannelList({
       <HostLabelData />
       <ChannelListView
         conversations={conversations}
+        openConversationId={openConversationId}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
@@ -171,6 +198,7 @@ export function ChannelList({
  */
 export function ChannelListView({
   conversations,
+  openConversationId,
   onOpen,
   onOpenSettings,
   onOpenArchive,
@@ -179,6 +207,11 @@ export function ChannelListView({
   onRename
 }: {
   conversations: readonly ConversationSummary[] | null
+  // #1098 — the id of the chat the pane is showing, or `null` when none has been opened this session.
+  // REQUIRED rather than optional: the container must decide, and a defaulted prop would let a future
+  // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
+  // is exactly what the store hydrates to under `renderToStaticMarkup`.
+  openConversationId: string | null
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -195,7 +228,7 @@ export function ChannelListView({
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
       </div>
-      {renderBody(conversations, onOpen, onSaveAsChannel, onRename)}
+      {renderBody(conversations, openConversationId, onOpen, onSaveAsChannel, onRename)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -625,6 +658,10 @@ export function CollapsibleWorkspaceGroup({
 
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
+  // #1098 — data, so it leads the callbacks. It is compared, never rendered: the id is daemon-asserted
+  // and stays a comparison operand, never a class-name interpolation, an attribute value, a title, an
+  // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
+  openConversationId: string | null,
   onOpen: (row: ConversationSummary) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
@@ -668,7 +705,17 @@ function renderBody(
           {groupByWorkspace(channels).map((group) => (
             <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
               {group.rows.map((c) => (
-                <Row key={c.id} row={c} onOpen={() => onOpen(c)} onRename={() => onRename(c)} />
+                <Row
+                  key={c.id}
+                  row={c}
+                  // #1098 — the comparison happens HERE, so `Row` takes a boolean about itself rather
+                  // than a global id to reason about. `===` against a possibly-null id and never a
+                  // truthiness test: an empty-string id stays an ordinary key instead of collapsing
+                  // into "nothing open" (App.tsx's `openConversationId` header names the same trap).
+                  isOpen={c.id === openConversationId}
+                  onOpen={() => onOpen(c)}
+                  onRename={() => onRename(c)}
+                />
               ))}
             </CollapsibleWorkspaceGroup>
           ))}
@@ -696,6 +743,9 @@ function renderBody(
                 <Row
                   key={d.id}
                   row={d}
+                  // Same comparison as the Channels tree above — one `Row` serves both, so the open
+                  // chat is marked in whichever tree it lives in and neither is a special case.
+                  isOpen={d.id === openConversationId}
                   onOpen={() => onOpen(d)}
                   onSaveAsChannel={() => onSaveAsChannel(d)}
                 />
@@ -801,13 +851,40 @@ function ConversationStatusDotControl({
 // onOpen, and PairedShell records it as the active conversation before navigating — so the thread's
 // wire actions (send, snapshot, dequeue) target the clicked conversation's real id. The Row keeps a
 // nullary onOpen prop; the map site closes over the row (the onSaveAsChannel/onRename pattern).
+// #1098 — the row of the chat the pane is showing carries the design's fill (node 103:2969). The STATE
+// is `aria-current` on the open button, never a modifier class, and it goes on the BUTTON rather than
+// on the wrapper. Three reasons, in order of weight:
+//
+//   - IT IS AN AFFORDANCE, NOT DECORATION. `aria-current` announces the open chat to a screen reader
+//     ("leaky-faucet, button, current"); a class announces nothing. That is also why it lands on the
+//     element a keyboard user actually reaches — on the role-less wrapper <div> the same attribute
+//     would only be met by browse-mode traversal of a generic container.
+//   - AC5 THEN HOLDS BY CONSTRUCTION, on the open row too. `ChannelList.test.tsx` matches whole
+//     attribute runs (`class="channel-list__row"`, `…__row-open"`, `…__title"`) and `rowChunksIn`
+//     SPLITS the render on the first of them — so a marker that stopped matching would yield zero
+//     chunks and pass every #801 `for` loop VACUOUSLY rather than failing one. An attribute after the
+//     class leaves all three runs byte-identical; a `--open` token would arm that trap.
+//   - IT IS THE RULING THIS FILE ALREADY MADE one row-family element over: `WorkspaceRow` keeps its
+//     class token sole and styles its collapsed state off `[aria-expanded='false']`, for exactly that
+//     silent-zeroing reason.
+//
+// `undefined` OMITS the attribute rather than emitting `aria-current="false"` on every other row — the
+// shape all four shipped consumers use (ComposerOptionsPanel, ComposerModelMenu,
+// ComposerSlashCommandTypeAhead, QuestionPanel). Its value is the client-owned literal 'true'; the
+// conversation id never reaches it.
+//
+// The FILL itself is `channels.css`'s and sits on `.channel-list__row`, selected through `:has()`: the
+// button is a `flex: 1 1 auto` SIBLING of the trailing affordances, not their parent, so a fill on it
+// would stop short and leave an unfilled tail on any row carrying Save-as-channel or Rename.
 function Row({
   row,
+  isOpen,
   onOpen,
   onSaveAsChannel,
   onRename
 }: {
   row: ConversationSummary
+  isOpen: boolean
   onOpen: () => void
   onSaveAsChannel?: () => void
   onRename?: () => void
@@ -824,7 +901,14 @@ function Row({
           button still spans the row and its hover/focus rectangles are unchanged; nothing about
           `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
       <ConversationStatusDotControl conversationId={row.id} />
-      <button type="button" className="channel-list__row-open" onClick={onOpen}>
+      <button
+        type="button"
+        className="channel-list__row-open"
+        // Nothing may be inserted between `className` and `aria-current`: the unit tier compares this
+        // tag against a resting row's as an equality, and `channels.css` selects on the pair.
+        aria-current={isOpen ? 'true' : undefined}
+        onClick={onOpen}
+      >
         <span className="channel-list__title">{titleFor(row.name)}</span>
       </button>
       {onRename && (

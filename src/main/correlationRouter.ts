@@ -239,12 +239,30 @@ export function createCorrelationRouter<C>(deps: CorrelationRouterDeps<C>): Corr
         return forget(batches, event.questionBatchId, serverId)
       // The daemon's own session id, NOT a conversation id — #501 is the standing bug about those two
       // being confused, and keeping this space in its own map read from its own arms is what keeps this
-      // slice from confusing them further. `sessionTransition.newSessionId` is deliberately NOT a fourth
-      // learning arm: the run-config store addresses whatever `runConfigReceived` last reported, so
-      // widening the learning surface would only invent disagreement between the two.
+      // slice from confusing them further.
+      //
+      // THREE ARMS, BECAUSE THE STORE THE WINDOW ADDRESSES HAS TWO WRITERS. The id a `setSessionSettings`
+      // carries is `sessionIdStore`'s (every footer control reads it through `selectSessionId`, and
+      // `runSettingsWriteBridge.ts`'s `buildSettingsPayload` sends it verbatim), and that store is fed
+      // BOTH by `runConfigSnapshot.ts`'s `subscribeRunConfig` (off `runConfigReceived`) AND by
+      // `sessionIdBridge.ts`'s `subscribeSessionId` (off `sessionTransition.newSessionId`) — "neither
+      // ingress is preferred; arrival order wins". This module's first draft read the run-config arms
+      // only, on the premise that the store addresses whatever `runConfigReceived` last reported. It does
+      // not, and the gap was reachable on ONE server: after a `/clear` the transition lands a new id in
+      // the store while `runConfigSnapshot.ts` leaves the snapshot — and therefore the still-active
+      // controls — untouched, and `runConfigLive.ts`'s refresh trigger fires on only two edges (a rising
+      // `connected`, a running→not-running turn). Every model / effort / permission-mode change in
+      // between would have refused with no frame on any wire, while `submitSettingsChange`'s
+      // record-before-send overlay reported it applied. Reading the transition too is what makes this
+      // index agree with the store the operator is reading, which is the same rule that made `learn`
+      // last-write-wins. Safe on every `WireSessionTransitionReason`: the event is stamped, so it names
+      // the right server; `''` is caught by `learn`'s first line; and an `idle_evict` marker mirrors the
+      // previous id, so it is an identical re-write that logs nothing.
       case 'runConfigReceived':
       case 'sessionSettingsUpdated':
         return learn(sessions, event.sessionId, serverId)
+      case 'sessionTransition':
+        return learn(sessions, event.newSessionId, serverId)
       default:
         return
     }

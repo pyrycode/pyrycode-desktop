@@ -449,3 +449,45 @@ is what shipped. Recorded here so the three questions are visibly answered rathe
    whatever `runConfigReceived` last reported, so adding a second source could only make the index name a
    session the window is not addressing. The reasoning is now a comment on the `record` switch's session
    arms so the next reader does not re-derive it.
+
+   **Superseded 2026-09-05 by the revision below — the premise was factually wrong.**
+
+**2026-09-05 — `sessionTransition` becomes the third session-learning arm (verifier MUST FIX).** A design
+change, not a clarification: `record` now learns from `sessionTransition.newSessionId` beside
+`runConfigReceived` and `sessionSettingsUpdated`, with a test alongside the other per-space learning tests
+and the `record` comment rewritten to carry the corrected reasoning rather than the old one.
+
+**The premise Open question 3 rested on is false.** It assumed the run-config store holds the id a
+`setSessionSettings` addresses. It does not: every footer control reads `sessionIdStore` through
+`selectSessionId`, and `runSettingsWriteBridge.ts`'s `buildSettingsPayload` sends that value verbatim. That
+store has **two** writers, and its own docblock says neither is preferred — `runConfigSnapshot.ts`'s
+`subscribeRunConfig` (off `runConfigReceived`, the arm the index read) and `sessionIdBridge.ts`'s
+`subscribeSessionId` (off `sessionTransition.newSessionId`, the arm it did not). So the conclusion inverts:
+the second source is the only thing that makes the index name the session the window **is** addressing.
+
+**The gap was reachable on one server, and failed in the worst direction.** `WireSessionTransitionReason`
+is `clear | idle_evict | workspace_change`; `clear` is live today. `runConfigSnapshot.ts` handles only
+`runConfigReceived`, so a `/clear` lands a new id in `sessionIdStore` while the snapshot — and therefore
+the still-active controls — is untouched. `runConfigLive.ts`'s `createRunConfigRefreshTrigger` fires on
+exactly two edges (a rising `connected`, a running→not-running turn), so nothing re-teaches the index until
+the operator happens to complete a turn. In that window every Model / Effort / YOLO / permission-mode
+change would have resolved to `null` and been refused with no frame on any wire — while
+`submitSettingsChange`'s record-before-send `changeDispatched` had already drawn the pending marker and
+optimistic overlay, and no `sessionSettingsUpdated` or `sessionSettingsRejected` would ever resolve them.
+The operator reads the change as applied; nothing was sent. AC5's "with one connection all five reach it
+exactly as they do today" was therefore false on that path, and the fake tier is green only because no
+run-config spec seeds a `session_transition`.
+
+**It is also the module's own invariant, mis-applied.** `learn`'s docblock — "it reads what the renderer
+reads, so an index can never disagree with the surface the window renders" — is the principle the Security
+review used to overturn first-write-wins. It holds for `modals` and `batches`, which are fed by exactly the
+events `modalBridge` / `questionBridge` consume; the session space was the one place the index was fed by a
+**narrower** set of events than the store the command addresses. So this revision applies the existing rule
+rather than adding one, and the Security review's analysis stands with its session-space premise corrected.
+
+**The added arm is safe on every reason.** The event is stamped, so it maps to the server that minted the
+id; `learn`'s `id.length === 0` guard covers an empty `newSessionId`; and an `idle_evict` marker mirrors the
+previous id, making it an identical re-write that logs nothing (asserted). Nothing else changes: no new
+export, no new diagnostic, no eviction in this space, no widening of `DiagnosticEvent`, and the #501
+session-vs-conversation separation is untouched — `sessionTransition` names a **session** id and lands in
+the session map only.

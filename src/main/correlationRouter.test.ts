@@ -11,6 +11,7 @@ import {
 } from './correlationRouter'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import { DAEMON_EVENT_CHANNEL, type DaemonEvent, type StampedDaemonEvent } from '../shared/ipc/events'
+import type { WireSessionTransitionReason } from '../shared/wire/types'
 import type { DiagnosticEvent } from './diagnosticLog'
 
 /** A stand-in connection. Identity is the whole contract — the router never calls a member. */
@@ -70,6 +71,22 @@ function runConfigReceived(serverId: string | null, sessionId: string): StampedD
 
 function sessionSettingsUpdated(serverId: string | null, sessionId: string): StampedDaemonEvent {
   return { type: 'sessionSettingsUpdated', sessionId, changeId: 'change-1', serverId }
+}
+
+/** The `/clear` marker: the second writer of the store whose id a `setSessionSettings` carries. */
+function sessionTransition(
+  serverId: string | null,
+  newSessionId: string,
+  reason: WireSessionTransitionReason = 'clear'
+): StampedDaemonEvent {
+  return {
+    type: 'sessionTransition',
+    newSessionId,
+    reason,
+    occurredAt: '2026-09-05T12:00:00Z',
+    workspaceCwd: null,
+    serverId
+  }
 }
 
 /** An arm this module reads for nothing — it must pass through untouched. */
@@ -182,6 +199,32 @@ describe('createCorrelationRouter — learning and routing', () => {
     expect(h.router.routeSession('session-2')).toBe(beta)
   })
 
+  it('learns a session from sessionTransition — the id the store holds after a /clear', () => {
+    // The store the footer controls address has two writers, and this is the one `runConfigReceived`
+    // never covers: after a `/clear` the transition lands a new id while the run-config snapshot (and
+    // therefore the still-active controls) is untouched, so an index blind to it would refuse every
+    // model / effort / permission-mode change until the next refresh edge.
+    const h = harness()
+    const alpha = h.connect('alpha')
+    h.connect('beta')
+    h.push(runConfigReceived('alpha', 'session-1'))
+    h.push(sessionTransition('alpha', 'session-2'))
+
+    expect(h.router.routeSession('session-2')).toBe(alpha)
+    // Nothing evicts in this space, so the pre-clear id stays routable beside the new one.
+    expect(h.router.routeSession('session-1')).toBe(alpha)
+  })
+
+  it('treats an idle_evict transition mirroring the previous id as an identical re-write', () => {
+    const h = harness()
+    const alpha = h.connect('alpha')
+    h.push(runConfigReceived('alpha', 'session-1'))
+    h.push(sessionTransition('alpha', 'session-1', 'idle_evict'))
+
+    expect(h.router.routeSession('session-1')).toBe(alpha)
+    expect(h.log.events).toEqual([])
+  })
+
   it('keeps the three spaces separate — an id learned in one is unroutable in another', () => {
     const h = harness()
     h.connect('alpha')
@@ -196,6 +239,7 @@ describe('createCorrelationRouter — learning and routing', () => {
     const h = harness()
     h.connect('alpha')
     h.push(runConfigReceived('alpha', ''))
+    h.push(sessionTransition('alpha', ''))
     h.push(modalShown('alpha', ''))
     h.push(questionShown('alpha', ''))
 
@@ -488,6 +532,8 @@ describe('createCorrelationRouter — AC4s never-log rule', () => {
     h.push(questionShown('alpha', ids[1] as string))
     h.push(runConfigReceived('alpha', ids[2] as string))
     h.push(runConfigReceived('beta', ids[2] as string))
+    // The transition arm on a logging path too: a re-point back to alpha, which records `reassigned`.
+    h.push(sessionTransition('alpha', ids[2] as string))
     h.push(modalShown('alpha', 'z'.repeat(MAX_CORRELATION_ID_LENGTH + 1)))
     h.disconnect('alpha')
     h.router.routeQuestions(ids[1] as string)

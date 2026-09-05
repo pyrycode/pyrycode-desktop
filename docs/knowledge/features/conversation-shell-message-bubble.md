@@ -195,19 +195,78 @@ through a new `ipcMain` channel in the `shared/ipc/unpair.ts` request/response s
 choice — that idiom grants the same capability through more code and would have pushed the ticket over
 its file-count boundary.
 
+## Whitespace (#1057)
+
+`.bubble` declares no `white-space`, so it always took the initial `normal` — every newline and every
+run of spaces collapsed to a single space. [#607](../codebase/607.md) had already fixed this for the
+assistant side, hanging `pre-wrap` on `.bubble--assistant-text` specifically *because* a rule on
+`.bubble` would have reached the user bubble too, and never said the user bubble wanted the same
+treatment. It stayed unfixed until this ticket: Shift+Enter's newline survives `composerSend`'s
+`trim()` all the way to the daemon and back, and the bubble threw it away at paint — a pasted stack
+trace or a two-paragraph instruction drew as one run-on line.
+
+The fix is two declarations on `.bubble--user`: `white-space: pre-wrap` (the value #607 already
+reasoned out — `normal` loses the break, `pre-line` still collapses runs, `pre` stops wrapping past
+the bubble's `max-width` measure, `break-spaces` would widen the box with a trailing run rather than
+letting it hang past the edge), plus `.bubble--user > * { white-space: normal }` to stop the
+inheritance at the bubble's own bare text node. The reset was not optional: `.bubble__file-name`
+([message bubble attachment slots](conversation-shell-message-bubble-attachments.md)) deliberately
+ships with no `white-space` rule of its own (#815's measured answer to its own wrapping criterion), so
+before the reset landed the inherited `pre-wrap` was its only value and
+`e2e/attachment-file-row.spec.ts`'s computed-`normal` assertion went red on the first build. `> *`
+rather than a list of today's two filename classes, so a child added to the bubble later inherits the
+reset without anyone remembering to add it.
+
+`.bubble--user` reaches every site that draws the user's own words in one declaration — the delivered
+`userText` row, `QueuedBacklog` (dimmed but otherwise the same markup), and the retired
+`MessageBubble`'s user branch — so all three keep whitespace with no markup change and no unit-tier
+edit. The queued row's text is daemon-supplied (`QueuedItem.text` over `queue_state`, not the local
+echo), so this preserves whitespace a hostile daemon chose; two existing bounds already cover it —
+`pre-wrap` hangs a trailing run past the line's end rather than widening the box, and `.bubble`'s
+`max-width` caps it regardless.
+
+Proven in `e2e/user-whitespace.spec.ts`, a new sibling to `assistant-whitespace.spec.ts` rather than an
+extension of it (that file's harness is the assistant delta/turn-end frame builder, unneeded here, and
+the ticket demanded it stay unedited). Every whitespace claim is a computed style or a measured box
+read through `locator.evaluate()`, never a `toHaveText`/`toContainText` expectation — both hardcode
+`normalizeWhiteSpace: true`, so a multi-line text expectation passes identically against the broken and
+the fixed build. Six fixtures (control, a long interior space run, three short lines, a blank line
+between two paragraphs, a second-line indent, a ~200-character unbroken token) each differ from the
+control only in the whitespace the assertion is testing, so *equal is the broken state* rather than the
+pass condition:
+
+- The overflow read for the long token is the bubble's own `scrollWidth` against its `clientWidth`, not
+  `boundingBox().width` — `.bubble`'s `max-width` caps the box whatever `white-space` says, so a width
+  read can never redden. Redden-checked for real: built once with `white-space: pre`, the long-token
+  bubble measured `scrollWidth` 1765 against `clientWidth` 486.
+- `Range.getClientRects()` does not return one rect per line box under `pre-wrap` — Blink splits the
+  range at the preserved newline, so a two-line text reports three rects. The indent assertion uses
+  per-character ranges (`setStart`/`setEnd` at one offset) instead, which say *which* line moved rather
+  than just how many there are.
+- Playwright's `toHaveText` does not normalise a `RegExp`'s *received* text against a multi-line
+  string, contrary to `assistant-whitespace.spec.ts`'s own header comment — the collapsed expectation
+  failed, reporting a string that still carried the newlines. Costs the existing tier nothing (every
+  other `toHaveText` over a user bubble reads a single-line text) but a spec asserting a multi-line
+  bubble's text must expect the raw `\n`.
+
+No ADR: the value (`pre-wrap`) was already settled by #607; this ticket only extended where it is
+stated. See [architecture spec](../../specs/architecture/1057-user-bubble-whitespace.md) for the full
+design and its `## Revisions`, where these three measurements were recorded.
+
 ## What stays untouched
 
 - **The queued row** (`QueuedBacklog`, [queued backlog + drop
   affordance](conversation-shell-conversation-and-modals.md#queued-backlog--drop-affordance-294-drop-since-296))
-  reuses `.bubble--user` with no CSS of its own, so it inherits the new geometry, fill and type — but it
-  renders no `BubbleMeta`: a queued message has no timestamp and nothing sent yet to copy. Its
-  `data-thread-role="queued"` distinguishes it from a delivered row's `"user"`, so the two are
-  distinguishable in a markup assertion that counts meta rows rather than greping for a class.
+  reuses `.bubble--user` with no CSS of its own, so it inherits the new geometry, fill and type, and
+  (#1057) the whitespace treatment too — but it renders no `BubbleMeta`: a queued message has no
+  timestamp and nothing sent yet to copy. Its `data-thread-role="queued"` distinguishes it from a
+  delivered row's `"user"`, so the two are distinguishable in a markup assertion that counts meta rows
+  rather than greping for a class.
 - **`MessageBubble`** — the retired, unmounted residue of the coarse `MessageThread` path
   [#179](../codebase/179.md) cut over from (still exported, still unit-tested, never rendered in the
-  app) — emits `bubble bubble--user` / `bubble bubble--daemon` and so inherits the CSS restyle passively,
-  but gained no `BubbleMeta` and no code change. Its tests still pin the message text as the bubble's
-  sole child (`data-message-role="user">text m1</div>`).
+  app) — emits `bubble bubble--user` / `bubble bubble--daemon` and so inherits the CSS restyle and the
+  whitespace treatment (#1057) passively, but gained no `BubbleMeta` and no code change. Its tests
+  still pin the message text as the bubble's sole child (`data-message-role="user">text m1</div>`).
 - **The tool rows and the fenced code block** are untouched by the #969 restyle: they are not bubbles. The
   file row and the image thumbnail — both instances of the same `Message` component's `Slot` — inherit the
   restyle around them but drew no content of their own at the time; both have since shipped. See
@@ -238,7 +297,10 @@ that must not leak into the string, a sub-four-digit year, and the `toLocaleStri
 above. #1014 also added stamped `assistantText`/`userText` cases to the #969 meta-row `describe` in
 `ConversationScreen.test.tsx` alongside an absent-stamp case; the 39 pre-existing stamp-free item literals
 in that file were left unedited — #1013's optional field is what keeps them compiling, and they remain the
-coverage for the empty-slot path.
+coverage for the empty-slot path. **#1057's whitespace fix gained no unit test** — `vitest.config.ts`
+runs the `node` environment, every renderer spec is a `renderToStaticMarkup` string with no stylesheet
+and no layout, and the markup is byte-identical before and after; see § Whitespace above and
+`e2e/user-whitespace.spec.ts` below.
 
 **Playwright** (`e2e/message-copy.spec.ts`, fake-transport tier): the clipboard-permission measurement
 above; the keyboard path (focus + Enter, same clipboard read-back); and the restyle's geometry as
@@ -255,6 +317,12 @@ alongside the sections that describe what each spec proves.
 
 ## Related
 
+- [#1057 architecture spec](../../specs/architecture/1057-user-bubble-whitespace.md) — the
+  `white-space: pre-wrap` / `> *` reset design, the redden-check evidence, and the `## Revisions`
+  where the "inert on the other children" assumption was measured false.
+- [#607 codebase notes](../codebase/607.md) — the assistant-side `pre-wrap` fix #1057 extends, and
+  the written-out value rationale (`normal`/`pre-line`/`pre`/`break-spaces`) #1057 cites rather than
+  re-derives.
 - [#969 architecture spec](../../specs/architecture/969-message-bubble-redraw-with-meta-row.md) — full
   design, the clipboard-permission open question and its resolution, and the security review.
 - [#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) — the parent ticket this meta row's

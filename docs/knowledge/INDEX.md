@@ -992,8 +992,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   their own `server` field (never an object key, so `__proto__` stays inert), a version-marked JSON
   envelope told apart from a legacy bare-string blob by a positive `v` check rather than a parse
   failure, and a `mutate` queue serializing the now-read-modify-write keyed saves/clears. Store-only:
-  the un-keyed triple and all four existing callers are untouched, and no caller is wired to the keyed
-  one yet. Architect self-review PASS (\#1155).
+  the un-keyed triple and all four existing callers are untouched. Architect self-review PASS (\#1155).
+  **\#1156** moved `saveFor`/`clearFor` onto live callers (pairing confirm, per-server unpair) and
+  taught `load()` to recognise both at-rest shapes. **[#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)**
+  gave the last keyed member, `loadFor`, its own caller too — see [Host-label channel](features/host-label-channel.md).
 - [Host-label channel](features/host-label-channel.md) — the fourth store-only IPC channel beside
   [pairing-status](features/pairing-status-signal.md)/[unpair](features/unpair-channel.md)/[server-info](features/server-info-channel.md):
   `window.pyry.hostLabel()` reads [host-label store](features/host-label-store.md)'s `load()` back to
@@ -1009,7 +1011,13 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   throw, log-free on every branch. Reuses the same `hostLabelStore` [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)
   already constructs — no second store. Shipped with no caller; [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833)
   gave it one and the sidebar host row is still open as [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
-  Architect self-review PASS (#824).
+  Architect self-review PASS (#824). **[#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)**
+  added a second channel, `HOST_LABEL_SERVER_CHANNEL`, carrying a guarded `serverId` and answering from
+  `MultiHostLabelStore.loadFor` through a `loadFor`-only handle — a second channel rather than a changed
+  signature, since the zero-argument one's sole caller passes it as a bare function reference. Same
+  three-arm `HostLabelResult` comes back; a guard refusal is the same value-free `error` as an unreadable
+  label. No caller wired yet — [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) migrates
+  the sidebar onto it. Architect self-review PASS (#1157).
 - [Host-label window store](features/host-label-window-store.md) — the renderer counterpart of
   [host-label store](features/host-label-store.md): a Zustand store + one-shot loader
   (`hostLabelStore.ts` / `hostLabelLoader.ts`) filling from `window.pyry.hostLabel()`

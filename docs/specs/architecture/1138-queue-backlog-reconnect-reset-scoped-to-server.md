@@ -218,7 +218,10 @@ ALL backlogs. No assertion, fixture or frame changes; both stay green.
 
 ## Security review
 
-**Verdict:** PASS
+**Verdict:** PASS — but only as re-run. The first pass returned PASS while missing the pairing boundary
+entirely; that gap is the last three findings below and the design change in Revision 1. Read the two
+together: the body of this section audits the server-to-server boundary, and the revision findings audit
+the pairing-to-pairing one.
 
 **Findings:**
 
@@ -281,8 +284,92 @@ ALL backlogs. No assertion, fixture or frame changes; both stay green.
   so the design is better under that threat, not worse. Token theft from disk — not on this path.
   Hostile daemon response — the finding above, named and deferred. Renderer compromise reaching the
   transport — unchanged, no new capability crosses the bridge.
+- [Trust boundaries] **Added by Revision 1 — the boundary the first pass missed.** The pass above audits
+  only the boundary between two *servers* and never the boundary between two *pairings*, where the state
+  that survives belongs to a machine the operator has left. `clearPairingScopedState` excludes
+  `queueStore` from the pairing-scoped clear, and states the reason in its header: the store is "cleared
+  by the `connected` edge, then repopulated", so a clear there would be dead code. **Scoping the reset
+  retires that justification.** After the change, a new pairing's first `connected` resolves an empty
+  conversation list, matches no held key, and hands the state object straight back; and the daemon
+  re-sends `queue_state` only for a NON-EMPTY conversation, so a conversation that drained while
+  unpaired is re-asserted by nothing at all. Its pre-drop backlog then renders indefinitely — #197's
+  shipped guarantee, broken at the pairing boundary — and because conversation ids are daemon-side, a
+  re-pair to the same box reuses the id the phantom is filed under. The content at stake is a
+  `QueuedItem.text`, untrusted daemon-relayed text, so this is the class `clearPairingScopedState`
+  already names in security terms: a silent stale-data leak across a pairing boundary. MUST FIX,
+  and fixed — see Revision 1. It is narrower than the sibling case that argument was written for
+  (`conversationTimelineStore`'s "a slice from the old server could be keyed under an id the new one
+  reuses"): a backlog renders only under its own conversation id and `clearAllConversations` means no
+  row points at it, so the phantom is reachable rather than cross-attributed. Reachable is enough.
+- [Trust boundaries] The fix's own input is audited on the same terms as the reset's, and it is
+  strictly safer: `clearAllBacklogs` is NULLARY. It takes no conversation id and no server origin, so
+  no daemon-supplied field can steer which backlogs survive a boundary the operator crossed
+  deliberately — the property `clearAllConversations` and `clearAllModelLists` are nullary for, against
+  a sharper input here, since a queued item's `text` is content the departing daemon authored. The
+  clear is total and unconditional, so there is no state in which a backlog legitimately survives.
+- [Concurrency] The added clear introduces no new interleaving: it is a synchronous in-memory store
+  write inside a function whose ten siblings are the same, on the renderer's single thread. It cannot
+  throw (nothing outside memory), so it neither needs nor perturbs the ordering constraint that keeps
+  `clearAllLastRead` last. It carries the `size === 0` subscriber short-circuit, so the common case — a
+  pairing change with nothing queued — wakes no listener.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
-**Date:** 2026-09-06
+**Date:** 2026-09-06 (revised 2026-09-06, Revision 1)
 </content>
 </invoke>
+
+## Revisions
+
+### Revision 1 — 2026-09-06 — `queueStore` joins the pairing-scoped clear
+
+**Driven by:** the two MUST FIX findings on PR #1142 — the code-layer one against `resetBacklogsFor` +
+`ClearPairingScopedStateDeps`, and the plan-layer one against `## Security review`.
+
+**What was wrong.** The design above establishes that only `clearAllConversations` at a pairing boundary
+empties the server-keyed conversation list, and uses that to argue the reconnect reset behaves correctly
+across a re-pairing. It stopped one step short of the consequence. `clearPairingScopedState` excludes
+`queueStore` from the pairing-scoped clear set and justifies the exclusion by the property this ticket
+removes: while the reconnect reset cleared the WHOLE map, a re-pairing's first `connected` blanked every
+latched backlog on its way past, so a clear at the boundary would have been dead code. Scoped, that edge
+resolves the new pairing's empty conversation list, matches no held key, and returns the state object
+unchanged — and since the daemon re-sends `queue_state` only for a NON-EMPTY conversation, a conversation
+that drained while unpaired is re-asserted by nothing. Its stale pre-drop backlog renders indefinitely,
+which is exactly the bug #197 shipped to fix, reintroduced at a boundary the original design never
+examined.
+
+**The new contract.** `queueStore` gains a nullary `clearAllBacklogs: () => void` and joins
+`ClearPairingScopedStateDeps`, wired in `PairedShell`'s `clearPairingDeps` beside `clearAllConversations`.
+The two mechanisms now split the work rather than one covering for the other: the `connected` edge drops
+the reconnecting server's listed conversations (`resetBacklogsFor`, unchanged by this revision), and the
+pairing boundary drops everything. `clearAllBacklogs` returns `initialQueueState` by reference and carries
+the `size === 0` subscriber short-circuit, the `clearAllModelLists` shape; it is nullary for the reason its
+four siblings are, against a sharper input — a queued item's `text` is untrusted daemon-relayed content,
+so an id-taking clear would let the departing daemon choose which of its own messages outlive it.
+
+This is the same sequence `conversationListStore` ran through, and the second instance of it: #531
+excluded that store as self-healing, #1086 removed the self-heal and had to add it here. `queueStore` is
+now the only member of the set whose store the `connected` edge ALSO clears, which is why
+`clearPairingScopedState`'s header gains a paragraph rather than just a list entry — the discriminator it
+documents ("does a reconnect to the SAME daemon need to clear it?") answers BOTH for this store, and the
+header said such a store does not belong in the set at all.
+
+**Testing added.** `queueStore.test.ts` gains a `clearAllBacklogs` block: it drops every server's
+backlogs including the orphan `resetBacklogsFor` is defined to leave alone (AC3's complement), returns
+`initialQueueState` by reference, is a same-reference no-op when already clear, does not mutate the map
+in place, and takes no arguments. `clearPairingScopedState.test.ts` goes from ten clears to eleven — the
+call assertion, the "exactly these N stores" key-set pin, the already-clear no-op case — and gains one
+integration case that asserts both halves of the argument: that a new pairing's first `connected` (a
+scoped reset with an empty id set) leaves the phantom, and that the pairing clear removes it. Both new
+cases were verified to redden with `deps.clearAllBacklogs()` removed.
+
+**Also corrected.** `clearPairingScopedState`'s header no longer lists `queueStore` among the
+self-healing stores, and its counts move from ten to eleven. Per the NIT on the same review,
+`conversationListStore.test.ts`'s `__proto__` case drops two assertions that could not fail
+(`Object.prototype` identity, and an unwritten `polluted` key) in favour of `expect([...ids])`, which
+does redden on a bare-object accumulator — assigning `__proto__` there sets the prototype instead of
+adding an own key, so the id vanishes from an enumeration.
+
+**Not changed.** `resetBacklogsFor`, `selectConversationIdsFor`, `queueBridge` and its `originOf` are
+untouched; the verifier confirmed those as correct. The deferred findings in the Security review above
+(the `conversationId`-only keying of `backlogs`, and the daemon's influence over the id set) stay
+deferred on the same reasoning — this revision narrows what survives a boundary and widens nothing.

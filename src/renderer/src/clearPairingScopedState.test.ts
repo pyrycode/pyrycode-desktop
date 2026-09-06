@@ -29,10 +29,12 @@ import {
   selectConversations,
   selectConversationsFor
 } from './store/conversationListStore'
+import { createQueueStore, selectBacklogFor, EMPTY_BACKLOG } from './store/queueStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   ConversationCreatedPayload,
   MessagePayload,
+  QueuedItem,
   WireModelOption,
   WireSlashCommand
 } from '@shared/wire/types'
@@ -88,6 +90,7 @@ function spyDeps(): {
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
   clearAllModelLists: ReturnType<typeof vi.fn>
   clearAllConversations: ReturnType<typeof vi.fn>
+  clearAllBacklogs: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -99,6 +102,7 @@ function spyDeps(): {
   const clearAllSlashCommandLists = vi.fn()
   const clearAllModelLists = vi.fn()
   const clearAllConversations = vi.fn()
+  const clearAllBacklogs = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -111,6 +115,7 @@ function spyDeps(): {
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
+      clearAllBacklogs,
       dispatchSession,
       clearAllLastRead
     },
@@ -122,6 +127,7 @@ function spyDeps(): {
     clearAllSlashCommandLists,
     clearAllModelLists,
     clearAllConversations,
+    clearAllBacklogs,
     dispatchSession,
     clearAllLastRead
   }
@@ -148,7 +154,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all ten clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all eleven clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -159,6 +165,7 @@ describe('clearPairingScopedState', () => {
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
+      clearAllBacklogs,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -191,6 +198,11 @@ describe('clearPairingScopedState', () => {
     // by server means the departed server's slot is simply never written again, so the union would go
     // on rendering its rows under the new pairing.
     expect(clearAllConversations).toHaveBeenCalledWith()
+    expect(clearAllBacklogs).toHaveBeenCalledTimes(1)
+    // #1138, the same nullary property as the four whole-map clears above and against the sharpest
+    // input of them: a queued item's `text` is untrusted daemon-relayed content, so a clear taking an
+    // id would let the DEPARTING daemon choose which of its own messages outlive the pairing.
+    expect(clearAllBacklogs).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -200,17 +212,18 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these ten stores', () => {
+  it('the pairing-scoped set is exactly these eleven stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so a TENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
-    // here until it is added to the literal, and then fails this assertion until it is also asserted
-    // called above — rather than being silently declared and never invoked. #779 was the seventh,
-    // #955 the eighth, #977 the ninth and #1086 the tenth, and each updated this pin, which is the
-    // intended cost of adding one; loosening it is not.
+    // names, so an ELEVENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
+    // compile here until it is added to the literal, and then fails this assertion until it is also
+    // asserted called above — rather than being silently declared and never invoked. #779 was the
+    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth and #1138 the eleventh, and each
+    // updated this pin, which is the intended cost of adding one; loosening it is not.
     const { deps } = spyDeps()
 
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
+      'clearAllBacklogs',
       'clearAllConversations',
       'clearAllLastRead',
       'clearAllModelLists',
@@ -380,6 +393,8 @@ describe('clearPairingScopedState', () => {
     const lastReadStateBefore = lastRead.getState()
     const slashCommandStateBefore = slashCommands.getState()
     const modelListStateBefore = modelLists.getState()
+    const queue = createQueueStore()
+    const queueStateBefore = queue.getState()
 
     clearPairingScopedState(
       realDeps(
@@ -391,7 +406,9 @@ describe('clearPairingScopedState', () => {
         session,
         lastRead,
         slashCommands,
-        modelLists
+        modelLists,
+        createConversationListStore(),
+        queue
       )
     )
 
@@ -417,6 +434,10 @@ describe('clearPairingScopedState', () => {
     // guard: the state OBJECT comes straight back, so zustand wakes no subscriber at all rather than
     // only sparing the selectors.
     expect(modelLists.getState()).toBe(modelListStateBefore)
+    // #1138's contribution to the same claim. It matters more here than for its siblings: a pairing
+    // change with nothing queued is the COMMON case, so an unguarded clear would churn every queue-rail
+    // subscriber on every unpair.
+    expect(queue.getState()).toBe(queueStateBefore)
   })
 
   it('real stores: the marks clear runs AFTER the timeline clear, so the open conversation is not re-minted (AC1, AC2)', () => {
@@ -510,6 +531,50 @@ describe('clearPairingScopedState', () => {
     expect(selectConversationsFor('srv-old')(conversations.getState())).toBeNull()
     expect(selectConversationsFor('srv-other')(conversations.getState())).toBeNull()
   })
+
+  it('real stores: a backlog queued on the ended pairing cannot outlive it, and the connected edge alone would NOT evict it (#1138)', () => {
+    const queue = createQueueStore()
+    const queued: QueuedItem = {
+      queued_msg_id: 7,
+      text: 'queued on the machine we just left',
+      ts: '2026-09-01T12:00:00Z'
+    }
+    queue.getState().setBacklog({ conversationId: 'c-drained', queued: [queued] })
+
+    // FIRST, the half that makes this store's membership necessary rather than defensive. Scoping the
+    // reconnect reset to the reconnecting server's own conversations (#1138) is what removed the
+    // self-heal #531 relied on: the new pairing's first `connected` finds no conversation list in its
+    // slot yet, so the scoped reset resolves an EMPTY id set, matches no held key, and hands the state
+    // object straight back. Simulated directly here rather than through the bridge, because the claim
+    // is about what the edge CANNOT do.
+    const before = queue.getState()
+    queue.getState().resetBacklogsFor(new Set())
+    expect(queue.getState()).toBe(before)
+    expect(selectBacklogFor('c-drained')(queue.getState())).toEqual([queued])
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        queue
+      )
+    )
+
+    // SECOND, the half this ticket adds. Without it 'c-drained' — a conversation that drained daemon-
+    // side while the operator was unpaired, so the next daemon re-sends NO queue_state for it (it
+    // unicasts one per NON-EMPTY conversation) — shows its stale pre-drop backlog indefinitely, keyed
+    // under an id a re-pair to the same box reuses. That is #197's bug at the pairing boundary.
+    expect(queue.getState().backlogs.size).toBe(0)
+    expect(selectBacklogFor('c-drained')(queue.getState())).toBe(EMPTY_BACKLOG)
+  })
 })
 
 function realDeps(
@@ -524,7 +589,9 @@ function realDeps(
   modelLists: ReturnType<typeof createModelListStore>,
   // #1086's tenth store. Defaulted rather than threaded through every call site: only the case that
   // asserts on the conversation rows needs to hold a reference to the store being cleared.
-  conversations: ReturnType<typeof createConversationListStore> = createConversationListStore()
+  conversations: ReturnType<typeof createConversationListStore> = createConversationListStore(),
+  // #1138's eleventh, defaulted for the same reason.
+  queue: ReturnType<typeof createQueueStore> = createQueueStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -535,6 +602,7 @@ function realDeps(
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     clearAllConversations: () => conversations.getState().clearAllConversations(),
+    clearAllBacklogs: () => queue.getState().clearAllBacklogs(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

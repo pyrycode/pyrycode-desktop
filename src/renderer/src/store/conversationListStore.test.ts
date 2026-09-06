@@ -289,8 +289,10 @@ describe('selectConversationIdsFor', () => {
     const s = state([['srv-a', [stamped('srv-a', { id: '__proto__' })]]])
     const ids = selectConversationIdsFor('srv-a')(s)
     expect(ids.has('__proto__')).toBe(true)
-    expect(Object.prototype).toBe(Object.getPrototypeOf({}))
-    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined()
+    // The half that actually reddens on a bare-object accumulator: `acc['__proto__'] = true` sets the
+    // prototype instead of adding an own key, so the id would vanish from an enumeration entirely
+    // rather than merely being unreadable. Asserting the whole membership, not just the lookup.
+    expect([...ids]).toEqual(['__proto__'])
   })
 })
 

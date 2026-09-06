@@ -177,3 +177,62 @@ describe('queueStore', () => {
     expect(store.getState().resetBacklogsFor).toBe(before)
   })
 })
+
+// clearAllBacklogs (#1138) — the pairing-boundary drop that replaces the self-heal scoping the
+// reconnect reset removed. Nullary by design: no daemon-supplied id may steer which backlogs survive.
+describe('clearAllBacklogs', () => {
+  it('drops EVERY server’s backlogs, whatever the conversation list says (AC3’s complement)', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    store.getState().setBacklog({ conversationId: 'b1', queued: [b] })
+    // Deliberately including the case resetBacklogsFor is DEFINED to leave alone: a backlog whose
+    // conversation appears in no server's list. The scoped reset must not reach it (AC3); the pairing
+    // boundary must, because nothing on the next pairing re-asserts it.
+    store.getState().setBacklog({ conversationId: 'orphan', queued: [a, b] })
+    store.getState().clearAllBacklogs()
+    expect(store.getState().backlogs.size).toBe(0)
+    expect(selectBacklogFor('a1')(store.getState())).toBe(EMPTY_BACKLOG)
+    expect(selectBacklogFor('b1')(store.getState())).toBe(EMPTY_BACKLOG)
+    expect(selectBacklogFor('orphan')(store.getState())).toBe(EMPTY_BACKLOG)
+  })
+
+  it('returns initialQueueState BY REFERENCE and is a same-reference no-op when already clear', () => {
+    // THE SUBSCRIBER SHORT-CIRCUIT, the `clearAllModelLists` shape: handing the state OBJECT straight
+    // back on an already-clear store makes zustand's Object.is fire, so a redundant clear — a second
+    // pairing change with nothing queued — wakes NO listener rather than only sparing the selectors.
+    const store = createQueueStore()
+    const empty = store.getState()
+    store.getState().clearAllBacklogs()
+    expect(store.getState()).toBe(empty)
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    store.getState().clearAllBacklogs()
+    expect(store.getState().backlogs).toBe(initialQueueState.backlogs)
+    const cleared = store.getState()
+    store.getState().clearAllBacklogs()
+    expect(store.getState()).toBe(cleared)
+  })
+
+  it('does not mutate the map it was handed out — copy-on-write like the two setters', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    const beforeMap = store.getState().backlogs
+    store.getState().clearAllBacklogs()
+    expect(beforeMap.size).toBe(1)
+    expect(beforeMap.get('a1')).toEqual([a])
+  })
+
+  it('takes no arguments, so no daemon-supplied id can steer which backlogs survive', () => {
+    // The call-side half of the nullary property (`tsc` enforces the other half). A queued item's
+    // `text` is untrusted daemon-relayed content, so an id-taking clear would let the DEPARTING daemon
+    // choose which of its own messages outlive the pairing.
+    const store = createQueueStore()
+    expect(store.getState().clearAllBacklogs).toHaveLength(0)
+  })
+
+  it('keeps the clearAllBacklogs reference stable across updates', () => {
+    const store = createQueueStore()
+    const before = store.getState().clearAllBacklogs
+    store.getState().setBacklog({ conversationId: 'c1', queued: [a] })
+    expect(store.getState().clearAllBacklogs).toBe(before)
+  })
+})

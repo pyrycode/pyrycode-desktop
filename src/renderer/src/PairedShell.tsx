@@ -32,6 +32,7 @@ import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { modelListStore } from './store/modelListStore'
 import { conversationListStore } from './store/conversationListStore'
+import { queueStore } from './store/queueStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -119,6 +120,12 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // method takes nothing at all. Adding it to THIS object is what makes both pairing-change paths
   // below drop it; neither call site needed an edit.
   clearAllConversations: () => conversationListStore.getState().clearAllConversations(),
+  // #1138: every conversation's queued backlog, dropped as one. The same direct, nullary shape as the
+  // four clears above. It is the only member of this object whose store the `connected` edge ALSO
+  // clears — scoping that edge's reset to the reconnecting server (which is what #1138 does) is exactly
+  // what stopped a re-pairing's first `connected` from blanking the map on its way past, so the two
+  // mechanisms now split the work rather than one covering for the other.
+  clearAllBacklogs: () => queueStore.getState().clearAllBacklogs(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

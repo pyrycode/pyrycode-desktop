@@ -20,6 +20,12 @@
 // the latest snapshot for a conversation"), so a discriminated-union action set would be a one-member
 // union — ceremony without benefit. Unidirectional is preserved: read-only selectors, one write path,
 // and `setBacklog` is invoked only by the subscription wiring, never two-way-bound from a component.
+//
+// This store answers to BOTH pairing-lifecycle mechanisms, which is unusual and deliberate: the
+// `connected` edge drops the reconnecting server's backlogs (`resetBacklogsFor`, #197 scoped by #1138)
+// and the pairing-scoped clear (`clearAllBacklogs`, #1138) lands in `clearPairingScopedState`'s
+// injected dep set. See `createQueueStore`'s docblock for why scoping the first one required the
+// second.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { QueuedItem } from '@shared/wire/types'
@@ -39,12 +45,14 @@ export interface QueueState {
   backlogs: ReadonlyMap<string, readonly QueuedItem[]>
 }
 
-/** Store shape = state + the two mutation entry points: record one conversation's snapshot, and drop
- *  the reconnecting server's backlogs (#197, scoped by #1138). Still two named setters, not a
- *  discriminated-union action set — that would be ceremony for two operations. */
+/** Store shape = state + the three mutation entry points: record one conversation's snapshot, drop the
+ *  reconnecting server's backlogs (#197, scoped by #1138), and drop EVERY server's at a pairing
+ *  boundary (#1138). Still named setters, not a discriminated-union action set — that would be
+ *  ceremony for three operations. */
 export type QueueStore = QueueState & {
   setBacklog: (snapshot: QueueSnapshot) => void
   resetBacklogsFor: (conversationIds: ReadonlySet<string>) => void
+  clearAllBacklogs: () => void
 }
 
 export const initialQueueState: QueueState = { backlogs: new Map() }
@@ -79,6 +87,25 @@ export const initialQueueState: QueueState = { backlogs: new Map() }
  * generalises: when NO held key is listed the state object is handed straight back, so zustand's
  * `Object.is` fires and a first connect, an all-drained reconnect and a reconnect of a server holding
  * nothing here all wake no listener at all (the #415 empty-slice no-op twin).
+ *
+ * `clearAllBacklogs` (#1138) is the PAIRING-boundary drop, and it exists because scoping the reconnect
+ * reset above removed the self-heal that kept this store out of `clearPairingScopedState`'s dep set —
+ * the `conversationListStore` sequence (#531 excluded it, #1086 scoped it and had to add it) repeated
+ * verb for verb. While the reconnect reset cleared the WHOLE map, a re-pairing's first `connected`
+ * blanked every latched backlog on its way past; scoped, that same edge resolves the new pairing's
+ * empty conversation list, matches no held key, and hands the state object straight back. Nothing else
+ * evicts a backlog for a conversation the daemon no longer re-sends, because the daemon re-sends only
+ * for NON-EMPTY conversations — so a conversation that drained while unpaired would show its stale
+ * pre-drop backlog indefinitely, which is precisely the bug #197 shipped to fix. Run against
+ * `clearPairingScopedState`'s discriminator — "does a reconnect to the SAME daemon need to clear it?" —
+ * the answer is now BOTH mechanisms, each covering what the other cannot: the edge covers the
+ * reconnecting server's listed conversations, this covers everything at a pairing change.
+ *
+ * NULLARY BY DESIGN, the `clearAllConversations` / `clearAllModelLists` shape: it takes no conversation
+ * id and no server origin, so no daemon-supplied field can steer which backlogs survive a boundary the
+ * operator crossed deliberately. It returns `initialQueueState` BY REFERENCE and carries the
+ * `size === 0` subscriber short-circuit for the same reason its siblings do — a redundant clear hands
+ * the state object straight back, so zustand's `Object.is` fires and no listener wakes.
  */
 export function createQueueStore(init: QueueState = initialQueueState) {
   return createStore<QueueStore>((set) => ({
@@ -96,7 +123,8 @@ export function createQueueStore(init: QueueState = initialQueueState) {
         const next = new Map(s.backlogs)
         for (const id of doomed) next.delete(id)
         return { backlogs: next }
-      })
+      }),
+    clearAllBacklogs: () => set((s) => (s.backlogs.size === 0 ? s : initialQueueState))
   }))
 }
 

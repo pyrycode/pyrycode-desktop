@@ -155,6 +155,74 @@ describe('runConfigStore', () => {
     expect(initialRunConfigState).toEqual({ snapshot: null })
   })
 
+  it('clearSnapshot returns a populated store to "nothing received yet" (#1167)', () => {
+    const store = createRunConfigStore({
+      snapshot: {
+        model: 'opus',
+        effort: 'high',
+        yolo: true,
+        permissionMode: 'bypassPermissions',
+        usedTokens: 146000,
+        windowTokens: 200000
+      }
+    })
+    store.getState().clearSnapshot()
+    // Back to the DISTINCT not-loaded state, not to an all-zero snapshot: `''`/`false`/`0` are real
+    // readings the daemon sends, and every control that draws its not-known rendering keys on the
+    // fall-through a null snapshot produces, not on the zeros.
+    expect(selectSnapshot(store.getState())).toBeNull()
+    expect(store.getState()).toMatchObject(initialRunConfigState)
+  })
+
+  it('clearSnapshot on an already-clear store is a no-op (#1167)', () => {
+    const store = createRunConfigStore()
+    store.getState().clearSnapshot()
+    expect(selectSnapshot(store.getState())).toBeNull()
+  })
+
+  it('a cleared store still records the next snapshot (#1167)', () => {
+    // The clear is a lifetime move, not a latch: the newly opened conversation's own reply must land
+    // in a store that has been cleared moments before, which is the ONLY sequence production runs.
+    const store = createRunConfigStore()
+    store.getState().clearSnapshot()
+    const next: RunConfigSnapshot = {
+      model: 'sonnet',
+      effort: 'low',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 1000,
+      windowTokens: 200000
+    }
+    store.getState().setSnapshot(next)
+    expect(selectSnapshot(store.getState())).toEqual(next)
+  })
+
+  it('keeps two stores independent across a clear (#1167)', () => {
+    const a = createRunConfigStore({
+      snapshot: {
+        model: 'a',
+        effort: 'low',
+        yolo: false,
+        permissionMode: 'default',
+        usedTokens: 0,
+        windowTokens: 0
+      }
+    })
+    const b = createRunConfigStore({
+      snapshot: {
+        model: 'b',
+        effort: 'high',
+        yolo: true,
+        permissionMode: 'plan',
+        usedTokens: 0,
+        windowTokens: 0
+      }
+    })
+    a.getState().clearSnapshot()
+    expect(selectSnapshot(a.getState())).toBeNull()
+    expect(selectSnapshot(b.getState())?.model).toBe('b')
+  })
+
   it('keeps the setSnapshot reference stable across updates', () => {
     const store = createRunConfigStore()
     const before = store.getState().setSnapshot

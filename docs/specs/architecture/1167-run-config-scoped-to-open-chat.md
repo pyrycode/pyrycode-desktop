@@ -254,6 +254,32 @@ it is reviewed rather than tested, and the e2e drive is its end-to-end proof.
 2. Whether the same-reference early-out is observable in the e2e tier. Expected not — it is a re-render
    count, not a rendering — so it stays a store-level assertion only.
 
+## Revisions
+
+### 2026-09-06 — Open questions resolved during implementation
+
+1. **Does the effort control need a published model list for chat B?** No. `composerEffortMenuModel`
+   returns `null` on `effort === ''` *before* it consults `effortRowFor`, so the not-known rendering is
+   reached with no list at all. The drive therefore pushes a `model_list` for A only, and B's absent
+   label is attributable to the cleared effort value rather than to a missing list — a stronger drive
+   than the one planned. No design change.
+2. **Is the same-reference early-out observable in the e2e tier?** No, as expected — it is a re-render
+   count, not a rendering. It stays pinned by two store-level cases: the untouched-store no-op, and the
+   pair asserting it is *not* a no-op when only `confirmed` or only `error` is dirty. That second case is
+   an addition to the plan: copying `reconnected`'s `pending.size === 0` predicate verbatim would return
+   early on exactly the state this arm exists for, so the predicate needed its own detector.
+
+One implementation detail not named in the plan: the three-field early-out reads through a
+module-private `hasConfirmed` predicate rather than inlining `Object.keys(...).length`. Same behaviour;
+the docstring records why key presence (not value inspection) is the right test given `applyConfirmed`
+is the only writer.
+
+**Detector proven by mutation, not by assertion.** With `deps.clearRunConfig()` removed from
+`activateConversation`'s gate and the app rebuilt, the new drive fails at its first detector —
+`.composer__effort-label` resolved to 1 element across 34 retries where 0 was required, i.e. A's
+confirmed override composing over B's absent snapshot. Restored and re-run green alongside
+`run-config-cross-conversation.spec.ts` and `composer-effort-menu.spec.ts`.
+
 ## Security review
 
 **Verdict:** PASS

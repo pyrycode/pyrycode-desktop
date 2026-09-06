@@ -495,6 +495,135 @@ describe('selectPendingFields', () => {
   })
 })
 
+describe('runSettingsWriteStore conversationSwitched (#1167)', () => {
+  it('drops pending, confirmed AND error together — every layer described the chat being left (AC1)', () => {
+    const store = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'model', value: 'opus' }]]),
+      confirmed: { effort: 'high', yolo: true },
+      error: 'permissionMode'
+    })
+    store.getState().dispatch({ type: 'conversationSwitched' })
+    const s = store.getState()
+    expect(s.pending.size).toBe(0)
+    expect(s.confirmed).toEqual({})
+    expect(selectError(s)).toBeNull()
+  })
+
+  it('reconnected on the SAME seeded state still preserves confirmed and error — the two arms pinned against each other (AC1)', () => {
+    // The contrast case, and the reason it lives beside the arm rather than in the #539 block: the two
+    // arms differ ONLY in what they preserve, and the reason is that a reconnect abandons correlations
+    // for a session that is still the one being described, while a switch changes which session is
+    // being described at all. An edit that collapses them into one clear reddens exactly here.
+    const seed = (): RunSettingsWriteState => ({
+      pending: new Map([['c1', { field: 'model', value: 'opus' }]]),
+      confirmed: { effort: 'high', yolo: true },
+      error: 'permissionMode'
+    })
+    const reconnected = createRunSettingsWriteStore(seed())
+    reconnected.getState().dispatch({ type: 'reconnected' })
+    expect(reconnected.getState().confirmed).toEqual({ effort: 'high', yolo: true })
+    expect(selectError(reconnected.getState())).toBe('permissionMode')
+
+    const switched = createRunSettingsWriteStore(seed())
+    switched.getState().dispatch({ type: 'conversationSwitched' })
+    expect(switched.getState().confirmed).toEqual({})
+    expect(selectError(switched.getState())).toBeNull()
+  })
+
+  it('composes the NEXT chat’s snapshot verbatim afterwards — the detector for an arm that clears pending only (AC3)', () => {
+    // The assertion that catches a partial clear. A `case` dropping only `pending` leaves `confirmed`
+    // beating the base in selectEffectiveSettings, so the layered read is what has to be asserted —
+    // reading `s.confirmed` alone would pass on an arm that cleared it while leaving `error` standing,
+    // and reading `pending.size` alone would pass on the shipped defect itself.
+    const store = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'effort', value: 'brisk' }]]),
+      confirmed: { model: 'opus', effort: 'deep', permissionMode: 'plan', yolo: true },
+      error: 'model'
+    })
+    store.getState().dispatch({ type: 'conversationSwitched' })
+    // `snap` here stands in for the newly opened chat's own reply: every field must be ITS value.
+    expect(selectEffectiveSettings(snap, store.getState())).toEqual({
+      model: snap.model,
+      effort: snap.effort,
+      yolo: snap.yolo,
+      permissionMode: snap.permissionMode
+    })
+  })
+
+  it('falls all the way through to the not-known rendering when no snapshot has arrived yet (AC3)', () => {
+    // The state a freshly opened chat is actually in: cleared overrides over a NULL snapshot. `''`/
+    // `false` is what makes the effort and permission-mode controls draw nothing at all — the
+    // rendering the shipped defect made unreachable for every chat once any chat had set something.
+    const store = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { model: 'opus', effort: 'deep', permissionMode: 'plan', yolo: true },
+      error: null
+    })
+    store.getState().dispatch({ type: 'conversationSwitched' })
+    expect(selectEffectiveSettings(null, store.getState())).toEqual({
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: ''
+    })
+    expect(selectPendingFields(store.getState())).toEqual({
+      model: false,
+      effort: false,
+      yolo: false,
+      permissionMode: false
+    })
+  })
+
+  it('is a same-reference no-op on an untouched store (AC4)', () => {
+    // #257 selects the WHOLE raw write state, so this is what keeps a switch between two chats that
+    // never wrote anything from re-rendering the sheet. The predicate spans all THREE fields here,
+    // where reconnected's spans only `pending` — asserted below, one field at a time.
+    const store = createRunSettingsWriteStore()
+    const before = store.getState()
+    store.getState().dispatch({ type: 'conversationSwitched' })
+    expect(store.getState()).toBe(before)
+  })
+
+  it('is NOT a no-op when only confirmed, or only error, is dirty (AC1)', () => {
+    // The pair that pins the early-out's predicate at three fields. With `pending.size === 0` alone as
+    // the guard — reconnected's predicate, the obvious copy — both of these return early and the
+    // durable half of the defect survives the switch untouched.
+    const confirmedOnly = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { effort: 'high' },
+      error: null
+    })
+    confirmedOnly.getState().dispatch({ type: 'conversationSwitched' })
+    expect(confirmedOnly.getState().confirmed).toEqual({})
+
+    const errorOnly = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: {},
+      error: 'yolo'
+    })
+    errorOnly.getState().dispatch({ type: 'conversationSwitched' })
+    expect(selectError(errorOnly.getState())).toBeNull()
+  })
+
+  it('still records the next chat’s own change afterwards (#1167)', () => {
+    // The clear is a lifetime move, not a latch: the store must accept the newly opened chat's first
+    // write immediately after.
+    const store = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { effort: 'high' },
+      error: null
+    })
+    store.getState().dispatch({ type: 'conversationSwitched' })
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c9',
+      change: change({ field: 'effort', value: 'low' })
+    })
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c9' })
+    expect(store.getState().confirmed).toEqual({ effort: 'low' })
+  })
+})
+
 describe('runSettingsWriteStore DI + independence', () => {
   it('seeds from an injected initial state', () => {
     const store = createRunSettingsWriteStore({

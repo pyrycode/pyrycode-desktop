@@ -4,6 +4,8 @@ import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
 import { createConversationTimelineStore, selectTimelineFor } from './store/conversationTimelineStore'
+import { createRunConfigStore } from './store/runConfigStore'
+import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type { ConversationCreatedPayload } from '@shared/wire/types'
 
@@ -35,12 +37,14 @@ function spyDeps(active: ConversationCreatedPayload | null): {
   clearTimelineFor: ReturnType<typeof vi.fn>
   clearActiveConversation: ReturnType<typeof vi.fn>
   clearSessionId: ReturnType<typeof vi.fn>
+  clearRunConfig: ReturnType<typeof vi.fn>
   navigateToList: ReturnType<typeof vi.fn>
 } {
   const dispatchTimeline = vi.fn()
   const clearTimelineFor = vi.fn()
   const clearActiveConversation = vi.fn()
   const clearSessionId = vi.fn()
+  const clearRunConfig = vi.fn()
   const navigateToList = vi.fn()
   return {
     deps: {
@@ -49,12 +53,14 @@ function spyDeps(active: ConversationCreatedPayload | null): {
       clearTimelineFor,
       clearActiveConversation,
       clearSessionId,
+      clearRunConfig,
       navigateToList
     },
     dispatchTimeline,
     clearTimelineFor,
     clearActiveConversation,
     clearSessionId,
+    clearRunConfig,
     navigateToList
   }
 }
@@ -94,6 +100,7 @@ describe('exitActiveConversation', () => {
       clearTimelineFor: () => void order.push('clearTimelineFor'),
       clearActiveConversation: () => void order.push('clearActiveConversation'),
       clearSessionId: () => void order.push('clearSessionId'),
+      clearRunConfig: () => void order.push('clearRunConfig'),
       navigateToList: () => void order.push('navigateToList')
     }
 
@@ -104,8 +111,93 @@ describe('exitActiveConversation', () => {
       'clearTimelineFor',
       'clearActiveConversation',
       'clearSessionId',
+      'clearRunConfig',
       'navigateToList'
     ])
+  })
+
+  it('the open conversation being deleted or archived drops its run configuration (#1167 AC1)', () => {
+    const { deps, clearRunConfig } = spyDeps(conversation('a'))
+
+    exitActiveConversation(deps, 'a')
+
+    expect(clearRunConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('real stores: the exit drops the snapshot AND the confirmed overrides (#1167 AC1)', () => {
+    // The delete/archive twin of the activate case. `confirmed` is the half that never heals on its
+    // own — a `set_session_settings` ack carries only a session id and never rewrites a snapshot — so a
+    // survivor here would compose over every chat opened afterwards, permanently.
+    const runConfig = createRunConfigStore({
+      snapshot: {
+        model: 'opus',
+        effort: 'deep',
+        yolo: true,
+        permissionMode: 'plan',
+        usedTokens: 140000,
+        windowTokens: 200000
+      }
+    })
+    const write = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'model', value: 'haiku' }]]),
+      confirmed: { effort: 'brisk' },
+      error: 'yolo'
+    })
+
+    exitActiveConversation(
+      realDeps(
+        createTimelineStore(initialTimelineState),
+        createConversationTimelineStore(),
+        createSessionIdStore({ sessionId: 's1' }),
+        createActiveConversationStore({ activeConversation: conversation('a') }),
+        () => {},
+        runConfig,
+        write
+      ),
+      'a'
+    )
+
+    expect(runConfig.getState().snapshot).toBeNull()
+    expect(write.getState().pending.size).toBe(0)
+    expect(write.getState().confirmed).toEqual({})
+    expect(write.getState().error).toBeNull()
+  })
+
+  it('real stores: a confirmation naming a DIFFERENT conversation leaves the run configuration alone (#1167 AC1 gate)', () => {
+    // The gate covers this clear too. A late delete confirmation for a chat the operator has already
+    // navigated away from must not blank the footer of the one now on screen — the same fail-direction
+    // argument the keyed timeline clear makes, applied to two more stores.
+    const snapshot = {
+      model: 'opus',
+      effort: 'deep',
+      yolo: true,
+      permissionMode: 'plan',
+      usedTokens: 140000,
+      windowTokens: 200000
+    }
+    const runConfig = createRunConfigStore({ snapshot })
+    const write = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { effort: 'brisk' },
+      error: null
+    })
+    const before = write.getState()
+
+    exitActiveConversation(
+      realDeps(
+        createTimelineStore(initialTimelineState),
+        createConversationTimelineStore(),
+        createSessionIdStore({ sessionId: 's1' }),
+        createActiveConversationStore({ activeConversation: conversation('a') }),
+        () => {},
+        runConfig,
+        write
+      ),
+      'b'
+    )
+
+    expect(runConfig.getState().snapshot).toBe(snapshot)
+    expect(write.getState()).toBe(before)
   })
 
   it('a confirmation naming a DIFFERENT conversation changes nothing (AC4)', () => {
@@ -115,12 +207,14 @@ describe('exitActiveConversation', () => {
       clearTimelineFor,
       clearActiveConversation,
       clearSessionId,
+      clearRunConfig,
       navigateToList
     } = spyDeps(conversation('a'))
 
     exitActiveConversation(deps, 'b')
 
     expect(dispatchTimeline).not.toHaveBeenCalled()
+    expect(clearRunConfig).not.toHaveBeenCalled()
     // The gate covers the keyed clear too: a late confirmation for a conversation the operator has
     // already navigated away from must not drop the slice of the one now on screen.
     expect(clearTimelineFor).not.toHaveBeenCalled()
@@ -222,7 +316,9 @@ function realDeps(
   keyedTimelines: ReturnType<typeof createConversationTimelineStore>,
   sessionId: ReturnType<typeof createSessionIdStore>,
   active: ReturnType<typeof createActiveConversationStore>,
-  navigateToList: () => void
+  navigateToList: () => void,
+  runConfig: ReturnType<typeof createRunConfigStore> = createRunConfigStore(),
+  runSettingsWrite: ReturnType<typeof createRunSettingsWriteStore> = createRunSettingsWriteStore()
 ): ExitActiveConversationDeps {
   return {
     getActiveConversation: () => active.getState().activeConversation,
@@ -230,6 +326,14 @@ function realDeps(
     clearTimelineFor: (id) => keyedTimelines.getState().clearTimelineFor(id),
     clearActiveConversation: () => active.getState().clearActiveConversation(),
     clearSessionId: () => sessionId.getState().clearSessionId(),
+    // #1167: ONE member, TWO stores. Wired to the real pair here because `clearRunConfig`,
+    // `clearSessionId`, `clearActiveConversation` and `navigateToList` are now FOUR nullary members on
+    // this interface — every swap compiles and survives a `toHaveBeenCalledTimes(1)`. They land in four
+    // different places, so with the real stores wired a swap fails several cases at once.
+    clearRunConfig: () => {
+      runConfig.getState().clearSnapshot()
+      runSettingsWrite.getState().dispatch({ type: 'conversationSwitched' })
+    },
     navigateToList
   }
 }

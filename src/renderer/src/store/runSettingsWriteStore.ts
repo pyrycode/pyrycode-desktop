@@ -9,11 +9,12 @@
 // arrive after the sheet closes), whereas runConfigStore's subscriber is sheet-scoped; (b) the write
 // state (pending changes + client-confirmed overrides + last error) is orthogonal to the snapshot's
 // { model, effort, yolo, usedTokens, windowTokens }. A REDUCER (a sealed event union + one `dispatch`)
-// rather than sessionIdStore's named setters, because every one of its four transitions reads prior
+// rather than sessionIdStore's named setters, because every one of its five transitions reads prior
 // state: three are CORRELATED (dispatch / confirm / reject — a confirm or reject is a no-op without a
-// matching pending record) and the fourth (`reconnected`, #539) is uncorrelated but still prior-state
-// reading, since it clears only when something is pending. sessionIdStore's set and clear (#529) are
-// independent whole-value writes that read nothing. The contrast is the coupling, not the count.
+// matching pending record) and the other two (`reconnected`, #539, and `conversationSwitched`, #1167)
+// are uncorrelated but still prior-state reading, since each clears only when something is held.
+// sessionIdStore's set and clear (#529) — and runConfigStore's, since #1167 — are independent
+// whole-value writes that read nothing. The contrast is the coupling, not the count.
 //
 // Why the confirmed value is client-side, not a daemon re-read: the daemon's `set_session_settings`
 // reply carries only `session_id` and the change lands on the NEXT session spawn (daemon ADR 031), so
@@ -47,12 +48,18 @@ export type SettingsChange =
  *  `sessionSettingsRejected` (#269). The confirm carries no value — the store commits the value the
  *  pending record remembered. `reconnected` (#539) is the one CONNECTION-LIFECYCLE arm: bridge-produced
  *  from the `connected` wire edge, carrying no daemon content and no `changeId` — it is correlated to
- *  nothing precisely because its job is to abandon every correlation. */
+ *  nothing precisely because its job is to abandon every correlation.
+ *
+ *  `conversationSwitched` (#1167) is the one CONVERSATION-LIFETIME arm, dispatched by
+ *  `activateConversation` and `exitActiveConversation` rather than by any bridge — no wire edge
+ *  produces it. It carries nothing, because which chat is open is not a fact this store holds; the
+ *  helpers own that decision and this store only obeys it. */
 export type RunSettingsWriteEvent =
   | { type: 'changeDispatched'; changeId: string; change: SettingsChange }
   | { type: 'settingsConfirmed'; changeId: string }
   | { type: 'settingsRejected'; changeId: string }
   | { type: 'reconnected' }
+  | { type: 'conversationSwitched' }
 
 /**
  * The write machine's whole state.
@@ -114,8 +121,17 @@ function applyConfirmed(
   }
 }
 
+/** Does anything stand in the sparse confirmed overrides? Key presence, not value inspection: every
+ *  writer here is `applyConfirmed`, which only ever sets a real value, so a present key is a real
+ *  override. A hand-seeded `{ model: undefined }` counts as held and is cleared anyway — the composed
+ *  read is identical either way, so the only cost is one extra notify in a state production cannot
+ *  produce. Its one caller is #1167's arm, whose early-out must not fire on a dirty store. */
+function hasConfirmed(confirmed: RunSettingsWriteState['confirmed']): boolean {
+  return Object.keys(confirmed).length > 0
+}
+
 /**
- * The pure reducer — four arms, each pinned by a named test:
+ * The pure reducer — five arms, each pinned by a named test:
  *  - `changeDispatched`: record the pending change under its `changeId`; clear `error` (a fresh
  *    attempt supersedes the last rejection). `confirmed` untouched — the optimistic value shows via
  *    the pending overlay in selectEffectiveSettings (AC1).
@@ -131,6 +147,12 @@ function applyConfirmed(
  *    pending BEATS confirmed in selectEffectiveSettings — outlives later confirmed changes as a
  *    permanent lie about the applied value. `confirmed` and `error` are preserved: a standing rejection
  *    is still true after a reconnect, and a confirmed override is still what the daemon has.
+ *  - `conversationSwitched`: drop pending, confirmed AND error (#1167). Every layer of this store
+ *    describes ONE chat's session, and after a switch all three describe the chat being left. This is
+ *    the whole of what distinguishes it from `reconnected` above, and the reason is that a reconnect
+ *    abandons correlations for a session that is STILL the one being described, while a switch changes
+ *    WHICH session is being described at all — so a standing rejection and a confirmed override, both
+ *    still true across a reconnect, are both false across a switch.
  *
  * There is no explicit "roll back" mutation: clearing the pending marker IS the rollback, because the
  * effective view falls through to the confirmed override or the snapshot base. `reconnected` is the
@@ -178,6 +200,24 @@ function reduceRunSettingsWrite(
       // a future field that is itself pending-scoped must be added to this arm by hand — TypeScript
       // will not force it.
       return { ...state, pending: new Map() }
+    }
+    case 'conversationSwitched': {
+      // Nothing held → the SAME reference, for `reconnected`'s reason one arm up: #257 selects the
+      // whole raw write state, so this is what keeps a switch between two chats that never wrote
+      // anything from re-rendering the sheet. The predicate spans ALL THREE fields where
+      // `reconnected`'s spans only `pending` — copying that narrower guard here would return early on
+      // exactly the state this arm exists for, a confirmed override standing with nothing in flight,
+      // which is the durable half of the defect and the one no reply can ever displace.
+      if (state.pending.size === 0 && state.error === null && !hasConfirmed(state.confirmed)) {
+        return state
+      }
+      // A FRESH WHOLE-STATE LITERAL, not `{ ...state, … }`, and the argument INVERTS from `reconnected`
+      // directly above. That arm spreads `state` so an unknown future field is preserved by default,
+      // matching its posture of clearing only the one thing that strands. This arm's posture is the
+      // opposite — every field of this store is conversation-scoped — so returning a literal makes a
+      // future required field a COMPILE ERROR here rather than a silently-preserved value that outlives
+      // the chat it described. Forcing that decision is the point.
+      return { pending: new Map(), confirmed: {}, error: null }
     }
     default:
       return assertNever(event)

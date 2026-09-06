@@ -28,15 +28,21 @@ fills (see [Host-label window store](host-label-window-store.md)), and
 shipped. Still open: the sidebar row that renders it
 ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).
 
-**\#1155 keyed the store, but wired no caller.** Since [#1069](https://github.com/pyrycode/pyrycode-desktop/issues/1069) the app holds
+**\#1155 keyed the store; \#1156 moved the writers.** Since [#1069](https://github.com/pyrycode/pyrycode-desktop/issues/1069) the app holds
 several paired records (see [paired-server store](paired-server-store.md)), so the single slot above
-described whichever pairing last supplied a label.
-\#1155 layers a per-server `saveFor`/`loadFor`/`clearFor` triple on the same store, over the same
-blob, alongside the untouched `save`/`load`/`clear` — the Strangler Fig shape #1069 itself used on
-[paired-server store](paired-server-store.md). All four existing callers (`pairingHandler`'s confirm
-arm, both `unpairHandler` arms, `hostLabelHandler`) still call the un-keyed three and are unaffected;
-migrating them to the keyed triple and deleting the un-keyed one is a separate, not-yet-filed slice.
-See § How it works below for the shape and § Edge cases for what changed at rest.
+described whichever pairing last supplied a label. \#1155 layered a per-server
+`saveFor`/`loadFor`/`clearFor` triple onto the same store, over the same blob, alongside the untouched
+`save`/`load`/`clear` — the Strangler Fig shape #1069 itself used on
+[paired-server store](paired-server-store.md) — and shipped it with no caller.
+[#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) moved two of the four callers: the
+pairing confirm now writes through `saveFor`, keyed by the server it just paired, and the per-server
+unpair arm erases through `clearFor`, unconditionally, retiring the interim rule that erased the
+single-slot label only once nothing remained paired. The whole-collection unpair arm keeps `clear` —
+it deletes the one blob either shape lives in, so it needs no keyed counterpart — and
+`hostLabelHandler`'s zero-argument read keeps `load`, which \#1156 taught to recognise **both** at-rest
+shapes so it goes on answering exactly as it did before a keyed envelope could exist: `loadFor` remains
+the only keyed member with no caller. See § How it works below for the shape and § Edge cases for what
+changed at rest.
 
 ## What it does
 
@@ -45,21 +51,27 @@ returns a `MultiHostLabelStore`: the original `{ save, load, clear }` handle ove
 plus a `{ saveFor, loadFor, clearFor }` handle over a label per server id, both reading and writing
 the **same one blob**:
 
-- **`save(label)` / `load()` / `clear()`** are the original single-slot triple, byte-for-byte
-  unchanged since #822. `save` persists the label verbatim (a second `save` overwrites, no length
-  bound or validation — this store takes what it is given, exactly as `pairedServerStore` does).
+- **`save(label)` / `load()` / `clear()`** are the un-keyed triple. `save` persists the label verbatim
+  (a second `save` overwrites, no length bound or validation — this store takes what it is given,
+  exactly as `pairedServerStore` does) and has had **no caller since \#1156** — it is deliberately not
+  taught the envelope, since teaching a dead writer a second format would be surface with no reader.
   `load` returns `null` (never stored), `''` (stored empty — a real value), or throws
-  `MalformedHostLabelError` (stored bytes are not valid UTF-8); a decrypt failure propagates
-  unchanged. `clear` erases, idempotently and fail-closed. The write path's only length bound lives
-  one layer up, at [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s `isPairingRequest` guard (`MAX_HOST_LABEL_LENGTH`); the
+  `MalformedHostLabelError` (stored bytes are not valid UTF-8, or a keyed envelope broken past its
+  version marker); a decrypt failure propagates unchanged. Since \#1156 it reads **either** at-rest
+  shape: a bare blob is the label it always was, and a keyed envelope resolves as its **most recently
+  stored** entry — never the envelope text, never a list, never a count (see Core behavior below).
+  `clear` erases the whole blob, idempotently and fail-closed — every server's label, whichever shape
+  it holds. The write path's only length bound lives one layer up, at [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s `isPairingRequest` guard (`MAX_HOST_LABEL_LENGTH`); the
   [host-label channel](host-label-channel.md) ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)) re-applies the same
   constant at the read boundary, and the [input field](pairing-input-screen.md#host-name-field-825) ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)) bounds again for UX, off the same imported constant.
-- **`saveFor(serverId, label)` / `loadFor(serverId)` / `clearFor(serverId)`** (\#1155) are the keyed
-  triple. `saveFor` adds-or-replaces that server's label and leaves every other server's untouched;
-  `loadFor` returns that server's label with the same `null` / `''` / throw semantics as `load`, per
-  id; `clearFor` erases exactly that server's label, resolving without a write when the id held none.
-  All three take a `serverId` that is untrusted QR/paste input once a caller is wired — see Encoding
-  and Security properties below for how it stays off the persistence path.
+- **`saveFor(serverId, label)` / `loadFor(serverId)` / `clearFor(serverId)`** are the keyed triple.
+  `saveFor` adds-or-replaces that server's label and leaves every other server's untouched — the
+  pairing confirm's write path since \#1156; `loadFor` returns that server's label with the same
+  `null` / `''` / throw semantics as `load`, per id, and still has **no caller**; `clearFor` erases
+  exactly that server's label, resolving without a write when the id held none — the per-server
+  unpair arm's erase since \#1156, called unconditionally on a matched unpair. All three take a
+  `serverId` that is untrusted QR/paste input — see Encoding and Security properties below for how it
+  stays off the persistence path.
 
 Unlike the other two consumers of the secure store, **the value this store returns is not a
 secret** — it is untrusted display text that later tickets must bound and escape (see Security
@@ -104,10 +116,13 @@ export function createHostLabelStore(deps: {
 `HostLabelStore` stays one flat interface — no `Clearable…` split, for the reason stated when #827
 confirmed it out: `pairedServerStore` splits `PairedServerStore` / `ClearablePairedServerStore`
 because several shipped consumers type against the base and would otherwise need a `clear` stub in
-their fakes, and nothing here needed that split. Four consumers exist today — `pairingHandler` on
-`save`, `hostLabelHandler` on `load`, and two `unpairHandler` arms on `clear` (the whole-collection
-one from #827, the per-server one from #1149) — each typed against a disjoint (or, for the two
-`unpair` arms, identical) `Pick<HostLabelStore, …>`.
+their fakes, and nothing here needed that split. Four consumers exist today, and since
+[#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) they split across both interfaces:
+`pairingHandler` on `MultiHostLabelStore`'s `saveFor`, the per-server `unpairHandler` arm on
+`MultiHostLabelStore`'s `clearFor`, the whole-collection `unpairHandler` arm on `HostLabelStore`'s
+`clear` (unchanged since #827 — deleting the whole blob already erases every server's label), and
+`hostLabelHandler` on `HostLabelStore`'s `load` (unchanged since #824, though what it now reads
+through changed — see Core behavior) — each typed against a disjoint `Pick<…, …>`.
 
 **\#1155's keyed triple is layered onto a new `MultiHostLabelStore`, not added to `HostLabelStore`
 itself**, for the same reason `MultiPairedServerStore extends ClearablePairedServerStore` in
@@ -117,9 +132,16 @@ new required member there would stop that file compiling — an edit this slice 
 Layering means `createHostLabelStore`'s widened return type is a subtype relation, so none of the
 four `Pick`-narrowed consumers or the composition root need touching. The keyed names mirror the
 un-keyed ones one-for-one (`saveFor`/`loadFor`/`clearFor` against `save`/`load`/`clear`) rather than
-borrowing `pairedServerStore`'s `loadById`/`clearServer` — that pairing is what the eventual
-Strangler Fig migration (delete the un-keyed three once every caller moves to the keyed three) reads
-against. `clearFor` returns `Promise<void>`, not `pairedServerStore.clearServer`'s
+borrowing `pairedServerStore`'s `loadById`/`clearServer` — that pairing is what the Strangler Fig
+migration read against, and \#1156 is the slice that ran it, **partially and on purpose**: it moved
+`save`→`saveFor` and the per-server `clear`→`clearFor`, but did not delete the un-keyed three, because
+`clear` still has a live caller (the whole-collection unpair arm, for which `clear` already does the
+right thing) and `load` still has a live caller (`hostLabelHandler`, out of scope for this slice and
+for [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)). "Move all four and delete the
+un-keyed three" — an earlier version of this module's header — is not what shipped; see § Encoding
+and § Core behavior for how `load` was taught to stay correct with two writers now feeding two
+different at-rest shapes into the same blob. `clearFor` returns `Promise<void>`, not
+`pairedServerStore.clearServer`'s
 `{ matched, remaining }`: both questions that outcome type would answer are already answered for this
 server by `clearServer` itself, which is what the per-server unpair arm reads, so a second outcome
 type here would have no reader.
@@ -168,20 +190,33 @@ emits valid UTF-8), and `safeStorage` is AEAD, so a tampered blob fails decrypti
 reaches the decoder. Anything that decodes as UTF-8 and isn't the envelope is therefore the old
 format. The decode order:
 
-1. invalid UTF-8 → `MalformedHostLabelError`, via the shared `decodeLabel` (unchanged).
-2. not JSON → legacy → no labels stored.
-3. not a non-null, non-array object → legacy → no labels stored (covers `[]`, `null`, `123`, a bare
-   string).
-4. `v` is not `HOST_LABEL_FORMAT_VERSION` → legacy → no labels stored (covers `{}`, and a future
-   format version — an older build overwrites rather than rejecting one).
+1. invalid UTF-8 → `MalformedHostLabelError`, from the shared `decodeLabel`, run **before** the parse
+   below rather than inside its `try` — that is what keeps this throw structurally unswallowed,
+   replacing an earlier catch-and-`instanceof`-re-throw dance that had to recognise its own error to
+   avoid reporting corruption as legacy.
+2. not JSON → legacy → `null` ("not our format" — see below for why this is `null` and not `[]`).
+3. not a non-null, non-array object → legacy → `null` (covers `[]`, `null`, `123`, a bare string).
+4. `v` is not `HOST_LABEL_FORMAT_VERSION` → legacy → `null` (covers `{}`, and a future format
+   version — an older build overwrites rather than rejecting one).
 5. past the marker the blob is unambiguously *this* format, so a broken one (non-array `labels`, a
    malformed entry, a repeated `server` id) is format drift, not legacy, and raises rather than
    silently dropping a server's label.
 
+**`null`, not `[]`, since \#1156.** The decode is split into two functions: `parseLabels(text)` runs
+steps 2-5 above and returns `HostLabelEntry[] | null`; `decodeLabels(blob)` is
+`parseLabels(decodeLabel(blob))`. The keyed triple's `readEntries` still coalesces `null` to `[]` —
+"legacy" and "no labels" are the same answer for `loadFor`/`saveFor`/`clearFor`, which have no view of
+what a bare string used to mean. But `load()` needed the two told apart: "this blob is not our
+envelope" (return the text verbatim, the un-keyed behaviour this store has always had) and "our
+envelope holds no entries" (resolve `null`, described in Core behavior) are different questions with
+different answers, and merging them into `[]` the way the keyed triple does would have made the first
+one unreachable from `load`.
+
 Accepted false positive, not fixed: an old label whose text happens to equal a valid v1 envelope
-reads as a collection. It is a bounded, human-typed host name, and the outcome is no worse than the
-sanctioned legacy-read loss below. Migration is **read-time only** — nothing in the decoder writes;
-the first keyed `saveFor` is what replaces a legacy blob with the new envelope.
+reads as a collection by every keyed member, and by `load` as that collection's most recent entry
+rather than as the literal old text. It is a bounded, human-typed host name, and the outcome is no
+worse than the sanctioned legacy-read loss below. Migration is **read-time only** — nothing in the
+decoder writes; the first keyed `saveFor` is what replaces a legacy blob with the new envelope.
 
 ### Core behavior
 
@@ -189,20 +224,41 @@ the first keyed `saveFor` is what replaces a legacy blob with the new envelope.
 
 - **`save(label)`** — `await secureStore.set(name, encodeLabel(label))`. Fail-closed: on
   keychain-unavailable, `set` throws `EncryptionUnavailableError` before any write, which propagates.
+  No caller since \#1156.
 - **`load()`** — `const blob = await secureStore.get(name)`; `blob === null` → `null` (the **only**
-  null path); otherwise `decodeLabel(blob)`. A decrypt failure inside `get` propagates unchanged; a
-  decrypted-but-invalid-UTF-8 blob throws `MalformedHostLabelError`, never coerced to `null`. No
-  caching — a straight read each call, so a `save` from another code path is observed immediately.
+  null path). Otherwise `decodeLabel(blob)` gives the text, and `parseLabels(text)` decides which of
+  two answers to give (\#1156):
+  - not the envelope (`parseLabels` → `null`) → the text **verbatim** — the un-keyed behaviour this
+    store has always had, and the answer for every blob that exists on an installed machine that has
+    not paired since \#1156.
+  - the envelope (`parseLabels` → an array) → `entries[entries.length - 1]?.label ?? null` — the
+    **most recently stored** entry, since `saveFor` drops any prior entry for an id and appends, so
+    array order is save order. `?? null`, never `||` or a truthiness test: a stored `''` is a value
+    the operator supplied, and collapsing it into absence here would merge two of this read's three
+    outcomes at the last boundary that still tells them apart. An entry-less envelope (unreachable
+    through `saveFor`/`clearFor` — `clearFor` deletes the blob when the last entry goes) resolves
+    `null` rather than falling through to `[]?.label`.
+
+  A decrypt failure inside `get` propagates unchanged; invalid UTF-8, or envelope drift past the
+  version marker, throws `MalformedHostLabelError`, never coerced to `null`. No caching — a straight
+  read each call, so a `save`/`saveFor` from another code path is observed immediately. This is the
+  seam \#1156 used to satisfy AC4: without it, a keyed `saveFor` write would make this same call
+  return the raw `{"v":1,…}` string (short envelopes clear `MAX_HOST_LABEL_LENGTH` at the [host-label
+  channel](host-label-channel.md)'s read bound) or `error` (once a longer one crosses it) instead of a
+  label. `load()` still returns **one label and nothing else** — never the envelope, a list, or a
+  count of servers held; see Security properties.
 - **`clear()`** — `await secureStore.delete(name)`, keyed by this store's own `name`, never a
   delete-by-literal. No `try`/`catch`: a delete failure propagates (reporting success while the
   label still sits on disk is the behaviour to avoid). `SecureStore.delete` is idempotent, so
-  clearing a never-stored store resolves cleanly.
-- **`loadFor(serverId)`** — reads the collection (`decodeLabels`, on a legacy or absent blob: `[]`),
-  then `entries.find(e => e.server === serverId)?.label ?? null` — `?? null` rather than `||`, so a
-  stored `''` stays a value rather than collapsing into absence. Off the mutate queue: a single read,
-  nothing to interleave.
+  clearing a never-stored store resolves cleanly. Erases the whole blob under either at-rest shape, so
+  it needs no keyed counterpart — the whole-collection unpair arm's caller since #827, unchanged.
+- **`loadFor(serverId)`** — reads the collection (`decodeLabels ?? []`, so a legacy or absent blob
+  reads as `[]`), then `entries.find(e => e.server === serverId)?.label ?? null` — `?? null` rather
+  than `||`, so a stored `''` stays a value rather than collapsing into absence. Off the mutate queue:
+  a single read, nothing to interleave. Still no caller.
 - **`saveFor(serverId, label)`** and **`clearFor(serverId)`** are read-modify-write and run through a
-  serializing `mutate` queue (below). `saveFor` reads leniently through `readForSave` — a
+  serializing `mutate` queue (below) — the pairing confirm's write and the per-server unpair's erase,
+  since \#1156. `saveFor` reads leniently through `readForSave` — a
   `MalformedHostLabelError` there is treated as an empty collection and the save overwrites it, since
   saving is the only exit from a corrupt blob (nothing else rewrites it, and a label can't be
   re-entered short of re-pairing); a **decrypt** failure still propagates, since that may be
@@ -228,32 +284,45 @@ primitive it sits on: `secureStore.get` tests the **ciphertext** for `null`, bef
 ciphertext non-empty (`electronSecretEncryption.ts:36`). A zero-length label therefore never
 collapses into `ENOENT`-style absence — `save('')` then `load()` resolves `''`, not `null`. If that
 null test in `secureStore.get` ever moves to test the plaintext instead, this distinction breaks
-silently; see the comment at `hostLabelStore.ts:135-139` pointing at it.
+silently; see the comment at `hostLabelStore.ts:382-387` pointing at it.
 
 ### Data flow
 
 ```
- pairingHandler's confirm arm (#823)               createHostLabelStore(core)   injected seam
-  store.save(label) ──► encodeLabel ─► set(name, bytes) ─► SecureStore (fail-closed encrypt-at-rest)
-  store.load() ───────► get(name) ─► SecureStore ─► blob?     (hostLabelHandler, #824)
+ pairingHandler's confirm arm (#1156)              createHostLabelStore(core)   injected seam
+  store.saveFor(serverId, label) ──► mutate queue ─► encodeLabels ─► set(name, bytes) ─► SecureStore
+
+ unpairHandler's per-server arm (#1156)
+  store.clearFor(serverId) ────────► mutate queue ─► filter ─► set/delete(name) ─► SecureStore
+
+ unpairHandler's whole-collection arm (#827)
+  store.clear() ────────────────────────────────────────────► delete(name) ─► SecureStore
+
+  store.load() ───────► get(name) ─► SecureStore ─► blob?     (hostLabelHandler, unchanged since #824)
                           null    → null   (never stored — the only null path)
-                          present → decodeLabel(blob) ─► label   ('' if stored empty;
-                                                                   throws MalformedHostLabelError
-                                                                   on invalid UTF-8;
-                                                                   a decrypt failure already propagated)
+                          present → decodeLabel(blob) ─► text ─► parseLabels(text)
+                                       not the envelope → text, verbatim  (every blob #1156 predates)
+                                       the envelope      → its newest entry's label ?? null   (#1156)
+                                       (either arm throws MalformedHostLabelError on invalid UTF-8
+                                        or on envelope drift past the version marker; a decrypt
+                                        failure already propagated out of `get`)
 ```
 
-`save` is reached from IPC as of #823 (renderer → preload `confirmPairing(label?)` → the `isPairingRequest`
-guard → `pairingHandler`'s confirm arm → this store). `load` is reached from IPC as of #824 (renderer →
-preload `hostLabel()` → [`hostLabelHandler`](host-label-channel.md), which re-applies
-`MAX_HOST_LABEL_LENGTH` at the read boundary). `clear` is reached as of
+`saveFor` is reached from IPC (renderer → preload `confirmPairing(label?)` → the `isPairingRequest`
+guard → `pairingHandler`'s confirm arm → this store, keyed by the server id the same confirm just
+persisted — since \#1156; `save` carried this before it and has no caller left). `load` is reached from
+IPC as of #824 (renderer → preload `hostLabel()` → [`hostLabelHandler`](host-label-channel.md), which
+re-applies `MAX_HOST_LABEL_LENGTH` at the read boundary) and is unchanged by \#1156 at every layer above
+this store — only what it reads through changed. `clear` is reached as of
 [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) — not from IPC at all, but from
 `unpairHandler.ts`'s **whole-collection** listener, once `pairedServerStore.clear()` has itself
-resolved. Since [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), `unpairHandler.ts`'s
-**per-server** listener reaches it too, on a narrower condition: only once `clearServer`'s
-`remaining` count reaches `0` — the whole-collection caller always erases the label because it always
-empties the collection, but the per-server caller must not, since a still-paired server's name would
-be wiped otherwise. See [Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
+resolved. `unpairHandler.ts`'s **per-server** listener reaches `clearFor` instead, since \#1156, on
+every matched unpair — [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) shipped it
+gated on `clearServer`'s `remaining` count reaching `0`, which \#1156 retired: keyed by server, the
+gate was the bug it guarded against (it left an unpaired machine's name on disk for as long as any
+other stayed paired), so the per-server arm now erases the named server's label unconditionally and a
+still-paired server's own label is untouched by construction, not by a remaining-count check. See
+[Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
 [Host-label channel](host-label-channel.md), and [Unpair channel § the label erase
 (#827)](unpair-channel.md#the-label-erase-827) and [§ the per-server channel
 (#1149)](unpair-channel.md#the-per-server-channel-1149) for the full hand-off on each side.
@@ -289,7 +358,7 @@ secure-store consumers — not a secret — so its review reads differently from
   *decryption* and surfaces as a throw rather than a plausible-looking string, which is what gives
   the "unreadable ⇒ failure" acceptance criterion any teeth; (2) one audited at-rest surface instead
   of a second persistence path; (3) fail-closed-on-write and log-free-on-every-path come for free by
-  staying on the seam. The one cost — `save` rejects with no keychain even though the label isn't
+  staying on the seam. The one cost — `saveFor` rejects with no keychain even though the label isn't
   secret — is correct and non-blocking: on a keychain-less machine, pairing itself already fails, so
   there is no state where the record persists but the label cannot.
 - **The value `load` returns is untrusted display text — hand off, do not lose it.** It comes off
@@ -316,11 +385,16 @@ secure-store consumers — not a secret — so its review reads differently from
   wired the **write** half (composition root + `pairingHandler`'s confirm arm) and [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) wired
   the **read** half ([host-label channel](host-label-channel.md), `Pick<HostLabelStore, 'load'>` —
   structurally erase-proof); the renderer still cannot reach this module directly on either path.
-- **A second untrusted input, \#1155: `serverId`.** Once a sibling slice wires a caller, `serverId` is
-  QR/paste input, same as `pairedServerStore`'s. It reaches exactly two places in this module, both
-  inert: a `===` comparand against a decoded entry's own `server` field, and a `JSON.stringify`d
-  string value. It never reaches `name` — `name` is `deps.name ?? HOST_LABEL_NAME` and nothing in the
-  module concatenates it — so no attacker-chosen text touches the persistence path, structurally.
+- **A second untrusted input, \#1155, live since \#1156: `serverId`.** `serverId` is QR/paste input,
+  same as `pairedServerStore`'s — reaching `saveFor` off the pairing paste and `clearFor` off the
+  already-guarded `UnpairServerRequest`. It reaches exactly two places in this module, both inert: a
+  `===` comparand against a decoded entry's own `server` field, and a `JSON.stringify`d string value.
+  It never reaches `name` — `name` is `deps.name ?? HOST_LABEL_NAME` and nothing in the module
+  concatenates it — so no attacker-chosen text touches the persistence path, structurally. Its length
+  is bounded transitively: `MAX_SERVER_ID_LENGTH` (the per-server unpair guard) is *aliased* to
+  `MAX_PASTE_LENGTH`, on the reasoning that every persisted `server` id already arrived inside a paste
+  that bound limited, so no id this store is asked to write can exceed what the unpair guard will
+  later accept.
 - **Prototype pollution is closed only if the decoder keeps three choices together**, and the
   implementation does: entries are an *array* of objects carrying their own `server` field, never a
   map keyed by id; the duplicate-id check uses a `Set` (`Set.has('__proto__')` is safe,
@@ -338,12 +412,15 @@ secure-store consumers — not a secret — so its review reads differently from
   a future caller sits behind authorizes the erase, not the match), and a timing signal on it would
   disclose only which ids are stored — which the server-info channel already publishes to the
   renderer by design.
-- **A second `clear`-only handle, [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149).**
-  The per-server unpair arm gets the same `Pick<HostLabelStore, 'clear'>` shape #827 gave the
-  whole-collection arm, over the same instance — no second store, no widened surface. The two callers
-  differ only in *when* they call it: the whole-collection arm always does (the collection it just
-  erased is always now empty), the per-server arm does so only when `clearServer`'s `remaining` count
-  is `0` — so unpairing one of two paired servers leaves the label naming the survivor untouched.
+- **A second erase-only handle, keyed since \#1156.** [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+  gave the per-server unpair arm the same `Pick<HostLabelStore, 'clear'>` shape #827 gave the
+  whole-collection arm, over the same instance, gated on `clearServer`'s `remaining` count reaching
+  `0` — the only point at which a *single un-keyed slot* was well defined for a per-server unpair.
+  \#1156 replaced that handle with `Pick<MultiHostLabelStore, 'clearFor'>` and deleted the gate: the
+  arm now erases the named server's label unconditionally, and a survivor's own label is untouched
+  because it is a different entry, not because a count said to leave it alone. Both handles remain
+  erase-only — neither can read a label back — so the module's log-free, credential-blind guarantees
+  are unchanged by the swap.
 - **Log-free by construction** — no `console.*` anywhere; the label is an opaque local, never a named
   field of a logged struct. `MalformedHostLabelError`'s message is static and interpolates nothing —
   no bytes, no partial decode.
@@ -351,42 +428,53 @@ secure-store consumers — not a secret — so its review reads differently from
   name, but the same access can already replace the paired-server record wholesale, which is strictly
   worse — the label grants no new capability. The daemon never sees the label (it is not a wire
   field), so it cannot be influenced from the daemon side. A disk-write attacker gains one *new*
-  capability from the keyed envelope (\#1155): a forged v1 envelope makes keyed reads raise, blanking
-  the sidebar name — denial, not escalation, and recoverable (the next `saveFor` overwrites it).
-- **Out of scope, hygiene not a vector (\#1155).** Label entries are never reconciled against the
-  paired records, so a caller that forgets to `clearFor` on unpair leaves a stale label for a server
-  that no longer exists. Growth is bounded by the pairing act (an entry needs a successful pairing)
-  and each label stays bounded at `MAX_HOST_LABEL_LENGTH` three layers up, so this is not a
-  memory-exhaustion vector — it belongs to whichever slice re-keys the unpair arms.
+  capability from the keyed envelope (\#1155): a forged v1 envelope makes keyed reads raise — since
+  \#1156 that includes the zero-argument `load()`, not only `loadFor` — blanking the sidebar name,
+  denial rather than escalation, and recoverable (the next `saveFor` overwrites it). A tampered blob
+  that still decrypts implies the attacker already holds the keychain entry, which means they already
+  hold the bearer token — a strictly worse position than a blanked label name.
+- **Hygiene not a vector, \#1155, still true after \#1156.** Label entries are never reconciled against
+  the paired records: `saveFor`/`clearFor` only run from the pairing confirm and the per-server unpair,
+  so an entry outlives its server only if one of those two paths is skipped or throws (both fail
+  closed — see Error handling in the architecture spec — and both leave the erase recoverable by
+  re-pairing or re-unpairing). Growth is bounded by the pairing act (an entry needs a successful
+  pairing) and each label stays bounded at `MAX_HOST_LABEL_LENGTH` three layers up, so this is not a
+  memory-exhaustion vector.
 
 ## Edge cases and limitations
 
 - **Never stored** — `load` resolves `null` — the only null path.
-- **Stored empty (`save('')`)** — `load` resolves `''`, not `null`; see Core behavior above for why
-  this holds end-to-end rather than only against a test fake.
-- **Keychain unavailable on `save`** — `set` throws `EncryptionUnavailableError`, which propagates;
-  nothing is written.
+- **Stored empty (`saveFor(id, '')`)** — `load()` resolves `''` for that id's entry (if it is the
+  newest) or via `loadFor(id)` directly, not `null`; see Core behavior above for why this holds
+  end-to-end rather than only against a test fake.
+- **Keychain unavailable on `saveFor`** — `set` throws `EncryptionUnavailableError` from inside the
+  mutate queue, which propagates; nothing is written. `pairingHandler` catches it and still reports
+  the pairing `ok` (AC5) — see the architecture spec's Error handling.
 - **Stored blob undecryptable (tamper / keychain rotation)** — `get`'s throw propagates out of
   `load`; never returned as `null`.
-- **Stored blob present, decrypts, but is not valid UTF-8** — `MalformedHostLabelError` (static
-  message, no bytes); never `null`.
+- **Stored blob present, decrypts, but is not valid UTF-8, or is a keyed envelope broken past its
+  version marker** — `MalformedHostLabelError` (static message, no bytes, no offending id, no
+  count); never `null`.
 - **Unpaired surrogate in the input** — encodes to U+FFFD; does not round-trip byte-identically.
   Inherent to UTF-8, not producible via a text field, intentionally unvalidated (see Encoding above).
-- **Re-save** — `save` overwrites; last-writer-wins, exactly one blob kept.
-- **Clearing when never stored** — `clear()` resolves without throwing (`SecureStore.delete` is a
-  documented no-op on an absent name).
+- **Re-pairing the same server** — `saveFor` drops that server's prior entry and appends the new one,
+  so it becomes the newest; `load()` reports the replacement immediately.
+- **Clearing when never stored, or an id nothing holds** — `clear()` and `clearFor(id)` both resolve
+  without throwing (`SecureStore.delete` is a documented no-op on an absent name; an unmatched
+  `clearFor` id resolves without a write).
 - **No length bound in this module** — by design; the write path is bounded one layer up at
   [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s IPC guard, the [read path](host-label-channel.md) bounds again
   at the same constant ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), and so does the
   [input field](pairing-input-screen.md#host-name-field-825) ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)).
-- **Write, read, and erase paths all wired.** [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) constructs the live store in
-  `src/main/index.ts` and gives `pairingHandler` a `save`-only handle; [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) gives the
-  [host-label handler](host-label-channel.md) a `load`-only handle over the same instance;
-  [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) gives the [unpair
-  handler](unpair-channel.md)'s whole-collection arm a `clear`-only handle over that same instance
-  again, and [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) gives its per-server
-  arm an identical `clear`-only handle over the same instance a fourth time — four seams, three
-  disjoint `Pick` shapes (two of the four share the `clear`-only shape), none able to do another's job.
+- **Write, read, and erase paths all wired, keyed since \#1156.** `src/main/index.ts` constructs the
+  live store once and hands out four disjoint `Pick`s over it: `pairingHandler` gets `saveFor`-only
+  ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823), re-pointed at `saveFor` by
+  \#1156); the [host-label handler](host-label-channel.md) keeps its `load`-only handle
+  ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824), unmoved); the whole-collection
+  unpair arm keeps its `clear`-only handle ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827),
+  unmoved); the per-server unpair arm gets `clearFor`-only
+  ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), re-pointed at `clearFor` by
+  \#1156) — none able to do another's job.
 - **A label per server, since \#1155 — not per-server-id keying via the store `name`.** An earlier
   version of this doc, and of the module's own header comment, called
   `pyrycode.host_label.<server-id>` (composing the persistence *name* from the id) "the deferred
@@ -394,21 +482,25 @@ secure-store consumers — not a secret — so its review reads differently from
   own collection — the `server` id is untrusted QR/paste input, and deriving a storage name from it
   would put attacker-chosen text on the persistence path — and \#1155 follows that rejection instead:
   one blob, one unchanged `HOST_LABEL_NAME`, a keyed collection inside it (see Encoding above).
-- **An already-installed single-slot label is not carried over — deliberate.** This store has no view
-  of the paired records (it is a pure core over one injected seam) and so cannot name "the" server a
-  legacy blob's bare string belongs to; adopting it for one server, or showing it on every host row,
-  would recreate the bug \#1155 exists to fix. A legacy blob reads as no labels stored for every
-  server id (see the decode order in Encoding), so upgrading an installed app drops the operator's
-  existing host name from the sidebar with no in-app way to re-enter it short of re-pairing
-  (`pairingHandler.ts` is the only write path). If carry-over is wanted, it needs the composition
-  root, where both stores are in scope — not filed as of this writing.
+- **An already-installed single-slot label carries over for the un-keyed read, and only for it.**
+  `loadFor`/`saveFor`/`clearFor` read a legacy blob as no labels stored for every server id (see the
+  decode order in Encoding) — this store has no view of the paired records and so cannot name "the"
+  server a bare string belongs to, and adopting it for one server or showing it on every host row
+  would recreate the bug \#1155 exists to fix. But `load()` — the zero-argument query the sidebar
+  actually reads — returns that bare string verbatim, exactly as it always has (\#1156), so upgrading
+  an installed app does **not** blank the sidebar name. It stops being carried the moment the first
+  `saveFor` after the upgrade replaces the blob with an envelope (a new pairing, or a re-pair of the
+  existing one) — from then on `load()` answers from the keyed collection, and the operator's
+  pre-upgrade text is gone unless it happened to also be re-entered as that pairing's label.
 - **An untrusted `serverId` never reaches the persistence name**, for any id including `__proto__`,
   `../pyrycode.paired_server`, or the empty string: every id reads and writes under the same
   `HOST_LABEL_NAME`, and a label stored under one id is retrievable only under that same id. See
   Security properties above for how the decoder keeps `__proto__` specifically inert.
-- **This slice ships with no caller.** `saveFor`/`loadFor`/`clearFor` exist and are tested, but no
-  composition-root wiring, no IPC handler, and no consumer's `Pick<>` references them yet — the four
-  existing callers still use `save`/`load`/`clear` exactly as before \#1155.
+- **`loadFor` still ships with no caller.** `saveFor` and `clearFor` gained callers in \#1156;
+  `loadFor` is reserved for the sidebar's own keyed read
+  ([#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)) and for
+  [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)'s parameterised query, neither of
+  which is filed against this store yet.
 
 ## Related
 
@@ -430,8 +522,9 @@ secure-store consumers — not a secret — so its review reads differently from
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — "keys never reach the
   renderer" / "keep the transport out of the window", which this module's zero-IPC-surface honours.
 - [Pairing IPC channel](pairing-ipc-channel.md) / [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) — the pairing-path write:
-  the operator-typed label rides the `confirm` request and reaches this store's `save`. **Read the
-  full hand-off there.**
+  the operator-typed label rides the `confirm` request and reaches this store's `saveFor`, keyed by
+  server since [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156). **Read the full
+  hand-off there.**
 - [Host-label channel](host-label-channel.md) / [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) — the IPC read path: the
   window reads this store's `load()` back through a `Pick<HostLabelStore, 'load'>` handler. **Read the
   full hand-off there.**
@@ -447,6 +540,8 @@ secure-store consumers — not a secret — so its review reads differently from
   the erase path: a `clear`-only handle, called only after the paired-server record's own erase has
   resolved, closing the gap [#173](../codebase/173.md)'s unpair used to leave (flagged in #823's spec,
   Open question 1) where the label outlived the record it described. [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
-  adds a second `clear`-only handle over the same instance, from that channel's per-server arm, called
-  only when no record remains — see [§ the per-server channel (#1149)](unpair-channel.md#the-per-server-channel-1149).
+  added a second, `clear`-only handle over the same instance, from that channel's per-server arm, gated
+  on no record remaining; [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) re-pointed
+  that handle at `clearFor` and deleted the gate — see [§ the per-server channel
+  (#1149)](unpair-channel.md#the-per-server-channel-1149).
 - Downstream, not yet built: the sidebar host row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).

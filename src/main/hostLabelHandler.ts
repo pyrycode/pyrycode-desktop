@@ -51,6 +51,13 @@ export function registerHostLabelHandler(
     try {
       // load() reads through with no cache, so a label written at pairing confirm is visible on the
       // very next invoke, with no invalidation step.
+      //
+      // Since #1156 that confirm writes a KEYED envelope, and `load` is what keeps this query
+      // answering as it always has: it recognises both at-rest shapes and hands back ONE label — the
+      // most recently stored one — never the envelope text. Without that this handler would return
+      // the raw `{"v":1,…}` as the machine's name, or `error` once a longer server id pushed it past
+      // the bound below. This channel is deliberately unchanged otherwise: #1157 owns the request
+      // argument and #1070 the sidebar's move onto a keyed read.
       const label = await store.load()
       // STRICT null, never a truthiness test. `''` is falsy, so `if (!label)` would type-check, read
       // naturally, pass any test that only exercises a non-empty label, and silently collapse a

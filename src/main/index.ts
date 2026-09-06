@@ -227,11 +227,13 @@ app.whenReady().then(() => {
   // secureStore — do not construct a second one — and pass NO `name` override, so the label stays
   // under the fixed HOST_LABEL_NAME, distinct from `pyrycode.paired_server` and
   // `pyrycode.device_static`. The label is only ever a VALUE handed to `save`, never a persistence
-  // key, so no caller-supplied string can reach the store name. The pairing handler below receives
-  // only this store's `save`, so it can neither read the label back nor erase it; the read path is
-  // the host-label handler registered below, which gets a `load`-only handle; and the unpair handler
-  // gets a `clear`-only one. Three seams over one store, three disjoint `Pick`s, none able to do
-  // another's job.
+  // key, so no caller-supplied string can reach the store name. Since #1155 it holds a label PER
+  // SERVER inside that one blob, and since #1156 the writers use those keyed members: the pairing
+  // handler below receives only `saveFor`, so it can neither read a label back nor erase one; the
+  // per-server unpair handler receives only `clearFor`; the whole-collection unpair handler keeps
+  // `clear`, which deletes the one blob and so erases every server's label; and the read path is the
+  // host-label handler registered below, which keeps a `load`-only handle. Four seams over one
+  // store, four disjoint `Pick`s, none able to do another's job.
   const hostLabelStore = createHostLabelStore({ secureStore })
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
@@ -260,9 +262,14 @@ app.whenReady().then(() => {
   // `connection`, no did-finish-load gate). The handler gets a `load`-only handle, so this read
   // channel structurally cannot overwrite or erase the label. Only the three-outcome union crosses
   // back — never the token / server key / keychain path, and never a truncated label; never-stored
-  // and unreadable stay distinct. The erase path is the unpair handler below (#827), holding the
-  // third, `clear`-only handle. No caller races it — the consumer is #826. `will-quit` removes the
-  // handler, symmetric with unregisterServerInfo.
+  // and unreadable stay distinct. The erase paths are the two unpair handlers below, holding the
+  // erase-only handles. No caller races it — the consumer is #826. `will-quit` removes the handler,
+  // symmetric with unregisterServerInfo.
+  //
+  // It keeps its zero-argument shape and its `load`-only handle through #1156, which re-keyed the
+  // writers: `load` now recognises the keyed envelope those writers produce and still answers with
+  // one label, so this channel needs no change here. #1157 owns its request argument, #1070 the
+  // sidebar's move onto a keyed read.
   const unregisterHostLabel = registerHostLabelHandler(ipcMain, { store: hostLabelStore })
   app.on('will-quit', () => unregisterHostLabel())
 
@@ -478,6 +485,12 @@ app.whenReady().then(() => {
   // callback runs to completion in one tick and no caller races it — the visible per-server unpair
   // control is #1090's UI, many ticks later. `will-quit` removes the handler, symmetric with the
   // other two.
+  //
+  // #1156 points this arm's label handle at `clearFor`, so it erases exactly the named machine's
+  // name and leaves every still-paired machine's stored — retiring the interim rule that erased the
+  // label only once nothing remained, which was the best a single un-keyed slot allowed. Still the
+  // SAME hostLabelStore, and still erase-only: `clearFor` carries no read, so no label text is
+  // materialised in that module either.
   const unregisterUnpairServer = registerUnpairServerHandler(ipcMain, {
     store: pairedServerStore,
     onUnpaired: () => registry.reconcile(),

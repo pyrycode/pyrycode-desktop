@@ -59,7 +59,7 @@ export type PairingStatus =
 
 ### 2. The main-process handler (`src/main/pairingStatusHandler.ts`)
 
-The injected-target, single-registration sibling of [`pairingHandler.ts`](pairing-ipc-channel.md), but **stateless** — it holds nothing between calls (no `pendingConfirm`), reads the store on each invoke, and takes **no request argument**. No `electron` import; the target is injected structurally, so it unit-tests with a `{ handle: vi.fn(), removeHandler: vi.fn() }` fake.
+The injected-target, single-registration sibling of [`pairingHandler.ts`](pairing-ipc-channel.md), but **stateless** — it holds nothing between calls (no held `pending` pair), reads the store on each invoke, and takes **no request argument**. No `electron` import; the target is injected structurally, so it unit-tests with a `{ handle: vi.fn(), removeHandler: vi.fn() }` fake.
 
 ```ts
 export interface PairingStatusHandleTarget {

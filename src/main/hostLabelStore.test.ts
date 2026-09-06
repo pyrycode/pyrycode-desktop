@@ -594,11 +594,205 @@ describe('createHostLabelStore — per-server labels (#1155)', () => {
 
     await labels.save(LABEL)
 
-    // Still BARE UTF-8, not JSON: every current caller — the pairing write, the two unpair erases,
-    // the read handler — behaves exactly as before this slice, because none of them is re-keyed here.
+    // Still BARE UTF-8, not JSON. `save` is the one un-keyed member #1156 left with no caller at
+    // all, and it is deliberately NOT taught the envelope — teaching a dead writer a second format
+    // would be surface with no reader.
     expect(new TextDecoder().decode(store.get(HOST_LABEL_NAME) as Uint8Array)).toBe(LABEL)
     expect(await labels.load()).toBe(LABEL)
     // And that blob is, to the keyed reader, exactly the legacy format.
     expect(await labels.loadFor(A)).toBeNull()
+  })
+})
+
+// The un-keyed reader over the KEYED blob (#1156). Once pairing writes through `saveFor`, the
+// zero-argument stored-host-label query is reading a blob written in the envelope format — the one
+// state #1155's header called out as "the one state that would put an envelope in front of the
+// un-keyed reader". `load` is the seam that answers it, so these tests own that boundary: what it
+// must return, and just as importantly what it must never return.
+describe('createHostLabelStore — the un-keyed load over a keyed blob (#1156)', () => {
+  const A = 'server-a'
+  const B = 'server-b'
+  const C = 'server-c'
+
+  it('reads a one-entry envelope back as that entry’s label, never as the envelope text (AC4)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, LABEL)
+
+    expect(await labels.load()).toBe(LABEL)
+    // The regression this guards is specific: the raw blob IS JSON, and returning it verbatim is
+    // both what the un-keyed reader used to do and short enough to clear the read bound, so it would
+    // surface as the operator's machine name rather than as an error.
+    expect(new TextDecoder().decode(store.get(HOST_LABEL_NAME) as Uint8Array)).toContain('"v":1')
+    expect(await labels.load()).not.toContain('"v":1')
+  })
+
+  it('reads back the MOST RECENTLY stored label when several servers are held (AC4)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    // Driven through saveFor rather than a hand-written blob, so this pins SAVE order — the property
+    // the single-slot blob had (last writer wins) — and not merely array order.
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    await labels.saveFor(C, 'Pyrybox III')
+
+    expect(await labels.load()).toBe('Pyrybox III')
+  })
+
+  it('follows a re-save to the front: replacing a server’s label makes it the most recent', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    await labels.saveFor(A, 'Pyrybox renamed')
+
+    // saveFor drops the old entry and appends, so a replacement is the newest save, exactly as a
+    // second single-slot `save` would have been.
+    expect(await labels.load()).toBe('Pyrybox renamed')
+  })
+
+  it('follows an erase: the newest SURVIVING label is what comes back', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    await labels.clearFor(B)
+
+    expect(await labels.load()).toBe('Pyrybox')
+  })
+
+  it('keeps a stored EMPTY label a value: it must not collapse into never-stored', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, '')
+
+    // `''` is falsy, so a truthiness test on the newest entry would type-check, read naturally, pass
+    // every test above, and silently merge two of the read channel's three outcomes here.
+    expect(await labels.load()).toBe('')
+  })
+
+  it('resolves null once the last keyed label is erased', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, LABEL)
+    await labels.clearFor(A)
+
+    expect(store.has(HOST_LABEL_NAME)).toBe(false)
+    expect(await labels.load()).toBeNull()
+  })
+
+  it('resolves null for an EMPTY envelope rather than handing back the envelope text', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    // Unreachable through saveFor/clearFor — clearFor deletes the blob when the last entry goes —
+    // so this is hand-seeded. It exists because it is the one remaining decoded shape that could put
+    // JSON in front of the renderer, and "no entries" must read as nothing stored.
+    seed(store, HOST_LABEL_NAME, `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[]}`)
+
+    await expect(createHostLabelStore({ secureStore }).load()).resolves.toBeNull()
+  })
+
+  it('still returns a LEGACY bare blob verbatim, including empty and BOM-leading text', async () => {
+    for (const text of [LABEL, '', '﻿Pyrybox', 'Pyryböx — Juhana’s 🖥', '{}', '[]', '123']) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, HOST_LABEL_NAME, text)
+
+      // Every one of these is "not our envelope", so the un-keyed read is unchanged for every blob
+      // that can exist on an installed machine today — including the JSON-ish ones that parse.
+      expect(await createHostLabelStore({ secureStore }).load()).toBe(text)
+    }
+  })
+
+  it('still raises on invalid UTF-8, so unreadable stays distinct from never-stored', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    store.set(HOST_LABEL_NAME, new Uint8Array([0xff, 0xfe, 0xfd]))
+
+    await expect(createHostLabelStore({ secureStore }).load()).rejects.toBeInstanceOf(
+      MalformedHostLabelError
+    )
+  })
+
+  it('raises on envelope DRIFT — past the version marker a broken blob is not legacy', async () => {
+    const drifted = [
+      `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":"nope"}`,
+      `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[{"server":"a"}]}`,
+      `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[{"server":"a","label":1}]}`,
+      `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[{"server":"a","label":"x"},{"server":"a","label":"y"}]}`
+    ]
+    for (const text of drifted) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, HOST_LABEL_NAME, text)
+
+      // Drift must surface as unreadable rather than as a plausible-looking string or a dropped
+      // label — the same rule loadFor follows, now applied at the un-keyed read too.
+      await expect(createHostLabelStore({ secureStore }).load()).rejects.toBeInstanceOf(
+        MalformedHostLabelError
+      )
+    }
+  })
+
+  it('reveals only ONE label — never the collection, a server id, or how many are stored', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+
+    // Returning the envelope, a joined list, or a count would tell a compromised renderer how many
+    // machines the operator has paired and what they are called — a capability the zero-argument
+    // query does not have today and must not gain here.
+    const read = await labels.load()
+    expect(read).toBe('Pyrybox II')
+    expect(read).not.toContain('Pyrybox II"')
+    expect(read).not.toContain(A)
+    expect(read).not.toContain(B)
+  })
+
+  it('erases every server’s label through the un-keyed clear (AC3)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    // The whole-collection unpair arm keeps its `clear`-only handle precisely because `clear`
+    // deletes the ONE blob the keyed collection lives in, so "no label stored for any server" is
+    // already what it does under the new at-rest shape — no `clearAll` member is needed.
+    await labels.clear()
+
+    expect(store.has(HOST_LABEL_NAME)).toBe(false)
+    expect(await labels.load()).toBeNull()
+    expect(await labels.loadFor(A)).toBeNull()
+    expect(await labels.loadFor(B)).toBeNull()
+  })
+
+  it('is log-free across the un-keyed read of every blob shape', async () => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {})
+    )
+    try {
+      const keyed = fakeSecureStore()
+      const keyedStore = createHostLabelStore({ secureStore: keyed.secureStore })
+      await keyedStore.saveFor(A, LABEL)
+      await keyedStore.load()
+
+      const drift = fakeSecureStore()
+      seed(drift.store, HOST_LABEL_NAME, `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[{}]}`)
+      await createHostLabelStore({ secureStore: drift.secureStore })
+        .load()
+        .catch(() => {})
+
+      const empty = fakeSecureStore()
+      seed(empty.store, HOST_LABEL_NAME, `{"v":${HOST_LABEL_FORMAT_VERSION},"labels":[]}`)
+      await createHostLabelStore({ secureStore: empty.secureStore }).load()
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
   })
 })

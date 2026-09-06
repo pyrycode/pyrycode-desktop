@@ -93,8 +93,11 @@ export interface MultiPairedServerStore extends ClearablePairedServerStore {
  * (unpairHandler's per-server arm) would otherwise have to ask with reads:
  *   - `matched` — "did an entry actually hold this id?", which the erase alone cannot report: an
  *     unheld id resolves silently, indistinguishably from a successful one.
- *   - `remaining` — "is anything still paired?", which decides whether the single-slot host label
- *     still describes something.
+ *   - `remaining` — "is anything still paired?", which used to decide whether the single-slot host
+ *     label still described something. That was its only reader, and #1156 retired the rule: the
+ *     label is keyed by server now, so the per-server unpair erases the named server's label
+ *     unconditionally and asks nothing about what remains. The field stays as shipped — narrowing
+ *     `ClearServerOutcome` is a change to this contract, not to the handler that stopped reading it.
  * Answering both from inside the mutate queue, off the same read the filter used, is what removes
  * the check-then-act gap a separate `loadById`/`list` pair would have opened — and what lets that
  * handler be typed against `clearServer` alone, with no read member and no whole-collection erase

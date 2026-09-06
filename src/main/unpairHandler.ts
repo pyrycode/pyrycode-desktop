@@ -9,9 +9,10 @@
 //
 // It exposes ONLY the ability to TRIGGER an erase to the renderer: the response is the value-free
 // UnpairResult enum, and no token / server_static_pubkey / relay URL / keychain path ever leaves
-// this module — and as of #827 no host label either, since the label handle is `clear`-only and the
-// string is therefore never materialised here. It is LOG-FREE by construction — no console.*
-// anywhere. #172's clear() is fail-closed
+// this module — and as of #827 no host label either, since both label handles are erase-only
+// (`clear` on the whole-collection arm, `clearFor` on the per-server one since #1156) and the string
+// is therefore never materialised here. It is LOG-FREE by construction — no console.* anywhere, and
+// that now includes the server id the per-server arm names. #172's clear() is fail-closed
 // (a secureStore.delete failure propagates rather than being swallowed), and a propagated error can
 // carry a filesystem path or OS-keychain detail, so the caught object is DROPPED (never logged,
 // interpolated, or returned). The `error` arm is the fail-closed boundary that turns that throw into
@@ -35,7 +36,7 @@ import {
   type UnpairResult
 } from '../shared/ipc/unpair'
 import type { ClearablePairedServerStore, MultiPairedServerStore } from './pairedServerStore'
-import type { HostLabelStore } from './hostLabelStore'
+import type { HostLabelStore, MultiHostLabelStore } from './hostLabelStore'
 
 /**
  * The minimal main-process invoke surface the handler needs. Electron's `ipcMain` satisfies this
@@ -63,9 +64,10 @@ export function registerUnpairHandler(
     store: ClearablePairedServerStore
     /**
      * Called once after clear() erases the record — the teardown-on-unpair trigger (#504). A
-     * trusted in-process callback, value-free (no record/token/key crosses), mirroring onPaired's
-     * contract (pairingHandler.ts:51-57). Never called when clear() throws. MUST NOT throw; a throw
-     * is DROPPED rather than downgrading the already-completed erase to `error` — see the listener.
+     * trusted in-process callback, value-free (no record/token/key crosses), mirroring
+     * `registerPairingHandler`'s onPaired contract. Never called when clear() throws. MUST NOT
+     * throw; a throw is DROPPED rather than downgrading the already-completed erase to `error` —
+     * see the listener.
      */
     onUnpaired?: () => void
     /**
@@ -97,9 +99,12 @@ export function registerUnpairHandler(
       // rethrows. The teardown below is skipped: nothing was erased, so nothing must be torn down.
       return { result: 'error' }
     }
-    // The record is gone, so the label that described it now describes nothing: erase it too (#827),
-    // or it outlives its record and the next pairing that carries no label shows the previous
-    // machine's name (pairingHandler.ts:118 writes only when one is supplied).
+    // The records are gone, so the labels that described them now describe nothing: erase them too
+    // (#827), or one outlives its record and the next pairing that carries no label shows the
+    // previous machine's name (`registerPairingHandler`'s confirm arm writes only when one is
+    // supplied). `clear` deletes the whole blob, which under the keyed at-rest shape #1156 ships is
+    // every server's label — exactly what this whole-collection arm wants, and why it needs no keyed
+    // counterpart.
     //
     // Ordered AFTER the record and OUTSIDE the fail-closed catch above, both deliberately. The
     // result reports on the RECORD — the credential — and by this line the record is already gone,
@@ -109,8 +114,8 @@ export function registerUnpairHandler(
     // label is stale display text, overwritten by the next pairing that carries one and erased by
     // the next unpair. Record-first also settles the crash interleaving: a kill between the two
     // erases leaves no-record + orphan label, which is benign and self-healing, rather than
-    // label-first's live-credential-with-no-name. This is the same rule pairingHandler.ts:121-127
-    // applied to the write half (a lost nickname must not be reported as a failed pairing).
+    // label-first's live-credential-with-no-name. This is the same rule `registerPairingHandler`'s label block
+    // applies to the write half (a lost nickname must not be reported as a failed pairing).
     //
     // The caught object is DROPPED, exactly as the two catches around it: secureStore.delete's
     // failure can carry an OS-keychain or filesystem path, so it is never logged, interpolated, or
@@ -124,7 +129,7 @@ export function registerUnpairHandler(
     }
     // Both at-rest erases are done: fire the teardown trigger (#504) so the live daemon session cannot outlive
     // the record that authorised it. Deliberately OUTSIDE the fail-closed catch above and guarded by
-    // its own — unlike onPaired, which sits inside its try (pairingHandler.ts:103). runUnpair coerces
+    // its own — unlike onPaired, which sits inside its try. runUnpair coerces
     // BOTH `error` and a rejected invoke to "stay on the conversation screen", so reporting a throw
     // here would leave a paired-looking UI over an already-erased record: the precise inverse
     // half-state runUnpair exists to prevent. By this point the erase has resolved — and the wired
@@ -184,8 +189,14 @@ export function registerUnpairServerHandler(
     store: Pick<MultiPairedServerStore, 'clearServer'>
     /** The teardown-on-unpair trigger, same contract as the sibling's — see its doc comment. */
     onUnpaired?: () => void
-    /** The erase half of the host-label store, same `clear`-only handle as the sibling's. */
-    hostLabel?: Pick<HostLabelStore, 'clear'>
+    /**
+     * The PER-SERVER erase half of the host-label store (#1156). The same instrument as the
+     * sibling's `clear`-only handle, pointed one level finer: `clearFor` erases exactly one named
+     * server's label, and `save`/`load`/`saveFor`/`loadFor` are absent from the TYPE, so this module
+     * still cannot read a label back and no label text is materialised here at all. Optional,
+     * mirroring onUnpaired; the composition root always wires it.
+     */
+    hostLabel?: Pick<MultiHostLabelStore, 'clearFor'>
   }
 ): () => void {
   const { store, onUnpaired, hostLabel } = deps
@@ -221,23 +232,27 @@ export function registerUnpairServerHandler(
     // session lost its authorisation and no name stopped describing anything.
     if (!outcome.matched) return { result: 'error' }
 
-    // The label is the SINGLE-SLOT one: hostLabelStore is not keyed by server (per-server keying is
-    // recorded there as deferred), so erasing it on every per-server unpair would wipe the name a
-    // STILL-PAIRED server is displayed under. Clearing it only once nothing remains preserves
-    // today's semantics at the one point where a single-slot label is well defined, and matches what
-    // the sibling does when the whole collection goes.
+    // Erase THIS server's label and no other (#1156), naming the same already-guarded id the record
+    // erase just used. Unconditional on a matched unpair: whatever stays paired keeps its own name,
+    // because the label is now keyed by server.
+    //
+    // Until #1156 this erase was gated on `outcome.remaining === 0`. That rule was correct while the
+    // label was one un-keyed slot — erasing it on every per-server unpair would have wiped the name
+    // a STILL-PAIRED server is displayed under, so clearing it only once nothing remained was the
+    // one point where a single-slot label was well defined. Keyed, the gate is the bug it was
+    // guarding against: it leaves the unpaired machine's name on disk for as long as any other
+    // machine stays paired. Nothing replaces it — `remaining` no longer decides anything here.
     //
     // Ordered AFTER the record erase and OUTSIDE the fail-closed catch above, both for the reasons
     // the sibling's listener sets out at length: the result reports on the RECORD, the record is
     // already gone by this line, and mapping a throw here to `error` would leave a paired-looking UI
     // over an erased record. A surviving record is a live bearer token; a surviving label is stale
-    // display text. The caught object is DROPPED, never logged, interpolated, or returned.
-    if (outcome.remaining === 0) {
-      try {
-        await hostLabel?.clear()
-      } catch {
-        // Intentionally empty — see above.
-      }
+    // display text. The caught object is DROPPED, never logged, interpolated, or returned — and the
+    // id is not logged either, which is what keeps this module log-free now that it names one here.
+    try {
+      await hostLabel?.clearFor(request.serverId)
+    } catch {
+      // Intentionally empty — see above.
     }
     // Both at-rest erases are done: fire the teardown trigger so the live daemon session cannot
     // outlive the record that authorised it. The wired callback is the registry's reconcile(), which

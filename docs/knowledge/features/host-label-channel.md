@@ -37,8 +37,12 @@ because ADR 0005 forbids masking an unreadable record as never-stored and
 [host-label store](host-label-store.md) makes the identical argument for the label directly:
 
 - **`{ status: 'stored'; label: string }`** — [`hostLabelStore.load()`](host-label-store.md) returned a
-  string, verbatim, no transformation. `''` **is** a stored label — the operator supplied an empty one
-  — not absence; this is the last boundary where that distinction could be thrown away, and it is not.
+  string. `''` **is** a stored label — the operator supplied an empty one — not absence; this is the
+  last boundary where that distinction could be thrown away, and it is not. Since
+  [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156), `load()` itself may be answering
+  from a keyed collection rather than a single blob (a second pairing no longer overwrites the first
+  machine's name at write time) — this channel does not know or care which; it still hands back
+  exactly one label, verbatim, never the at-rest envelope.
 - **`{ status: 'not-stored' }`** — `load()` returned `null`. The only not-stored path. Declares no
   `label` key at all (not `label: undefined`) — Electron's structured-clone IPC **preserves** an own
   `undefined` property (unlike `JSON.stringify`), so a renderer testing `'label' in result` would
@@ -126,7 +130,11 @@ const listener = async (): Promise<HostLabelResult> => {
   interpolated, or returned. No `console.*` anywhere in the module, on any branch. `handle` must
   resolve to a value, so the listener never rethrows.
 - **Stateless** — reads the store fresh on every invoke (no cache), so a label written at pairing
-  confirm is visible on the very next invoke with no invalidation step.
+  confirm is visible on the very next invoke with no invalidation step. Since \#1156 that confirm
+  writes a **keyed** envelope; this handler and its `Pick<HostLabelStore, 'load'>` dep are unchanged
+  by that — the seam that keeps this call answering with one label instead of the raw envelope lives
+  one layer down, inside `store.load()` itself (see [host-label store § Core
+  behavior](host-label-store.md)).
 - Nothing Electron-specific is imported — `ipcMain` satisfies `HostLabelHandleTarget` structurally, so
   the unit test injects a fake `{ handle: vi.fn(), removeHandler: vi.fn() }`.
 
@@ -198,10 +206,15 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
 - **`error` and over-length both mean "no usable label," and the union does not distinguish them.**
   Both call for the same recovery (re-enter the label) in #826's design; if a reason to split ever
   surfaces, the union extends additively then.
-- **Single fixed store name.** `HOST_LABEL_NAME` is one constant — no per-server-id keying yet. When
-  that lands (see [host-label store](host-label-store.md) § Edge cases), this query gains an argument
-  and stops being body-free, and needs a request guard the way `pairing.ts` has one and this channel
-  currently does not.
+- **Single fixed store name, and still a zero-argument, body-free query — deliberately, since
+  [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156).** `HOST_LABEL_NAME` is one
+  constant; the store behind it has held a label **per server** since #1155, and the pairing/unpair
+  writers have addressed it that way since #1156, but this channel was kept out of scope on purpose —
+  its `load()` call was taught to answer from the keyed collection (the most recently stored label)
+  rather than change shape. [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) is where
+  this query is expected to gain an argument and stop being body-free, needing a request guard the way
+  `pairing.ts` has one and this channel does not yet; [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
+  owns the sidebar's move onto that keyed read.
 - **Repeated invokes are cheap** — each is an independent local `store.load()`, no amplification, no
   state mutation, no secret returned.
 
@@ -209,7 +222,10 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
 
 - [Host-label store](host-label-store.md) / [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822) —
   `load()`, the source of all three outcomes, and the never-stored/stored-empty/malformed distinction
-  this channel exists to carry across the boundary intact.
+  this channel exists to carry across the boundary intact. Since
+  [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156), `load()` also decides between a
+  legacy single-slot blob and a keyed envelope on this channel's behalf — see that doc's § Core
+  behavior for how it keeps answering with one label either way.
 - [Pairing IPC channel](pairing-ipc-channel.md) § Confirm carries an optional host label
   ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)) — the write half this channel
   mirrors; `MAX_HOST_LABEL_LENGTH` is declared there and imported here, not redeclared.

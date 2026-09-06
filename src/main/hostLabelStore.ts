@@ -7,15 +7,28 @@
 //
 // Since #1155 it can hold a label PER SERVER, so pairing a second machine stops overwriting the
 // first one's name. It is still ONE blob under ONE name, for the reason spelled out on
-// HOST_LABEL_NAME. The keyed triple (saveFor/loadFor/clearFor on MultiHostLabelStore) ships ALONGSIDE
-// the un-keyed one rather than replacing it — the Strangler Fig shape #1069 used on pairedServerStore
-// — so every existing caller behaves exactly as before. The two write different at-rest shapes into
-// the same blob and each treats the other's as "not mine": the keyed reader sees a bare label as
-// legacy (no labels stored), and the un-keyed reader would see an envelope as label text. That is
-// safe only while nothing calls both, which holds because this slice wires NO caller to the keyed
-// members. THE SLICE THAT RE-KEYS THE CALLERS MUST MOVE ALL FOUR AT ONCE — pairingHandler's confirm
-// arm, both unpairHandler arms, and hostLabelHandler — and delete the un-keyed three after; a partial
-// migration is the one state that would put an envelope in front of the un-keyed reader.
+// HOST_LABEL_NAME. The keyed triple (saveFor/loadFor/clearFor on MultiHostLabelStore) shipped
+// ALONGSIDE the un-keyed one rather than replacing it — the Strangler Fig shape #1069 used on
+// pairedServerStore — so no existing caller had to move at once.
+//
+// #1156 moved the writers. The pairing confirm now calls saveFor and the per-server unpair calls
+// clearFor, so the envelope is what an installed app holds the moment it pairs. The un-keyed `save`
+// therefore has NO caller left and is deliberately not taught the envelope: teaching a dead writer a
+// second format would be surface with no reader. `clear` keeps its caller — the whole-collection
+// unpair arm — because it deletes the one blob the keyed collection lives in, so "no label for any
+// server" is already what it does; a keyed synonym for it would only be a second name. And `load`
+// keeps its caller, hostLabelHandler's zero-argument query, which #1157 leaves as it is and #1070
+// moves onto a keyed channel.
+//
+// So the two at-rest shapes DO coexist in a shipped state, and an earlier version of this header
+// warned that they could only be safe while nothing read both — "THE SLICE THAT RE-KEYS THE CALLERS
+// MUST MOVE ALL FOUR AT ONCE … a partial migration is the one state that would put an envelope in
+// front of the un-keyed reader." Moving all four was not what shipped and was not the fix: #1156
+// answered the hazard at the reader instead. `load` now recognises both shapes — a bare blob is the
+// label it always was, an envelope reads back as its most recently stored entry — so the un-keyed
+// read cannot surface envelope text whatever the writers do. The KEYED reader still treats a bare
+// blob as legacy (no labels stored for any id), which is the deliberate one-way loss recorded in
+// docs/knowledge/features/host-label-store.md.
 //
 // This is the PURE CORE: it imports no effectful dependency (no `electron`, no `fs`, no
 // `safeStorage`) — only the TYPE of SecureStore. The one effectful edge is injected:
@@ -47,10 +60,12 @@
 import type { SecureStore } from './secureStore'
 
 /**
- * The SINGLE-SLOT host-label accessor. `save` persists the label (a second save overwrites); `load`
- * retrieves it with the absent-vs-stored-empty-vs-unreadable semantics below; `clear` erases it. All
- * three are main-process only. No in-memory cache: `load` reads through each call, so a write from
- * another code path is observed immediately.
+ * The UN-KEYED host-label accessor: one label in, one label out, no server id anywhere in the shape.
+ * `save` persists the label (a second save overwrites) and has had no caller since #1156; `load`
+ * retrieves ONE label with the absent-vs-stored-empty-vs-unreadable semantics below, whichever
+ * at-rest shape the blob holds; `clear` erases the blob entire. All three are main-process only. No
+ * in-memory cache: `load` reads through each call, so a write from another code path is observed
+ * immediately.
  *
  * Deliberately NO read-modify-write helper HERE: a `load`-then-`save` pair across an `await` would be
  * a check-then-act race these three cannot have, because each is a single unconditional operation.
@@ -63,11 +78,16 @@ import type { SecureStore } from './secureStore'
  * above `ClearablePairedServerStore`.
  */
 export interface HostLabelStore {
-  /** Persist the label verbatim. A second save overwrites. No length bound, no validation. */
+  /** Persist the label verbatim, un-keyed. A second save overwrites. No bound, no validation. */
   save(label: string): Promise<void>
-  /** The stored label, or null when none was ever stored. `''` is a stored value, not absence. */
+  /**
+   * ONE stored label, or null when none is stored. `''` is a stored value, not absence. Reads both
+   * at-rest shapes (#1156): a single-slot blob is the label it holds, a keyed envelope is its MOST
+   * RECENTLY stored entry — the same last-writer-wins answer the single slot always gave. Never the
+   * envelope text, never a list, never a count of the servers held.
+   */
   load(): Promise<string | null>
-  /** Erase the stored label. Idempotent; fail-closed. */
+  /** Erase the stored blob — every server's label, whichever shape it holds. Idempotent; fail-closed. */
   clear(): Promise<void>
 }
 
@@ -81,8 +101,10 @@ export interface HostLabelStore {
  * needs no edit either.
  *
  * The triple mirrors the un-keyed `save` / `load` / `clear` one-for-one, which is the pairing the
- * Strangler Fig migration reads against: the keyed members ship here with no caller, the callers move
- * over in a sibling slice, and the un-keyed three are deleted after.
+ * Strangler Fig migration read against. Two of the three now have the callers: #1156 moved the
+ * pairing write onto `saveFor` and the per-server unpair onto `clearFor`. `loadFor` is still
+ * caller-less — the zero-argument read channel is #1157's and the sidebar's keyed read is #1070's —
+ * and the un-keyed three were NOT deleted after, for the reasons the module header gives.
  *
  * `clearFor` returns void rather than the sibling's `{ matched, remaining }`. Those two questions are
  * already answered for this family by `pairedServerStore.clearServer`, which is what the per-server
@@ -217,9 +239,15 @@ function parseEntry(value: unknown): HostLabelEntry {
 }
 
 /**
- * Parse a stored blob into the keyed collection. This is where AC3 ("unreadable raises") and AC5
- * ("a single-slot blob does not raise") meet on the same bytes, and the version marker is what
- * separates them.
+ * Parse already-decoded blob text into the keyed collection, or `null` when the text is NOT this
+ * format. This is where AC3 ("unreadable raises") and AC5 ("a single-slot blob does not raise") meet
+ * on the same bytes, and the version marker is what separates them.
+ *
+ * The `null` return is the whole reason this is a distinct answer from an empty array (#1156):
+ * "these bytes are somebody else's format" and "our envelope holds no entries" are different
+ * questions with different answers, and only `load` had to tell them apart — it returns the bare
+ * text for the first and nothing-stored for the second. The keyed triple treats both as no labels,
+ * which is what `readEntries`'s `?? []` says.
  *
  * A blob the single-slot version wrote is a BARE operator-typed string, so it is structurally
  * indistinguishable from garbage — and `JSON.parse` rejects most old labels but NOT all of them
@@ -230,10 +258,11 @@ function parseEntry(value: unknown): HostLabelEntry {
  * is therefore the old format.
  *
  * So the test is POSITIVE, in this order:
- *   1. invalid UTF-8            → MalformedHostLabelError, via the shared `decodeLabel` (unchanged).
- *   2. not JSON                 → legacy → no labels.
- *   3. not a non-null, non-array object → legacy → no labels (covers `[]`, `null`, `123`, a string).
- *   4. `v` is not ours          → legacy → no labels (covers `{}`, and a future version, which an
+ *   1. invalid UTF-8            → MalformedHostLabelError, from the shared `decodeLabel` its caller
+ *                                 runs BEFORE this — deliberately outside the try below.
+ *   2. not JSON                 → legacy → null.
+ *   3. not a non-null, non-array object → legacy → null (covers `[]`, `null`, `123`, a string).
+ *   4. `v` is not ours          → legacy → null (covers `{}`, and a future version, which an
  *                                 older build likewise overwrites rather than rejecting).
  *   5. past the marker          → unambiguously OUR format, so a broken one is drift, not legacy, and
  *                                 raises rather than silently dropping a server's label.
@@ -250,18 +279,16 @@ function parseEntry(value: unknown): HostLabelEntry {
  * would let a smuggled duplicate decide which label a server shows. The message stays static: no
  * offending id, no index, no count (which would leak how many servers are paired).
  */
-function decodeLabels(blob: Uint8Array): HostLabelEntry[] {
+function parseLabels(text: string): HostLabelEntry[] | null {
   let parsed: unknown
   try {
-    parsed = JSON.parse(decodeLabel(blob))
-  } catch (error) {
-    // decodeLabel's own throw is the invalid-UTF-8 branch and must NOT be swallowed as legacy.
-    if (error instanceof MalformedHostLabelError) throw error
-    return []
+    parsed = JSON.parse(text)
+  } catch {
+    return null
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return []
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
   const { v, labels } = parsed as Record<string, unknown>
-  if (v !== HOST_LABEL_FORMAT_VERSION) return []
+  if (v !== HOST_LABEL_FORMAT_VERSION) return null
   if (!Array.isArray(labels)) throw new MalformedHostLabelError()
   const entries = labels.map((entry) => parseEntry(entry))
   const seen = new Set<string>()
@@ -270,6 +297,17 @@ function decodeLabels(blob: Uint8Array): HostLabelEntry[] {
     seen.add(entry.server)
   }
   return entries
+}
+
+/**
+ * Decode a stored blob into the keyed collection, or `null` when it is not this format. Splitting
+ * the byte decode from the parse is what lets the invalid-UTF-8 throw stay unswallowed
+ * STRUCTURALLY — `decodeLabel` runs outside `parseLabels`'s `try`, replacing an earlier
+ * catch-and-re-throw-if-`instanceof` dance that had to re-recognise its own error to avoid reporting
+ * corruption as legacy.
+ */
+function decodeLabels(blob: Uint8Array): HostLabelEntry[] | null {
+  return parseLabels(decodeLabel(blob))
 }
 
 /**
@@ -286,10 +324,15 @@ export function createHostLabelStore(deps: {
   const { secureStore } = deps
   const name = deps.name ?? HOST_LABEL_NAME
 
-  /** The persisted collection. Absent name = no labels — the only empty-without-throwing path. */
+  /**
+   * The persisted collection, for the KEYED members. Absent name = no labels, and so does a legacy
+   * blob (`decodeLabels`' `null`) — the two empty-without-throwing paths, which stay merged here on
+   * purpose: to a keyed reader a single-slot blob holds no labels for any id, since this store has
+   * no view of the paired records and so cannot name the server a bare string belonged to.
+   */
   const readEntries = async (): Promise<HostLabelEntry[]> => {
     const blob = await secureStore.get(name)
-    return blob === null ? [] : decodeLabels(blob)
+    return blob === null ? [] : (decodeLabels(blob) ?? [])
   }
 
   // The collection as `saveFor` alone sees it: a blob that decrypts and still cannot be read counts
@@ -336,12 +379,33 @@ export function createHostLabelStore(deps: {
     },
     async load() {
       const blob = await secureStore.get(name)
-      // Absent = never stored — the only null path. A stored EMPTY label is a zero-length blob, not
-      // absence, and stays distinguishable end-to-end because secureStore.get tests the CIPHERTEXT
-      // for null before decrypting (secureStore.ts:94) and safeStorage's version header keeps an
-      // empty plaintext's ciphertext non-empty. If that null test ever moves to the plaintext, the
-      // never-stored / stored-empty distinction breaks silently here.
-      return blob === null ? null : decodeLabel(blob)
+      // Absent = never stored. A stored EMPTY label is a zero-length blob, not absence, and stays
+      // distinguishable end-to-end because secureStore.get tests the CIPHERTEXT for null before
+      // decrypting and safeStorage's version header keeps an empty plaintext's ciphertext non-empty.
+      // If that null test ever moves to the plaintext, the never-stored / stored-empty distinction
+      // breaks silently here.
+      if (blob === null) return null
+      const text = decodeLabel(blob)
+      const entries = parseLabels(text)
+      // Not our envelope — a blob the single-slot `save` wrote, which is every blob on an installed
+      // machine that has not paired since #1156. Verbatim, exactly as this read has always answered.
+      if (entries === null) return text
+      // It IS the keyed envelope (#1156). This branch is what stops the partial migration from
+      // shipping a regression: pairing now writes through `saveFor`, so without it this read hands
+      // the raw `{"v":1,…}` back and the sidebar renders it as the machine's name — or returns
+      // `error` instead, once a longer id pushes that string past the read bound one layer up.
+      //
+      // The NEWEST entry, because `saveFor` drops any entry for the id and appends: last-writer-wins
+      // is the single-slot blob's own semantics, so the answer does not change character now that
+      // more than one label can be held. `?? null` and never `||` or a truthiness test — a stored
+      // `''` is a value the operator supplied, and collapsing it into absence here would merge two
+      // of the read channel's three outcomes at the last boundary that still tells them apart.
+      //
+      // ONE label leaves, never the collection, an id, or a count: the zero-argument query cannot
+      // tell a caller how many machines are paired or what they are called, and must not start.
+      // An entry-less envelope is unreachable through this store (`clearFor` deletes the blob when
+      // the last entry goes) and reads as nothing stored rather than as envelope text.
+      return entries[entries.length - 1]?.label ?? null
     },
     async saveFor(serverId, label) {
       await mutate(async () => {
@@ -384,8 +448,10 @@ export function createHostLabelStore(deps: {
       })
     },
     async clear() {
-      // Erase exactly what save wrote and load reads: keyed by this store's own `name`, never a
-      // delete-by-literal. SecureStore.delete is idempotent (absent name → no-op), so a
+      // Erase the whole blob under this store's own `name`, never a delete-by-literal. That is one
+      // label in the single-slot shape and EVERY server's in the keyed one, which is exactly what
+      // the whole-collection unpair arm wants and why it needs no keyed counterpart (#1156).
+      // SecureStore.delete is idempotent (absent name → no-op), so a
       // never-stored store clears cleanly. No try/catch: a delete failure propagates (fail-closed —
       // reporting success while the value still sits on disk is the behaviour to avoid).
       await secureStore.delete(name)

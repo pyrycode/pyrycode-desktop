@@ -282,3 +282,22 @@ src/renderer/src/
   harsher: this family has no re-assertion path of any kind, so every held roster (not merely a drained
   one) would otherwise latch across a pairing change. Nullary, whole-map, and sequenced strictly before
   `clearAllLastRead` for the same reason as its siblings.
+- [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) · Spec:
+  `docs/specs/architecture/1140-scoped-modal-reconnect-clear.md` — widens `clearPairingScopedState` to a
+  thirteenth store, [`modalStore`](modal-store-bridge.md)'s `dispatch`, carrying a new payload-free
+  `reset` `ModalEvent`. The **fourth** name to move off the header's self-healing list by the same
+  argument — `modalStore` had stood there longest, cited as "cleared by the `connected` edge, then
+  repopulated." That claim died in both halves when [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)
+  scoped the edge to the reconnecting server's own conversations ([modal-prompt
+  model](modal-prompt-model.md)): a new pairing's first `connected` resolves an empty conversation list,
+  matches no held prompt, and hands the state back unchanged. Unlike the roster this store *does* have a
+  repopulation path (the daemon's connect-time reconcile re-sends still-outstanding prompts) — what it
+  lacks is one that reaches a *departed* server's prompts, since the reconcile re-sends only the newly
+  paired server's. A dispatched action rather than a `clearAll*` setter, because `dispatch` is
+  `modalStore`'s only write path (the `dispatchTimeline`/`dispatchSession` shape, not the six nullary
+  setters); the payload-free property is identical. Sequenced strictly before `clearAllLastRead` for the
+  same reason as its siblings. Named the most ACTIONABLE residue in the set rather than the most
+  sensitive: a retained permission prompt is a live control carrying a departed daemon's untrusted
+  `title`/`prompt`/`options[].label`, answerable with a `modal_answer` the currently paired daemon never
+  issued, and `selectHasOutstandingFor` lights the sidebar's input-required dot off the same slice — the
+  phantom is visible before anyone clicks it.

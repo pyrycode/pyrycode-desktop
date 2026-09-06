@@ -1,59 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
-  registerUnpairHandler,
   registerUnpairServerHandler,
-  type UnpairHandleTarget,
   type UnpairServerHandleTarget
 } from './unpairHandler'
-import {
-  UNPAIR_CHANNEL,
-  UNPAIR_SERVER_CHANNEL,
-  MAX_SERVER_ID_LENGTH
-} from '../shared/ipc/unpair'
-import type { ClearablePairedServerStore, MultiPairedServerStore } from './pairedServerStore'
-import type { HostLabelStore, MultiHostLabelStore } from './hostLabelStore'
+import { UNPAIR_SERVER_CHANNEL, MAX_SERVER_ID_LENGTH } from '../shared/ipc/unpair'
+import type { MultiPairedServerStore } from './pairedServerStore'
+import type { MultiHostLabelStore } from './hostLabelStore'
 
-// A structural stand-in for Electron's ipcMain: only handle/removeHandler, spied. No Electron
-// harness needed — the handler is typed against the minimal target, not ipcMain (the
-// pairingStatusHandler.test idiom).
-function fakeTarget(): UnpairHandleTarget & {
-  handle: ReturnType<typeof vi.fn>
-  removeHandler: ReturnType<typeof vi.fn>
-} {
-  return { handle: vi.fn(), removeHandler: vi.fn() }
-}
-
-// The invoke listener the handler registers, pulled from the fake target and typed for direct
-// driving (extract target.handle.mock.calls[0][1] and call it — no request arg, the request has no body).
-function listenerOf(
-  target: ReturnType<typeof fakeTarget>
-): (event: unknown) => Promise<unknown> {
-  return target.handle.mock.calls[0][1]
-}
-
-// A fake store exercising only clear() — the sole method the handler calls. save()/load() are
-// present to satisfy ClearablePairedServerStore but never invoked; no keychain, no filesystem. Their
-// spies double as the "the handler erases, it does not read" assertion surface.
-function storeWithClear(clear: ClearablePairedServerStore['clear']): ClearablePairedServerStore & {
-  save: ReturnType<typeof vi.fn>
-  load: ReturnType<typeof vi.fn>
-  clear: ClearablePairedServerStore['clear']
-} {
-  return { save: vi.fn(async () => {}), load: vi.fn(async () => null), clear }
-}
-
-// A clear-only host-label handle (#827) — exactly the surface the handler is typed against,
-// Pick<HostLabelStore, 'clear'>. `save`/`load` are absent from the TYPE, so this module cannot read
-// the label back and there is no label text here to leak. No keychain, no filesystem.
-function labelWithClear(clear: HostLabelStore['clear']): Pick<HostLabelStore, 'clear'> {
-  return { clear }
-}
-
-// The PER-SERVER arm's handle since #1156 — Pick<MultiHostLabelStore, 'clearFor'>. Same instrument
-// pointed one level finer: it erases exactly one named server's label and still carries no reader,
-// so this module remains unable to materialise any label text. The whole-collection arm above keeps
-// the `clear`-only handle, because deleting the one blob the keyed collection lives in IS "no label
-// for any server".
+// The handler's label handle since #1156 — Pick<MultiHostLabelStore, 'clearFor'>. It erases exactly
+// one named server's label and carries no reader, so this module cannot materialise any label text.
+// (Until #1163 a whole-collection arm sat beside it with a `clear`-only handle, deleting the one blob
+// the keyed collection lives in; that arm and its handle went with the channel.)
 function labelWithClearFor(
   clearFor: MultiHostLabelStore['clearFor']
 ): Pick<MultiHostLabelStore, 'clearFor'> {
@@ -68,303 +25,10 @@ const SECRET_PATH = '/Users/x/Library/Keychains/login.keychain-db'
 // response either: the result reports on the record and carries no payload field at all.
 const LABEL_TEXT = 'Pyrybox'
 
-describe('registerUnpairHandler', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('registers exactly one handler on the unpair channel and unregisters that exact channel', () => {
-    const target = fakeTarget()
-
-    const unregister = registerUnpairHandler(target, {
-      store: storeWithClear(vi.fn(async () => {}))
-    })
-
-    expect(target.handle).toHaveBeenCalledTimes(1)
-    // Channel comes from the exported constant, not a literal — a rename can't silently pass.
-    expect(target.handle).toHaveBeenCalledWith(UNPAIR_CHANNEL, expect.any(Function))
-
-    unregister()
-    expect(target.removeHandler).toHaveBeenCalledTimes(1)
-    expect(target.removeHandler).toHaveBeenCalledWith(UNPAIR_CHANNEL)
-  })
-
-  it('clear() succeeds → ok', async () => {
-    const target = fakeTarget()
-    registerUnpairHandler(target, { store: storeWithClear(vi.fn(async () => {})) })
-    const listener = listenerOf(target)
-
-    expect(await listener({})).toEqual({ result: 'ok' })
-  })
-
-  it('erases exactly once and never reads (clear() only, no load/save)', async () => {
-    const target = fakeTarget()
-    const store = storeWithClear(vi.fn(async () => {}))
-    registerUnpairHandler(target, { store })
-    const listener = listenerOf(target)
-
-    await listener({})
-
-    expect(store.clear).toHaveBeenCalledTimes(1)
-    expect(store.load).not.toHaveBeenCalled()
-    expect(store.save).not.toHaveBeenCalled()
-  })
-
-  it('clear() throws → value-free error (resolves, never rejects)', async () => {
-    const target = fakeTarget()
-    const clear = vi.fn(async () => {
-      throw new Error(`delete failed: ${SECRET_PATH}`)
-    })
-    registerUnpairHandler(target, { store: storeWithClear(clear) })
-    const listener = listenerOf(target)
-
-    // resolves, never rejects — handle must produce a value.
-    await expect(listener({})).resolves.toEqual({ result: 'error' })
-  })
-
-  it('never leaks the thrown error detail into the response (value-free)', async () => {
-    const target = fakeTarget()
-    const clear = vi.fn(async () => {
-      throw new Error(`delete failed: ${SECRET_PATH}`)
-    })
-    registerUnpairHandler(target, { store: storeWithClear(clear) })
-    const listener = listenerOf(target)
-
-    const serialized = JSON.stringify(await listener({}))
-    expect(serialized).not.toContain(SECRET_PATH)
-    // The ok path stringifies to exactly the discriminant — no extra field.
-    const okTarget = fakeTarget()
-    registerUnpairHandler(okTarget, { store: storeWithClear(vi.fn(async () => {})) })
-    expect(JSON.stringify(await listenerOf(okTarget)({}))).toBe('{"result":"ok"}')
-  })
-
-  it('logs nothing on the ok, the error, the throwing-label-erase, or the throwing-callback path', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const okTarget = fakeTarget()
-    registerUnpairHandler(okTarget, { store: storeWithClear(vi.fn(async () => {})) })
-    await listenerOf(okTarget)({})
-
-    const errTarget = fakeTarget()
-    registerUnpairHandler(errTarget, {
-      store: storeWithClear(
-        vi.fn(async () => {
-          throw new Error(`delete failed: ${SECRET_PATH}`)
-        })
-      )
-    })
-    await listenerOf(errTarget)({})
-
-    // The dropped label-erase throw must not break log-free-by-construction either (#827): a
-    // secureStore.delete failure can carry an OS-keychain or filesystem path, so it is dropped too.
-    const labelTarget = fakeTarget()
-    registerUnpairHandler(labelTarget, {
-      store: storeWithClear(vi.fn(async () => {})),
-      hostLabel: labelWithClear(
-        vi.fn(async () => {
-          throw new Error(`delete ${LABEL_TEXT} failed: ${SECRET_PATH}`)
-        })
-      )
-    })
-    await listenerOf(labelTarget)({})
-
-    // The dropped onUnpaired throw must not break log-free-by-construction either (#504): its
-    // caught object could carry internal state or a path, so it is dropped, not reported.
-    const throwTarget = fakeTarget()
-    registerUnpairHandler(throwTarget, {
-      store: storeWithClear(vi.fn(async () => {})),
-      onUnpaired: () => {
-        throw new Error(`teardown failed: ${SECRET_PATH}`)
-      }
-    })
-    await listenerOf(throwTarget)({})
-
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(logSpy).not.toHaveBeenCalled()
-    expect(warnSpy).not.toHaveBeenCalled()
-  })
-
-  // --- onUnpaired: the teardown-on-unpair trigger (#504) -------------------------------------
-  describe('onUnpaired', () => {
-    it('fires exactly once, with no arguments, after a successful clear()', async () => {
-      const target = fakeTarget()
-      const onUnpaired = vi.fn()
-      registerUnpairHandler(target, {
-        store: storeWithClear(vi.fn(async () => {})),
-        onUnpaired
-      })
-
-      expect(await listenerOf(target)({})).toEqual({ result: 'ok' })
-
-      expect(onUnpaired).toHaveBeenCalledTimes(1)
-      // Value-free: a bare signal, so no record/token/key field can cross to the callback.
-      expect(onUnpaired).toHaveBeenCalledWith()
-    })
-
-    it('never fires when clear() throws, and the fail-closed error result is unchanged', async () => {
-      const target = fakeTarget()
-      const onUnpaired = vi.fn()
-      registerUnpairHandler(target, {
-        store: storeWithClear(
-          vi.fn(async () => {
-            throw new Error(`delete failed: ${SECRET_PATH}`)
-          })
-        ),
-        onUnpaired
-      })
-
-      await expect(listenerOf(target)({})).resolves.toEqual({ result: 'error' })
-      expect(onUnpaired).not.toHaveBeenCalled()
-    })
-
-    // Pins the deliberate deviation from onPaired (pairingHandler.ts:103, inside the try): a throw
-    // here must NOT downgrade an already-completed erase to `error`. runUnpair coerces `error` and a
-    // rejected invoke to the same outcome — stay on the conversation screen — which would leave a
-    // paired-looking UI over an erased record. A future "tidy-up" back to onPaired's shape fails here.
-    it('still resolves ok (never rejects) when the callback throws — the erase already completed', async () => {
-      const target = fakeTarget()
-      const clear = vi.fn(async () => {})
-      registerUnpairHandler(target, {
-        store: storeWithClear(clear),
-        onUnpaired: () => {
-          throw new Error(`teardown failed: ${SECRET_PATH}`)
-        }
-      })
-
-      const response = await listenerOf(target)({})
-      expect(response).toEqual({ result: 'ok' })
-      expect(clear).toHaveBeenCalledTimes(1)
-      // The dropped object never reaches the renderer.
-      expect(JSON.stringify(response)).not.toContain(SECRET_PATH)
-    })
-  })
-
-  // --- hostLabel: the label erased alongside the record (#827) --------------------------------
-  describe('hostLabel', () => {
-    it('erases the label exactly once, with no arguments, after a successful clear()', async () => {
-      const target = fakeTarget()
-      const clearLabel = vi.fn(async () => {})
-      registerUnpairHandler(target, {
-        store: storeWithClear(vi.fn(async () => {})),
-        hostLabel: labelWithClear(clearLabel)
-      })
-
-      expect(await listenerOf(target)({})).toEqual({ result: 'ok' })
-
-      expect(clearLabel).toHaveBeenCalledTimes(1)
-      // No argument: the store erases by its OWN name, so no caller-supplied string can reach a
-      // persistence key. Also covers "unpair when no label was ever stored" — the shipped clear() is
-      // idempotent on an absent name, so never-stored is the same code path and needs no guard.
-      expect(clearLabel).toHaveBeenCalledWith()
-    })
-
-    it('never erases the label when the record erase throws, and the error result is unchanged', async () => {
-      const target = fakeTarget()
-      const clearLabel = vi.fn(async () => {})
-      registerUnpairHandler(target, {
-        store: storeWithClear(
-          vi.fn(async () => {
-            throw new Error(`delete failed: ${SECRET_PATH}`)
-          })
-        ),
-        hostLabel: labelWithClear(clearLabel)
-      })
-
-      await expect(listenerOf(target)({})).resolves.toEqual({ result: 'error' })
-      // Nothing was erased, so nothing must follow up — the label still describes a live record.
-      expect(clearLabel).not.toHaveBeenCalled()
-    })
-
-    // The mirror of the onUnpaired case above, under the same rule: the result reports on the
-    // RECORD. By this point the record is gone, so `error` would leave a paired-looking UI over an
-    // erased record — the inverse half-state runUnpair's coercion exists to prevent. A lost label is
-    // stale display text, overwritten by the next pairing that carries one.
-    it('still resolves ok (never rejects) when the label erase throws — the record is already gone', async () => {
-      const target = fakeTarget()
-      const clear = vi.fn(async () => {})
-      const onUnpaired = vi.fn()
-      registerUnpairHandler(target, {
-        store: storeWithClear(clear),
-        hostLabel: labelWithClear(
-          vi.fn(async () => {
-            throw new Error(`delete ${LABEL_TEXT} failed: ${SECRET_PATH}`)
-          })
-        ),
-        onUnpaired
-      })
-
-      await expect(listenerOf(target)({})).resolves.toEqual({ result: 'ok' })
-      expect(clear).toHaveBeenCalledTimes(1)
-      // The teardown trigger still fires: the record is gone either way, so the live daemon session
-      // must not outlive it just because a nickname survived.
-      expect(onUnpaired).toHaveBeenCalledTimes(1)
-    })
-
-    it('never leaks the label erase failure detail into the response (value-free)', async () => {
-      const target = fakeTarget()
-      registerUnpairHandler(target, {
-        store: storeWithClear(vi.fn(async () => {})),
-        hostLabel: labelWithClear(
-          vi.fn(async () => {
-            throw new Error(`delete ${LABEL_TEXT} failed: ${SECRET_PATH}`)
-          })
-        )
-      })
-
-      const serialized = JSON.stringify(await listenerOf(target)({}))
-      expect(serialized).not.toContain(SECRET_PATH)
-      expect(serialized).not.toContain(LABEL_TEXT)
-      // Exactly the discriminant — the response has no payload field for anything to ride out on.
-      expect(serialized).toBe('{"result":"ok"}')
-    })
-
-    // Pins the erase ORDER, so a reorder is a test failure rather than a silent regression. Record
-    // first: a label-first erase that threw would either abort with a live token still on disk, or
-    // continue and gain nothing from having gone first. Label before the teardown trigger: all
-    // at-rest erasure completes before anything observable is signalled.
-    it('erases the record, then the label, then fires the teardown callback', async () => {
-      const target = fakeTarget()
-      const order: string[] = []
-      registerUnpairHandler(target, {
-        store: storeWithClear(
-          vi.fn(async () => {
-            order.push('record')
-          })
-        ),
-        hostLabel: labelWithClear(
-          vi.fn(async () => {
-            order.push('label')
-          })
-        ),
-        onUnpaired: () => {
-          order.push('teardown')
-        }
-      })
-
-      expect(await listenerOf(target)({})).toEqual({ result: 'ok' })
-      expect(order).toEqual(['record', 'label', 'teardown'])
-    })
-
-    it('resolves ok when no hostLabel dep is wired (the optional-dep path)', async () => {
-      const target = fakeTarget()
-      const onUnpaired = vi.fn()
-      registerUnpairHandler(target, {
-        store: storeWithClear(vi.fn(async () => {})),
-        onUnpaired
-      })
-
-      expect(await listenerOf(target)({})).toEqual({ result: 'ok' })
-      expect(onUnpaired).toHaveBeenCalledTimes(1)
-    })
-  })
-})
-
 // --- the per-server arm (#1149) ----------------------------------------------------------------
 
-// The per-server ipcMain stand-in. Its own function rather than a reuse of fakeTarget above, so it
-// is typed against the two-argument UnpairServerHandleTarget the handler actually takes.
+// The ipcMain stand-in: only handle/removeHandler, spied. No Electron harness needed — the handler is
+// typed against the minimal two-argument target, not ipcMain (the pairingStatusHandler.test idiom).
 function fakeServerTarget(): UnpairServerHandleTarget & {
   handle: ReturnType<typeof vi.fn>
   removeHandler: ReturnType<typeof vi.fn>
@@ -372,9 +36,9 @@ function fakeServerTarget(): UnpairServerHandleTarget & {
   return { handle: vi.fn(), removeHandler: vi.fn() }
 }
 
-// The two-argument invoke listener the per-server handler registers. Unlike the legacy one above it
-// takes a REQUEST — the first untrusted field this module has ever had — so it is driven as
-// (event, request) and every malformed shape below is a real invoke a hostile renderer can make.
+// The two-argument invoke listener the handler registers. It takes a REQUEST — the first untrusted
+// field this module ever had — so it is driven as (event, request) and every malformed shape below is
+// a real invoke a hostile renderer can make.
 function serverListenerOf(
   target: ReturnType<typeof fakeServerTarget>
 ): (event: unknown, request: unknown) => Promise<unknown> {
@@ -387,9 +51,9 @@ type ExtraServerDeps = Omit<Parameters<typeof registerUnpairServerHandler>[1], '
 // A fake store carrying the FULL MultiPairedServerStore surface, deliberately wider than the dep
 // type. The production dep is Pick<MultiPairedServerStore, 'clearServer'>, so `clear`, `save`,
 // `load`, `loadById` and `list` are not merely unused — the compiler denies the module their names.
-// They are spied here anyway so the tests below can assert it, keeping the legacy arm's "erases,
-// never reads" property observable on this arm too, and adding "never erases the whole collection"
-// alongside it.
+// They are spied here anyway so the tests below can assert it, keeping "erases, never reads"
+// observable and adding "never erases the whole collection" alongside it — the latter outliving the
+// whole-collection arm #1163 deleted, since a re-added `clear` caller would have to widen the dep.
 function storeWithClearServer(
   clearServer: MultiPairedServerStore['clearServer']
 ): MultiPairedServerStore & {
@@ -455,10 +119,12 @@ describe('registerUnpairServerHandler', () => {
     })
 
     expect(target.handle).toHaveBeenCalledTimes(1)
-    // The per-server channel, NOT the whole-collection one: the two must never collapse onto one
-    // registration, or the structural separation this arm rests on is gone.
+    // The per-server channel, and NOT the whole-collection one #1163 deleted. The literal rather than
+    // a constant, deliberately: `UNPAIR_CHANNEL` no longer exists, and this is the pin that the app
+    // registers no whole-collection erase — it would redden if a later edit re-registered 'pyry:unpair'
+    // here, whatever the constant naming it were called.
     expect(target.handle).toHaveBeenCalledWith(UNPAIR_SERVER_CHANNEL, expect.any(Function))
-    expect(target.handle).not.toHaveBeenCalledWith(UNPAIR_CHANNEL, expect.any(Function))
+    expect(target.handle).not.toHaveBeenCalledWith('pyry:unpair', expect.any(Function))
 
     unregister()
     expect(target.removeHandler).toHaveBeenCalledTimes(1)

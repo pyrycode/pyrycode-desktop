@@ -8,11 +8,7 @@ import {
   type PairingConfirmResponse
 } from '../shared/ipc/pairing'
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
-import {
-  UNPAIR_CHANNEL,
-  UNPAIR_SERVER_CHANNEL,
-  type UnpairResult
-} from '../shared/ipc/unpair'
+import { UNPAIR_SERVER_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import {
   HOST_LABEL_CHANNEL,
@@ -121,29 +117,22 @@ const api = {
   pairingStatus: (): Promise<PairingStatus> => ipcRenderer.invoke(PAIRING_STATUS_CHANNEL),
 
   /**
-   * Ask the background process to erase the stored pairing, returning the app to a clean, not-paired
-   * state (#173). Request/response (ipcRenderer.invoke) called with NO second argument — no data
-   * leaves the renderer; only the value-free ok/error enum comes back, never the token / server key /
-   * relay / keychain path. UNPAIR_CHANNEL is fixed here so the renderer cannot address arbitrary
-   * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the visible unpair
-   * action is #166/#167.
-   */
-  unpair: (): Promise<UnpairResult> => ipcRenderer.invoke(UNPAIR_CHANNEL),
-
-  /**
    * Ask the background process to erase the record for ONE named server, leaving every other paired
-   * machine — its bearer token and server static key — untouched (#1149). The narrow counterpart to
-   * `unpair` above, which forgets every machine; both stay wired until #1152 migrates the last
-   * no-arg caller. Request/response (ipcRenderer.invoke) on its own fixed channel, so the renderer
-   * can address neither an arbitrary channel nor the whole-collection erase by malforming this
-   * request; ipcRenderer never crosses the bridge.
+   * machine — its bearer token and server static key — untouched (#1149). Request/response
+   * (ipcRenderer.invoke) on its own fixed channel, so the renderer cannot address an arbitrary
+   * channel; ipcRenderer never crosses the bridge.
+   *
+   * It is the ONLY unpair the bridge exposes since #1163, which deleted the nullary `unpair` that used
+   * to sit above it and erased the WHOLE collection. Both were wired between #1149 and #1163 while the
+   * last no-arg caller (the composer's Re-pair control) migrated; with that caller moved, the
+   * whole-collection method, its channel, its handler and its registration went together, so a
+   * compromised renderer has no name for a wipe left to reach.
    *
    * The `serverId` is the ONE value that leaves the renderer here, and building the request object
    * in the bridge is a convenience, NOT a defence: the renderer is untrusted and can invoke the
    * channel with anything, so the main side validates the shape and the length on its own merits
    * regardless. Only the value-free ok/error enum comes back — never the token, server key, relay,
-   * keychain path, or even whether the id named a held record. No caller is wired yet; the visible
-   * per-server unpair control is #1090's UI.
+   * keychain path, or even whether the id named a held record.
    */
   unpairServer: (serverId: string): Promise<UnpairResult> =>
     ipcRenderer.invoke(UNPAIR_SERVER_CHANNEL, { serverId }),

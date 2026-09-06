@@ -126,10 +126,14 @@ in-session, on the pairing screen:
        cancel fired (#662) → PairingScreen fires onCancel → setRoute('welcome')
                         → pairing screen unmounts (reducer state discarded), welcome screen mounts
 
-in-session, on the conversation screen (#166):
-       unpair confirmed → window.pyry.unpair() → ok → session store reset → onUnpaired
+in-session, on the conversation screen's composer error slot ([#166](../codebase/166.md)'s original
+`UnpairControl` was deleted by #1061; the surviving Re-pair control was migrated onto the per-server
+channel by [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) — see [Unpair channel §
+The two renderer callers](unpair-channel.md#the-two-renderer-callers)):
+       Re-pair clicked → window.pyry.unpairServer(serverId) → ok, no servers left → onUnpaired
                         → setRoute('pairing') → conversation screen unmounts, pairing screen mounts
                         (deliberately 'pairing', not 'welcome' — re-pairing, not a cold landing)
+                        ok, servers remain → shell stays on 'conversation', nothing navigates
 ```
 
 ### Pending phase (neutral first paint)

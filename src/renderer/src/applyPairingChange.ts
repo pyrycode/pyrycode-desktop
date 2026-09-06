@@ -21,17 +21,21 @@
  * down. Three separate helpers would let a fourth transition be added beside them with the question
  * never asked, which is precisely how the bug #1141 fixes came to exist.
  *
- *  - `unpaired`                   — the operator forgot this pairing. `runUnpair` reports ok, App
- *                                   flips its route to `pairing` and this shell unmounts.
- *                                   #1162 gave it a SECOND caller, and the distinction matters: the
- *                                   Settings row's per-server Unpair forgets one named server and
- *                                   reaches this member only when the refreshed collection comes back
- *                                   EMPTY. Forgetting one of several servers ends no pairing the app
- *                                   still has, so it stays inside the shell and never arrives here —
- *                                   the condition lives in `runUnpairServer`, which is the only
- *                                   caller that can know the remaining count. This member's contract
- *                                   is therefore unchanged: reaching it still means the app is no
- *                                   longer paired to anything, so the clear is still owed in full.
+ *  - `unpaired`                   — the operator forgot the LAST paired server. App flips its route
+ *                                   to `pairing` and this shell unmounts.
+ *                                   #1162 gave it a SECOND caller and #1163 moved the first one onto
+ *                                   the same rule, so BOTH unpair paths — the Settings row's
+ *                                   per-server Unpair and the composer's Re-pair — forget one named
+ *                                   server and reach this member only when the refreshed collection
+ *                                   comes back EMPTY. Forgetting one of several servers ends no
+ *                                   pairing the app still has, so it stays inside the shell and never
+ *                                   arrives here. The condition lives in `runUnpairServer`, in ONE
+ *                                   copy that both paths compose with (`runUnpair` delegates to it),
+ *                                   because a caller holding the refreshed list is the only thing
+ *                                   that can know the remaining count. This member's contract is
+ *                                   therefore unchanged and is now honoured on every path: reaching
+ *                                   it means the app is no longer paired to anything, so the clear is
+ *                                   owed in full.
  *  - `pairedAnotherServer`        — the operator ADDED a server. `pairServer` → `list` inside this
  *                                   shell; nothing has ended and nothing is left.
  *  - `cancelledPairAnotherServer` — the operator backed out of the pairing dialog. `pairServer` →
@@ -113,8 +117,9 @@ function assertNever(change: never): never {
  * batches the thirteen writes into the commit that carries the route change. The pinned order is
  * intra-arm only; the three arms are independent of each other.
  *
- * Fail-safe by inheritance, at zero cost: `runUnpair` calls `onUnpaired` only on `result: 'ok'`, so
- * a failed unpair reaches neither this helper nor the clear, and the conversation screen stays up.
+ * Fail-safe by inheritance, at zero cost: both unpair helpers call their route-flip dep only on
+ * `result: 'ok'`, so a failed unpair reaches neither this helper nor the clear, and the screen the
+ * operator was on stays up.
  *
  * Total — no gate, no return value, no throw path of its own. Nothing is logged, deliberately: this
  * extends `clearPairingScopedState`'s no-diagnostic property to its caller. The only value a

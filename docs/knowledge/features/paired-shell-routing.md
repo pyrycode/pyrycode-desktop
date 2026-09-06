@@ -109,8 +109,12 @@ reusing `onUnpaired` rather than a callback of its own: the Settings screen's pe
 reaches it only when its own erase leaves no paired record behind, at which point the app's pairing has
 genuinely ended and the existing `applyPairingChange(pairingChangeDeps, 'unpaired')` clear-then-navigate
 below applies exactly as it does from `thread`. Forgetting one of several servers never reaches this
-prop — it stays inside the shell, and `applyPairingChange`'s `unpaired` arm needed no behavioural
-change, only a docblock update naming the second, conditional caller.
+prop — it stays inside the shell. **[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
+put the `thread` case's own Re-pair control on the identical condition**, so "exactly as it does from
+`thread`" is no longer true only because the old whole-collection erase always ended the pairing — both
+callers now reach `applyPairingChange('unpaired')` for the same reason, one copy of the remaining-count
+rule (in `runUnpairServer`) that `runUnpair` delegates to rather than restates. See [Unpair
+channel](unpair-channel.md).
 
 Every route renders a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
 always has *something* to show. The `settings` and `archive` cases both reuse the shared `onBack`
@@ -295,14 +299,16 @@ unchanged; `PairedShell` nests *under* the `conversation` route, not beside it.
 `ConversationScreenProps` gained `onBack?: () => void` — the exact `onUnpaired?` precedent
 ([#166](../codebase/166.md)): optional and gated, so a bare `<ConversationScreen />` (no shell, no
 `onBack`) keeps today's DOM output identical, satisfying AC3 ("no behavioral change" to the existing
-screen). An in-file `BackControl({ onBack })` mirrors the `UnpairControl` idiom, returning `null` when
-`onBack` is absent and, when present, an icon-only 48px `<button aria-label="Back">` holding a 24px
-inline `arrow_back` SVG glyph (Figma node 16-11, `on-surface` color — the `.composer__send` inline-SVG
-precedent, no remote asset fetch). Rendered as the **first child** of `.conversation`, before the
-existing `UnpairControl` header row — the leading edge, matching Figma's top-app-bar placement. The
-back arrow and the unpair header are two separate rows for now (a future top-app-bar ticket
-consolidates back + title + overflow + unpair into one bar per Figma 16-9); a deliberate, spec-sanctioned
-interim, not an oversight.
+screen). An in-file `BackControl({ onBack })` mirrors the (then-live, since #1061-deleted)
+`UnpairControl` idiom, returning `null` when `onBack` is absent and, when present, an icon-only 48px
+`<button aria-label="Back">` holding a 24px inline `arrow_back` SVG glyph (Figma node 16-11,
+`on-surface` color — the `.composer__send` inline-SVG precedent, no remote asset fetch). Rendered as the
+**first child** of `.conversation` — at the time of this ticket, before the `UnpairControl` header row
+that `UnpairControl` idiom implied. #1061 deleted that row outright (no header-row unpair entry point
+exists today); the composer's Re-pair affordance now lives inside `ComposerErrorSlot`, an
+already-terminal-error-only control (see [Unpair channel § The two renderer
+callers](unpair-channel.md#the-two-renderer-callers)), not a persistent header row `BackControl` sits
+beside.
 
 ## Data flow
 
@@ -328,8 +334,12 @@ AppView (route='conversation')
                                                 .paired-shell__pane → route==='thread' ?
                                                   ConversationScreen key={paneKey} (store-backed) + BackControl — [←] → dispatch{back}
                                                   → WorkspaceChip reads activeConversationStore (#278)
-                                                  onUnpaired → clearPairingScopedState(clearPairingDeps)  ← #531
-                                                                onUnpaired() → App sets route='pairing'
+                                                  ComposerErrorSlotControl Re-pair (#1163) → runUnpair(serverIdForOpenConversation(…)) → runUnpairServer → window.pyry.unpairServer(serverId)
+                                                    ok + servers remain   → serverInfoStore re-read/written, shell stays on 'thread'
+                                                    ok + servers empty    → onLastServerUnpaired() → applyPairingChange(deps,'unpaired')
+                                                                             → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as settings' unpair
+                                                                               App sets route='pairing'
+                                                    error/rejected/no resolvable server → dispatch{failed}, nothing cleared, nothing navigated
                                                   : null   ← #670, genuinely empty, no placeholder
 
   activateConversation(activateDeps, conversation):  ← #530 (src/renderer/src/activateConversation.ts)

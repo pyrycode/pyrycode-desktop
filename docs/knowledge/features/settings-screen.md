@@ -145,9 +145,10 @@ link points at the right file.
   route flip to the pairing screen conditional on no records remaining — see [How it
   works](settings-screen-how-it-works.md#the-server-rows-serverrowtsx-334-widened-to-a-list-by-1148-given-an-unpair-action-by-1162)
   for the mechanism. What #1162 deliberately does **not** do: scope the app-wide state clear to the
-  departed server ([#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) owns that) or
-  migrate the composer's Re-pair control off the whole-collection channel
-  ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)).
+  departed server ([#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) owns that).
+  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) migrated the composer's Re-pair
+  control onto the same per-server mechanism and deleted the whole-collection channel outright — see
+  [Unpair channel](unpair-channel.md).
 - **A failed per-server unpair has no visible affordance — the row just returns to idle.** No banner,
   no row-local error copy, no session-store degradation (the deliberate reason for the last point).
   Retrying is the affordance: the Unpair button is right there, un-armed. Reddening a richer surface

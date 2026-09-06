@@ -127,11 +127,13 @@ a `.conversation__header` row above the thread, right-aligned, holding `UnpairCo
 `useState<'idle' | 'confirming' | 'unpairing'>` phase machine: `idle` showed an `Unpair` trigger;
 `confirming` showed `Forget this pairing?` + `Cancel`/`Confirm` (the AC3 accidental-unpair guard);
 `unpairing` disabled both buttons while the request was in flight. It called the pure `runUnpair` helper
-(`unpairAction.ts`, the `composerSend.ts` precedent: injected effects, spy-tested, no React), which
-invokes `window.pyry.unpair()` — the [unpair channel](unpair-channel.md) (#173) bridge — and either
-dispatches `{ type: 'reset' }` into the [session store](session-store.md) then calls `onUnpaired` (on
-`ok`), or dispatches `{ type: 'failed', error: { code: 'unpair', ... } }` and stays put (on `error` or a
-rejected invoke).
+(`unpairAction.ts`, the `composerSend.ts` precedent: injected effects, spy-tested, no React), which at
+the time invoked a now-deleted nullary `window.pyry.unpair()` — the whole-collection arm of the [unpair
+channel](unpair-channel.md) (#173), deleted by
+[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) — and either dispatched
+`{ type: 'reset' }` into the [session store](session-store.md) then called `onUnpaired` (on `ok`), or
+dispatched `{ type: 'failed', error: { code: 'unpair', ... } }` and stayed put (on `error` or a rejected
+invoke).
 
 [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) (operator ruling, 2026-09-04) deleted
 the component, its mount, and the `.conversation__header` rule — the desktop `Content` frame (Figma
@@ -147,11 +149,15 @@ is the wrong home for it), most likely the sidebar's host row, to be settled wit
 `ConversationScreen`'s **optional** `onUnpaired?: () => void` prop — mirroring `PairingScreen`'s
 `onPaired?`/`onCancel?` — survives the deletion unchanged: its one remaining consumer is the composer
 status row's error slot below, so a bare `<ConversationScreen />` still server-renders green with no
-prop supplied. `unpairAction.ts` and `runUnpair` are untouched, byte-for-byte, and their header comment
-still reads "UnpairControl is thin glue over this" — a dead reference this ticket left rather than
-edited a file its own AC named as untouched. See [#166 codebase notes](../codebase/166.md) for the
-original control's full design, the [App shell](app-shell.md) for the route-flip half, and the
-[#1061 architecture spec](../../specs/architecture/1061-hide-the-unpair-control.md) for the deletion.
+prop supplied. `unpairAction.ts` and `runUnpair` were untouched, byte-for-byte, by #1061's deletion, and
+their header comment read "UnpairControl is thin glue over this" as a dead reference for a while —
+[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) rewrote both the module and its header
+when it migrated `runUnpair` onto the per-server channel and had it delegate to
+`runUnpairServer`/`serverIdForOpenConversation` instead; see [Unpair channel § The two renderer
+callers](unpair-channel.md#the-two-renderer-callers) for the current shape. See [#166 codebase
+notes](../codebase/166.md) for the original control's full design, the [App shell](app-shell.md) for the
+route-flip half, and the [#1061 architecture spec](../../specs/architecture/1061-hide-the-unpair-control.md)
+for the deletion.
 
 ## Re-pair control (#167, folded into the composer status row's error slot by #963)
 
@@ -184,13 +190,18 @@ without it, a failed re-pair would immediately re-satisfy the predicate and re-o
 loop. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
 re-dials), so it never reaches this predicate either.
 
-The **no confirm phase, no busy guard** posture and the exact `runUnpair` wiring
-(`window.pyry.unpair` → `dispatch({ reset })` → `onUnpaired`, fired as a bare `void` since
-`runUnpair` never rejects) both carried over to `ComposerErrorSlotControl` unchanged — the button
-only ever appears in an already-terminal error, so a confirm step is pure friction, and the
-affordance self-hides on both outcomes (`ok` → route unmounts the screen; `error` → store lands on
-`code: 'unpair'`, which the predicate excludes). See [#167 codebase notes](../codebase/167.md) for
-the full original design, patterns, and code-review record.
+The **no confirm phase, no busy guard** posture carried over to `ComposerErrorSlotControl` unchanged —
+the button only ever appears in an already-terminal error, so a confirm step is pure friction, and the
+affordance self-hides on both outcomes (`ok` → either the route unmounts the screen, if that was the
+last paired server, or the shell just stays up with the error cleared; `error` → store lands on
+`code: 'unpair'`, which the predicate excludes). The wiring underneath it changed at
+[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163): `runUnpair` no longer calls a nullary
+`window.pyry.unpair`, it resolves the server whose conversation is open
+(`serverIdForOpenConversation` over `conversationListStore`'s stamped rows, read at click time rather
+than subscribed) and delegates to `runUnpairServer` on the per-server channel, so the route flip is now
+conditional on nothing being left paired rather than unconditional on `ok` — see [Unpair channel § The
+two renderer callers](unpair-channel.md#the-two-renderer-callers) for the mechanism. See [#167 codebase
+notes](../codebase/167.md) for the original design, patterns, and code-review record.
 
 ## Connection banner (#279)
 

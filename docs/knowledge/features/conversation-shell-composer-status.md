@@ -245,12 +245,18 @@ lines of markup with no branch of its own would add a name and a test surface wi
 **`ComposerErrorSlotControl({ onUnpaired })`** is the store-bound container, collapsing #797's
 `ComposerErrorChipControl` and #167's `RepairControl` into one — they read the same `selectStatus` slice
 for the same fact and now fill the same hole, so the re-render footprint narrows rather than grows.
-`handleRepair` is `RepairControl`'s body verbatim: `void runUnpair({ unpair: window.pyry.unpair, dispatch,
-onUnpaired: () => onUnpaired?.() })`, fired as a bare `void` since `runUnpair` never rejects. No confirm
-phase and no busy guard, for #167's recorded reasons — the button only ever appears in an already-terminal
-error, and it self-hides on both outcomes (`ok` → route unmounts the screen; `error` → the store lands on
-`code: 'unpair'`, which the predicate excludes). `window.pyry` is dereferenced only inside the handler,
-never during render.
+`handleRepair` was `RepairControl`'s body verbatim through [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163):
+`void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })`. #1163
+migrated it onto the per-server channel: it now resolves the open conversation's server id at
+interaction time (`serverIdForOpenConversation` over `conversationListStore`'s stamped rows, via
+`getState()`, not a subscription) and calls `void runUnpair({ unpairServer: window.pyry.unpairServer,
+refreshServers, onLastServerUnpaired: () => onUnpaired?.(), dispatch }, serverId)`, still fired as a bare
+`void` since `runUnpair` never rejects. No confirm phase and no busy guard, for #167's recorded reasons —
+the button only ever appears in an already-terminal error, and it self-hides on both outcomes (`ok` and
+nothing left paired → route unmounts the screen; `ok` and other servers remain → the shell just stays up;
+`error` → the store lands on `code: 'unpair'`, which the predicate excludes). `window.pyry` is
+dereferenced only inside the handler, never during render — see [Unpair channel § The two renderer
+callers](unpair-channel.md#the-two-renderer-callers) for the full mechanism.
 
 **`COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'`** joins `composerSend.ts` beside
 `COMPOSER_ERROR_CHIP_COPY` — see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).

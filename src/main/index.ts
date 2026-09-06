@@ -23,7 +23,7 @@ import { selectRelayPolicy } from './relayPolicy'
 import { selectWindowPresentation, type WindowPresentation } from './windowPresentation'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
-import { registerUnpairHandler, registerUnpairServerHandler } from './unpairHandler'
+import { registerUnpairServerHandler } from './unpairHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
 import { registerHostLabelHandler, registerHostLabelServerHandler } from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
@@ -230,10 +230,11 @@ app.whenReady().then(() => {
   // key, so no caller-supplied string can reach the store name. Since #1155 it holds a label PER
   // SERVER inside that one blob, and since #1156 the writers use those keyed members: the pairing
   // handler below receives only `saveFor`, so it can neither read a label back nor erase one; the
-  // per-server unpair handler receives only `clearFor`; the whole-collection unpair handler keeps
-  // `clear`, which deletes the one blob and so erases every server's label; and the read path is the
-  // host-label handler registered below, which keeps a `load`-only handle. Four seams over one
-  // store, four disjoint `Pick`s, none able to do another's job.
+  // unpair handler receives only `clearFor`; and the read path is the host-label handler registered
+  // below, which keeps a `load`-only handle. Three seams over one store, three disjoint `Pick`s,
+  // none able to do another's job. (There were four until #1163: the whole-collection unpair handler
+  // held `clear`, which deletes the one blob and so erased every server's label. That handler is
+  // deleted, so `clear` now has no production caller at all — see hostLabelStore's header.)
   const hostLabelStore = createHostLabelStore({ secureStore })
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
@@ -457,60 +458,44 @@ app.whenReady().then(() => {
   })
   app.on('will-quit', () => unregisterPairing())
 
-  // The unpair request (#173): reuse the same pairedServerStore — do not construct a second store —
-  // so the renderer can ask to erase the stored pairing and return to a clean, not-paired state. Its
-  // ClearablePairedServerStore.clear() (#172) is fail-closed; the handler maps every throw to a
-  // value-free `error`, never reporting success while a live token may remain on disk. Registered
-  // here, below the registry and beside the pairing handler, because #504 gave it the mirror-image
-  // dependency: `onUnpaired` fires only after the erase succeeds and tears the live daemon session
-  // down, so an authenticated session can never outlive the record that authorised it. The same
-  // `reconcile()` — synchronous, void, non-throwing — serves both callbacks, which is the whole point
-  // of reconciling against the store rather than against a value the signal carries (#1117): with
-  // every record gone it stops and drops every connection and installs the not-paired stand-in, whose
-  // dial settles at failed(not-paired) exactly as the single connection's `reconnect()` did. It never
-  // sets the registry's permanent stopped flag, so a later re-pair still connects. `clear()` still
-  // erases the WHOLE collection here — that is now the NARROWER of two registrations: #1149 added
-  // the per-server arm below, and #1152 migrates this one's last caller and deletes this block.
-  // Registering this late is safe for the same reason the pairing handler is (above): the
-  // whole whenReady callback runs to completion in one tick, and no caller races it — the visible
-  // unpair UI is #166/#167, many ticks later, after first paint. `will-quit` removes the handler,
+  // The unpair request (#173, per-server since #1149): forget ONE named machine, leaving every other
+  // record on disk and every other connection live. Reuse the SAME pairedServerStore and
+  // hostLabelStore constructed above — do not build second ones. The erase (#172) is fail-closed; the
+  // handler maps every throw to a value-free `error`, never reporting success while a live token may
+  // remain on disk.
+  //
+  // Registered here, below the registry and beside the pairing handler, because #504 gave it the
+  // mirror-image dependency: `onUnpaired` fires only after the erase succeeds and tears the live
+  // daemon session down, so an authenticated session can never outlive the record that authorised it.
+  // The same `reconcile()` — synchronous, void, non-throwing — serves both callbacks, which is the
+  // whole point of reconciling against the store rather than against a value the signal carries
+  // (#1117): it reads the store and makes the connection set match, so with one record gone it stops
+  // and drops that one connection and leaves every other live and un-handshaken. It never sets the
+  // registry's permanent stopped flag, so a later re-pair still connects.
+  //
+  // #1163 DELETED THE WHOLE-COLLECTION REGISTRATION THAT USED TO SIT ABOVE THIS ONE. It erased every
+  // record from a bodiless request and #1149 kept it registered only for its one remaining caller, the
+  // composer's Re-pair control, which now names its server and arrives here. So this app registers no
+  // whole-collection erase at all. The handler is typed against `clearServer` alone — no
+  // whole-collection `clear`, no read of any kind — so a malformed or unknown-id request structurally
+  // cannot reach a wipe and no bearer token can be materialised in that module. `pairedServerStore`
+  // satisfies the narrow handle structurally; the narrowing lives in the handler, not here.
+  //
+  // Registering this late is safe for the same reason the pairing handler is (above): the whole
+  // whenReady callback runs to completion in one tick and no caller races it — the visible unpair
+  // controls are renderer UI, many ticks later, after first paint. `will-quit` removes the handler,
   // symmetric with unregisterPairing.
-  // #827 adds the label erase here: reuse the SAME hostLabelStore constructed above — do not build a
-  // second store — so unpairing takes the host's name with it rather than leaving it to describe a
-  // record that no longer exists. A `clear`-only handle, so this handler can neither read the label
-  // back nor overwrite it. The erase is ordered after the record's and outside the fail-closed catch,
-  // and a failure to erase it still resolves `ok`: the result reports on the RECORD, and by then the
-  // record is gone — see the listener's comment for the full argument.
-  const unregisterUnpair = registerUnpairHandler(ipcMain, {
-    store: pairedServerStore,
-    onUnpaired: () => registry.reconcile(),
-    hostLabel: hostLabelStore
-  })
-  app.on('will-quit', () => unregisterUnpair())
-
-  // The per-server unpair request (#1149): forget ONE named machine, leaving every other record on
-  // disk and every other connection live. Reuse the SAME pairedServerStore and hostLabelStore — do
-  // not construct second ones — and the SAME `reconcile()` callback, which is exactly why this can
-  // share a wiring shape with the whole-collection arm above: reconcile reads the store and makes
-  // the connection set match it, so with one record gone it stops and drops that one connection and
-  // leaves the rest un-handshaken (connectionRegistry already proves this; nothing there changes).
   //
-  // A SEPARATE registration on a separate channel, not a second request shape on the one above. The
-  // handler is typed against `clearServer` alone — no whole-collection `clear`, no read of any kind
-  // — so a malformed or unknown-id request structurally cannot reach the wipe this ticket exists to
-  // prevent, and no bearer token can be materialised in that module. `pairedServerStore` satisfies
-  // the narrow handle structurally; the narrowing lives in the handler, not here.
+  // #827 put the label erase here: unpairing takes the host's name with it rather than leaving it to
+  // describe a record that no longer exists. It is erase-only, so this handler can neither read the
+  // label back nor overwrite it; ordered after the record's erase and outside the fail-closed catch,
+  // and a failure to erase it still resolves `ok` — the result reports on the RECORD, and by then the
+  // record is gone. See the listener's comment for the full argument.
   //
-  // Registering this late is safe for the same reason the two above are: the whole whenReady
-  // callback runs to completion in one tick and no caller races it — the visible per-server unpair
-  // control is #1090's UI, many ticks later. `will-quit` removes the handler, symmetric with the
-  // other two.
-  //
-  // #1156 points this arm's label handle at `clearFor`, so it erases exactly the named machine's
-  // name and leaves every still-paired machine's stored — retiring the interim rule that erased the
-  // label only once nothing remained, which was the best a single un-keyed slot allowed. Still the
-  // SAME hostLabelStore, and still erase-only: `clearFor` carries no read, so no label text is
-  // materialised in that module either.
+  // #1156 points the label handle at `clearFor`, so it erases exactly the named machine's name and
+  // leaves every still-paired machine's stored — retiring the interim rule that erased the label only
+  // once nothing remained, which was the best a single un-keyed slot allowed. Still erase-only:
+  // `clearFor` carries no read, so no label text is materialised in that module either.
   const unregisterUnpairServer = registerUnpairServerHandler(ipcMain, {
     store: pairedServerStore,
     onUnpaired: () => registry.reconcile(),

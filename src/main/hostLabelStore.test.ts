@@ -759,9 +759,11 @@ describe('createHostLabelStore — the un-keyed load over a keyed blob (#1156)',
 
     await labels.saveFor(A, 'Pyrybox')
     await labels.saveFor(B, 'Pyrybox II')
-    // The whole-collection unpair arm keeps its `clear`-only handle precisely because `clear`
-    // deletes the ONE blob the keyed collection lives in, so "no label stored for any server" is
-    // already what it does under the new at-rest shape — no `clearAll` member is needed.
+    // The whole-collection unpair arm held a `clear`-only handle precisely because `clear` deletes
+    // the ONE blob the keyed collection lives in, so "no label stored for any server" was already
+    // what it does under the new at-rest shape — no `clearAll` member was ever needed. #1163 deleted
+    // that arm and `clear` now has no production caller; this pins the member's behaviour until the
+    // follow-up removes it (see hostLabelStore's header for why it is not removed here).
     await labels.clear()
 
     expect(store.has(HOST_LABEL_NAME)).toBe(false)

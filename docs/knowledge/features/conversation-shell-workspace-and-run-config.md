@@ -508,13 +508,20 @@ per model — measured live against claude 2.1.220 on 2026-08-21, Haiku publishe
 the other rows publish all five — so the fixed strip used to offer Haiku five choices it could not use
 and ask the daemon for something it would refuse.
 
-**The row is the session's model, not the running one.** `EffortSection` now takes `model` and
-`models` props and resolves its row via `publishedRowFor(models, model)` — the same helper and the
-same exact-equality-on-`value` rule `ModelSection` marks a row selected by, renamed from
-`runningPublishedRow` because #976 gave it a second caller. The two callers join **different strings**
-through the identical rule: `RunningModelSection` joins `announced.model` (what claude announced for
-the running turn), `EffortSection` joins the session's `model` (the same string `ModelSection` marks a
-row selected by). Conflating the two inputs is the mistake a shared name is meant to make visible.
+**The row is the session's model, not the running one.** `EffortSection` takes `model` and `models`
+props and resolves its row via `effortRowFor(models, model)` (`publishedRowFor` before #1168) — the same
+exact-equality-on-`value` rule `ModelSection` marks a row selected by. `RunningModelSection` joins a
+**different string** through the unwrapped `publishedRowFor`: `announced.model` (what claude announced
+for the running turn), never the session's `model`. Conflating the two inputs is the mistake the two
+names are meant to make visible.
+
+**Since #1168, an empty `model` — the wire's inherited daemon default, not an absence — resolves onto
+the row the daemon publishes for that default (`value: 'default'`) instead of matching nothing.**
+`effortRowFor` is `publishedRowFor` with only that lookup argument substituted; every other model, and
+every other `publishedRowFor` caller (`RunningModelSection`, `ModelSection`, both composer menus except
+the effort one), is unmoved. See [Composer effort
+menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
+for the shared wrapper both effort surfaces now call.
 
 **Four inputs, three renderings** — the section's own `nothingKnown` guard is the one place this table
 is written down in code:

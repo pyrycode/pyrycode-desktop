@@ -29,7 +29,8 @@ The two triggers look interchangeable but differ in one load-bearing way: the mo
 its label (a row's `display_name`, joined on the session's model), while this trigger's label **is** the
 session's value, unmodified. Claude's own control displays effort levels lowercase and byte-identical to
 the machine values it accepts, so there is no display convention to reproduce and no relabelling to do.
-`publishedRowFor` is used here only to find the **levels** — never the label.
+The row lookup (`effortRowFor` since #1168, `publishedRowFor` before it) is used here only to find the
+**levels** — never the label.
 
 ## `composerEffortMenuModel`, one pure function deciding all three renderings
 
@@ -67,10 +68,25 @@ put a second copy of the vocabulary back in the one place it was removed from. `
 effort value and never appears in a published list — Claude Code resolves it to `xhigh` plus a separate
 boolean the daemon's session-settings surface carries no field for, confirmed on the ticket as deliberate.
 
-**The row is the session's model**, resolved by exact equality on `value` through `publishedRowFor` — the
-same string and the same rule `EffortSection` and the model menu both join, and this is that helper's
-fourth caller. No family derivation, no substring, prefix, case fold or trim: `value` is an argument
-(`default`, `sonnet`, `opus[1m]`), not a parseable identifier.
+**The row is the session's model**, resolved by exact equality on `value`. No family derivation, no
+substring, prefix, case fold or trim: `value` is an argument (`default`, `sonnet`, `opus[1m]`), not a
+parseable identifier.
+
+**Since #1168, an empty model is that equality's one deliberate exception, and it lives outside this
+rule rather than inside it.** `composerEffortMenuModel` and `EffortSection` (the run-configuration
+sheet's own Effort section) both resolve their row through `effortRowFor` — `publishedRowFor` with the
+lookup *argument* substituted: an empty model, the wire's inherited daemon default and explicitly not an
+absence, looks up the row the daemon publishes for that default (`value: 'default'`) instead of matching
+nothing. Every other model still passes straight through to `publishedRowFor`'s unchanged `===`. This is
+why a chat nobody has set a model on now reaches the **menu** rendering below instead of the inert one it
+drew permanently before #1168 — measured against a live daemon, that was the common case for an
+unconfigured chat, not an edge one. With no `default` row published, or no `model_list` frame received at
+all, `effortRowFor` still returns `undefined` and this control still draws the inert arm.
+`RunningModelSection`, `ModelSection` and the model menu's two lookups keep calling `publishedRowFor`
+directly and are unmoved — in particular
+[the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022) deliberately did
+not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on every
+inherited-default chat.
 
 **`truncated_fields` is deliberately not read.** The shared panel's option is `{ id, label }` with one
 text child, so a cut report here would need either a new prop on a component four tickets share

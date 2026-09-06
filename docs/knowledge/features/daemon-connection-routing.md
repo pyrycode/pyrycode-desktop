@@ -327,6 +327,13 @@ reasoning `conversationRouter.ts` states for its own map.
 `''` is never learned in any space — for `sessions` this is AC3 (a `session_id` of `''` means "no
 session resolved," not an address); the same guard covers the other two for free.
 
+**Since [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176), `runConfigReceived` itself
+only fires for a correlated `session_settings` reply** — `daemonConnection.ts` now drops an
+uncorrelatable one before emitting anything, so `sessions` also learns nothing from it. Accepted, not a
+regression: a session id this client cannot tie to a request it sent is exactly the input this index
+must not accept. `conversationId`, the field #1176 added to the event, is read by nothing here —
+`sessions` keys on `sessionId` alone.
+
 ## Last write wins — and the reason is not #1118's
 
 \#1118 argues last-write-wins from conversations that genuinely move hosts. A live modal id or question

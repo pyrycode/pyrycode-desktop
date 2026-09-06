@@ -403,18 +403,21 @@ is not a retry, delivery is still best-effort, and no consumer may block a model
 [Model-list store § The request half](model-list-store.md#the-request-half-requestmodellist-1166) for the
 corrected reasoning.
 
-**Known gap, filed rather than fixed here: a late reply can land after a switch.** Neither
-`SessionSettingsPayload` nor the `runConfigReceived` event carries a `conversation_id`, so a reply in
-flight when the operator switches A → B still lands wherever `runConfigStore`/`sessionIdStore` are
-listening when it arrives, attributed to whichever conversation is active at that moment. This is
-pre-existing — the `connected` and turn-end edges already produced in-flight replies — and #1166 does not
-widen the exposure per occurrence (B's own request is already in flight behind A's stale one, so an
-in-order reply now self-corrects one round trip later instead of latching until B's first turn ends); what
-it changes is the *frequency*, since every switch now produces a catchable request rather than only a
-switch that happens to follow a completed turn. Filed as
-[#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176), deliberately not attempted here — the
-real fix needs a daemon-side `conversation_id` on the payload or an `in_reply_to` correlation map spanning
-main, the event channel and the bridge.
+**Late-reply attribution gap, closed by #1176 client-side.** Neither `SessionSettingsPayload` nor the
+`runConfigReceived` event carries a `conversation_id` — that stayed true, since a wire change was out of
+scope (ADR 0002) — so #1166 made every switch a fourth request occasion without being able to stop a
+reply still in flight when the operator switches A → B from landing wherever `runConfigStore` /
+`sessionIdStore` are listening when it arrives. #1176 closed it without touching the wire: the background
+process now records each `request_session_settings`' envelope id against the conversation it named,
+matches the reply by `Envelope.in_reply_to`, and carries the resolved id on `runConfigReceived`;
+`subscribeRunConfig` drops a reply describing anything but the open conversation. See [Run config store §
+Conversation-attributed since #1176](run-config-store.md#conversation-attributed-since-1176) for the
+mechanism.
+
+**What #1176 did not reach.** `sessionIdStore` has a second, unsolicited writer —
+`sessionIdBridge`'s `session_transition` marker, which carries no conversation id and answers no
+request, so there is nothing to correlate against. Filed as
+[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192).
 
 **Security consequence: the tail is no longer an operator-only region.** `activateConversation` is also
 reached ungated from a daemon-confirmed create (`useConversationCreatedNav`, above) — the store's own

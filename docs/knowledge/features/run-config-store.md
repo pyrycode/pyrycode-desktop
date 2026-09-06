@@ -89,6 +89,54 @@ Every "bare"/"daemon-wide" statement elsewhere in this document below this point
 inline describes the request as it stood before 2026-08-20 — read it as history, not current wire
 shape.
 
+## Conversation-attributed since #1176
+
+The reply itself still carries no correlation id — `SessionSettingsPayload` gained nothing, and giving
+it one would be a wire change (ADR 0002), so this closes client-side instead. Every conversation switch
+since #1166 is a request occasion, and a reply from a conversation the operator has since switched away
+from used to land in both stores unconditionally, attributed to whichever conversation was open when it
+arrived — showing another chat's model/effort/permission-mode/context reading, and, the sharp half,
+pointing `changeSetting` (`runSettingsControls.ts`) at that other conversation's session id.
+
+**The correlation lives in `src/main/daemonConnection.ts`**, as a fourth per-connection map beside
+`outstandingAnswers`/`pendingSettings`/`pendingCreateFolders` — `pendingConfigRequests: Map<number,
+string>`, envelope id → the conversation `request_session_settings` named. Set *after* a successful
+`driver.sendMessage` in `requestSessionSettings` (a throwing build/send registers nothing, so an entry
+never sits under an unspent id), matched and deleted by `Envelope.in_reply_to` in the `session-settings`
+arm of `onDriverEvent`, and cleared wholesale on each `dial()` — which is what makes the recycled
+envelope ids after a reconnect safe. Keyed by a client-minted number, never a daemon-supplied string, so
+it stays a `Map` for the same reason `pendingCreateFolders` is a `Set` rather than an object.
+
+**Fail-closed on anything uncorrelatable, silently.** A `session_settings` frame with no `in_reply_to`,
+or one matching no outstanding entry (a stale reply from a cleared connection, a duplicate of an
+already-matched reply, or a daemon forging a snapshot for a request never sent), emits no
+`runConfigReceived` at all — not a partial event, not a coerced id. Neither branch logs: the only values
+a diagnostic could carry are the conversation id and the wire routing id, and `emitDaemonEvent` is
+log-free by construction. One accepted consequence: `correlationRouter`'s `learn` also reads
+`runConfigReceived.sessionId` to index session → server, so an uncorrelatable reply now teaches it
+nothing either — correct, since a session id this client cannot tie to a request it sent is exactly the
+input that index must not accept.
+
+**The renderer gate is `subscribeRunConfig`'s fourth parameter**, `getOpenConversationId: () => string |
+null`, called *per event inside the listener* — never resolved once at subscribe time, since this
+listener is app-lifetime (mounted in `RunConfigLiveData`) and a closure capture would freeze the open
+conversation at mount and reinstate the defect in a new shape. One gate covers both writes
+(`event.conversationId !== getOpenConversationId()` returns before either setter runs), deliberately not
+one per setter, because the settings and the session id they describe are only meaningful together —
+see § The data path below for the exact shape. `toRunConfigSnapshot`/`toSnapshotSessionId` are untouched
+by the gate and stay pure `DaemonEvent → value | null` mappers.
+
+The one production caller, `RunConfigLiveData` (`runConfigLive.ts`), reads the open conversation
+non-reactively at call time — `activeConversationStore.getState().activeConversation?.id ?? null` — the
+third consumer of that shape after `conversationLastReadBridge.ts` and this module's own request side;
+`conversationLastReadBridge.ts`'s note that a third consumer is the signal for a
+`selectOpenConversationId` selector is now genuinely due, and remains unactioned as adjacent refactoring.
+
+**What this does not reach.** `sessionIdStore`'s other writer, `sessionIdBridge`'s unsolicited
+`session_transition` marker, carries no conversation id and answers no request, so there is nothing to
+correlate against — filed as
+[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192).
+
 ## What it does
 
 Requests the session settings on four occasions — every time the Run configuration sheet opens,
@@ -200,14 +248,17 @@ requestRunConfigSnapshot(sendCommand, conversationId): void
 // { type: 'requestSessionSettings', payload: { conversation_id } }. Inline typed literal, no shared
 // constructor.
 
-subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId): () => void
-// One listener feeds BOTH setters from the SAME event: onDaemonEvent(event => {
+subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId, getOpenConversationId): () => void
+// One listener feeds BOTH setters from the SAME event, gated by ONE check (#1176): onDaemonEvent(event => {
+//   if (event.type === 'runConfigReceived' && event.conversationId !== getOpenConversationId()) return
 //   const s = toRunConfigSnapshot(event); if (s) setSnapshot(s)
 //   const id = toSnapshotSessionId(event); if (id !== null) setSessionId(id)
 // }). Returns the off handle (the daemonEventBridge cleanup idiom). Deliberately one subscription,
 // not two: the settings and the session id they describe arrive on one frame and are only
 // meaningful together — splitting them would let the sheet show one session's values while
-// addressing another.
+// addressing another. The gate is symmetric with that reasoning: it is one check covering both
+// writes, not one per setter, for the same reason. getOpenConversationId is called PER EVENT, never
+// captured once at subscription — see § Conversation-attributed since #1176 above.
 ```
 
 `toRunConfigSnapshot`/`toSnapshotSessionId` return `null` via a plain `default`, not `assertNever` —
@@ -386,23 +437,17 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
 - **A response landing after an instant sheet close is still landed.** Since #810 the listener is
   app-level and outlives the sheet, so a reply to the sheet's own request is not dropped just
   because the sheet closed first — it lands in the store exactly as any edge-driven reply would.
-- **No correlation.** Any `session_settings` reply that arrives is decoded and emitted
-  unconditionally — safe because the *reply* schema (`SessionSettingsPayload`) carries no
-  `conversation_id`, or any other correlation id, to disambiguate at all. #945/#946 gave the *request*
-  a `conversation_id`; the reply shape is untouched, so this still holds exactly as before — the
-  per-conversation request #946 shipped relies on this same no-correlation acceptance, since nothing
-  on the reply says which request it answers. This is why the request always names the *active*
-  conversation rather than, say, the edge's own conversation: whichever id goes out is the one whose
-  values land, unconditionally, whenever the reply arrives. A duplicate reply (sheet-open landing
-  alongside an edge-driven request) is simply idempotent, since `setSnapshot` always replaces the
-  whole snapshot. Since [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166), every
-  conversation switch is itself a fourth request occasion, so a reply from conversation A still in
-  flight when the operator switches to B can land after B is active and be attributed to B — pre-existing
-  (the other two edges already produced in-flight replies) and not widened per occurrence (B's own
-  request is already in flight behind A's, so an in-order reply self-corrects one round trip later rather
-  than latching until B's first turn ends), but now reachable on every switch instead of only one that
-  follows a completed turn. Filed as
-  [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176), not fixed here.
+- **Correlated by envelope id, client-side, since #1176.** The *reply* schema
+  (`SessionSettingsPayload`) still carries no `conversation_id` — #945/#946 gave the *request* one, the
+  reply is untouched, and giving the reply one would be a wire change out of scope under ADR 0002. The
+  background process instead records each request's envelope id against the conversation it named and
+  matches the reply by `Envelope.in_reply_to`; a reply that cannot be tied to an outstanding request of
+  this client's own emits no `runConfigReceived` at all. This is why the request still always names the
+  *active* conversation rather than the edge's own: the correlation identifies which reply answers which
+  request, not which conversation a reply "belongs to" independent of having been asked. A duplicate
+  reply (sheet-open landing alongside an edge-driven request) is still simply idempotent, since
+  `setSnapshot` always replaces the whole snapshot. See § Conversation-attributed since #1176 above for
+  the mechanism, and its final paragraph for the one ingress ([#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)) this does not reach.
 - **A daemon that flaps `turn_state` costs one request per genuine transition, not per re-assertion**
   — the per-conversation `Set` in `createRunConfigRefreshTrigger` absorbs re-asserted phases (#810).
   If a real daemon is ever observed flapping transitions rapidly enough to matter, a debounce belongs
@@ -507,5 +552,10 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   occasion, conversation activation, via `PairedShell`'s `activateDeps.requestConversationConfig`; see
   § What it does above and [Paired shell — conversation exits and stamps § The run-configuration and
   model-list ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
-  Narrows, but does not close, the pre-existing late-reply attribution gap named there — filed as
-  [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176).
+  Widened the frequency of the pre-existing late-reply attribution gap, closed client-side by #1176
+  below.
+- **[#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176)** — closed the late-reply
+  attribution gap: envelope-id correlation in `daemonConnection.ts`, a required `conversationId` on
+  `runConfigReceived`, and a gate in `subscribeRunConfig`. See § Conversation-attributed since #1176
+  above. Filed [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) for the one ingress
+  into `sessionIdStore` it cannot reach (`sessionIdBridge`'s unsolicited `session_transition`).

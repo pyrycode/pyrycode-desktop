@@ -393,7 +393,8 @@ see [Push notifications](push-notifications.md#clicking-the-notification-393) fo
 See [Paired shell — conversation exits and stamps § The run-configuration and model-list
 ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
 for why `requestConversationConfig` is one member firing two requests, why it runs last, and the
-known late-reply gap (#1176) it narrows but does not close.
+late-reply attribution gap it widened per-occurrence — closed client-side by #1176, see [Run config
+store § Conversation-attributed since #1176](run-config-store.md#conversation-attributed-since-1176).
 
 `sessionStore` (module-singleton, app-lifetime) holds the messages, independent of this nav state.
 Navigating list→thread→list→thread still unmounts/remounts `ConversationScreen` (the pane goes through

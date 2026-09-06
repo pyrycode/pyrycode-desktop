@@ -204,3 +204,57 @@ a concurrency cap one layer up, in the orchestrator, not this correlation tier �
 post-review follow-up fix, the set-after-send ordering above). Emits **no** `DaemonEvent` — the outcome
 goes back to `requestAttachment`'s consumer, and surfacing it to the window is
 [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996)'s own orchestrator, one layer up.
+
+# Run-configuration read attribution correlation ([#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176))
+
+A sixth correlation store, the `pendingSettings`/`pendingCreateFolders` shape rather than the
+attachment legs' two-key or timer-backed ones: `pendingConfigRequests: Map<number, string>`, mapping a
+sent `request_session_settings`' `envelopeId` to the conversation id that request named. It exists
+because `SessionSettingsPayload` carries no conversation id at all — the reply is not "missing a field
+that could disambiguate it," there is no candidate field on the wire, present or absent, and adding one
+is a wire change out of scope under [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md).
+The only place the fact "which conversation does this reply describe" exists is this client's own
+memory of what it asked, which is exactly the `outstandingAnswers` rationale restated for a keyed
+lookup instead of a FIFO — two outstanding requests can name different conversations, so shift-oldest
+would misattribute the same way it would for `pendingSettings`.
+
+- **Set — after the send, `pendingSettings`' order, not the attachment-retrieval leg's.** `envelopeId`
+  is captured into ONE local, read by the builder and the `set` alike (so the id sent and the id
+  recorded can never be two different expressions), and the map is written only *after*
+  `driver.sendMessage` returns — a build/send throw leaves no entry under an unspent id, which matters
+  here for the same reason it matters for `pendingSettings`: a phantom entry would answer whichever
+  request next re-mints that id with the wrong conversation. An absent `conversationId` argument
+  records `''`, which can never equal an open conversation, so it is fail-closed by construction rather
+  than by a guard — unreachable in production today, since both renderer callers already refuse to send
+  an unaddressable id before reaching this method.
+- **Match + delete — inside `case 'session-settings':`, not the `daemon-error` tier.** This is the one
+  correlation store in this file gating a **success** reply rather than a rejection: `inbound.inReplyTo
+  === undefined` short-circuits before the map lookup (no event), a `pendingConfigRequests.get` miss
+  short-circuits the same way (a stale reply from a cleared connection, a duplicate of an
+  already-matched reply, or a daemon forging a snapshot for a request never sent), and a hit `delete`s
+  the entry and emits `runConfigReceived` carrying the recorded conversation id — never the numeric
+  `in_reply_to` itself, which stops here. Both silent branches: the only values a diagnostic could carry
+  are the conversation id and the wire routing id, and neither may reach a sink (`emitDaemonEvent` is
+  log-free by construction, matching the decode-side `session_settings` log's own content-free pin).
+- **Reset — `dial()` clears the map next to `pendingSettings.clear()`.** A reconnect abandons every
+  outstanding read request, which is what makes `nextEnvelopeId`'s restart-at-2 recycling safe for this
+  store the same way it is for the other four.
+- **No cap**, mirroring every sibling in this file — evidence-based, no observed unbounded-growth
+  failure. Named explicitly as an accepted decision rather than an oversight: request volume here is
+  partly daemon-driven (`createRunConfigRefreshTrigger` fires on each running→not-running `turn_state`),
+  so a flapping daemon can inflate this map, but each entry is a number and a short string, created only
+  *after* the encrypted frame build and socket write that necessarily precede it — this store is
+  strictly cheaper than the request that populates it, so it adds no new vector. If a flapping daemon is
+  ever observed, the debounce belongs in `subscribeRunConfigRefresh` ([Run configuration
+  store](run-config-store.md)), not a cap here.
+- **The renderer-side half of this fix is not in this module.** `subscribeRunConfig`
+  (`runConfigSnapshot.ts`) drops a `runConfigReceived` naming anything but the open conversation before
+  either of its two store writes — see [Run config store § Conversation-attributed since
+  #1176](run-config-store.md#conversation-attributed-since-1176) for that half and for what this
+  correlation does not reach (`sessionIdBridge`'s unsolicited `session_transition`, filed
+  [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)).
+
+`security-sensitive`, builder self-review **PASS**. `correlationRouter`'s `learn` also reads
+`runConfigReceived.sessionId` to index session → server; an uncorrelatable reply now teaches it nothing
+either, which is accepted as correct rather than a regression — a session id this client cannot tie to
+a request it sent is exactly the input that index must not accept.

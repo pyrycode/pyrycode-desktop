@@ -268,10 +268,19 @@ test('a new chat opens at the last effort level used, and a chat with its own le
   // the switch happened at all (the label read A_PICKED one step ago).
   await expect(label).toHaveText(C_BASELINE, { timeout: ROUNDTRIP_TIMEOUT_MS })
   // Nothing was written to C. Asserted after the positive reading above, so the pipeline is provably live
-  // rather than dead — and after C's list has landed, which is when an apply would have fired had the
-  // precondition been ignored.
+  // rather than dead.
+  //
+  // THIS ZERO IS NOT THE RULE-4 DETECTOR, and the line below is — do not delete it believing otherwise.
+  // The label read above proves C's `session_settings` reply was processed; it proves nothing about the
+  // `model_list` pushed on the line before it, which is fire-and-forget and is sent AFTER that reply on
+  // the same connection. So a build with the empty-effort precondition removed could still read zero here
+  // simply because C's levels had not landed yet — the membership rule would refuse for the wrong reason
+  // and this assertion would pass anyway.
   expect(settingsFramesFor(captured, SESSION_C)).toBe(0)
-  // The earlier chats are untouched by C's opening: no late frame went out under either session.
+  // The earlier chats are untouched by C's opening: no late frame went out under either session. A's count
+  // is what actually catches a rule-4 mutation, and it catches it independently of any ordering above: a
+  // build that ignored the empty-effort precondition re-applies the remembered level to A the moment A's
+  // own confirm lands, so this reads 2 rather than 1.
   expect(settingsFramesFor(captured, SESSION_A)).toBe(1)
   expect(settingsFramesFor(captured, SESSION_B)).toBe(1)
 })

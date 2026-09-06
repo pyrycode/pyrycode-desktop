@@ -195,3 +195,28 @@ Accepted limitation, stated rather than papered over (the sibling real specs' ow
 **Two verifier NITs folded in.** The segment click no longer compiles a daemon-published level into a `RegExp`; it addresses `segment.nth(pickedIndex)` into the array the drive already read. And § Testing strategy above describes the fake drive as two chats where it shipped as three — chat C exists because A's own "nothing was sent" reading is vacuous at launch, and the reason is recorded in `e2e/composer-effort-default.spec.ts`'s header.
 
 **Open question 3 is resolved by the same change.** The fake drive must push the new chat's model list before polling the frame count; the real drive's equivalent is the separate "segments are visible on the never-messaged chat" assertion, placed before the label read so a daemon that publishes nothing for a childless conversation fails there, saying so, rather than as a blank label that could mean anything.
+
+### 2026-09-06 — the second real-claude gate FAIL is a stale daemon, not a defect in this repo
+
+**No production or spec change. The drive is correct as written and passes on a current daemon; the gate host's `pyry` predates the daemon feature the drive depends on.**
+
+**What the gate reported.** The same spec failed one assertion earlier than before: `.run-config__effort-segment` **element(s) not found** on the never-messaged chat, at the separate "segments are visible" assertion the previous revision added for exactly this purpose. That placement did its job — the failure named the missing precondition instead of presenting as a blank label three assertions later. The turn gates fixed last revision held: total duration 19.8s against `real-claude.spec.ts`'s own 6.6s for one real turn, so the seeded row's turn ran and the ~1.7s no-turn signature of the first FAIL is gone.
+
+**Root cause, established from the daemon binary rather than inferred.** A never-messaged conversation has no claude child and so no `model_list` of its own; its vocabulary can only come from pyrycode#2124's daemon-wide fallback, delivered on open by pyrycode#2125's `request_model_list` verb, which `activateConversation`'s `requestModelList` (#1166, already on `main`) fires. Neither is in the daemon installed on the gate host:
+
+| symbol / literal | installed `~/.local/bin/pyry` | freshly built from `pyrycode` HEAD |
+|---|---|---|
+| `resolveBoundModelList` (#1857) | present | present |
+| `retainedModelLists` (connect-time reconcile) | present | present |
+| `retainedModelVocabulary` (#2124 fallback) | **absent** | present |
+| `handleRequestModelList` (#2125 handler) | **absent** | present |
+| `modelListFor` (#2125 seam) | **absent** | present |
+| `request_model_list` wire verb | **absent** | present |
+
+The timeline agrees: the installed binary was built 2026-09-05 18:14, pyrycode#2124 merged 23:07 and #2125 landed 23:38 the same evening. With that binary, `resolveBoundModelList` refuses any conversation whose bound session holds no retained list — which every FAB-created chat is, since pyrycode#2085 binds it a session eagerly and no child spawns until its first message. So no `model_list` frame can reach a never-messaged chat by any path, the membership rule in `effortDefaultToApply` correctly refuses, and the control stays blank. That is AC4's second arm firing for an environment reason.
+
+**Why this cannot be fixed in this repo, and must not be papered over.** From the client, a stale daemon and a broken feature are indistinguishable here: both present as "the never-messaged chat has no published levels". That is precisely why #933 gated on the handshake capability set rather than on behaviour. The gate is unavailable to this spec because `supportedV2Capabilities` is `[interactive, question]` — pyrycode#2124/#2125 added no capability string — so `requiredCapabilities` has nothing to name. A behavioural skip on "no segments appeared" would convert AC5 into a test that passes by skipping exactly when the feature is broken, which is the 2026-07-22 failure this tier exists to prevent. It is therefore left as a hard failure.
+
+**The two remedies, both outside this ticket.** Rebuild and reinstall the daemon on the gate host (`go build -o ~/.local/bin/pyry ./cmd/pyry` from a current `pyrycode` checkout, or point `PYRY_BIN` at a fresh binary — the harness honours both, and `daemonCapabilityGate.ts`'s own `REBUILD_INSTRUCTION` says the same). And, in the `pyrycode` repo, add a capability string for the on-demand model list so a stale daemon skips with an actionable reason instead of failing a spec back to a builder who cannot rebuild a Go binary — the durable fix, and #933's stated intent.
+
+**One verifier NIT folded in.** `e2e/composer-effort-default.spec.ts` step 5 credited the `SESSION_C` zero-count as the rule-4 detector "after C's list has landed", which the drive does not establish: the `model_list` push is fire-and-forget and follows C's `session_settings` reply, so the label read that gates the assertion proves only that the reply was processed. The comment now says which line actually carries the detection — the `SESSION_A` count, which reads 2 on a rule-4-less build the moment A's own confirm lands — so a future editor cannot delete it believing C's zero is doing that work.

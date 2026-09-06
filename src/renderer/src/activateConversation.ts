@@ -24,8 +24,9 @@ import type { ThreadEvent } from './store/threadTimeline'
  * PairedShell from subscribing to the store at all (a subscription would re-render the whole paired
  * subtree on every switch).
  *
- * `clearActiveConversation` (#529) is deliberately NOT among these: it belongs to #531 (unpair /
- * pair-another-server), and calling it here would wipe the value this path is in the middle of setting.
+ * `clearActiveConversation` (#529) is deliberately NOT among these: it belongs to #531's pairing-ended
+ * clear — since #1141 the unpair path alone, pairing another server having stopped clearing anything —
+ * and calling it here would wipe the value this path is in the middle of setting.
  */
 export interface ActivateConversationDeps {
   getActiveConversation: () => ConversationCreatedPayload | null

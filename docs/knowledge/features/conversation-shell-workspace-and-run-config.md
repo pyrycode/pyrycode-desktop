@@ -37,11 +37,13 @@ clear from, and [#530](../codebase/530.md) (navigation, shipped) did touch exact
 deliberately did **not** call `clearActiveConversation` there: `setActiveConversation` stays
 unconditional (a conversation switch still *records* the new conversation, it just also clears the
 timeline and session id first via the new `activateConversation` helper — see [Paired
-shell](paired-shell-routing.md#the-pure-view--container-pairedshelltsx)). [#531](../codebase/531.md) (unpair /
-pair-another-server, shipped) is `clearActiveConversation`'s sole caller, wired unconditionally into
+shell](paired-shell-routing.md#the-pure-view--container-pairedshelltsx)). [#531](../codebase/531.md) (unpair,
+shipped) is `clearActiveConversation`'s sole caller, wired unconditionally into
 [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) — the pairing
 context itself ending, rather than the active conversation merely changing, is exactly the case that
-call site was reserved for.
+call site was reserved for. Until [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)
+pairing another server reached this same clear; it no longer does, since adding a server ends no pairing
+and the active conversation on an already-paired server has nothing to lose.
 
 Rejected alternative: correlating `sessionIdStore`'s session id against a `conversationListStore` row.
 There is no join key — `sessionIdStore` holds a daemon *session* routing id from `sessionTransition`,

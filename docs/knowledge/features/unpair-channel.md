@@ -289,7 +289,9 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - [#166 codebase notes](../codebase/166.md) — the first consumer: confirm-guarded control and route
   flip (originally also the session reset, moved upstream by [#531](../codebase/531.md)).
 - [#531 codebase notes](../codebase/531.md) / [Paired shell](paired-shell.md) — moved the ok-branch
-  session reset out of `runUnpair` and into a shared four-store clear wrapped around `onUnpaired`,
-  shared with the pair-another-server path this channel has no part in.
+  session reset out of `runUnpair` and into a shared clear wrapped around `onUnpaired` — grown to
+  thirteen stores by later tickets, and, since
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), the only pairing-change path that
+  runs it at all (pairing another server used to share it and no longer does).
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this
   channel's value-free contract enforces (token/keys never reach the renderer).

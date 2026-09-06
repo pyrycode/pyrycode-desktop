@@ -18,11 +18,15 @@ describe('runUnpair', () => {
 
     expect(outcome).toBe('ok')
     // #531: the session reset is NOT dispatched here any more. It moved into the shared
-    // clearPairingScopedState, which PairedShell runs around `onUnpaired` so the unpair and the
-    // pair-another-server paths clear the same set from one place. Leaving a second reset here would
-    // be runtime-harmless (the arm is idempotent by reference) but a live divergence trap: a later
-    // reader deleting the helper's session reset because "runUnpair already does it" would silently
-    // break the pair-another path with every test still green. This assertion pins the single owner.
+    // clearPairingScopedState, which PairedShell runs on the unpair path so the whole pairing-scoped
+    // set is enumerated in one place. Leaving a second reset here would be runtime-harmless (the arm
+    // is idempotent by reference) but would put one member of that set outside the interface the
+    // thirteen-key pin checks — a store with two owners, one of them invisible to the test that
+    // exists to enumerate them. #531 argued this from a second consequence too, that a later reader
+    // deleting the helper's session reset because "runUnpair already does it" would silently break
+    // the pair-another path; #1141 retired that half by taking the clear off the pair-another path
+    // altogether (adding a server ends no pairing). This assertion pins the single owner on the
+    // ground that survives.
     expect(dispatch).not.toHaveBeenCalled()
     expect(onUnpaired).toHaveBeenCalledTimes(1)
   })

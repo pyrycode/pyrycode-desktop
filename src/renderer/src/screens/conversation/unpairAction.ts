@@ -45,9 +45,14 @@ const UNPAIR_FAILED_ERROR: ConnectionError = {
  * re-routes, so neither the pairing screen nor an immediate relaunch observes the ended pairing's
  * state. Keeping a duplicate reset here would be runtime-harmless (the arm returns the shared
  * `initialSessionState` by reference) but would give the session store two owners on one path, and the
- * pair-another-server path would silently lose its clear the moment someone deleted the "redundant"
- * one from the helper. That the flip is ok-only is also what extends this fail-safe posture to the new
- * clears at zero cost: no `onUnpaired`, no wrapper, no clear — which the error tests below already pin.
+ * one that is not in the helper is invisible to the test that enumerates the set. #531 argued the same
+ * rule from a second consequence — that the pair-another-server path would lose its clear if someone
+ * deleted the "redundant" one from the helper — and #1141 retired that consequence by establishing
+ * that pairing an ADDITIONAL server ends no pairing and must clear nothing. The rule stands on the
+ * first ground alone: the helper is where the set is enumerated, reviewed and pinned, so a member
+ * kept out here would be a member no pin can see. That the flip is ok-only is also what extends this
+ * fail-safe posture to the clears at zero cost: no `onUnpaired`, no `applyPairingChange`, no clear —
+ * which the error tests below already pin.
  */
 export async function runUnpair(deps: UnpairDeps): Promise<'ok' | 'error'> {
   let result: UnpairResult

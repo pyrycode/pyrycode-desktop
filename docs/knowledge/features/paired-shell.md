@@ -157,22 +157,34 @@ src/renderer/src/
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 - **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
   reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The eleven-clear logic
-  (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The thirteen-store clear
+  logic (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
   [#757](../codebase/757.md), `clearAllSlashCommandLists` at
   [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), `clearAllModelLists` at
   [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), `clearAllLastRead` at
   [#779](conversation-last-read-store.md), `clearAllConversations` at
-  [#1086](conversation-list-store.md#edge-cases-and-limitations) (§ AC5), and `clearAllBacklogs` at
-  [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)) is unit-tested directly on the
+  [#1086](conversation-list-store.md#edge-cases-and-limitations) (§ AC5), `clearAllBacklogs` at
+  [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), `clearAllRosters` at
+  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), and `modalStore`'s `dispatch` at
+  [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)) is unit-tested directly on the
   pure helper in `clearPairingScopedState.test.ts`, including dedicated regression cases pinning
   #779's and #977's ordering constraints (`clearAllLastRead` after `clearAllTimelines`, after
   `clearAllSlashCommandLists` since #955 and after `clearAllModelLists` since #977, each pinned by
-  `mock.invocationCallOrder` rather than trusted from a comment).
-  One residual: the "clear runs before the route flips" ordering has no executable assertion after
-  [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that pinned it — low-stakes
-  today since all eleven writes are synchronous and batched into the same commit as the route change,
-  but worth restoring the moment a jsdom harness lands (see [#531 codebase notes](../codebase/531.md)).
+  `mock.invocationCallOrder` rather than trusted from a comment). The helper itself still has exactly
+  one caller as of [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — unpair, via
+  `applyPairingChange`'s `unpaired` arm — but its own test suite is unaffected, since it drives
+  `clearPairingScopedState` directly rather than through a call site.
+  The residual this bullet used to name — the "clear runs before the route flips" ordering had no
+  executable assertion after [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that
+  pinned it — is now closed, and not the way this bullet predicted. No jsdom harness landed; instead
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) lifted the three pairing-change
+  callbacks out of `PairedShell`'s JSX into `applyPairingChange`
+  (`src/renderer/src/applyPairingChange.ts`), a pure, React-free helper in the
+  `activateConversation`/`exitActiveConversation`/`unpairAction` shape, and
+  `applyPairingChange.test.ts` pins the unpair arm's clear-then-navigate order with
+  `mock.invocationCallOrder` directly on the helper. The same lift is what makes AC1/AC3's negatives —
+  "pairing another server clears nothing," "cancelling clears nothing" — assertable at all: before
+  #1141 those were the absence of a call inside an inline arrow no test in this repo could invoke.
 
 ## Related
 
@@ -189,7 +201,7 @@ src/renderer/src/
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the eleven clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md) and [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)); the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action is one of the thirteen clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) and [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
 - [Slash-command-list store](slash-command-list-store.md) / [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) — `clearAllSlashCommandLists` is the eighth store added to `clearPairingDeps`, after the store shipped dormant at #954 following the same #588 → #593 precedent as the announced model; nullary and whole-map, reached only through this helper and never from a bridge arm or either call site, and sequenced to run before `clearAllLastRead` despite arriving after it
 - [Model-list store](model-list-store.md) / [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) — `clearAllModelLists` is the ninth store added to `clearPairingDeps`, after the store shipped dormant at #974 repeating the #588 → #593 / #954 → #955 sequence a third time; nullary and whole-map like its slash-command twin, and sharper because the rows are claude-authored — a clear taking a conversation id would let a daemon-supplied id steer which machine's model identities survive the boundary. Reached only through this helper, never a bridge arm or either call site; sequenced to run before `clearAllLastRead` despite arriving after it
@@ -301,3 +313,22 @@ src/renderer/src/
   `title`/`prompt`/`options[].label`, answerable with a `modal_answer` the currently paired daemon never
   issued, and `selectHasOutstandingFor` lights the sidebar's input-required dot off the same slice — the
   phantom is visible before anyone clicks it.
+- [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) · Spec:
+  `docs/specs/architecture/1141-pairing-another-server-clears-nothing.md` — deletes the
+  `clearPairingScopedState` call from the `pairedAnotherServer` path. Since #1117 and #1084 the
+  background process holds one live connection per paired server, so adding a server does not end one —
+  the docblock's stated rationale (a conversation id reused across servers) was false besides: the
+  daemon mints conversation ids as UUIDv4. Lifts all three pairing-change callbacks
+  (`onUnpaired`/`onPairServerPaired`/`onPairServerCancelled`) out of this file's JSX into
+  [`applyPairingChange`](paired-shell-pair-server-route.md#the-pairserver-route-152)
+  (`src/renderer/src/applyPairingChange.ts`), a pure helper in the `activateConversation` /
+  `exitActiveConversation` / `unpairAction` shape, which is what makes the two negatives (pairing
+  another server clears nothing; cancelling clears nothing) — and the unpair clear-then-navigate
+  ordering — assertable at all in a repo with no DOM. `clearPairingScopedState` itself is unchanged
+  beyond its prose; unpair still runs the full thirteen-store clear, in the same order. Carves out
+  `conversationActivityStore` (still blanks every server's turn state on any `connected` edge — filed as
+  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)) and flags `announcedModelStore`
+  (single app-wide slot, now stale after a pair-another — filed as
+  [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146), see [Announced-model
+  store](announced-model-store.md#edge-cases-and-limitations)) as known, deliberately unwidened
+  residue.

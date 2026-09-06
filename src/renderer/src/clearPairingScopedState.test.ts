@@ -243,13 +243,21 @@ describe('clearPairingScopedState', () => {
   })
 
   it('the pairing-scoped set is exactly these thirteen stores', () => {
-    // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so a FOURTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
-    // compile here until it is added to the literal, and then fails this assertion until it is also
+    // The tripwire the whole design rests on: this interface IS the enumeration of what "the pairing
+    // ended" means, so a FOURTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
+    // to compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
     // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh, #1139 the
     // twelfth and #1140 the thirteenth, and each
     // updated this pin, which is the intended cost of adding one; loosening it is not.
+    //
+    // The pin's stated MOTIVE has changed even though its value has not. It read as a guard against
+    // two independent call sites diverging on which stores they cleared, which is the bug #531 fixed;
+    // #1141 left one call site, so there is nothing left to diverge. What the pin buys now is that
+    // the set stays an ENUMERATION rather than "whatever the one caller happens to do" — with a
+    // single caller, a store cleared inline beside the call would be indistinguishable from a member,
+    // and no test could see the difference. Which changes clear at all is a separate decision, made
+    // and pinned one layer up in applyPairingChange.test.ts.
     const { deps } = spyDeps()
 
     expect(Object.keys(deps).sort()).toEqual([

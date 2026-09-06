@@ -289,8 +289,9 @@ with the `attachments` field documented above (§ Types).
   conversation switch clears the timeline via `activateConversation`, gated on the active conversation's
   id actually changing — a re-open of the already-active conversation clears nothing, since the timeline
   has no history backfill and a redundant reset would destroy rows that never come back. A pairing ending
-  (unpair / pair-another-server) clears it via `clearPairingScopedState`, unconditionally — there the
-  pairing itself is over, so no id gate applies. The open discussion being deleted clears it via
+  (unpair — pair-another-server stopped clearing anything at
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)) clears it via
+  `clearPairingScopedState`, unconditionally — there the pairing itself is over, so no id gate applies. The open discussion being deleted clears it via
   `exitActiveConversation`, gated on the id like #530's — a `conversationDeleted` naming any other
   conversation clears nothing.
 - **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's

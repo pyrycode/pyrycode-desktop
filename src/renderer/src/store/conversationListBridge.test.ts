@@ -145,7 +145,9 @@ describe('subscribeConversations', () => {
     const list = [row({ id: 'a' })]
     bridge.emit({ type: 'conversationsReceived', conversations: list })
     expect(setConversations).toHaveBeenCalledTimes(1)
-    expect(setConversations).toHaveBeenCalledWith(list)
+    // A BARE event literal — no #1068 stamp — files under the unstamped slot rather than being
+    // dropped: the write stays total over the three-case origin domain (#1086).
+    expect(setConversations).toHaveBeenCalledWith(list, undefined)
   })
 
   it('does not call setConversations for an unrelated event', () => {
@@ -164,7 +166,70 @@ describe('subscribeConversations', () => {
 
     bridge.emit({ type: 'conversationsReceived', conversations: [] })
     expect(setConversations).toHaveBeenCalledTimes(1)
-    expect(setConversations).toHaveBeenCalledWith([])
+    expect(setConversations).toHaveBeenCalledWith([], undefined)
+  })
+
+  // #1086 — the origin is read off #1068's stamp, which rides BESIDE the union, so it arrives
+  // structurally at a bare-`DaemonEvent`-typed hole while the static type stays silent about it. The
+  // casts below are exactly that shape: a stamped event as it really arrives from the main side.
+  const stampedEvent = (
+    conversations: readonly ConversationSummary[],
+    serverId: unknown
+  ): DaemonEvent => ({ type: 'conversationsReceived', conversations, serverId }) as DaemonEvent
+
+  it('files a reply under the server that sent it, off the #1068 stamp (AC1)', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, vi.fn())
+
+    const list = [row({ id: 'a' })]
+    bridge.emit(stampedEvent(list, 'srv-a'))
+    expect(setConversations).toHaveBeenCalledWith(list, 'srv-a')
+  })
+
+  it('files a null-stamped reply under the null slot, not the unstamped one (AC2)', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, vi.fn())
+
+    bridge.emit(stampedEvent([row()], null))
+    expect(setConversations).toHaveBeenCalledWith([row()], null)
+  })
+
+  it('files a non-string, non-null stamp under the unstamped slot — the write stays total', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, vi.fn())
+
+    // No producer can emit one (`bindServerOrigin` takes a `string | null` scalar); answering with a
+    // slot rather than throwing is what keeps `originOf` total.
+    bridge.emit(stampedEvent([row()], 42))
+    expect(setConversations).toHaveBeenCalledWith([row()], undefined)
+  })
+
+  it('keeps BOTH servers’ replies through the real store (AC1)', () => {
+    const bridge = fakeBridge()
+    const store = createConversationListStore()
+    subscribeConversations(
+      bridge.onDaemonEvent,
+      (list, serverId) => store.getState().setConversations(list, serverId),
+      vi.fn()
+    )
+
+    bridge.emit(stampedEvent([row({ id: 'a1' })], 'srv-a'))
+    bridge.emit(stampedEvent([row({ id: 'b1' })], 'srv-b'))
+    expect((selectConversations(store.getState()) ?? []).map((r) => [r.serverId, r.id])).toEqual([
+      ['srv-a', 'a1'],
+      ['srv-b', 'b1']
+    ])
+
+    // The second server's reply no longer overwrites the first, and a re-list from one replaces only
+    // its own rows — the whole bug this ticket fixes.
+    bridge.emit(stampedEvent([row({ id: 'a2' })], 'srv-a'))
+    expect((selectConversations(store.getState()) ?? []).map((r) => [r.serverId, r.id])).toEqual([
+      ['srv-a', 'a2'],
+      ['srv-b', 'b1']
+    ])
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
@@ -179,7 +244,7 @@ describe('subscribeConversations', () => {
     const store = createConversationListStore()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       vi.fn()
     )
 
@@ -235,7 +300,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       refreshOnChange
     )
 
@@ -252,7 +317,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       refreshOnChange
     )
 
@@ -276,7 +341,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       refreshOnChange
     )
 
@@ -319,7 +384,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       refreshOnChange
     )
 
@@ -348,7 +413,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(
       bridge.onDaemonEvent,
-      (list) => store.getState().setConversations(list),
+      (list, serverId) => store.getState().setConversations(list, serverId),
       refreshOnChange
     )
 

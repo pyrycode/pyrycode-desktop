@@ -2,9 +2,9 @@
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above five sections: "Connection", whose body renders the paired
-server's identity (a Server row showing `serverId` + `relayUrl`, an empty host slot for the future
-two-dot status indicator, and a "Pair another server" nav row that switches daemons); "Defaults for new
+top-bar (back + "Settings" title) above five sections: "Connection", whose body renders one Server row
+per paired server (each showing its own `serverId` + `relayUrl` and an empty host slot for the future
+two-dot status indicator — #1148), plus a "Pair another server" nav row that adds another; "Defaults for new
 conversations", whose body renders a Default workspace row showing the client-owned default-workspace
 preference and opens a picker to change it; "Notifications", whose body renders a single push-toggle
 row reflecting and writing the client-owned push-notification preference; "Storage", whose body renders
@@ -30,6 +30,11 @@ then inserted a Notifications section between Defaults and Storage, holding a si
 that reads and writes the [#408](../codebase/408.md) push-notification preference — the write half of
 the #353 push-toggle split (#353 itself split from the #158 push-notifications line; #408, the data
 half, shipped first).
+[#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) then widened the Connection section
+from one Server row to one per paired server — the read path from the [server-info
+store](server-info-store.md) down to the row had stayed single-valued even after
+[#1069](paired-server-store.md) keyed the paired-server store by server id, so pairing a second machine
+still named only whichever was paired last.
 Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row reads only the
 vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Default-workspace row reads/writes a
 renderer-local, non-secret preference and sends no daemon command; the Notifications row reads/writes
@@ -203,28 +208,46 @@ chevron — it is a genuine forward-nav affordance, matching Figma `17:21`. Acti
 `onPairAnother`, wired by `PairedShellView` to `dispatch({ type: 'openPairServer' })` — see
 [Paired shell](paired-shell-pair-server-route.md#the-pairserver-route-152) for what renders next.
 
-### The Server row (`ServerRow.tsx`, #334)
+### The Server row(s) (`ServerRow.tsx`, #334, widened to a list by #1148)
 
 Follows the #330 `ConnectionStatusIndicator`/`Control` view/container split, as a dedicated module (its
-own test seam) rather than in-file:
+own test seam) rather than in-file. Three exports, of which the first is untouched since #334:
 
 ```ts
 export function ServerRow({ serverInfo }: { serverInfo: ServerInfoValue | null }): JSX.Element
-export function ServerRowControl(): JSX.Element   // useServerInfoStore(selectServerInfo) → <ServerRow>
+export function ServerRows({ servers }: { servers: ServerInfoValue[] }): JSX.Element   // #1148, new
+export function ServerRowControl(): JSX.Element   // useServerInfoStore(selectServers) → <ServerRows>
 ```
 
-`ServerRow` is the pure view: always renders the `Server` label; when `serverInfo` is present, renders
-`serverId` (primary line) and `relayUrl` (secondary line) as auto-escaped React children; when `null`,
-renders a single `Loading…` placeholder in its place (never a blank `<p>`). In both states it renders an
-**empty** `.settings__server-status-slot` — a class-labelled mount point for #330's future two-dot
-indicator, deliberately carrying no `aria-label="Connection status"` (that marker belongs to #330's
-`thread`-view indicator; duplicating it here was flagged as a collision risk during #333). `ServerRowControl`
-is the store-bound container: a narrow `useServerInfoStore(selectServerInfo)` read, no effects, no
-`window.pyry` — the one-shot fetch that populates the store is owned entirely by `ServerInfoData`
-(mounted alongside it, not inside it).
+`ServerRow` is the pure single-row view, unchanged: always renders the `Server` label; when `serverInfo`
+is present, renders `serverId` (primary line) and `relayUrl` (secondary line) as auto-escaped React
+children; when `null`, renders a single `Loading…` placeholder in its place (never a blank `<p>`). In
+both states it renders an **empty** `.settings__server-status-slot` — a class-labelled mount point for
+\#330's future two-dot indicator, deliberately carrying no `aria-label="Connection status"` (that
+marker belongs to #330's `thread`-view indicator; duplicating it here was flagged as a collision risk
+during #333).
 
-Mounting `<ServerInfoData />` inside `SettingsScreen`'s section-body is what makes the row work: #340
-shipped that loader dormant (zero consumers), so before #334 the store sat at `null` forever. Because
+`ServerRows` (#1148) is the new pure exported list view: a non-empty list renders one `<ServerRow>` per
+entry, keyed by `serverId` and in the given order; an empty list renders exactly one
+`<ServerRow serverInfo={null} />` — the same placeholder byte-for-byte, so nothing paired, nothing
+fetched yet, and an unreadable collection all render identically, with no new "no servers" copy string.
+Returns a fragment, so each row is a direct child of `.settings__section-body`, already a plain flex
+column with per-row padding — N rows stack correctly with `settings.css` untouched. `serverId` is safe
+as a React key because `pairedServerStore`'s decode raises `MalformedPairedServerRecordError` on a
+repeated `server` id, collapsing the whole collection to the absent arm before it reaches the renderer.
+
+The one-row-per-entry loop lives on this **exported view**, not inside `ServerRowControl`, because the
+container's populated branch is unreachable under `renderToStaticMarkup` (zustand v5 reads
+`getInitialState()`) and neither e2e tier covers this row — so on the container the only detector left
+would be a `vi.mock` of the store module, ceremony `ServerRow.test.tsx` already declined once in favour
+of injected props. On `ServerRows`, a two-entry injection is an ordinary server render.
+
+`ServerRowControl` stays the store-bound container: a narrow `useServerInfoStore(selectServers)` read
+handed straight to `ServerRows`, no effects, no `window.pyry` — the one-shot fetch that populates the
+store is owned entirely by `ServerInfoData` (mounted alongside it, not inside it).
+
+Mounting `<ServerInfoData />` inside `SettingsScreen`'s section-body is what makes the row(s) work: #340
+shipped that loader dormant (zero consumers), so before #334 the store sat empty forever. Because
 `SettingsScreen` mounts only under the paired shell's `settings` route (post-pairing, [PairedShell](paired-shell.md)),
 a fresh fetch fires every time Settings opens rather than once at app launch.
 
@@ -436,8 +459,8 @@ ChannelList SettingsButton.onClick
   → nextPairedRoute('list', openSettings) = 'settings'
   → PairedShellView route='settings' → <SettingsScreen onBack={dispatch back} />
     → mounts <ServerInfoData />  → window.pyry.serverInfo() [once]
-        → mapServerInfo → setServerInfo → serverInfoStore
-    → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
+        → mapServerInfo → setServers → serverInfoStore
+    → mounts <ServerRowControl /> → useServerInfoStore(selectServers) → <ServerRows servers=… /> → one <ServerRow> per entry
     → mounts <DefaultWorkspaceRowControl /> → useDefaultWorkspaceStore(selectDefaultWorkspace)
         → <DefaultWorkspaceRowView defaultWorkspace=… onActivate={() => setOpen(true)} />
     → mounts <PushNotificationRowControl /> → usePushNotificationPrefStore(selectPushNotificationsEnabled)
@@ -497,10 +520,11 @@ fetch or subscribe to.
 ## Edge cases and limitations
 
 - **Momentary loading window, not a persistent empty state.** Before the one-shot fetch resolves
-  (`serverInfo === null`), the row shows a `Loading…` placeholder — never a blank or stale value. Because
-  Settings mounts only post-pairing, this is a brief window that resolves within a tick, not a "not
-  paired" state; the store can't currently distinguish "not yet loaded" from "fetch rejected/unavailable"
-  (both are `null`) — see [server-info store](server-info-store.md#edge-cases-and-limitations).
+  (`servers` still `[]`), `ServerRows` shows a single `Loading…` placeholder row — never a blank or stale
+  value. Because Settings mounts only post-pairing, this is a brief window that resolves within a tick,
+  not a "not paired" state; the store can't currently distinguish "not yet loaded" from "fetch
+  rejected/unavailable" (both are `[]`) — see
+  [server-info store](server-info-store.md#edge-cases-and-limitations).
 - **The two-dot status slot is intentionally empty.** `.settings__server-status-slot` is a
   class-labelled mount point for a future #330-style indicator; it carries no `aria-label="Connection
   status"` in this slice to avoid colliding with the `thread` view's existing indicator of the same name.
@@ -541,9 +565,12 @@ fetch or subscribe to.
   stack-aware `back` from `pairServer` would need to land on `settings`, which is a different resolution
   than the two intents this ticket actually needs. `current` stays in `nextPairedRoute`'s signature for
   exactly this reason — see [paired shell](paired-shell.md).
-- **Desktop remains single-server, overwrite semantics after #152.** Confirming a new pairing from
-  Settings replaces the one stored record; it is not a multi-server manager. Per-server `.${serverId}`
-  keying is a deliberately deferred, separate change (`pairedServerStore.ts`).
+- **Settings now names every paired server, but adds no way to remove one.** Since #1148 the Connection
+  section renders one row per entry in [`pairedServerStore`](paired-server-store.md)'s collection
+  (`list()`, oldest-paired first); confirming a new pairing from the Pair-another-server row adds or
+  replaces an entry **by server id** (#1069's keyed `save`), it does not overwrite a single stored
+  record. Per-server removal is [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152),
+  natively blocked on this ticket — #1148 adds no Unpair action and no mutation surface at all.
 - **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
   already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
   and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
@@ -602,6 +629,10 @@ fetch or subscribe to.
 - [#152 codebase notes](../codebase/152.md) · Spec: `docs/specs/architecture/152-pair-another-server-from-settings.md`
   — adds the "Pair another server" row and the `pairServer` sub-route it opens; the last open follow-up
   on the #150 line for the Connection section.
+- [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) · Spec:
+  `docs/specs/architecture/1148-settings-lists-every-paired-server.md` — widens the Connection section to
+  one `ServerRow` per paired server via the new `ServerRows` view; the first of #1090's four slices,
+  and what [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)'s per-server Unpair hangs on.
 - [#403 codebase notes](../codebase/403.md) · Spec: `docs/specs/architecture/403-default-workspace-persist-apply.md`
   — the data half of the Defaults section: the persisted store and its read/write seam, no UI.
 - [#404 codebase notes](../codebase/404.md) · Spec: `docs/specs/architecture/404-default-workspace-row.md`

@@ -121,6 +121,15 @@ means *upload this path* and is refused outright by `isAttachmentUploadRequest` 
 still exactly one place a path enters main from the window — see § The request body and its guard below
 for the full shape.
 
+**Every ask names its conversation, and the picker has an ask (#1205).** pyrycode#2143 made the daemon file
+an upload under the conversation the chunk names and refuse one naming none, so `conversationId` is
+*required* on all three asks under one rule, `hasValidConversationId` (non-empty, bounded), and the
+argument-free picker intent is retired: an ask has to carry the id, so the picker names itself with a
+second literal (`ATTACHMENT_PICK_SOURCE` / `isAttachmentPickRequest`) and a bare send matches no guard.
+Unlike `serverId` the id is acted on — it rides every chunk — but as a claim the daemon validates against
+its registry, never a capability. Sentences below saying "argument-free" or "no ask object" describe the
+channel before #1205.
+
 ### The request body and its guard (#890)
 
 ```ts
@@ -347,9 +356,10 @@ for the routing decision `buildDeps`'s `upload` arrow makes, including why an un
 
 ## Bridge — `src/preload/index.ts`
 
-Four members on the existing `api` literal (#1032 added the fourth): `requestAttachmentUpload(): void`
-(fire-and-forget `send`, no argument — the picker intent, unchanged), `dropAttachmentFile(file: File):
-void` (#890, below), `pasteAttachmentImage(): void` (#1032, below), and `onAttachmentUploadEvent(listener):
+Four members on the existing `api` literal (#1032 added the fourth; #1205 gave the first three a
+`{ conversationId }` argument): `requestAttachmentUpload({ conversationId }): void` (fire-and-forget
+`send` of a self-named pick ask), `dropAttachmentFile(file: File, { conversationId }): void` (#890,
+below), `pasteAttachmentImage({ conversationId }): void` (#1032, below), and `onAttachmentUploadEvent(listener):
 () => void` (the `onDaemonEvent` shape — strips the raw `IpcRendererEvent`, returns an unsubscribe handle
 that removes the exact handler). All four are called from [Composer attach](composer-attach.md) (#863's
 button and outcome view, #890's drop handler, #1033's paste handler).
@@ -405,7 +415,7 @@ closure, the same posture every sender here shares. `PyryApi` is inferred from `
 ## Data flow
 
 ```
-renderer: window.pyry.requestAttachmentUpload()   ── no argument ──▶
+renderer: window.pyry.requestAttachmentUpload({ conversationId })  ── pick ask (#1205) ──▶
 
 main: ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL) → pickerOpen? ──yes──▶ ignored (one dialog at a time)
   │no

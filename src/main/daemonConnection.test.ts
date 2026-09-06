@@ -11,12 +11,12 @@ import type { DaemonEvent, StampedDaemonEvent } from '../shared/ipc/events'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
 import type {
-  ClearablePairedServerStore,
+  MultiPairedServerStore,
   PairedServerRecord,
   PairedServerStore
 } from './pairedServerStore'
 import { MalformedPairedServerRecordError } from './pairedServerStore'
-import { registerUnpairHandler } from './unpairHandler'
+import { registerUnpairServerHandler } from './unpairHandler'
 import type {
   NoiseRelayDriver,
   NoiseRelayDriverConfig,
@@ -1071,17 +1071,24 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
 
 describe('createDaemonConnection — teardown on unpair (#504)', () => {
   /**
-   * Pull the registered invoke listener out of a fake ipcMain — the unpairHandler.test `listenerOf`
-   * idiom. The composition root's wiring (index.ts) has no test of its own, so this test composes
-   * those two lines itself: driving `connection.reconnect()` directly would pass on `main`
-   * unchanged (reconnect already fences) and prove nothing — the fix IS the wiring.
+   * Pull the registered invoke listener out of a fake ipcMain — the unpairHandler.test
+   * `serverListenerOf` idiom. The composition root's wiring (index.ts) has no test of its own, so this
+   * test composes those two lines itself: driving `connection.reconnect()` directly would pass on
+   * `main` unchanged (reconnect already fences) and prove nothing — the fix IS the wiring.
+   *
+   * #1163 pointed it at the PER-SERVER handler, the only unpair the app registers now that the
+   * whole-collection one is deleted. The property under test is untouched by that move: both arms
+   * wired the same value-free `onUnpaired` after a successful erase, so an authenticated session still
+   * cannot outlive the record that authorised it. The listener now takes a request, so it is driven as
+   * `(event, { serverId })` and the returned closure supplies the id.
    */
-  function unpairListenerFor(deps: Parameters<typeof registerUnpairHandler>[1]): (
-    event: unknown
-  ) => Promise<unknown> {
+  function unpairListenerFor(
+    deps: Parameters<typeof registerUnpairServerHandler>[1]
+  ): () => Promise<unknown> {
     const handle = vi.fn()
-    registerUnpairHandler({ handle, removeHandler: vi.fn() }, deps)
-    return handle.mock.calls[0][1]
+    registerUnpairServerHandler({ handle, removeHandler: vi.fn() }, deps)
+    const listener = handle.mock.calls[0][1]
+    return () => listener(undefined, { serverId: RECORD.server })
   }
 
   /**
@@ -1091,17 +1098,20 @@ describe('createDaemonConnection — teardown on unpair (#504)', () => {
    */
   function unpairable(): {
     ctx: ReturnType<typeof build>
-    store: ClearablePairedServerStore
+    store: Pick<MultiPairedServerStore, 'clearServer'>
     repair: () => void
   } {
     let record: PairedServerRecord | null = RECORD
     return {
       ctx: build({ load: () => Promise.resolve(record) }),
+      // The narrow handle the per-server handler is typed against, over ONE mutable record: an id
+      // matching it erases it and reports `matched`, so the connection's read-through `load` sees null
+      // on the next dial. `remaining: 0` — this fixture holds one record, and nothing here reads it.
       store: {
-        save: () => Promise.resolve(),
-        load: () => Promise.resolve(record),
-        clear: async () => {
+        clearServer: async (serverId: string) => {
+          if (serverId !== RECORD.server) return { matched: false, remaining: record === null ? 0 : 1 }
           record = null
+          return { matched: true, remaining: 0 }
         }
       },
       repair: () => {
@@ -1128,7 +1138,7 @@ describe('createDaemonConnection — teardown on unpair (#504)', () => {
     // The renderer's unpair invoke, through the real handler wired the way index.ts wires it.
     const listener = unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })
     const beforeUnpair = emitted(ctx.sink).length
-    expect(await listener({})).toEqual({ result: 'ok' })
+    expect(await listener()).toEqual({ result: 'ok' })
     await tick()
 
     // The authenticated session is closed, and bootstrap returns before createDriver with no record.
@@ -1153,7 +1163,7 @@ describe('createDaemonConnection — teardown on unpair (#504)', () => {
     await tick()
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
-    await unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })({})
+    await unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })()
     await tick()
     expect(ctx.drivers).toHaveLength(1)
 

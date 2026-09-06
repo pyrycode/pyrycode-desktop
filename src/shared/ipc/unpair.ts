@@ -1,26 +1,26 @@
 // The unpair request between the renderer window and the background process: one channel constant
 // plus a sealed two-outcome response union, imported by both process sides. The renderer asks the
-// background process to erase the stored pairing so the app can return to a clean, not-paired state
-// (#173, on top of #172's ClearablePairedServerStore.clear()). The visible unpair control that calls
-// it lands in the renderer follow-ups #166/#167; this module ships the contract ahead of any caller,
-// the same way pairingStatus.ts (#80) shipped ahead of its consumer. Request/response via
+// background process to erase a stored pairing so the app can return to a clean, not-paired state
+// (#173, on top of #172's ClearablePairedServerStore.clear()). Request/response via
 // ipcRenderer.invoke / ipcMain.handle; the main-process handler is unpairHandler.ts.
 //
-// It ships TWO channels since #1149, deliberately, not one channel with two request shapes. The
-// original UNPAIR_CHANNEL erases the WHOLE collection and still carries no body — the renderer
-// invokes it with zero arguments. UNPAIR_SERVER_CHANNEL erases exactly ONE named record and carries
-// an untrusted `serverId`. Keeping them apart is what makes "a malformed per-server request can
-// never reach the whole-collection erase" a property of the TYPES rather than of a branch: the
-// per-server handler is registered with a store handle that has no whole-collection `clear` on it at
-// all, so there is no name for that erase to be reached by from this path. (#1152 migrates the one
-// remaining no-arg caller and retires UNPAIR_CHANNEL wholesale; nothing migrates in #1149.)
+// ONE CHANNEL, AND IT NAMES ITS SERVER. #1149 added UNPAIR_SERVER_CHANNEL beside an original
+// UNPAIR_CHANNEL that erased the WHOLE collection with no request body, as a Strangler Fig — a second
+// channel rather than a second request shape on the first, so that "a malformed per-server request can
+// never reach the whole-collection erase" was a property of the TYPES rather than of a branch. #1163
+// completed the migration: the last no-arg caller (the composer's Re-pair control) moved onto this
+// channel and UNPAIR_CHANNEL was deleted outright, along with its handler, its preload method and its
+// registration. So the app now registers no whole-collection erase at all, and the structural property
+// that motivated two channels holds trivially — there is nothing left for a malformed request to reach.
+// A second per-server verb would take its own channel the same way this one did.
 //
-// The per-server channel is therefore the FIRST untrusted request field this module has ever had,
-// and it ships isUnpairServerRequest alongside it — the runtime guard the main handler applies at
-// the renderer→main boundary, modelled on pairing.ts's isPairingRequest. (An earlier version of this
-// header stated that "the request carries NO body … so there is no untrusted request field to
-// validate at the boundary". That is true of UNPAIR_CHANNEL only, and is no longer true of this
-// module: the renderer can now PARAMETERIZE an erase, not merely trigger one.)
+// This channel's `serverId` is the FIRST untrusted request field this module ever had, and it ships
+// isUnpairServerRequest alongside it — the runtime guard the main handler applies at the renderer→main
+// boundary, modelled on pairing.ts's isPairingRequest. (An earlier version of this header stated that
+// "the request carries NO body … so there is no untrusted request field to validate at the boundary".
+// That was true of the deleted UNPAIR_CHANNEL only: the renderer can now PARAMETERIZE an erase, not
+// merely trigger one — though what it can parameterize is one record rather than every record, which
+// is a reduction in blast radius, not a new class of power.)
 //
 // The response is value-free BY CONSTRUCTION: no member declares any field beyond the `result`
 // discriminant, so the handler cannot serialize a token, server key, relay URL, keychain path, or
@@ -32,14 +32,10 @@
 // pull main-only code). Relative imports only — src/main and src/preload have no @shared alias.
 import { MAX_PASTE_LENGTH } from './pairing'
 
-/** The IPC channel the WHOLE-COLLECTION unpair request/response travels on, renderer ↔ main.
- *  Single source of truth: the preload invoker ships on it, the main handler registers on it.
- *  A mismatch would break the request, so both sides reference this constant. */
-export const UNPAIR_CHANNEL = 'pyry:unpair' as const
-
-/** The IPC channel the PER-SERVER unpair request/response travels on, renderer ↔ main (#1149).
- *  A second channel rather than a second request shape on the one above — see the header. Same
- *  single-source-of-truth discipline; same value-free UnpairResult comes back. */
+/** The IPC channel the PER-SERVER unpair request/response travels on, renderer ↔ main (#1149), and
+ *  since #1163 the only unpair channel there is. Single source of truth: the preload invoker ships on
+ *  it, the main handler registers on it. A mismatch would break the request, so both sides reference
+ *  this constant. */
 export const UNPAIR_SERVER_CHANNEL = 'pyry:unpair-server' as const
 
 /**
@@ -79,11 +75,11 @@ export type UnpairServerRequest = { serverId: string }
  * the renderer. Keep it minimal — no speculative error-sub-reason field; a future recovery flow
  * extends it additively if it ever needs to distinguish error sub-cases.
  *
- * SHARED by both channels (#1149), unchanged. On the per-server channel `error` additionally covers
- * a guard refusal and an id that names no held record — deliberately NOT distinguished from a failed
- * erase. A third member would answer "is this id paired?" for a compromised renderer; that it could
- * already learn the same from the server-info channel is a reason not to widen the surface, not a
- * reason to.
+ * `error` also covers a guard refusal and an id that names no held record — deliberately NOT
+ * distinguished from a failed erase. A third member would answer "is this id paired?" for a
+ * compromised renderer; that it could already learn the same from the server-info channel is a reason
+ * not to widen the surface, not a reason to. (It was SHARED by two channels between #1149 and #1163;
+ * the union is unchanged by the deletion of the other one.)
  */
 export type UnpairResult = { result: 'ok' } | { result: 'error' }
 

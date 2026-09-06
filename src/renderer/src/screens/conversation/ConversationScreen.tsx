@@ -29,6 +29,7 @@ import {
 } from '../../store/conversationTimelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
+  activeConversationStore,
   useActiveConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
@@ -70,7 +71,10 @@ import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
-import { runUnpair } from './unpairAction'
+import { runUnpair, serverIdForOpenConversation } from './unpairAction'
+import { conversationListStore, selectConversations } from '../../store/conversationListStore'
+import { serverInfoStore } from '../../store/serverInfoStore'
+import { loadServerInfo } from '../../store/serverInfoLoader'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
@@ -3383,6 +3387,21 @@ export function ComposerErrorSlot({
 // inside the handler (interaction time), never during render, so a container smoke-render never touches
 // the bridge.
 //
+// #1163: it forgets ONE server — the one whose conversation is open — through the per-server channel,
+// and the route flip that follows is now conditional on nothing being left paired. Before that it called
+// a nullary `unpair()` that erased the whole collection, so recovering server A's dead connection also
+// forgot server B and dropped its live connection.
+//
+// THE TWO STORE READS THAT NAME THE SERVER HAPPEN AT INTERACTION TIME, through `getState()`, not as
+// subscriptions — the `conversationLastReadDeps` / `downloadAttachment` idiom. Subscribing would widen
+// this control's re-render footprint from `status` + `dispatch` to every conversation-list write, for a
+// value only the click needs. Reading them here also keeps `serverIdForOpenConversation` pure and
+// therefore unit-testable, including the ambiguity refusal a static render could never drive.
+//
+// `refreshServers` is the SAME loader the Settings mount fetch uses, so the refreshed rows and the "do
+// any records remain?" decision come from one read and cannot disagree — `runUnpairServer`'s contract,
+// reused rather than re-derived.
+//
 // Neither populated branch is reachable in a server render — zustand v5's useStore reads
 // getInitialState() there, which is `disconnected` — so both container tests stage that initial snapshot
 // with a getInitialState spy rather than a setState, which cannot reach a non-initial arm at all.
@@ -3391,7 +3410,24 @@ function ComposerErrorSlotControl({ onUnpaired }: { onUnpaired?: () => void }): 
   const dispatch = useSessionStore((s) => s.dispatch)
 
   const handleRepair = (): void => {
-    void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })
+    const open = selectActiveConversation(activeConversationStore.getState())
+    const serverId = serverIdForOpenConversation(
+      selectConversations(conversationListStore.getState()),
+      open === null ? null : open.id
+    )
+    void runUnpair(
+      {
+        unpairServer: window.pyry.unpairServer,
+        refreshServers: () =>
+          loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers),
+        // The prop App bound to `applyPairingChange(deps, 'unpaired')`, whose contract is now honoured
+        // rather than assumed: reaching it means nothing is paired any more, so it may run the
+        // thirteen-store clear and flip the route.
+        onLastServerUnpaired: () => onUnpaired?.(),
+        dispatch
+      },
+      serverId
+    )
   }
 
   return <ComposerErrorSlot status={status} onRepair={handleRepair} />

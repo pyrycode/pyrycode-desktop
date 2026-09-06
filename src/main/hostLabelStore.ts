@@ -14,9 +14,15 @@
 // #1156 moved the writers. The pairing confirm now calls saveFor and the per-server unpair calls
 // clearFor, so the envelope is what an installed app holds the moment it pairs. The un-keyed `save`
 // therefore has NO caller left and is deliberately not taught the envelope: teaching a dead writer a
-// second format would be surface with no reader. `clear` keeps its caller — the whole-collection
-// unpair arm — because it deletes the one blob the keyed collection lives in, so "no label for any
-// server" is already what it does; a keyed synonym for it would only be a second name. And `load`
+// second format would be surface with no reader. `clear` kept ONE caller through #1156 — the
+// whole-collection unpair arm — because it deletes the one blob the keyed collection lives in, so "no
+// label for any server" was already what it does and a keyed synonym would only be a second name.
+// #1163 DELETED THAT ARM, so `clear` now has no production caller either. The member is deliberately
+// left in place rather than removed with it: that deletion was outside #1163's enumerated scope, and
+// three test object literals pin the member (`hostLabelHandler.test.ts` on `HostLabelStore`, two more
+// on `MultiHostLabelStore`), making its removal a tsc-only cascade `npm test` alone would not surface.
+// A follow-up removes both; until then, do not read this as evidence of a live whole-collection erase
+// — there is none. And `load`
 // keeps its caller, hostLabelHandler's zero-argument query, which #1157 leaves as it is and #1070
 // moves onto a keyed channel.
 //
@@ -449,8 +455,9 @@ export function createHostLabelStore(deps: {
     },
     async clear() {
       // Erase the whole blob under this store's own `name`, never a delete-by-literal. That is one
-      // label in the single-slot shape and EVERY server's in the keyed one, which is exactly what
-      // the whole-collection unpair arm wants and why it needs no keyed counterpart (#1156).
+      // label in the single-slot shape and EVERY server's in the keyed one, which is what the
+      // whole-collection unpair arm wanted and why it needed no keyed counterpart (#1156). That arm
+      // is deleted (#1163) and this member now has no production caller — see the header.
       // SecureStore.delete is idempotent (absent name → no-op), so a
       // never-stored store clears cleanly. No try/catch: a delete failure propagates (fail-closed —
       // reporting success while the value still sits on disk is the behaviour to avoid).

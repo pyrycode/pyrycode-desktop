@@ -422,9 +422,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // #1141: all three pairing-change callbacks go through `applyPairingChange`, which owns the
       // decision of WHICH of them ends a pairing and so clears. Only `unpaired` does. Wiring them
       // here rather than threading a dep into runUnpair puts the three on adjacent lines and leaves
-      // ConversationScreen untouched, and the unpair arm inherits that path's fail-safe posture
-      // verbatim: `runUnpair` calls `onUnpaired` only on `result: 'ok'`, so a failed unpair reaches
-      // neither this callback nor the clear. What changed at #1141 is `onPairServerPaired`, which
+      // ConversationScreen's own prop untouched, and the unpair arm inherits that path's fail-safe
+      // posture verbatim: both unpair helpers call their route-flip dep only on `result: 'ok'`, so a
+      // failed unpair reaches neither this callback nor the clear. Since #1163 they also call it only
+      // when the erase left NOTHING paired, so forgetting one of several servers stays in the shell.
+      // What changed at #1141 is `onPairServerPaired`, which
       // used to run the same clear as unpair on the argument that both "end a pairing" — it does not:
       // it ADDS a server beside the ones already paired, and the shell never unmounts, so the
       // conversation the operator was reading and everything scoped to it must survive intact.

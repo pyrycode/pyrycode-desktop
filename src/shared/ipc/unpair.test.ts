@@ -1,21 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import {
-  UNPAIR_CHANNEL,
-  UNPAIR_SERVER_CHANNEL,
-  MAX_SERVER_ID_LENGTH,
-  isUnpairServerRequest
-} from './unpair'
+import * as unpairContract from './unpair'
+import { UNPAIR_SERVER_CHANNEL, MAX_SERVER_ID_LENGTH, isUnpairServerRequest } from './unpair'
 import { MAX_PASTE_LENGTH } from './pairing'
 
 describe('unpair channels', () => {
-  it('pins both IPC channel strings, and keeps them distinct', () => {
-    // The preload invokers ship on these and the main handlers register on them; a drift between
-    // the two sides would break the round-trip. Distinctness is the load-bearing half: the
-    // per-server request reaches a listener that has no whole-collection erase to call, so the two
-    // channels must never collapse onto one registration.
-    expect(UNPAIR_CHANNEL).toBe('pyry:unpair')
+  it('pins the IPC channel string', () => {
+    // The preload invoker ships on this and the main handler registers on it; a drift between the two
+    // sides would break the round-trip.
     expect(UNPAIR_SERVER_CHANNEL).toBe('pyry:unpair-server')
-    expect(UNPAIR_SERVER_CHANNEL).not.toBe(UNPAIR_CHANNEL)
+  })
+
+  it('exports NO whole-collection channel — nothing here names "pyry:unpair" (#1163)', () => {
+    // AC3, pinned on the contract side: #1163 deleted UNPAIR_CHANNEL along with its handler, its
+    // preload method and its registration, so the app registers no whole-collection erase and no
+    // module can name one through this contract. Walked over the module's whole export set rather
+    // than asserting the old identifier is undefined, so a re-added constant reddens this under ANY
+    // name. The surviving channel is a distinct string, so it does not trip the check itself.
+    expect(Object.values(unpairContract)).not.toContain('pyry:unpair')
   })
 
   it('bounds the server id at the pairing paste bound', () => {

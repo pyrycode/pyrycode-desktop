@@ -13,7 +13,7 @@ import { COMMAND_CHANNEL } from './commands'
 import { DIAGNOSTIC_CHANNEL } from './diagnostics'
 import { PAIRING_CHANNEL } from './pairing'
 import { PAIRING_STATUS_CHANNEL } from './pairingStatus'
-import { UNPAIR_CHANNEL } from './unpair'
+import { UNPAIR_SERVER_CHANNEL } from './unpair'
 import { SERVER_INFO_CHANNEL } from './serverInfo'
 import { HOST_LABEL_CHANNEL } from './hostLabel'
 
@@ -30,7 +30,7 @@ describe('attachment-upload channels', () => {
       DIAGNOSTIC_CHANNEL,
       PAIRING_CHANNEL,
       PAIRING_STATUS_CHANNEL,
-      UNPAIR_CHANNEL,
+      UNPAIR_SERVER_CHANNEL,
       SERVER_INFO_CHANNEL,
       HOST_LABEL_CHANNEL
     ]

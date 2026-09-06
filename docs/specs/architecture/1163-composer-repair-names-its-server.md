@@ -297,6 +297,52 @@ existing per-server tests already pin that `clearFor` names exactly the unpaired
 
 Each is recorded in `## Revisions` if its resolution changes the design above.
 
+## Revisions
+
+**2026-09-06 — Open questions resolved.**
+
+1. **The Settings screen replaces the whole shell**, sidebar included (`PairedShell`'s `settings` case
+   returns a bare `SettingsScreen`, where `list`/`thread` return the two-pane `paired-shell`). So the
+   e2e drive needs the return step the plan assumed: `.settings__back` is clicked before the
+   surviving server's channel row is read back. No design change.
+2. **`daemonConnection.test.ts`'s `unpairable()` fake** now supplies `Pick<MultiPairedServerStore,
+   'clearServer'>` and nulls the record on a matching id, reporting `{ matched: true, remaining: 0 }`
+   (and `matched: false` for any other id, so the fixture cannot silently erase on a wrong name). The
+   #504 property it proves is unchanged. Mechanical, as expected.
+3. **`PyryApi` is wholly inferred** from the `api` object literal, so deleting the `unpair` method
+   removed `window.pyry.unpair` from the renderer's type with no separate declaration to edit. The
+   build confirms it.
+
+**2026-09-06 — Four comment-only production edits beyond the plan's five deletion sites.** Deleting
+the whole-collection arm falsified claims made about it elsewhere, and a comment asserting a caller
+that no longer exists is the failure mode the citation discipline exists to prevent. None of these
+changes behaviour:
+
+- `src/main/hostLabelStore.ts` — its header said "`clear` keeps its caller — the whole-collection
+  unpair arm", and the `clear` body repeated it. `clear` now has **no production caller**; both notes
+  say so, and record why the member itself is deliberately not removed here (out of #1149's
+  enumerated four; three test object literals pin it, so removal is a tsc-only cascade for a
+  follow-up).
+- `src/main/index.ts` — the host-label seam comment enumerated "four seams, four disjoint `Pick`s"
+  over that store. There are three.
+- `src/renderer/src/applyPairingChange.ts` — its `'unpaired'` member doc said the condition applies to
+  #1162's caller alone and that `runUnpair` reaches the member on `ok`. Both paths now carry the
+  condition, from one copy of the rule.
+- `src/renderer/src/PairedShell.tsx` — the `onUnpaired` wiring comment restated the same ok-only
+  posture without the remaining-count half.
+
+**2026-09-06 — `rowName` in the e2e spec.** `ConversationSummary.name` is `string | null`, and no
+tsconfig includes `e2e/` while Playwright strips types with esbuild, so a `hasText: SEEDED_ROW.name`
+type error would have surfaced in no gate at all (caught by an ad-hoc `tsc --noEmit` run by hand). It
+is narrowed by a throwing helper rather than `?? ''`: an empty `hasText` matches every row, so a null
+seed name would have silently selected both servers' rows — the exact ambiguity the fixture's
+non-overlapping seed names exist to prevent.
+
+**2026-09-06 — the new e2e assertion was mutation-checked.** Reverting `runUnpair` to the
+pre-#1163 unconditional flip (calling `onLastServerUnpaired` on every `ok`) reddens the two-server
+test: the app routes to the pairing screen, `PairedShell` unmounts, and the Settings button detaches
+mid-click. The single-server test stays green, correctly — it is the last-server case.
+
 ## Security review
 
 **Verdict:** PASS

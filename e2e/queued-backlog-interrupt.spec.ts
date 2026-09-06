@@ -31,10 +31,12 @@ import type {
 //      lands in the store but is selected by nothing → zero rows render, SILENTLY (the run-config
 //      session-id gate analogue). turn_state has no such gate (timelineBridge drops its conversation_id,
 //      ADR 0004) — set it to SEEDED_ROW.id anyway for realism.
-//   2. subscribeQueue resets ALL backlogs on every `connected` event (the #197 reconnect reconcile). The
-//      fixture's completion signal (Send enabled) is gated on that same `connected`, so by the time
-//      launchPairedApp resolves `connected` has already fired; no rekey/reconnect happens in this spec, so
-//      no further `connected` wipes the backlog. Push queue_state ONLY AFTER launch resolves — never before.
+//   2. subscribeQueue resets backlogs on every `connected` event (the #197 reconnect reconcile, scoped
+//      by #1138 to the conversations the reconnecting server has listed — with one server that is every
+//      conversation this spec touches). The fixture's completion signal (Send enabled) is gated on that
+//      same `connected`, so by the time launchPairedApp resolves `connected` has already fired; no
+//      rekey/reconnect happens in this spec, so no further `connected` wipes the backlog. Push
+//      queue_state ONLY AFTER launch resolves — never before.
 //   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding`, and since #648 the same
 //      running-turn reading gates the ThinkingIndicator too. So turn_state{thinking} lights BOTH the
 //      interrupt button and the running indicator; turn_state{idle} returns `phase` to idle and retracts

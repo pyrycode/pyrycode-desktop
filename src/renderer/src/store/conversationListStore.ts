@@ -268,6 +268,47 @@ export const selectConversationsFor =
   (s: ConversationListState): readonly ServerConversationSummary[] | null =>
     s.byServer.get(origin) ?? null
 
+/** A module-level stable reference for the empty resolution below, so a not-loaded or loaded-empty
+ *  server answers the same set every time (the `EMPTY_BACKLOG` idiom). `ReadonlySet` is the only guard
+ *  on it — `Object.freeze` does not stop `Set.prototype.add` — so mutating it would take a cast past
+ *  the type, and no consumer has cause to. */
+export const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set()
+
+/**
+ * WHICH CONVERSATIONS BELONG TO THIS SERVER (#1138) — the renderer's shared answer, landed here once
+ * rather than restated in the three bridges that scope a reconnect reset by it (#1138 queue backlogs,
+ * #1139 background-task rosters, #1140 outstanding prompts). Since #1117 the app holds one live
+ * connection per paired server and since #1068 every event carries the id of the server it came from,
+ * so `connected` means "THIS server's connection came back" and a subscriber clearing its whole store
+ * on that edge discards the other servers' state too.
+ *
+ * A projection of `selectConversationsFor`, deliberately, rather than a second read of `byServer`: the
+ * "CALL IT WITH A CLIENT-HELD ID" rule that selector's docblock states is then carried forward by
+ * construction. The origin must come from this client's own paired-server list — a wire-sourced lookup
+ * key would let a confused or hostile daemon steer which server's state a reset spares.
+ *
+ * NOT-LOADED AND LOADED-EMPTY COLLAPSE. `selectConversationsFor` answers `null` for a slot holding no
+ * list yet and `[]` for a server that reported zero conversations; for every consumer of this both mean
+ * "drop nothing", so both give back the one `EMPTY_CONVERSATION_IDS` reference. Exposing the
+ * distinction would be a three-state API with no reader.
+ *
+ * A `Set`, never a bare object keyed by id: `ServerOrigin`'s docblock in `shared/ipc/events.ts` rules
+ * it for any consumer indexing by a daemon-adjacent id, and these ids ARE the daemon's (a `__proto__`
+ * id would write through `Object.prototype` on a `Record<string, …>`). Membership is what the consumers
+ * test, one lookup per key they hold.
+ *
+ * NOT A `useConversationListStore` READ SURFACE. A non-empty result is a fresh `Set` per call, so it has
+ * no referential stability and subscribing to it would churn re-renders; the consumers call it once,
+ * inside an event handler, against `getState()`.
+ */
+export const selectConversationIdsFor =
+  (origin: ConversationListOrigin) =>
+  (s: ConversationListState): ReadonlySet<string> => {
+    const rows = selectConversationsFor(origin)(s)
+    if (rows === null || rows.length === 0) return EMPTY_CONVERSATION_IDS
+    return new Set(rows.map((row) => row.id))
+  }
+
 /** The archived-conversation count for the Settings Storage row (#351). Passes `null` (not yet loaded)
  *  through as `null` so the row shows a neutral placeholder rather than a spurious "0 archived"; a loaded
  *  list — including `[]` — resolves to the count of `is_archived === true` rows. A primitive return means

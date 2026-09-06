@@ -39,12 +39,12 @@ export interface QueueState {
   backlogs: ReadonlyMap<string, readonly QueuedItem[]>
 }
 
-/** Store shape = state + the two mutation entry points: record one conversation's snapshot, and
- *  clear every backlog on reconnect (#197). Still two named setters, not a discriminated-union action
- *  set — that would be ceremony for two operations. */
+/** Store shape = state + the two mutation entry points: record one conversation's snapshot, and drop
+ *  the reconnecting server's backlogs (#197, scoped by #1138). Still two named setters, not a
+ *  discriminated-union action set — that would be ceremony for two operations. */
 export type QueueStore = QueueState & {
   setBacklog: (snapshot: QueueSnapshot) => void
-  resetBacklogs: () => void
+  resetBacklogsFor: (conversationIds: ReadonlySet<string>) => void
 }
 
 export const initialQueueState: QueueState = { backlogs: new Map() }
@@ -57,15 +57,28 @@ export const initialQueueState: QueueState = { backlogs: new Map() }
  * coercion, no validation — #292 owns the fail-closed decode). The write is unconditional: an empty
  * `queued: []` sets that key to `[]` ("the daemon says this conversation's backlog is now empty" — the
  * AC2 clear case); it does NOT delete the key (per-conversation stale-key clearing is a `setBacklog []`,
- * not `resetBacklogs`).
+ * not `resetBacklogsFor`).
  *
- * `resetBacklogs` (#197) is the reconnect reconcile: the relay re-emits `connected` on every
- * (re)handshake, and the daemon re-sends one queue_state per NON-EMPTY conversation, so the client
- * clears the WHOLE map and lets those re-sends repopulate via `setBacklog`. Clearing the map IS
- * clearing every backlog — an absent key reads `EMPTY_BACKLOG` (AC3), so no per-key eviction loop is
- * needed. Copy-on-write like `setBacklog` (never mutate `s.backlogs` in place); returning the SAME
- * state reference when the map is already empty makes zustand's `Object.is` short-circuit fire — no
- * listener churn on a first connect or a reconnect that held nothing (the #415 empty-slice no-op twin).
+ * `resetBacklogsFor` (#197, scoped by #1138) is the reconnect reconcile: the relay re-emits `connected`
+ * on every (re)handshake, and the daemon re-sends one queue_state per NON-EMPTY conversation, so the
+ * client drops that server's held backlogs and lets those re-sends repopulate via `setBacklog`.
+ *
+ * SCOPED, not wholesale. #197 shipped this as a nullary clear of the WHOLE map, which was right while
+ * the app had one connection; since #1117 it holds one per paired server and `connected` means "THIS
+ * server's connection came back", so a whole-map clear discarded the other server's backlogs and
+ * nothing ever put them back — only the reconnecting server re-sends. The caller resolves which
+ * conversations belong to the reconnecting server from the server-keyed conversation list (#1086's
+ * `selectConversationIdsFor`) and hands the ids across; the ids are therefore CLIENT-HELD, never a
+ * daemon-supplied field naming a server. A conversation this store holds a backlog for that appears in
+ * no server's list is left alone — the accepted consequence of scoping by the list.
+ *
+ * Iterates the HELD keys, not the id set, so the work is bounded by what this store holds rather than
+ * by the server's conversation count. Copy-on-write like `setBacklog` (never mutate `s.backlogs` in
+ * place), and every surviving slot comes back BY REFERENCE, so a component watching another
+ * conversation sees `Object.is` true and does not re-render. #197's `size === 0` short-circuit
+ * generalises: when NO held key is listed the state object is handed straight back, so zustand's
+ * `Object.is` fires and a first connect, an all-drained reconnect and a reconnect of a server holding
+ * nothing here all wake no listener at all (the #415 empty-slice no-op twin).
  */
 export function createQueueStore(init: QueueState = initialQueueState) {
   return createStore<QueueStore>((set) => ({
@@ -76,7 +89,14 @@ export function createQueueStore(init: QueueState = initialQueueState) {
         next.set(snapshot.conversationId, snapshot.queued)
         return { backlogs: next }
       }),
-    resetBacklogs: () => set((s) => (s.backlogs.size === 0 ? s : { backlogs: new Map() }))
+    resetBacklogsFor: (conversationIds) =>
+      set((s) => {
+        const doomed = [...s.backlogs.keys()].filter((id) => conversationIds.has(id))
+        if (doomed.length === 0) return s
+        const next = new Map(s.backlogs)
+        for (const id of doomed) next.delete(id)
+        return { backlogs: next }
+      })
   }))
 }
 

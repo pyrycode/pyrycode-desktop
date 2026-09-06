@@ -12,6 +12,38 @@
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { queueStore, type QueueSnapshot } from './queueStore'
+import {
+  conversationListStore,
+  selectConversationIdsFor,
+  type ConversationListOrigin
+} from './conversationListStore'
+
+/**
+ * Read the server this event came from (#1138), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * `relayLinkBridge.ts`'s `originOf` is the same idiom for the relay leg, `conversationListBridge.ts`'s
+ * for the list leg and `daemonEventBridge.ts`'s for the daemon leg — a copy rather than an import, for
+ * the reason each of those three states: taking another's would couple two deliberately independent
+ * single-arm subscribers and drag this path's key domain onto that store's.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload. The `connected` arm carries the
+ * daemon's own `ack.server_id`, which is a DISTINCT value the daemon chose; the stamp is bound
+ * main-side at construction from a paired record this client holds, so a hostile or confused daemon
+ * cannot make its reconnect clear another server's queued backlogs.
+ */
+function originOf(event: DaemonEvent): ConversationListOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null selects the unstamped slot: no producer can
+  // emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot rather
+  // than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
+}
 
 /**
  * The filter: map the one owned arm to its snapshot, every other DaemonEvent to `null`. A FRESH
@@ -33,28 +65,35 @@ export function translateQueueState(event: DaemonEvent): QueueSnapshot | null {
 
 /**
  * Subscribe via the injected `onDaemonEvent`. A `connected` event is the reconnect edge (#197): it
- * `resetBacklogs()` and returns — the relay re-emits `connected` on every (re)handshake (v2 has no
- * session resume), and the daemon then re-sends one queue_state per non-empty conversation, so the reset
- * clears the whole map before those re-sends repopulate it through `setBacklog` unchanged. The reset
- * reads only the discriminant — it ignores `event.ack`. Every other `queueState` writes its snapshot via
- * `setBacklog`; unrelated events no-op. Reset-before-repopulate needs no ordering logic here: the
- * transport emits `connected` before any re-sent queue_state and the single daemon-event channel
- * delivers in arrival order, dispatched synchronously per event.
+ * resets and returns — the relay re-emits `connected` on every (re)handshake (v2 has no session
+ * resume), and the daemon then re-sends one queue_state per non-empty conversation, so the reset drops
+ * that server's held backlogs before those re-sends repopulate them through `setBacklog` unchanged.
+ * Every other `queueState` writes its snapshot via `setBacklog`; unrelated events no-op.
+ * Reset-before-repopulate needs no ordering logic here: the transport emits `connected` before any
+ * re-sent queue_state and the single daemon-event channel delivers in arrival order, dispatched
+ * synchronously per event.
+ *
+ * SCOPED TO THE RECONNECTING SERVER (#1138). Since #1117 the background process holds one live
+ * connection per paired server, so `connected` means "THIS server's connection came back" and the reset
+ * carries the origin `originOf` read off the stamp. The branch reads the discriminant and the stamp,
+ * never `event.ack` — the daemon's own `server_id` must not steer whose backlogs survive. Turning the
+ * origin into the conversations to drop is the CALLER's job (`QueueData` below), so this bridge stays
+ * store-free and drivable with a plain spy.
  *
  * The `snapshot !== null` guard (not `if (snapshot)`) is deliberate: an empty `queued: []` snapshot is a
  * real REPLACEMENT (the AC2 clear case), never dropped. The reset is a separate branch, not folded into
  * `translateQueueState`, so that translator stays the pure `queueState`→snapshot filter. Injected
- * `onDaemonEvent` + `setBacklog` + `resetBacklogs` keep it React-free and unit-testable with plain spies.
- * The listener only translates + dispatches — it never throws into React.
+ * `onDaemonEvent` + `setBacklog` + `resetBacklogsForServer` keep it React-free and unit-testable with
+ * plain spies. The listener only translates + dispatches — it never throws into React.
  */
 export function subscribeQueue(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   setBacklog: (snapshot: QueueSnapshot) => void,
-  resetBacklogs: () => void
+  resetBacklogsForServer: (origin: ConversationListOrigin) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
-      resetBacklogs()
+      resetBacklogsForServer(originOf(event))
       return
     }
     const snapshot = translateQueueState(event)
@@ -78,10 +117,23 @@ export function QueueData(): null {
     // nets exactly one live listener (the sessionIdBridge idiom). Each queueState writes its snapshot
     // into the app-singleton store via its setter; a connected edge resets it (#197). Both write paths
     // ride this one listener, so the reset lands before the connect-time re-sends on the same channel.
+    //
+    // THE COMPOSITION ROOT for #1138's scoping, and the only place the two singletons meet: the origin
+    // the bridge read off the stamp resolves to that server's conversation ids through #1086's shared
+    // resolution, and only those keys are dropped. The list is read HERE, at reset time, not at
+    // subscribe time — on a first connect the server's slot holds no list yet (the list request rides
+    // the same edge) so nothing is dropped and nothing is held either; on a reconnect the slot still
+    // holds the previous episode's rows, since only `clearAllConversations` at a pairing boundary
+    // empties it, so the reconnecting server's conversations are known before its re-sends arrive.
+    // Nothing can interleave between the read and the write: both stores are written from this one
+    // synchronous dispatch, with no await between them.
     return subscribeQueue(
       window.pyry.onDaemonEvent,
       (snapshot) => queueStore.getState().setBacklog(snapshot),
-      () => queueStore.getState().resetBacklogs()
+      (origin) =>
+        queueStore
+          .getState()
+          .resetBacklogsFor(selectConversationIdsFor(origin)(conversationListStore.getState()))
     )
   }, [])
 

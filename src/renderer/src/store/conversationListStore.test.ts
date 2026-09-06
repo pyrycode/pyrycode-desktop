@@ -5,7 +5,9 @@ import {
   initialConversationListState,
   selectArchivedCount,
   selectConversations,
+  selectConversationIdsFor,
   selectConversationsFor,
+  EMPTY_CONVERSATION_IDS,
   type ConversationListOrigin,
   type ConversationListState,
   type ServerConversationSummary
@@ -239,6 +241,56 @@ describe('selectConversationsFor', () => {
     ])
     expect(selectConversationsFor(null)(s)).toEqual([stamped(null, { id: 'no-record' })])
     expect(selectConversationsFor(undefined)(s)).toEqual([stamped(undefined, { id: 'unbound' })])
+  })
+})
+
+// selectConversationIdsFor (#1138) — the renderer's shared answer to "which conversations belong to
+// this server", landed once here for the three bridges that scope a reconnect reset by it (#1138 queue
+// backlogs, #1139 background-task rosters, #1140 outstanding prompts). A projection of
+// selectConversationsFor, so the "call it with a client-held id" rule carries forward by construction.
+describe('selectConversationIdsFor', () => {
+  it('answers one server’s conversation ids, and only that server’s', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'a1' }), stamped('srv-a', { id: 'a2' })]],
+      ['srv-b', [stamped('srv-b', { id: 'b1' })]]
+    ])
+    expect([...selectConversationIdsFor('srv-a')(s)].sort()).toEqual(['a1', 'a2'])
+    expect(selectConversationIdsFor('srv-a')(s).has('b1')).toBe(false)
+  })
+
+  it('collapses not-loaded and loaded-empty to the SAME stable empty set', () => {
+    const s = state([['srv-a', []]])
+    // The two states selectConversationsFor tells apart (null vs []) are one thing to this consumer:
+    // "drop nothing". Exposing the distinction would be a three-state API with no reader.
+    expect(selectConversationIdsFor('srv-a')(s)).toBe(EMPTY_CONVERSATION_IDS)
+    expect(selectConversationIdsFor('srv-unknown')(s)).toBe(EMPTY_CONVERSATION_IDS)
+    expect(EMPTY_CONVERSATION_IDS.size).toBe(0)
+  })
+
+  it('gives each of the three origin kinds its own slot and nothing wider', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'a1' })]],
+      [null, [stamped(null, { id: 'no-record' })]],
+      [undefined, [stamped(undefined, { id: 'unbound' })]]
+    ])
+    expect([...selectConversationIdsFor('srv-a')(s)]).toEqual(['a1'])
+    expect([...selectConversationIdsFor(null)(s)]).toEqual(['no-record'])
+    expect([...selectConversationIdsFor(undefined)(s)]).toEqual(['unbound'])
+  })
+
+  it('takes the ids from the wire ConversationSummary.id, not the stamp', () => {
+    const s = state([['srv-a', [stamped('srv-a', { id: 'conv-42' })]]])
+    expect([...selectConversationIdsFor('srv-a')(s)]).toEqual(['conv-42'])
+  })
+
+  it('holds a __proto__ id as an ordinary member, writing nothing through Object.prototype', () => {
+    // ServerOrigin's docblock rules that a consumer indexing by a daemon-adjacent id uses a Map/Set,
+    // never a bare object. A daemon chooses these ids, so this is the case that rule exists for.
+    const s = state([['srv-a', [stamped('srv-a', { id: '__proto__' })]]])
+    const ids = selectConversationIdsFor('srv-a')(s)
+    expect(ids.has('__proto__')).toBe(true)
+    expect(Object.prototype).toBe(Object.getPrototypeOf({}))
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined()
   })
 })
 

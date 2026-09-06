@@ -986,7 +986,14 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   then gave it its first caller — see [Pairing IPC channel](features/pairing-ipc-channel.md) for the
   full write-path detail; summarized there rather than duplicated here. **[#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)**
   gave it its read caller — see [Host-label channel](features/host-label-channel.md) for the full
-  read-path detail.
+  read-path detail. **\#1155** layered a `MultiHostLabelStore` (`saveFor`/`loadFor`/`clearFor`) onto the
+  same store, mirroring [paired-server store](features/paired-server-store.md)'s own single-slot →
+  keyed-collection shape: one blob under the unchanged `HOST_LABEL_NAME`, entries as an array carrying
+  their own `server` field (never an object key, so `__proto__` stays inert), a version-marked JSON
+  envelope told apart from a legacy bare-string blob by a positive `v` check rather than a parse
+  failure, and a `mutate` queue serializing the now-read-modify-write keyed saves/clears. Store-only:
+  the un-keyed triple and all four existing callers are untouched, and no caller is wired to the keyed
+  one yet. Architect self-review PASS (\#1155).
 - [Host-label channel](features/host-label-channel.md) — the fourth store-only IPC channel beside
   [pairing-status](features/pairing-status-signal.md)/[unpair](features/unpair-channel.md)/[server-info](features/server-info-channel.md):
   `window.pyry.hostLabel()` reads [host-label store](features/host-label-store.md)'s `load()` back to

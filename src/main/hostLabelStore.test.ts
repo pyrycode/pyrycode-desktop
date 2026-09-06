@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EncryptionUnavailableError, type SecureStore } from './secureStore'
-import { createHostLabelStore, HOST_LABEL_NAME, MalformedHostLabelError } from './hostLabelStore'
+import {
+  createHostLabelStore,
+  HOST_LABEL_FORMAT_VERSION,
+  HOST_LABEL_NAME,
+  MalformedHostLabelError
+} from './hostLabelStore'
 
 // The one injected edge — SecureStore — is faked in-file: no keychain, no filesystem (mirrors
 // pairedServerStore.test.ts / deviceKeypair.test.ts). Encoding is pure, so there is no second seam
@@ -228,6 +233,27 @@ describe('createHostLabelStore', () => {
       await okStore.clear()
       await okStore.load()
 
+      // The keyed happy path (#1155): the same four verbs per server, plus the by-id erase.
+      const keyed = fakeSecureStore()
+      const keyedStore = createHostLabelStore({ secureStore: keyed.secureStore })
+      await keyedStore.saveFor('server-a', LABEL)
+      await keyedStore.loadFor('server-a')
+      await keyedStore.loadFor('never-stored')
+      await keyedStore.clearFor('server-a')
+      await keyedStore.loadFor('server-a')
+
+      // The keyed error paths: a legacy blob (read as empty, never logged) and a recognized-but-
+      // broken envelope (raises). Neither may name the id, the bytes, or how many servers are stored.
+      const legacy = fakeSecureStore()
+      seed(legacy.store, HOST_LABEL_NAME, LABEL)
+      await createHostLabelStore({ secureStore: legacy.secureStore }).loadFor('server-a')
+
+      const brokenEnvelope = fakeSecureStore()
+      seed(brokenEnvelope.store, HOST_LABEL_NAME, '{"v":1,"labels":[{"server":"a"}]}')
+      await createHostLabelStore({ secureStore: brokenEnvelope.secureStore })
+        .loadFor('a')
+        .catch(() => {})
+
       // Keychain-unavailable error path.
       const noEnc = fakeSecureStore()
       noEnc.control.setError = new EncryptionUnavailableError()
@@ -261,5 +287,318 @@ describe('createHostLabelStore', () => {
     } finally {
       for (const spy of spies) spy.mockRestore()
     }
+  })
+})
+
+// The per-server labels (#1155). The keyed triple lives over the SAME blob under the SAME name as
+// the un-keyed one; nothing here is wired to a caller in this slice, so both formats never coexist
+// in a shipped state. The un-keyed tests above stay green untouched — that is the Strangler Fig
+// property this block sits beside, not one it replaces.
+describe('createHostLabelStore — per-server labels (#1155)', () => {
+  const A = 'server-a'
+  const B = 'server-b'
+
+  /** The stored blob, parsed. Proves a write really produced the versioned envelope, not a memo. */
+  const readEnvelope = (store: Map<string, Uint8Array>): unknown =>
+    JSON.parse(new TextDecoder().decode(store.get(HOST_LABEL_NAME) as Uint8Array))
+
+  /** A well-formed envelope as a string, for seeding a "written by this version" blob. */
+  const envelope = (labels: unknown): string =>
+    JSON.stringify({ v: HOST_LABEL_FORMAT_VERSION, labels })
+
+  it('keeps a label per server: a second machine does not overwrite the first (AC1)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+
+    expect(await labels.loadFor(A)).toBe('Pyrybox')
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+    // Still ONE blob under ONE name — the collection lives inside it, the way pairedServerStore's
+    // does. A per-server store NAME would show up here as a second entry.
+    expect(store.size).toBe(1)
+    expect(store.has(HOST_LABEL_NAME)).toBe(true)
+  })
+
+  it('outlives the instance that wrote it: a reopened store reads both back (AC1)', async () => {
+    const { secureStore } = fakeSecureStore()
+
+    const first = createHostLabelStore({ secureStore })
+    await first.saveFor(A, 'Pyrybox')
+    await first.saveFor(B, 'Pyrybox II')
+
+    // A second store over the same persistence is what models a restart.
+    const reopened = createHostLabelStore({ secureStore })
+    expect(await reopened.loadFor(A)).toBe('Pyrybox')
+    expect(await reopened.loadFor(B)).toBe('Pyrybox II')
+  })
+
+  it('re-saving one server replaces only that label (AC1)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    await labels.saveFor(A, 'Renamed')
+
+    expect(await labels.loadFor(A)).toBe('Renamed')
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+    // Replace-by-key, not append: the id appears once, so a later read cannot see a stale label.
+    expect(readEnvelope(store)).toEqual({
+      v: HOST_LABEL_FORMAT_VERSION,
+      labels: [
+        { server: B, label: 'Pyrybox II' },
+        { server: A, label: 'Renamed' }
+      ]
+    })
+  })
+
+  it('erases one server and leaves every other label stored (AC2)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.saveFor(B, 'Pyrybox II')
+    await labels.clearFor(A)
+
+    expect(await labels.loadFor(A)).toBeNull()
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+  })
+
+  it('clearFor an unheld id changes nothing and writes nothing (AC2)', async () => {
+    const { secureStore, writes } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    const writesAfterSave = writes.length
+
+    await expect(labels.clearFor('never-stored')).resolves.toBeUndefined()
+
+    // No match resolves without a keychain round-trip, so an erase that had nothing to erase can
+    // never raise EncryptionUnavailableError.
+    expect(writes).toHaveLength(writesAfterSave)
+    expect(await labels.loadFor(A)).toBe('Pyrybox')
+  })
+
+  it('deletes the blob when the last label goes, sparing the neighbouring credentials (AC2)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    // The paired-server record (a bearer token) and the device static keypair live under their own
+    // names in the same chain. A `name` derived from the id would erase one of them here.
+    seed(store, 'pyrycode.paired_server', 'paired-server-record-bytes')
+    seed(store, 'pyrycode.device_static', 'device-static-keypair-bytes')
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.saveFor(A, 'Pyrybox')
+    await labels.clearFor(A)
+
+    // No blob, rather than an empty envelope: "absent" stays the one at-rest form of nothing stored,
+    // which is where clear() also ends.
+    expect(store.has(HOST_LABEL_NAME)).toBe(false)
+    expect(store.has('pyrycode.paired_server')).toBe(true)
+    expect(store.has('pyrycode.device_static')).toBe(true)
+  })
+
+  it('keeps absent, stored-empty and unreadable distinct per server (AC3)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    // Absent id → never stored.
+    expect(await labels.loadFor(A)).toBeNull()
+
+    // A stored '' is a value, not absence — and it does not make its NEIGHBOUR absent either.
+    await labels.saveFor(A, '')
+    await labels.saveFor(B, 'Pyrybox II')
+    const empty = await labels.loadFor(A)
+    expect(empty).toBe('')
+    expect(empty).not.toBeNull()
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+
+    // Present, decrypts, not valid UTF-8 → raises, never read as never-stored. Seeded as raw bytes:
+    // TextEncoder cannot produce this, so it is unreachable through either version's save.
+    store.set(HOST_LABEL_NAME, new Uint8Array([0xff, 0xfe, 0xfd]))
+    await expect(labels.loadFor(A)).rejects.toBeInstanceOf(MalformedHostLabelError)
+  })
+
+  it('propagates a decrypt failure from a keyed read rather than masking it as absence (AC3)', async () => {
+    const { secureStore, store, control } = fakeSecureStore()
+    seed(store, HOST_LABEL_NAME, envelope([{ server: A, label: 'Pyrybox' }]))
+    control.getError = new Error('authenticated decryption failed')
+
+    await expect(createHostLabelStore({ secureStore }).loadFor(A)).rejects.toThrow(
+      'authenticated decryption failed'
+    )
+  })
+
+  it('raises on a recognized-but-broken envelope, and a keyed save recovers it (AC3)', async () => {
+    // Past the version marker the blob is unambiguously ours, so a broken one is format drift, not
+    // the old format — it must raise rather than silently drop a server's label. Saving is the only
+    // recovery, exactly as re-pairing is pairedServerStore's, so save overwrites what no read parses.
+    const cases: Array<{ label: string; text: string }> = [
+      { label: 'labels is not an array', text: envelope('nope') },
+      { label: 'labels is missing', text: JSON.stringify({ v: HOST_LABEL_FORMAT_VERSION }) },
+      { label: 'entry is not an object', text: envelope([null]) },
+      { label: 'entry is an array', text: envelope([['a', 'b']]) },
+      { label: 'entry is missing label', text: envelope([{ server: A }]) },
+      { label: 'entry label is not a string', text: envelope([{ server: A, label: 1 }]) },
+      { label: 'entry server is not a string', text: envelope([{ server: 1, label: 'x' }]) },
+      {
+        label: 'repeated server id',
+        text: envelope([
+          { server: A, label: 'x' },
+          { server: A, label: 'y' }
+        ])
+      }
+    ]
+
+    for (const { label, text } of cases) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, HOST_LABEL_NAME, text)
+      const labels = createHostLabelStore({ secureStore })
+
+      await expect(labels.loadFor(A), label).rejects.toBeInstanceOf(MalformedHostLabelError)
+      // The erase stays strict — it surfaces the corruption rather than hiding it.
+      await expect(labels.clearFor(A), label).rejects.toBeInstanceOf(MalformedHostLabelError)
+      // ...and the save still lands, leaving a readable one-entry collection behind.
+      await expect(labels.saveFor(A, 'Pyrybox'), label).resolves.toBeUndefined()
+
+      expect(await labels.loadFor(A), label).toBe('Pyrybox')
+      expect(readEnvelope(store), label).toEqual({
+        v: HOST_LABEL_FORMAT_VERSION,
+        labels: [{ server: A, label: 'Pyrybox' }]
+      })
+    }
+  })
+
+  it('rejects a keyed save on a decrypt failure and persists nothing (AC3)', async () => {
+    const { secureStore, store, control, writes } = fakeSecureStore()
+    seed(store, HOST_LABEL_NAME, envelope([{ server: A, label: 'Pyrybox' }]))
+    control.getError = new Error('authenticated decryption failed')
+
+    // Not folded into the malformed case: an undecryptable blob may be transient keychain state, so
+    // overwriting it would discard every real label that is still in there.
+    await expect(createHostLabelStore({ secureStore }).saveFor(B, 'Pyrybox II')).rejects.toThrow(
+      'authenticated decryption failed'
+    )
+    expect(writes).toHaveLength(0)
+  })
+
+  it('never puts an untrusted server id on the persistence name (AC4)', async () => {
+    // `constructor` and `__proto__` are the detectors for the two ways this goes wrong: an
+    // object-keyed collection (prototype pollution / a bogus duplicate) and a name-derived-from-id
+    // store (a write outside this store's own blob). `../pyrycode.paired_server` is the traversal
+    // shape; '' is the degenerate id.
+    const ids = ['__proto__', 'constructor', '../pyrycode.paired_server', '', 'x'.repeat(4096)]
+
+    for (const id of ids) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, 'pyrycode.paired_server', 'paired-server-record-bytes')
+      const labels = createHostLabelStore({ secureStore })
+
+      await labels.saveFor(id, LABEL)
+
+      // The blob went under this store's own fixed name and nowhere else — no `pyrycode.host_label.x`
+      // entry, and the neighbouring credential untouched.
+      expect(store.has(HOST_LABEL_NAME), id).toBe(true)
+      expect(store.size, id).toBe(2)
+      expect(new TextDecoder().decode(store.get('pyrycode.paired_server') as Uint8Array), id).toBe(
+        'paired-server-record-bytes'
+      )
+
+      // Retrievable under that id only: matched with === against the entry's own field.
+      expect(await labels.loadFor(id), id).toBe(LABEL)
+      expect(await labels.loadFor('some-other-server'), id).toBeNull()
+
+      // Nothing was written through an object key, so Object.prototype gained nothing.
+      expect(Object.prototype).not.toHaveProperty('label')
+      expect(({} as Record<string, unknown>).label, id).toBeUndefined()
+
+      await labels.clearFor(id)
+      expect(await labels.loadFor(id), id).toBeNull()
+      expect(store.has('pyrycode.paired_server'), id).toBe(true)
+    }
+  })
+
+  it('reads a single-slot blob as no labels stored, then replaces it (AC5)', async () => {
+    // A blob the single-slot version wrote is a BARE string with no id attached, so it cannot name a
+    // server and is not carried over — a deliberate loss. The trap: JSON.parse rejects most old
+    // labels but not all of them, so "it failed to parse" is not the test. The version marker is.
+    const oldLabels = ['Pyrybox', '[]', '{}', 'null', '123', '"quoted"', '{"v":2,"labels":[]}']
+
+    for (const old of oldLabels) {
+      const { secureStore, store } = fakeSecureStore()
+      seed(store, HOST_LABEL_NAME, old)
+      const labels = createHostLabelStore({ secureStore })
+
+      // No labels for ANY id, and no throw — this is the one unreadable-as-new blob that must not
+      // raise, because it is the only thing that reaches the decoder and is neither our format nor
+      // invalid UTF-8 (safeStorage is AEAD, so tampering fails decryption upstream).
+      expect(await labels.loadFor(A), old).toBeNull()
+      expect(await labels.loadFor(''), old).toBeNull()
+      await expect(labels.clearFor(A), old).resolves.toBeUndefined()
+
+      // The first keyed save replaces it wholesale.
+      await labels.saveFor(A, 'Pyrybox')
+      expect(await labels.loadFor(A), old).toBe('Pyrybox')
+      expect(readEnvelope(store), old).toEqual({
+        v: HOST_LABEL_FORMAT_VERSION,
+        labels: [{ server: A, label: 'Pyrybox' }]
+      })
+    }
+  })
+
+  it('serializes concurrent keyed mutations so none is clobbered', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    // Three read-modify-write cycles in flight at once. Unserialized, all three read the same empty
+    // collection and the last write wins — this module's own single-slot defect from the other
+    // direction, and the race the "deliberately no read-modify-write helper" note warned about.
+    await Promise.all([
+      labels.saveFor(A, 'Pyrybox'),
+      labels.saveFor(B, 'Pyrybox II'),
+      labels.saveFor('server-c', 'Pyrybox III')
+    ])
+
+    expect(await labels.loadFor(A)).toBe('Pyrybox')
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+    expect(await labels.loadFor('server-c')).toBe('Pyrybox III')
+  })
+
+  it('serializes an erase against a save rather than losing one to the gap', async () => {
+    const { secureStore } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+    await labels.saveFor(A, 'Pyrybox')
+
+    await Promise.all([labels.saveFor(B, 'Pyrybox II'), labels.clearFor(A)])
+
+    expect(await labels.loadFor(A)).toBeNull()
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+  })
+
+  it('does not wedge the mutation queue when one keyed mutation fails', async () => {
+    const { secureStore, control } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+    control.setError = new EncryptionUnavailableError()
+
+    await expect(labels.saveFor(A, 'Pyrybox')).rejects.toBeInstanceOf(EncryptionUnavailableError)
+    control.setError = null
+    await labels.saveFor(B, 'Pyrybox II')
+
+    expect(await labels.loadFor(B)).toBe('Pyrybox II')
+  })
+
+  it('leaves the un-keyed triple writing and reading the single-slot format unchanged', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const labels = createHostLabelStore({ secureStore })
+
+    await labels.save(LABEL)
+
+    // Still BARE UTF-8, not JSON: every current caller — the pairing write, the two unpair erases,
+    // the read handler — behaves exactly as before this slice, because none of them is re-keyed here.
+    expect(new TextDecoder().decode(store.get(HOST_LABEL_NAME) as Uint8Array)).toBe(LABEL)
+    expect(await labels.load()).toBe(LABEL)
+    // And that blob is, to the keyed reader, exactly the legacy format.
+    expect(await labels.loadFor(A)).toBeNull()
   })
 })

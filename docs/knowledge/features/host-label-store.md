@@ -37,14 +37,17 @@ described whichever pairing last supplied a label. \#1155 layered a per-server
 [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) moved two of the four callers: the
 pairing confirm now writes through `saveFor`, keyed by the server it just paired, and the per-server
 unpair arm erases through `clearFor`, unconditionally, retiring the interim rule that erased the
-single-slot label only once nothing remained paired. The whole-collection unpair arm keeps `clear` —
-it deletes the one blob either shape lives in, so it needs no keyed counterpart — and
+single-slot label only once nothing remained paired, and
 `hostLabelHandler`'s zero-argument read keeps `load`, which \#1156 taught to recognise **both** at-rest
 shapes so it goes on answering exactly as it did before a keyed envelope could exist.
 [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) gave `loadFor` its own caller — a
 second, keyed IPC channel beside the zero-argument one (see [Host-label channel § the per-server
 channel](host-label-channel.md#the-per-server-channel-1157)) — so all four members of the keyed triple
-now have one. See § How it works below for the shape and § Edge cases for what changed at rest.
+now have one. **[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) deleted the
+whole-collection unpair arm** that used to keep `clear` alive (it deleted the one blob either shape
+lives in, so it needed no keyed counterpart) — `clear` therefore has **no production caller left at
+all**; see § Edge cases for why the member itself stays in the interface regardless. See § How it works
+below for the shape and § Edge cases for what changed at rest.
 
 ## What it does
 
@@ -120,15 +123,16 @@ export function createHostLabelStore(deps: {
 `HostLabelStore` stays one flat interface — no `Clearable…` split, for the reason stated when #827
 confirmed it out: `pairedServerStore` splits `PairedServerStore` / `ClearablePairedServerStore`
 because several shipped consumers type against the base and would otherwise need a `clear` stub in
-their fakes, and nothing here needed that split. **Five** consumers exist today, split across both
+their fakes, and nothing here needed that split. **Four** consumers exist today, split across both
 interfaces: `pairingHandler` on `MultiHostLabelStore`'s `saveFor` (since \#1156), the per-server
-`unpairHandler` arm on `MultiHostLabelStore`'s `clearFor` (since \#1156), the whole-collection
-`unpairHandler` arm on `HostLabelStore`'s `clear` (unchanged since #827 — deleting the whole blob
-already erases every server's label), `hostLabelHandler`'s zero-argument arm on `HostLabelStore`'s
-`load` (unchanged since #824, though what it now reads through changed — see Core behavior), and
-`hostLabelHandler`'s keyed arm on `MultiHostLabelStore`'s `loadFor`
+`unpairHandler` arm on `MultiHostLabelStore`'s `clearFor` (since \#1156), `hostLabelHandler`'s
+zero-argument arm on `HostLabelStore`'s `load` (unchanged since #824, though what it now reads through
+changed — see Core behavior), and `hostLabelHandler`'s keyed arm on `MultiHostLabelStore`'s `loadFor`
 ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)) — each typed against a disjoint
-`Pick<…, …>`.
+`Pick<…, …>`. There was a fifth until
+[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163): the whole-collection `unpairHandler`
+arm on `HostLabelStore`'s `clear`. That arm is deleted, so `clear` now has **no production caller**;
+see § Edge cases for why the interface still carries it.
 
 **\#1155's keyed triple is layered onto a new `MultiHostLabelStore`, not added to `HostLabelStore`
 itself**, for the same reason `MultiPairedServerStore extends ClearablePairedServerStore` in
@@ -141,9 +145,9 @@ un-keyed ones one-for-one (`saveFor`/`loadFor`/`clearFor` against `save`/`load`/
 borrowing `pairedServerStore`'s `loadById`/`clearServer` — that pairing is what the Strangler Fig
 migration read against, and \#1156 is the slice that ran it, **partially and on purpose**: it moved
 `save`→`saveFor` and the per-server `clear`→`clearFor`, but did not delete the un-keyed three, because
-`clear` still has a live caller (the whole-collection unpair arm, for which `clear` already does the
-right thing) and `load` still has a live caller (`hostLabelHandler`, out of scope for this slice and
-for [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)). "Move all four and delete the
+`clear` still had a live caller at the time (the whole-collection unpair arm, since deleted by
+[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)) and `load` still has a live caller
+(`hostLabelHandler`, out of scope for this slice and for [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)). "Move all four and delete the
 un-keyed three" — an earlier version of this module's header — is not what shipped; see § Encoding
 and § Core behavior for how `load` was taught to stay correct with two writers now feeding two
 different at-rest shapes into the same blob. `clearFor` returns `Promise<void>`, not
@@ -257,7 +261,9 @@ decoder writes; the first keyed `saveFor` is what replaces a legacy blob with th
   delete-by-literal. No `try`/`catch`: a delete failure propagates (reporting success while the
   label still sits on disk is the behaviour to avoid). `SecureStore.delete` is idempotent, so
   clearing a never-stored store resolves cleanly. Erases the whole blob under either at-rest shape, so
-  it needs no keyed counterpart — the whole-collection unpair arm's caller since #827, unchanged.
+  it needs no keyed counterpart — the whole-collection unpair arm's caller from #827 until
+  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) deleted that arm; **no production
+  caller since**.
 - **`loadFor(serverId)`** — reads the collection (`decodeLabels ?? []`, so a legacy or absent blob
   reads as `[]`), then `entries.find(e => e.server === serverId)?.label ?? null` — `?? null` rather
   than `||`, so a stored `''` stays a value rather than collapsing into absence. Off the mutate queue:
@@ -301,10 +307,7 @@ silently; see the comment at `hostLabelStore.ts:382-387` pointing at it.
  unpairHandler's per-server arm (#1156)
   store.clearFor(serverId) ────────► mutate queue ─► filter ─► set/delete(name) ─► SecureStore
 
- unpairHandler's whole-collection arm (#827)
-  store.clear() ────────────────────────────────────────────► delete(name) ─► SecureStore
-
-  store.load() ───────► get(name) ─► SecureStore ─► blob?     (hostLabelHandler, unchanged since #824)
+ store.load() ───────► get(name) ─► SecureStore ─► blob?     (hostLabelHandler, unchanged since #824)
                           null    → null   (never stored — the only null path)
                           present → decodeLabel(blob) ─► text ─► parseLabels(text)
                                        not the envelope → text, verbatim  (every blob #1156 predates)
@@ -327,19 +330,19 @@ this store — only what it reads through changed. `loadFor` is reached from IPC
 `hostLabelFor(serverId)` → the `isHostLabelServerRequest` guard →
 [`hostLabelHandler`'s keyed arm](host-label-channel.md#the-per-server-channel-1157), which re-applies
 `MAX_HOST_LABEL_LENGTH` the same way `load`'s reader does) — a sibling call, not a replacement; `load`
-is untouched by it. `clear` is reached as of
-[#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) — not from IPC at all, but from
-`unpairHandler.ts`'s **whole-collection** listener, once `pairedServerStore.clear()` has itself
-resolved. `unpairHandler.ts`'s **per-server** listener reaches `clearFor` instead, since \#1156, on
-every matched unpair — [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) shipped it
-gated on `clearServer`'s `remaining` count reaching `0`, which \#1156 retired: keyed by server, the
-gate was the bug it guarded against (it left an unpaired machine's name on disk for as long as any
-other stayed paired), so the per-server arm now erases the named server's label unconditionally and a
-still-paired server's own label is untouched by construction, not by a remaining-count check. See
-[Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
-[Host-label channel](host-label-channel.md), and [Unpair channel § the label erase
-(#827)](unpair-channel.md#the-label-erase-827) and [§ the per-server channel
-(#1149)](unpair-channel.md#the-per-server-channel-1149) for the full hand-off on each side.
+is untouched by it. `clear` was reached from [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)
+until [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) — not from IPC at all, but from
+`unpairHandler.ts`'s **whole-collection** listener, once `pairedServerStore.clear()` had itself
+resolved; that listener is deleted, so `clear` is reached from nowhere in production now.
+`unpairHandler.ts`'s **per-server** listener reaches `clearFor` instead, since \#1156, on every matched
+unpair — [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) shipped it gated on
+`clearServer`'s `remaining` count reaching `0`, which \#1156 retired: keyed by server, the gate was the
+bug it guarded against (it left an unpaired machine's name on disk for as long as any other stayed
+paired), so the per-server arm now erases the named server's label unconditionally and a still-paired
+server's own label is untouched by construction, not by a remaining-count check. See [Pairing IPC
+channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
+[Host-label channel](host-label-channel.md), and [Unpair channel](unpair-channel.md) for the full
+hand-off on each side.
 
 ## Concurrency & lifecycle
 
@@ -426,14 +429,16 @@ secure-store consumers — not a secret — so its review reads differently from
   a future caller sits behind authorizes the erase, not the match), and a timing signal on it would
   disclose only which ids are stored — which the server-info channel already publishes to the
   renderer by design.
-- **A second erase-only handle, keyed since \#1156.** [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+- **A second erase-only handle, keyed since \#1156, now the only one.** [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
   gave the per-server unpair arm the same `Pick<HostLabelStore, 'clear'>` shape #827 gave the
-  whole-collection arm, over the same instance, gated on `clearServer`'s `remaining` count reaching
-  `0` — the only point at which a *single un-keyed slot* was well defined for a per-server unpair.
-  \#1156 replaced that handle with `Pick<MultiHostLabelStore, 'clearFor'>` and deleted the gate: the
-  arm now erases the named server's label unconditionally, and a survivor's own label is untouched
-  because it is a different entry, not because a count said to leave it alone. Both handles remain
-  erase-only — neither can read a label back — so the module's log-free, credential-blind guarantees
+  (since-deleted) whole-collection arm, over the same instance, gated on `clearServer`'s `remaining`
+  count reaching `0` — the only point at which a *single un-keyed slot* was well defined for a
+  per-server unpair. \#1156 replaced that handle with `Pick<MultiHostLabelStore, 'clearFor'>` and
+  deleted the gate: the arm now erases the named server's label unconditionally, and a survivor's own
+  label is untouched because it is a different entry, not because a count said to leave it alone.
+  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) deleted the whole-collection
+  sibling entirely; this remains erase-only — it cannot read a label back — so the module's log-free,
+  credential-blind guarantees
   are unchanged by the swap.
 - **Log-free by construction** — no `console.*` anywhere; the label is an opaque local, never a named
   field of a logged struct. `MalformedHostLabelError`'s message is static and interpolates nothing —
@@ -481,16 +486,24 @@ secure-store consumers — not a secret — so its review reads differently from
   at the same constant ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), and so does the
   [input field](pairing-input-screen.md#host-name-field-825) ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)).
 - **Write, read, and erase paths all wired, keyed since \#1156, and keyed-read wired since \#1157.**
-  `src/main/index.ts` constructs the live store once and hands out **five** disjoint `Pick`s over it:
+  `src/main/index.ts` constructs the live store once and hands out **four** disjoint `Pick`s over it:
   `pairingHandler` gets `saveFor`-only ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823),
   re-pointed at `saveFor` by \#1156); the [host-label handler](host-label-channel.md)'s zero-argument
   arm keeps its `load`-only handle ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824),
-  unmoved); the whole-collection unpair arm keeps its `clear`-only handle
-  ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827), unmoved); the per-server unpair arm
-  gets `clearFor`-only ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), re-pointed
-  at `clearFor` by \#1156); the [host-label handler](host-label-channel.md)'s per-server arm gets
-  `loadFor`-only ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157), new) — none able
-  to do another's job.
+  unmoved); the per-server unpair arm gets `clearFor`-only
+  ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), re-pointed at `clearFor` by
+  \#1156); the [host-label handler](host-label-channel.md)'s per-server arm gets `loadFor`-only
+  ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157), new) — none able to do another's
+  job. There was a fifth, the whole-collection unpair arm's `clear`-only handle
+  ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)), until
+  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) deleted that handler along with its
+  registration.
+- **`clear` has no production caller left, and the interface member is deliberately not removed
+  with it ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)).** Removing the handler
+  that called it was in scope; removing `clear` itself from `HostLabelStore` was not — three test
+  object literals pin the member (`hostLabelHandler.test.ts` on `HostLabelStore`, two more on
+  `MultiHostLabelStore`), so deleting it is a tsc-only cascade `npm test` alone would not surface
+  (`npm run build` catches it). Left for a follow-up.
 - **A label per server, since \#1155 — not per-server-id keying via the store `name`.** An earlier
   version of this doc, and of the module's own header comment, called
   `pyrycode.host_label.<server-id>` (composing the persistence *name* from the id) "the deferred
@@ -556,11 +569,13 @@ secure-store consumers — not a secret — so its review reads differently from
   session — see that doc's edge cases and [Unpair channel § the label erase
   (#827)](unpair-channel.md).
 - [Unpair channel](unpair-channel.md) / [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) —
-  the erase path: a `clear`-only handle, called only after the paired-server record's own erase has
-  resolved, closing the gap [#173](../codebase/173.md)'s unpair used to leave (flagged in #823's spec,
-  Open question 1) where the label outlived the record it described. [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
-  added a second, `clear`-only handle over the same instance, from that channel's per-server arm, gated
-  on no record remaining; [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) re-pointed
-  that handle at `clearFor` and deleted the gate — see [§ the per-server channel
-  (#1149)](unpair-channel.md#the-per-server-channel-1149).
+  the erase path. The original `clear`-only handle, called only after the paired-server record's own
+  erase had resolved, closed the gap [#173](../codebase/173.md)'s unpair used to leave (flagged in
+  #823's spec, Open question 1) where the label outlived the record it described.
+  [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) added a second, `clear`-only handle
+  over the same instance, from that channel's per-server arm, gated on no record remaining;
+  [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156) re-pointed that handle at
+  `clearFor` and deleted the gate. [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
+  deleted the original whole-collection handle and its channel entirely — the per-server `clearFor`
+  handle is now the only one this store's erase side has.
 - Downstream, not yet built: the sidebar host row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).

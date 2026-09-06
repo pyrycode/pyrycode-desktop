@@ -264,9 +264,13 @@ failed erase would put the whole app into a `failed` session status while the *o
 connected and its conversation is fine. The constraint is met by the **type**, not a rule:
 `UnpairServerDeps` carries no `dispatch` member at all, so there is no name in this module through which
 a session-store write could be reached — a future edit cannot reintroduce the degradation without first
-widening a reviewed interface. This also leaves `runUnpair`'s `unpair` dep nullary, so
-`ConversationScreen` — its one existing caller — is untouched, and [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
-can migrate and delete the whole-collection path without unpicking a shared dep shape first.
+widening a reviewed interface. [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) later
+built on exactly that gap rather than closing it: `unpairAction.ts`'s `UnpairDeps` now `extends
+UnpairServerDeps` and adds only `dispatch`, and `runUnpair` **delegates** to `runUnpairServer` instead of
+restating its erase→refresh→maybe-flip sequence — passing the wider bag into the narrower parameter type
+does not leak `dispatch` into this module's body, since TypeScript gives a callee only what its
+parameter type declares. That is also how the composer's Re-pair control moved off the whole-collection
+channel this doc used to describe as its remaining caller — see [Unpair channel](unpair-channel.md).
 
 Behaviour, in order: (1) `await deps.unpairServer(serverId)` — a rejected invoke or `{ result: 'error' }`
 returns `'error'` having done nothing else, fail-safe by construction and inherited from `runUnpair`: no

@@ -18,6 +18,7 @@ import {
   useConversationLastRead
 } from './store/conversationLastReadBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
+import { applyPairingChange, type PairingChangeDeps } from './applyPairingChange'
 import {
   clearPairingScopedState,
   type ClearPairingScopedStateDeps
@@ -80,11 +81,16 @@ const activateDeps: ActivateConversationDeps = {
  * `modelListStore` appear here and nowhere else in this file; PairedShell still subscribes to no store
  * at all and stays server-renderable. #593 widened the set with the announced running model, #779 with
  * the per-conversation read marks, #955 with the published slash-command menus and #977 with the
- * published model menus, and because both call sites below pass this one object, each was a single
- * edit rather than two — which is the whole reason the clear lives in the shared helper. The two
- * paths are NOT symmetric: unpair unmounts this shell, while pair-another-server transitions
- * `pairServer` → `list` inside it, so a store dropped by one and not the other would latch on exactly
- * the path a remount cannot rescue.
+ * published model menus, and each was a single edit here rather than one per call site — which is the
+ * whole reason the clear lives in the shared helper, and which survives #1141 narrowing the callers to
+ * one. THAT the set is enumerated in one reviewable, testable place is the property; that two paths
+ * once shared it was the occasion, not the reason.
+ *
+ * #1141: exactly one path reaches this object now — unpair, through `applyPairingChange`'s `unpaired`
+ * arm. Pair-another-server ran the same clear until then, on the argument that both paths end a
+ * pairing. It does not end one: it ADDS a server beside those already paired, and since #1117 and
+ * #1084 the background process holds a live connection for each of them. The clear itself is
+ * unchanged and stays unconditional on the path that remains.
  */
 /**
  * #652: the store wiring for the deleted-conversation exit, module scope for the same reason as the two
@@ -114,13 +120,13 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   clearAllSlashCommandLists: () => slashCommandListStore.getState().clearAllSlashCommandLists(),
   // #977: every conversation's published MODEL menu, dropped as one, the same shape and for the same
   // reason as its twin above — the store method takes nothing at all, so there is no sampling or
-  // gating branch to keep in one tested place. Adding it to THIS object is what makes both
-  // pairing-change paths below drop it; neither call site needed an edit.
+  // gating branch to keep in one tested place. Adding it to THIS object is what makes the unpair path
+  // below drop it; the call site needed no edit.
   clearAllModelLists: () => modelListStore.getState().clearAllModelLists(),
   // #1086: every server's conversation rows, dropped as one. The same direct, nullary shape as the
   // three clears above — no sampling or gating branch to keep in one tested place, because the store
-  // method takes nothing at all. Adding it to THIS object is what makes both pairing-change paths
-  // below drop it; neither call site needed an edit.
+  // method takes nothing at all. Adding it to THIS object is what makes the unpair path below drop
+  // it; the call site needed no edit.
   clearAllConversations: () => conversationListStore.getState().clearAllConversations(),
   // #1138: every conversation's queued backlog, dropped as one. The same direct, nullary shape as the
   // four clears above. It is the only member of this object whose store the `connected` edge ALSO
@@ -133,8 +139,8 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // clears. Scoping that edge to the reconnecting server (which is what #1139 does) is what stopped a
   // re-pairing's first `connected` from blanking the map on its way past, and this family re-asserts
   // nothing at all, so without this entry a departed pairing's command lines would latch for the life
-  // of the process. Adding it to THIS object is what makes both pairing-change paths below drop it;
-  // neither call site needed an edit.
+  // of the process. Adding it to THIS object is what makes the unpair path below drop it; the call
+  // site needed no edit.
   clearAllRosters: () => backgroundTaskRosterStore.getState().clearAllRosters(),
   // #1140: every outstanding permission prompt, its suppression bookkeeping and its rejection banners,
   // dropped as one — and the THIRD member whose store the `connected` edge also clears. It reaches its
@@ -144,8 +150,10 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // server (which is what #1140 does) is what stopped a re-pairing's first `connected` from clearing the
   // store on its way past, and the daemon's reconcile re-sends only the NEW server's prompts, so without
   // this entry a departed pairing's answerable prompts would latch for the life of the process. Adding
-  // it to THIS object is what makes both pairing-change paths below drop it; neither call site needed an
-  // edit.
+  // it to THIS object is what makes the unpair path below drop it; the call site needed no edit. Note
+  // "DEPARTED": since #1141 a prompt raised by a server that is still paired survives a pair-another
+  // and stays answerable, which is the point — `answerModal` routes by modal id to the connection that
+  // raised it, so the answer reaches a daemon that is still waiting for it.
   dispatchModal: (event) => modalStore.getState().dispatch(event),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
@@ -347,6 +355,22 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // listening. It subscribes for its effect only, never for render, so this container still subscribes to
   // no store and stays server-renderable.
   useConversationLastRead()
+  // #1141: the pairing-change wiring, and the ONE dep object in this file that cannot live at module
+  // scope — three of its four members close over per-render values (`onUnpaired`, `dispatch`). That
+  // is `exitConversationDeps`' situation one notch further: there the single container-bound member
+  // is supplied at the call site and an `Omit` keeps the rest module-scope, which is not worth doing
+  // for a majority. The per-render allocation is free, exactly as it is for the inline arrows this
+  // replaces, and the container still subscribes to no store and stays server-renderable.
+  //
+  // `clearPairingScopedState` is nullary HERE: `applyPairingChange` decides whether a change clears,
+  // never what the clear contains, so `clearPairingDeps` stays module-scope above and the thirteen
+  // stores stay behind the helper that enumerates and tests them.
+  const pairingChangeDeps: PairingChangeDeps = {
+    clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),
+    navigateToPairingScreen: onUnpaired,
+    navigateToNewServerList: () => dispatch({ type: 'pairServerPaired' }),
+    returnToSettings: () => dispatch({ type: 'pairServerCancelled' })
+  }
   return (
     <PairedShellView
       route={route}
@@ -369,27 +393,21 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
-      // #531: the two paths that END a pairing, and the one place both clear the same set. They are
-      // NOT symmetric, which is why neither can be left to the other: unpair flips App's route to
-      // `pairing` and unmounts this shell, while pair-another transitions `pairServer` → `list` INSIDE
-      // it (pairedRoute.ts:62-65), so the shell never unmounts and nothing a remount would have
-      // cleared gets cleared. Wrapping the props here rather than threading a dep into runUnpair puts
-      // both wirings on adjacent lines and leaves ConversationScreen untouched — and it inherits the
-      // unpair fail-safe posture verbatim, because runUnpair calls `onUnpaired` only on `result: 'ok'`
-      // (unpairAction.ts:61-64), so a failed unpair reaches neither this wrapper nor the clear.
-      // Clear-then-navigate on both: no observer may see the new pairing's view against the ended
-      // pairing's rows, conversation id or session. `onPairServerCancelled` is deliberately NOT
-      // wrapped — cancelling out of pair-another ends no pairing, so it must clear nothing.
-      onUnpaired={() => {
-        clearPairingScopedState(clearPairingDeps)
-        onUnpaired()
-      }}
+      // #1141: all three pairing-change callbacks go through `applyPairingChange`, which owns the
+      // decision of WHICH of them ends a pairing and so clears. Only `unpaired` does. Wiring them
+      // here rather than threading a dep into runUnpair puts the three on adjacent lines and leaves
+      // ConversationScreen untouched, and the unpair arm inherits that path's fail-safe posture
+      // verbatim: `runUnpair` calls `onUnpaired` only on `result: 'ok'`, so a failed unpair reaches
+      // neither this callback nor the clear. What changed at #1141 is `onPairServerPaired`, which
+      // used to run the same clear as unpair on the argument that both "end a pairing" — it does not:
+      // it ADDS a server beside the ones already paired, and the shell never unmounts, so the
+      // conversation the operator was reading and everything scoped to it must survive intact.
+      onUnpaired={() => applyPairingChange(pairingChangeDeps, 'unpaired')}
       onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
-      onPairServerPaired={() => {
-        clearPairingScopedState(clearPairingDeps)
-        dispatch({ type: 'pairServerPaired' })
-      }}
-      onPairServerCancelled={() => dispatch({ type: 'pairServerCancelled' })}
+      onPairServerPaired={() => applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')}
+      onPairServerCancelled={() =>
+        applyPairingChange(pairingChangeDeps, 'cancelledPairAnotherServer')
+      }
     />
   )
 }

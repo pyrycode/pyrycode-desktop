@@ -1,8 +1,11 @@
 // The "this pairing has ended" clear — framework-free and React-free, co-located with PairedShell
 // beside its other pure helpers activateConversation.ts and pairedRoute.ts, and mirroring
 // unpairAction.ts / composerSend.ts: the effects are injected so the helper is a pure, deterministic
-// function tested with plain spies (no React, no store, no Electron). PairedShell's two pairing-change
-// sites — the unpair route flip and the pair-another-server transition — are thin glue over this.
+// function tested with plain spies (no React, no store, no Electron). ONE pairing-change site is thin
+// glue over this: the unpair route flip, reached through `applyPairingChange`'s `unpaired` arm. The
+// pair-another-server transition called it too until #1141 established that adding a server ends no
+// pairing — that helper is now where "which changes clear?" is decided, and this is where "what does
+// clearing mean?" is decided.
 import type { ThreadEvent } from './store/threadTimeline'
 import type { SessionAction } from './store/sessionStore'
 import type { ModalEvent } from './store/modalPrompts'
@@ -27,10 +30,11 @@ import type { ModalEvent } from './store/modalPrompts'
  * The dispatches are typed against the real action unions rather than being bare `() => void` thunks,
  * so the dispatched action SHAPE is compile-checked and the test can assert the exact payload.
  *
- * This interface is the contract both pairing-change paths share, and that is the point: the bug this
- * fixes existed because each path decided its own clear set independently. A future pairing-scoped
- * store that nothing re-asserts on the new pairing belongs HERE, not at one call site — which is why
- * the test pins this key set. `announcedModelStore` is the worked example: #588 deferred its clear
+ * This interface is the whole enumeration of what "the pairing ended" means to the renderer, and that
+ * is the point: the bug #531 fixed existed because two call sites each decided their own clear set
+ * independently. #1141 retired one of those sites rather than the property — a future pairing-scoped
+ * store that nothing re-asserts on the next pairing belongs HERE, not inline at the caller, which is
+ * why the test pins this key set even now that one caller reaches it. `announcedModelStore` is the worked example: #588 deferred its clear
  * while the slice was dormant, and #593 added it here rather than at either call site.
  * `slashCommandListStore` (#954 dormant, #955 cleared) repeated that sequence verb for verb, and
  * `modelListStore` (#974 dormant, #977 cleared) a third time. A store that
@@ -115,6 +119,16 @@ import type { ModalEvent } from './store/modalPrompts'
  * deliberately never touches and which therefore had never been collected at a pairing boundary either:
  * every slice of this store is scoped to the pairing that ended, so the arm returns it to its initial
  * state rather than covering two slices of three.
+ *
+ * ALL FOUR of those membership arguments survive #1141 intact, and every one of them is an argument
+ * about a pairing that ENDED — a departed server's slot never written again, a departed server's
+ * backlogs, rosters and prompts re-asserted by nothing. That is unpair, and unpair still runs this
+ * whole clear. What #1141 removed is the OTHER caller, and none of the four reaches it: pairing an
+ * additional server retires no slot, departs no daemon and silences no re-assertion, so the residue
+ * each paragraph describes does not arise. The `connected`-edge half of the split is unchanged too —
+ * the handshake still fires on both pairing-change paths, and each of those three scoped resets still
+ * covers a reconnect's own listed conversations. The two mechanisms simply stopped overlapping at a
+ * boundary that turned out not to be one.
  */
 export interface ClearPairingScopedStateDeps {
   dispatchTimeline: (event: ThreadEvent) => void
@@ -141,15 +155,28 @@ export interface ClearPairingScopedStateDeps {
  * suppression bookkeeping and rejection banners, the session store's status + coarse message list, and
  * how far the operator had read into each conversation.
  *
- * Called from BOTH paths that end a pairing, which is the whole design. Unpair flips the App route to
- * `pairing` and unmounts PairedShell; pair-another-server transitions `pairServer` → `list` INSIDE the
- * shell (pairedRoute.ts:62-65), so the shell never unmounts and nothing a remount would have cleared
- * gets cleared. Twelve of these thirteen stores latch across either switch because nothing on a new pairing
+ * Called from ONE path — unpair, via `applyPairingChange`'s `unpaired` arm, which flips the App route
+ * to `pairing` and unmounts PairedShell. Until #1141 the pair-another-server transition called it too,
+ * on the argument that it ends a pairing as well; it does not. It ADDS a server, `pairServer` → `list`
+ * INSIDE the shell (`nextPairedRoute`'s `pairServerPaired` arm), leaving every already-paired server
+ * paired and — since #1117 gave each stored record its own live connection — still connected. So the
+ * shell never unmounting stopped being the reason a clear was owed there and became the reason one
+ * must not run: nothing has ended, and everything below belongs to a machine the operator is still on.
+ * Read every argument in this docblock as scoped to a pairing that ENDED, which is now unpair alone.
+ *
+ * Twelve of these thirteen stores latch across an unpair because nothing on the NEXT pairing
  * re-asserts them: neither timeline has any history backfill (their only production writers are the
- * live stream, timelineBridge.ts:347, and the composer's optimistic echo, composerSend.ts:82) — and
+ * live stream in `subscribeTimeline` and the composer's optimistic echo in `submitMessage`) — and
  * the keyed one is worse than the flat one, because it holds EVERY conversation's thread rather than
- * only the open one, and a conversation id is scoped to the server that issued it, so a slice from the
- * old server could be keyed under an id the new one reuses. `activeConversation` is written only by a
+ * only the open one. NOT because ids collide: the daemon mints conversation ids as UUIDv4 from the
+ * system random source (`internal/conversations/id.go` in the pyrycode repo, at `7304b79b`), so a
+ * later server cannot reuse an earlier one's ids and no slice can be read under a stranger's key.
+ * This docblock argued the opposite until #1141 — "a conversation id is scoped to the server that
+ * issued it, so a slice from the old server could be keyed under an id the new one reuses" — and that
+ * claim was the stated reason the pair-another path had to clear. It was false, and its falseness is
+ * what makes retaining EVERY keyed store safe while several servers are paired at once. The clear is
+ * still owed on unpair, on the plain ground that the rows are attributed to a machine that is gone.
+ * `activeConversation` is written only by a
  * nav action, `sessionId` only by a `sessionTransition` marker, and the announced model only by
  * `subscribeAnnouncedModel` (announcedModelBridge.ts:60-70), driven by a turn's init line — so on a
  * fresh pairing nothing writes it until the new daemon's first turn, and until then #560's sheet would
@@ -183,8 +210,8 @@ export interface ClearPairingScopedStateDeps {
  * The background-task rosters (#1139) latch for the SAME reason as those backlogs, with that notch
  * turned as far as it goes: their re-assertion does not exist at all. No frame in the family is in the
  * daemon's reconcile-on-connect set and this app advertises no `last_event_id` (#569 owns that gap), so
- * where a drained conversation was the queue's unlucky case, EVERY held roster is stale after a pairing
- * change and none of them ever refreshes. Until #1139 the edge's own whole-map reset covered that gap
+ * where a drained conversation was the queue's unlucky case, EVERY held roster is stale after an
+ * unpair and none of them ever refreshes. Until #1139 the edge's own whole-map reset covered that gap
  * incidentally, the same accident #1138 removed next door. The residue is the sharpest content this set
  * handles: a held task's `description` for `taskType: local_bash` IS the literal command line claude
  * ran, and its `latestUpdate.patch` is the same class of untrusted, model-influenced text under a
@@ -206,14 +233,16 @@ export interface ClearPairingScopedStateDeps {
  * the rejection banners have never been collected anywhere, since the `connected` arm deliberately
  * never touched them. All three go, because all three are scoped to the pairing that ended.
  * The last-read marks (#779) latch HARDER than the other nine,
- * because #776 persists them to `localStorage`: they survive not only either switch but the restart
+ * because #776 persists them to `localStorage`: they survive not only the unpair but the restart
  * after it, so clearing the in-memory slice alone would leave the previous pairing's marks on disk to be
  * re-hydrated at next launch — a failure that looks correct in memory and is silent. Reaching the
  * persisted bytes is what makes persisting them defensible at all, which is why this clear is the
  * counterweight to #776 rather than a tidy-up after it. The session store is IN the
  * set rather than beside it: it used to be reset by `runUnpair` alone, and leaving it there would have
- * degraded this into "eleven clears plus a special case" — exactly the per-path divergence that let the
- * bug exist.
+ * degraded this into "eleven clears plus a special case" — one store with an owner of its own, outside
+ * the enumeration this interface exists to be. #1141 sharpened that rather than softening it: with a
+ * single caller, "the set" and "what the caller happens to do" would be indistinguishable if any
+ * member were allowed to live at the call site, and the pin below would be pinning nothing.
  *
  * Unconditional, unlike activateConversation's id gate. That helper guards because clearing a thread
  * the user is still reading would destroy rows that never come back; here the pairing itself is over,

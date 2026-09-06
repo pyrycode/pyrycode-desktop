@@ -316,3 +316,32 @@ which is unproven and a far larger change than this ticket.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+### 2026-09-06 — the prose sweep found two more sites than the plan listed
+
+Implementing the sweep the ticket asks for ("sweep for it rather than working from a list") turned up
+two stale claims the plan's own list did not name, both restated rather than deleted:
+
+- `PairedShell.tsx` — four of `clearPairingDeps`' member comments (#977, #1086, #1139, #1140) each end
+  *"Adding it to THIS object is what makes both pairing-change paths below drop it; neither call site
+  needed an edit."* One call site now. The #1140 member additionally gained the reason its residue
+  argument does not reach a still-paired server: `answerModal` routes by modal id to the connection
+  that raised the prompt.
+- `src/renderer/src/store/sessionStore.ts` — the `reset` action's comment says the clear set is *"owned
+  by `clearPairingScopedState.ts`, which both pairing-change paths run"*.
+
+**Production-file count: 6, one over the size table's 5.** The sixth is `sessionStore.ts`, and the edit
+is a single comment sentence — no behaviour, no signature, no consumer. Stated rather than avoided:
+suppressing a known-false sentence to protect a file count would invert what that count is for (it
+bounds edit cost and cascade risk, and a comment correction carries neither), and the ticket makes the
+sweep part of the deliverable precisely because the helper's prose is load-bearing. The other five
+lines of the table hold as planned.
+
+### 2026-09-06 — how RED was reached
+
+The lift landed first with the pair-another clear carried over *verbatim*, so the suite reddened on
+exactly the two cases that forbid it (`pairing another server clears NOTHING` and the table pin)
+while the unpair and cancel cases passed. Deleting the one call turned both green. That sequence is
+AC4's "a test that fails if the call is put back", executed rather than asserted.

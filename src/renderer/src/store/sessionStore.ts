@@ -82,7 +82,8 @@ export type SessionAction =
   // alone does NOT keep a later re-pair from showing the previous pairing's conversation (#531 — the
   // gap that claim hid). The full pairing-scoped clear set — the timeline rows, the active
   // conversation, the daemon session id and this reset — is owned by `clearPairingScopedState.ts`,
-  // which both pairing-change paths run; this action is one of its four members, never the whole job.
+  // which the unpair path runs (since #1141 the only one: pairing an ADDITIONAL server ends no
+  // pairing, so it clears nothing); this action is one of that set's members, never the whole job.
   | { type: 'reset' }
 
 /** The whole session state. Single source of truth. */

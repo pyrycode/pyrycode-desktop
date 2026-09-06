@@ -2806,11 +2806,13 @@ function Composer({
   // returns a pair instead of this being one component. It resets on remount for free: PairedShellView
   // keys the chat pane on the conversation id, so a switch rebuilds this component with a fresh outcome.
   // No `window.pyry` dereference happens during render — see the hook.
-  const attach = useAttachmentUpload()
+  // #1205: it takes the open conversation's id, the same value `submitMessage` sends under, because the
+  // daemon files an upload under the conversation the ask names and refuses one naming none. Read here
+  // from the store the send already reads, so the two cannot name different chats.
+  const attach = useAttachmentUpload({ conversationId: activeConversationId })
   // #890: the drop entry into that same flow. It takes `attach.dropFile` — the hook's own third member —
   // rather than a second bridge call of its own, which is what keeps ONE owner of the clear-on-gesture
-  // and one outcome surface for both entries. No `conversationId` and no store read, for the attach
-  // button's reason: the intent it dispatches names no conversation.
+  // and one outcome surface for both entries. The conversation rides `attach.dropFile` itself (#1205).
   const fileDrop = useComposerFileDrop({ onFile: attach.dropFile })
 
   // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command

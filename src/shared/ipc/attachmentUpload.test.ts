@@ -3,8 +3,11 @@ import {
   ATTACHMENT_PASTE_SOURCE,
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  ATTACHMENT_PICK_SOURCE,
+  MAX_UPLOAD_CONVERSATION_ID_LENGTH,
   MAX_UPLOAD_PATH_LENGTH,
   isAttachmentPasteRequest,
+  isAttachmentPickRequest,
   isAttachmentUploadRequest,
   type AttachmentUploadEvent
 } from './attachmentUpload'
@@ -16,6 +19,11 @@ import { PAIRING_STATUS_CHANNEL } from './pairingStatus'
 import { UNPAIR_SERVER_CHANNEL } from './unpair'
 import { SERVER_INFO_CHANNEL } from './serverInfo'
 import { HOST_LABEL_CHANNEL } from './hostLabel'
+
+// #1205: every ask carries the open conversation's id, so every fixture below that is meant to be
+// refused for SOME OTHER reason carries a valid one too — the refusal each test names stays the only
+// refusal in play. The rule for the id itself is asserted in its own describe at the bottom.
+const CONV = { conversationId: 'conv-1' } as const
 
 describe('attachment-upload channels', () => {
   it('are two distinct names, and collide with no existing channel', () => {
@@ -149,14 +157,14 @@ describe('AttachmentUploadEvent', () => {
 // "upload this path". Everything below is the second door's lock.
 describe('isAttachmentUploadRequest', () => {
   it('accepts a well-formed request', () => {
-    expect(isAttachmentUploadRequest({ path: '/Users/someone/Pictures/photo.png' })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/Users/someone/Pictures/photo.png', ...CONV })).toBe(true)
   })
 
   it('accepts a request carrying extra keys, which are never read', () => {
     // isAttachmentBytesRequest's posture restated: nothing downstream rebuilds a value from this
     // object's other keys, so a smuggled field reaches nothing. Refusing extras would buy nothing and
     // would make the guard brittle against a future additive field.
-    expect(isAttachmentUploadRequest({ path: '/tmp/a', filename: 'b', bytes: [1, 2] })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', filename: 'b', bytes: [1, 2], ...CONV })).toBe(true)
   })
 
   it('rejects everything that is not an object with a usable path', () => {
@@ -185,12 +193,12 @@ describe('isAttachmentUploadRequest', () => {
     // THE LOAD-BEARING CASE. `webUtils.getPathForFile` answers '' for a File the page built itself, so
     // this line is what turns "only a file the OS delivered is backed by a path" into a refusal main
     // actually performs, rather than a property the preload merely observes.
-    expect(isAttachmentUploadRequest({ path: '' })).toBe(false)
+    expect(isAttachmentUploadRequest({ path: '', ...CONV })).toBe(false)
   })
 
   it('bounds the path, accepting the limit and refusing one character past it', () => {
-    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH) })).toBe(true)
-    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH + 1) })).toBe(false)
+    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH), ...CONV })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: 'a'.repeat(MAX_UPLOAD_PATH_LENGTH + 1), ...CONV })).toBe(false)
   })
 
   it('rejects a __proto__-carrying literal and alters no prototype reading it', () => {
@@ -198,23 +206,24 @@ describe('isAttachmentUploadRequest', () => {
     // own key at all — it sets the prototype — so a literal fixture would pass this test vacuously
     // while proving nothing. JSON.parse round-trips `__proto__` as an ordinary OWN key, which is the
     // shape a hostile renderer can actually put on the wire.
-    const hostile: unknown = JSON.parse('{"__proto__": {"path": "/etc/passwd"}}')
+    const hostile: unknown = JSON.parse('{"__proto__": {"path": "/etc/passwd"}, "conversationId": "conv-1"}')
     expect(isAttachmentUploadRequest(hostile)).toBe(false)
     // The polluting object has no OWN `path`, and the guard's `in` test is followed by a typeof on the
     // value actually found — so nothing inherited from Object.prototype can satisfy it either.
     expect(Object.prototype).not.toHaveProperty('path')
-    expect(isAttachmentUploadRequest(JSON.parse('{"__proto__": {"path": "/x"}, "path": ""}'))).toBe(
+    expect(isAttachmentUploadRequest(JSON.parse('{"__proto__": {"path": "/x"}, "path": "", "conversationId": "conv-1"}'))).toBe(
       false
     )
   })
 })
 
-// #1032: the THIRD entry's guard. The channel now carries three asks — argument-free is the picker, a
-// path is a drop, and this one is a paste. Presence alone can no longer tell them apart, so this ask
-// names itself with a client-owned literal and the guard compares against it.
+// #1032: the THIRD entry's guard. The channel carries three asks — a path is a drop, this one is a
+// paste, and since #1205 the picker names itself too (below). Presence alone could no longer tell them
+// apart once there were three, so an ask names itself with a client-owned literal and the guard
+// compares against it.
 describe('isAttachmentPasteRequest', () => {
   it('accepts the well-formed ask', () => {
-    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(true)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, ...CONV })).toBe(true)
   })
 
   it('accepts an ask carrying extra keys, which are never read', () => {
@@ -224,7 +233,7 @@ describe('isAttachmentPasteRequest', () => {
     // and it is looked up against the registry and discarded rather than acted on; it is not an
     // unread extra and has its own rule, asserted in the routing-key describe at the bottom of this
     // file.
-    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, path: '/etc/passwd' })).toBe(
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, path: '/etc/passwd', ...CONV })).toBe(
       true
     )
   })
@@ -259,7 +268,7 @@ describe('isAttachmentPasteRequest', () => {
     // key at all — it sets the prototype — so a literal fixture would pass vacuously. JSON.parse
     // round-trips `__proto__` as an ordinary OWN key, which is the shape a hostile renderer can put on
     // the wire.
-    const hostile: unknown = JSON.parse('{"__proto__": {"source": "clipboard-image"}}')
+    const hostile: unknown = JSON.parse('{"__proto__": {"source": "clipboard-image"}, "conversationId": "conv-1"}')
     expect(isAttachmentPasteRequest(hostile)).toBe(false)
     expect(Object.prototype).not.toHaveProperty('source')
   })
@@ -272,15 +281,15 @@ describe('isAttachmentPasteRequest', () => {
 // behaviour one for every ask an operator can actually produce.
 describe('the two request guards, side by side', () => {
   it('neither guard accepts the other entry’s ask', () => {
-    expect(isAttachmentUploadRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(false)
-    expect(isAttachmentPasteRequest({ path: '/Users/someone/Pictures/photo.png' })).toBe(false)
+    expect(isAttachmentUploadRequest({ source: ATTACHMENT_PASTE_SOURCE, ...CONV })).toBe(false)
+    expect(isAttachmentPasteRequest({ path: '/Users/someone/Pictures/photo.png', ...CONV })).toBe(false)
   })
 
   it('an ask carrying both shapes is a PATH ask, because the path guard runs first', () => {
     // Stated as a fact about the guards rather than about the listener, since this is where it can be
     // proved. Both accept it; the ordering in `attachmentUploadListener` is what resolves it, and
     // resolving it towards the shipped arm is what keeps #890's behaviour byte-for-byte unchanged.
-    const both = { path: '/tmp/a', source: ATTACHMENT_PASTE_SOURCE }
+    const both = { path: '/tmp/a', source: ATTACHMENT_PASTE_SOURCE, ...CONV }
     expect(isAttachmentUploadRequest(both)).toBe(true)
     expect(isAttachmentPasteRequest(both)).toBe(true)
   })
@@ -301,15 +310,17 @@ describe('the two request guards, side by side', () => {
 // these assertions are what keep the two copies from drifting, and they are written against the
 // rule rather than against the helper.
 //
-// The picker's ask has no object at all and so appears nowhere below: it carries no id by
-// construction and takes the unnamed path, which is `serverRouter.resolve(undefined)`'s
+// The picker's ask gained an object in #1205 and takes the same rule; it is asserted in its own
+// describe below rather than woven in here. An ask with no id takes the unnamed path, which is
+// `serverRouter.resolve(undefined)`'s
 // sole-connection branch.
 describe('the optional routing key on both asks', () => {
   it('accepts an ask that names a server, on either entry', () => {
-    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: 'server-a' })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV, serverId: 'server-a' })).toBe(true)
     expect(
       isAttachmentPasteRequest({
         source: ATTACHMENT_PASTE_SOURCE,
+        ...CONV,
         serverId: 'server-a'
       })
     ).toBe(true)
@@ -319,8 +330,8 @@ describe('the optional routing key on both asks', () => {
     // The load-bearing half of "absent-or-undefined-or-string" in the REFUSAL direction: no
     // renderer sender has a per-server surface to name a server from until #1086, so a present-key
     // REJECTION would refuse the ordinary bare ask both current senders produce.
-    expect(isAttachmentUploadRequest({ path: '/tmp/a' })).toBe(true)
-    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV })).toBe(true)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, ...CONV })).toBe(true)
   })
 
   it('accepts an explicitly-undefined serverId, which is what structured clone delivers', () => {
@@ -329,10 +340,11 @@ describe('the optional routing key on both asks', () => {
     // writes `{ path, serverId }` from an absent variable puts an own `serverId: undefined` key on
     // the wire. A bare `'serverId' in value` check would read that as a supplied value and refuse
     // it.
-    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: undefined })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV, serverId: undefined })).toBe(true)
     expect(
       isAttachmentPasteRequest({
         source: ATTACHMENT_PASTE_SOURCE,
+        ...CONV,
         serverId: undefined
       })
     ).toBe(true)
@@ -344,10 +356,11 @@ describe('the optional routing key on both asks', () => {
     // held entry's id is empty, and the not-paired stand-in's is `null`, which no string can match.
     // Refusing it here would buy nothing the resolution does not already buy, and would put a
     // second, weaker opinion about the id at a boundary that is not the one holding the entry set.
-    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: '' })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV, serverId: '' })).toBe(true)
     expect(
       isAttachmentPasteRequest({
         source: ATTACHMENT_PASTE_SOURCE,
+        ...CONV,
         serverId: ''
       })
     ).toBe(true)
@@ -367,9 +380,10 @@ describe('the optional routing key on both asks', () => {
       {},
       { toString: () => 'server-a' }
     ]
-    const drops = invalid.map((serverId) => ({ path: '/tmp/a', serverId }))
+    const drops = invalid.map((serverId) => ({ path: '/tmp/a', ...CONV, serverId }))
     const pastes = invalid.map((serverId) => ({
       source: ATTACHMENT_PASTE_SOURCE,
+      ...CONV,
       serverId
     }))
     expect(drops.map(isAttachmentUploadRequest)).toEqual(invalid.map(() => false))
@@ -384,17 +398,124 @@ describe('the optional routing key on both asks', () => {
     expect(
       isAttachmentUploadRequest({
         path: '/tmp/a',
+        ...CONV,
         serverIds: 42,
         filename: 'b'
       })
     ).toBe(true)
-    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, server: 42 })).toBe(true)
-    expect(isAttachmentUploadRequest({ path: '/tmp/a', serverId: 42 })).toBe(false)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, ...CONV, server: 42 })).toBe(true)
+    expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV, serverId: 42 })).toBe(false)
     expect(
       isAttachmentPasteRequest({
         source: ATTACHMENT_PASTE_SOURCE,
+        ...CONV,
         serverId: 42
       })
     ).toBe(false)
+  })
+})
+
+// #1205: the REQUIRED destination, on all three asks, and the picker's own ask. pyrycode #2143 made
+// the daemon refuse a chunk naming no conversation, so an ask that names none is refused HERE — at
+// the boundary, with no filesystem call and no event — rather than reaching the composer as "the host
+// rejected part of the upload". One rule, `hasValidConversationId`, checked by all three guards.
+describe('the required conversation on every ask (#1205)', () => {
+  const asks = {
+    drop: (extra: object) => isAttachmentUploadRequest({ path: '/tmp/a', ...extra }),
+    paste: (extra: object) => isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, ...extra }),
+    pick: (extra: object) => isAttachmentPickRequest({ source: ATTACHMENT_PICK_SOURCE, ...extra })
+  }
+  const entries = Object.values(asks)
+
+  it('accepts a non-empty string on every entry', () => {
+    expect(entries.map((ask) => ask({ conversationId: 'conv-1' }))).toEqual([true, true, true])
+  })
+
+  it('refuses an ask with no conversationId key, on every entry — there is no unnamed path for it', () => {
+    // The asymmetry with `serverId` is the point: a server falls back to the sole connection, a
+    // conversation falls back to nothing, because the daemon has had no cursor to fall back to since
+    // pyrycode #2143. Accepting an absent id here would only move the refusal to the operator's screen.
+    expect(entries.map((ask) => ask({}))).toEqual([false, false, false])
+  })
+
+  it('refuses undefined, empty and non-string ids, on every entry', () => {
+    const invalid: unknown[] = [undefined, '', null, 42, true, [], ['conv-1'], {}, { toString: () => 'c' }]
+    for (const ask of entries) {
+      expect(invalid.map((conversationId) => ask({ conversationId }))).toEqual(invalid.map(() => false))
+    }
+  })
+
+  it('bounds the id, accepting the limit and refusing one character past it', () => {
+    for (const ask of entries) {
+      expect(ask({ conversationId: 'c'.repeat(MAX_UPLOAD_CONVERSATION_ID_LENGTH) })).toBe(true)
+      expect(ask({ conversationId: 'c'.repeat(MAX_UPLOAD_CONVERSATION_ID_LENGTH + 1) })).toBe(false)
+    }
+  })
+
+  it("takes the retrieval channel's bound, so one identifier rule holds across both attachment legs", () => {
+    expect(MAX_UPLOAD_CONVERSATION_ID_LENGTH).toBe(256)
+  })
+
+  it('refuses a __proto__-carrying id, on every entry', () => {
+    // The polluting object has no OWN `conversationId`; the `in` test is followed by a typeof on the
+    // value actually found, so nothing inherited can satisfy it. JSON.parse for the sibling tests' reason.
+    expect(
+      isAttachmentUploadRequest(JSON.parse('{"path": "/tmp/a", "__proto__": {"conversationId": "conv-1"}}'))
+    ).toBe(false)
+    expect(
+      isAttachmentPickRequest(
+        JSON.parse('{"source": "file-picker", "__proto__": {"conversationId": "conv-1"}}')
+      )
+    ).toBe(false)
+    expect(Object.prototype).not.toHaveProperty('conversationId')
+  })
+})
+
+describe('isAttachmentPickRequest (#1205)', () => {
+  it('accepts the well-formed ask, with and without a server', () => {
+    expect(isAttachmentPickRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV })).toBe(true)
+    expect(isAttachmentPickRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV, serverId: 'server-a' })).toBe(
+      true
+    )
+    expect(isAttachmentPickRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV, serverId: undefined })).toBe(
+      true
+    )
+  })
+
+  it('rejects a bare send — the argument-free picker intent is retired', () => {
+    // The channel's original shape. It cannot carry a destination, so since #1205 it matches no guard
+    // and the listener drops it: no dialog, no event, no log.
+    expect(isAttachmentPickRequest(undefined)).toBe(false)
+    expect(isAttachmentUploadRequest(undefined)).toBe(false)
+    expect(isAttachmentPasteRequest(undefined)).toBe(false)
+  })
+
+  it('rejects everything that is not an object naming this exact source', () => {
+    const rejected: unknown[] = [
+      null,
+      'file-picker',
+      42,
+      [],
+      {},
+      { ...CONV },
+      { source: null, ...CONV },
+      { source: '', ...CONV },
+      { source: 'file', ...CONV },
+      { source: 'file-picker-x', ...CONV },
+      { source: ATTACHMENT_PASTE_SOURCE, ...CONV }
+    ]
+    expect(rejected.map(isAttachmentPickRequest)).toEqual(rejected.map(() => false))
+  })
+
+  it('rejects a serverId that is not a string, like its siblings', () => {
+    expect(isAttachmentPickRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV, serverId: 42 })).toBe(false)
+  })
+
+  it('names a source that collides with neither a path nor the paste literal', () => {
+    expect(ATTACHMENT_PICK_SOURCE).toBe('file-picker')
+    expect(ATTACHMENT_PICK_SOURCE).not.toContain('/')
+    expect(ATTACHMENT_PICK_SOURCE).not.toBe(ATTACHMENT_PASTE_SOURCE)
+    expect(isAttachmentPasteRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV })).toBe(false)
+    expect(isAttachmentUploadRequest({ source: ATTACHMENT_PICK_SOURCE, ...CONV })).toBe(false)
   })
 })

@@ -7,9 +7,10 @@
 // builder here works. Iterating a planAttachmentChunks() result is #861's job, and nothing in this
 // module sends.
 //
-// The frame carries no conversation_id, and that omission is a security property — the daemon places
-// an upload in the conversation the authenticated session is already on (see the AttachmentChunkPayload
-// doc comment). This builder copies the payload verbatim and adds nothing to it.
+// The frame carries the conversation_id the plan put on it (#1205). It used to carry none, and that
+// omission was a security property while the daemon filed uploads under its follow-active cursor; since
+// pyrycode #2143 the daemon requires the field and validates it against its registry instead (see the
+// AttachmentChunkPayload doc comment). This builder copies the payload verbatim and adds nothing to it.
 //
 // MAIN-PROCESS ONLY. It imports codec.ts (Node `Buffer`) and the payload carries the file's bytes as
 // base64. Never re-export it through any renderer barrel. It performs no logging: `filename` is

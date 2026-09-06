@@ -21,6 +21,7 @@ describe('planAttachmentChunks', () => {
 
   const plan = (bytes: Uint8Array): ReturnType<typeof planAttachmentChunks> =>
     planAttachmentChunks({
+      conversation_id: 'conv-1',
       attachment_id: 'att-1',
       filename: 'notes.txt',
       mime_type: 'text/plain',
@@ -111,13 +112,17 @@ describe('planAttachmentChunks', () => {
     expect(chunks[0].total_chunks).toBe(4)
   })
 
-  it('carries identical attachment_id, total_chunks, size and sha256 on every chunk', () => {
-    // AC 4. The planner computes each of the four once and spreads them, so this is structural —
-    // the assertion is what keeps it structural.
+  it('carries identical conversation_id, attachment_id, total_chunks, size and sha256 on every chunk', () => {
+    // AC 4. The planner computes each of the five once and spreads them, so this is structural —
+    // the assertion is what keeps it structural. `conversation_id` (#1205) matters most here: the
+    // daemon fixes a transfer's destination on its FIRST chunk and refuses any later chunk naming a
+    // different one (pyrycode #2146), so a chunk that read the id live from a store the operator can
+    // switch mid-upload would kill the upload. Spread from one input, it cannot.
     const chunks = plan(pattern(STRIDE * 2 + 10))
     const first = chunks[0]
 
     for (const chunk of chunks) {
+      expect(chunk.conversation_id).toBe(first.conversation_id)
       expect(chunk.attachment_id).toBe(first.attachment_id)
       expect(chunk.total_chunks).toBe(first.total_chunks)
       expect(chunk.size).toBe(first.size)
@@ -125,7 +130,11 @@ describe('planAttachmentChunks', () => {
       expect(chunk.filename).toBe('notes.txt')
       expect(chunk.mime_type).toBe('text/plain')
     }
+    expect(first.conversation_id).toBe('conv-1')
     expect(first.attachment_id).toBe('att-1')
+    // Wire order: the daemon's struct puts the destination first (pyrycode #2142), and the builder
+    // serialises keys in insertion order, so the plan's literal is what the daemon's fixtures compare.
+    expect(Object.keys(first)[0]).toBe('conversation_id')
   })
 
   it('declares size as the WHOLE file length, not this chunk length', () => {

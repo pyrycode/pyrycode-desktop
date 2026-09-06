@@ -6955,6 +6955,7 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
     attachmentId = 'att-1'
   ): Promise<AttachmentTransferResult> =>
     connection.uploadAttachment({
+      conversation_id: 'conv-1',
       attachment_id: attachmentId,
       filename: 'notes.txt',
       mime_type: 'text/plain',
@@ -7204,7 +7205,7 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
     const reports: Array<[number, number]> = []
 
     const result = connection.uploadAttachment(
-      { attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
+      { conversation_id: 'conv-1', attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
       (sent, total) => void reports.push([sent, total])
     )
     await drain()
@@ -7228,7 +7229,7 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
 
     await expect(
       connection.uploadAttachment(
-        { attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
+        { conversation_id: 'conv-1', attachment_id: 'att-1', filename: 'notes.txt', mime_type: 'text/plain', bytes: FILE },
         (sent) => void reports.push(sent)
       )
     ).resolves.toEqual({ ok: false, outcome: 'not-connected' })
@@ -7243,6 +7244,7 @@ describe('createDaemonConnection — attachment upload drive (#861)', () => {
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
     const result = ctx.connection.uploadAttachment({
+      conversation_id: 'conv-1',
       attachment_id: 'att-secret-9f2b',
       filename: 'quarterly-severance-list.xlsx',
       mime_type: 'application/vnd.ms-excel',

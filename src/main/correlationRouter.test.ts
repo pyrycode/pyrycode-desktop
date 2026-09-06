@@ -85,6 +85,11 @@ function sessionTransition(
 ): StampedDaemonEvent {
   return {
     type: 'sessionTransition',
+    // The marker's routing key (#1192). This index is deliberately BLIND to it — every marker teaches
+    // `newSessionId → serverId` regardless of which chat it names, because a settings write must reach
+    // the daemon owning the session whether or not that chat is the one on screen. The attribution gate
+    // is the renderer's alone.
+    conversationId: 'conv-routing',
     newSessionId,
     reason,
     occurredAt: '2026-09-05T12:00:00Z',

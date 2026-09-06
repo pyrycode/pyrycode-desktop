@@ -1275,17 +1275,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'session-transition':
-            // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
-            // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,
-            // `workspaceCwd` — copied by name from the already-decoded, already-validated payload (so a
-            // malformed marker still fails closed upstream in parseSessionTransitionPayload, before this
-            // runs). Only `previous_session_id` is DROPPED — it has no consumer. Never a spread of the
-            // decoded payload (the assistant-delta idiom), so only the four named fields cross IPC and a
-            // decoder that ever grew an extra field cannot smuggle it across. `workspace_cwd` is
-            // `string | null` and carried through unchanged — the null is preserved, not coerced. A
-            // session_id is a routing id, not a secret (the conversation_id convention).
+            // The session-boundary data path (#254, widened #285, attributed #1192). Emit a fresh literal
+            // carrying the marker's routing key plus the four fields the delimiter slice (#286) reads —
+            // `conversationId`, `newSessionId`, `reason`, `occurredAt`, `workspaceCwd` — copied by name
+            // from the already-decoded, already-validated payload (so a malformed marker still fails
+            // closed upstream in parseSessionTransitionPayload, before this runs; since #1192 that
+            // includes a marker with no `conversation_id`, which is dropped at the decode with no event
+            // emitted and the connection left up). Only `previous_session_id` is DROPPED — it has no
+            // consumer. Never a spread of the decoded payload (the assistant-delta idiom), so only the
+            // five named fields cross IPC and a decoder that ever grew an extra field cannot smuggle it
+            // across. `workspace_cwd` is `string | null` and carried through unchanged — the null is
+            // preserved, not coerced. A session_id is a routing id, not a secret (the conversation_id
+            // convention).
+            //
+            // EVERY marker is forwarded, including one naming a conversation the operator is not looking
+            // at. The attribution gate is the RENDERER's (`subscribeSessionId`), deliberately: the
+            // correlation index below learns `newSessionId → serverId` off this same event, and dropping
+            // a marker here would blind it — reintroducing the refuses-with-no-frame bug its header
+            // documents. Main routes; the window decides what to hold.
             emitDaemonEvent(sink, {
               type: 'sessionTransition',
+              conversationId: inbound.sessionTransition.conversation_id,
               newSessionId: inbound.sessionTransition.new_session_id,
               reason: inbound.sessionTransition.reason,
               occurredAt: inbound.sessionTransition.occurred_at,

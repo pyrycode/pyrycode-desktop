@@ -222,6 +222,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(
       translateDaemonEvent({
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',

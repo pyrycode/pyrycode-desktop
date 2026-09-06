@@ -903,12 +903,20 @@ export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block
 /**
  * Inbound `session_transition` marker (daemon → client). Mirrors the daemon's SessionTransitionPayload
  * field-for-field (pyrycode/pyrycode#656, internal/protocol/messaging.go), wire order
- * `previous_session_id, new_session_id, reason, occurred_at, workspace_cwd` — all always present (no
- * `omitempty`). A session-boundary event the daemon emits when a conversation's session rotates (a `/clear`,
- * an idle eviction, a workspace change); it carries `new_session_id`, the addressing key a client needs to
- * change per-session settings (model / effort / YOLO). **There is NO `conversation_id`** — a session
- * boundary is attributed by the connection it arrives on, and desktop targets the single active conversation
- * (activeConversationStore, #448). `reason` is a plain wire string like `MessagePayload.role`, closed to the
+ * `conversation_id, previous_session_id, new_session_id, reason, occurred_at, workspace_cwd` — all
+ * always present (no `omitempty`). A session-boundary event the daemon emits when a conversation's session
+ * rotates (a `/clear`, an idle eviction, a workspace change); it carries `new_session_id`, the addressing
+ * key a client needs to change per-session settings (model / effort / YOLO).
+ *
+ * `conversation_id` is the marker's ROUTING KEY, and it has been on the wire since upstream #740/#741
+ * (merged 2026-06-23): the daemon resolves the owning conversation from `NewSessionID` once per
+ * transition and stamps it before marshalling, and an unresolvable binding DROPS the whole event rather
+ * than emitting a guessed or empty key. So a conforming daemon never sends this payload without one, and
+ * the decoder requires it (#1192). This port previously asserted the opposite — that a session boundary
+ * was attributed by the connection it arrives on — which was true of the port, never of the daemon; the
+ * marker is unsolicited, so this key is the ONLY thing that says which chat it describes.
+ *
+ * `reason` is a plain wire string like `MessagePayload.role`, closed to the
  * three WireSessionTransitionReason values. `occurred_at` is RFC3339Nano (a plain string on the wire; the
  * decoder requires a string but does not parse the timestamp). `workspace_cwd` is `string | null` (the
  * `ConversationSummary.name` valid-`null` idiom): the new workspace dir, non-null iff
@@ -916,6 +924,7 @@ export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block
  * (#179). See #254.
  */
 export interface SessionTransitionPayload {
+  conversation_id: string
   previous_session_id: string
   new_session_id: string
   reason: WireSessionTransitionReason

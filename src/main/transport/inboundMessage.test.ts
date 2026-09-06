@@ -848,8 +848,10 @@ const DELETED = { id: 'conv-9' }
  *  `path` is the daemon-side canonical path; a remote, opaque display string never resolved locally. */
 const FOLDER_CREATED = { path: '/home/user/projects/new-app' }
 
-/** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254). */
+/** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254),
+ *  carrying the routing key the daemon stamps on every transition (#1192). */
 const SESSION_TRANSITION = {
+  conversation_id: 'conv-1',
   previous_session_id: 'sess-1',
   new_session_id: 'sess-2',
   reason: 'clear',
@@ -1885,8 +1887,11 @@ describe('parseInboundMessage — session_transition recognition (#254, additive
     }
   })
 
-  it('drops unknown server keys (incl. a spurious conversation_id), keeping only the five known fields', () => {
-    const withExtras = { ...SESSION_TRANSITION, conversation_id: 'conv-1', extra: 'ignore-me' }
+  // `conversation_id` used to be this test's example of a spurious key. It is a KNOWN field since
+  // #1192, so the example moved to a `turn_id` the daemon does not send on this payload — a real
+  // forward-compat case rather than one this repo has since adopted.
+  it('drops unknown server keys, keeping only the six known fields', () => {
+    const withExtras = { ...SESSION_TRANSITION, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeSessionTransition(withExtras))).toEqual({
       kind: 'session-transition',
       sessionTransition: SESSION_TRANSITION
@@ -1916,7 +1921,7 @@ describe('parseInboundMessage — session_transition fail-closed (#254)', () => 
     }
   })
 
-  it('throws when previous_session_id / new_session_id / occurred_at is absent or non-string', () => {
+  it('throws when conversation_id / previous_session_id / new_session_id / occurred_at is absent or non-string', () => {
     const bad: unknown[] = [
       { ...SESSION_TRANSITION, previous_session_id: undefined },
       { ...SESSION_TRANSITION, new_session_id: 42 },
@@ -1925,6 +1930,36 @@ describe('parseInboundMessage — session_transition fail-closed (#254)', () => 
     for (const payload of bad) {
       expect(() => parseInboundMessage(encodeSessionTransition(payload))).toThrow(WireDecodeError)
     }
+  })
+
+  it('#1192: a marker with no conversation_id is DROPPED at the decode, whole and unattributed', () => {
+    // The marker is pushed unsolicited, so this key is its only attribution — there is no request to
+    // correlate it against the way #1176 correlates a reply. A marker that cannot say which chat it
+    // describes cannot be gated, so it fails closed here rather than reaching the renderer to be
+    // guessed at. A conforming daemon cannot produce one: it resolves the conversation from
+    // NewSessionID and drops the event itself when it cannot bind (upstream #740/#741).
+    const bad: unknown[] = [
+      (() => {
+        const { conversation_id: _dropped, ...missing } = SESSION_TRANSITION
+        return missing
+      })(), // absent
+      { ...SESSION_TRANSITION, conversation_id: undefined },
+      { ...SESSION_TRANSITION, conversation_id: null },
+      { ...SESSION_TRANSITION, conversation_id: 42 },
+      { ...SESSION_TRANSITION, conversation_id: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionTransition(payload))).toThrow(WireDecodeError)
+    }
+    // Empty string is admitted, like every sibling conversation_id in this decoder: `requireString`
+    // narrows the TYPE, and the daemon guarantees the value. Rejecting it here would be a second,
+    // divergent contract for one field.
+    expect(
+      parseInboundMessage(encodeSessionTransition({ ...SESSION_TRANSITION, conversation_id: '' }))
+    ).toEqual({
+      kind: 'session-transition',
+      sessionTransition: { ...SESSION_TRANSITION, conversation_id: '' }
+    })
   })
 
   it('throws when workspace_cwd is absent/undefined (must be present, even as null) or non-string-non-null', () => {
@@ -6720,7 +6755,11 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const SECRET_PREV = 'secret-previous-session-id'
     const SECRET_NEW = 'secret-new-session-id'
     const SECRET_CWD = '/home/secret/workspace'
+    // Conversation-correlating, and therefore held to the same rule as the session ids beside it: it
+    // is a routing key the decoder narrows and never names, in a message or in a log record (#1192).
+    const SECRET_CONV = 'secret-conversation-id'
     const plaintext = encodeSessionTransition({
+      conversation_id: SECRET_CONV,
       previous_session_id: SECRET_PREV,
       new_session_id: SECRET_NEW,
       reason: 'workspace_change',
@@ -6736,10 +6775,10 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.code).toBe('session_transition')
     expect(record.bytes).toBe(plaintext.length)
     expect(record.hash).toMatch(HEX64)
-    // The exact content-free field set — no decoded field (session ids / reason / occurred_at /
-    // workspace_cwd) reaches the log.
+    // The exact content-free field set — no decoded field (conversation id / session ids / reason /
+    // occurred_at / workspace_cwd) reaches the log.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
-    for (const secret of [SECRET_PREV, SECRET_NEW, SECRET_CWD, 'workspace_change']) {
+    for (const secret of [SECRET_CONV, SECRET_PREV, SECRET_NEW, SECRET_CWD, 'workspace_change']) {
       expect(lines[0]).not.toContain(secret)
     }
   })

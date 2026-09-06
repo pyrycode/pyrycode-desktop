@@ -203,6 +203,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       },
       {
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',

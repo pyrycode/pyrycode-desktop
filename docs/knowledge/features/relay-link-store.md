@@ -49,8 +49,8 @@ export type RelayLinkStore = RelayLinkState & {
 createRelayLinkStore(init?)          // vanilla createStore — one isolated instance per test (DI seam)
 relayLinkStore                       // app-wide singleton
 useRelayLinkStore(selector)           // React binding: useStore(relayLinkStore, selector)
-selectRelayLinkStatus(s)              // app-wide read — unchanged name, signature and return type
-selectRelayLinkStatusFor(origin)(s)   // one server's slot (#1134), or undefined if unheard-from
+selectRelayLinkStatus(s)              // app-wide read — unchanged name, signature and return type; ZERO production readers since #1199
+selectRelayLinkStatusFor(origin)(s)   // one server's slot (#1134); the sidebar's reader since #1199
 ```
 
 Mirrors `sessionIdStore`'s DI-factory → singleton → hook → selector structure, swapping
@@ -86,10 +86,15 @@ an untouched server's slot comes back by reference and a component watching only
 re-render when a different one changes.
 
 `status` itself is **not** reshaped into the index — it stays the single most-recently-written cell,
-byte-for-byte its pre-#1134 behaviour. This is non-negotiable rather than convenient:
-`HostConnectionDotsControl`, this store's one production reader, keeps reading `selectRelayLinkStatus`
-untouched in name, signature and return type, because `ConversationScreen.tsx`'s `relayLeg` takes
-`RelayLinkStatus | null` and it is `null` that maps to "Relay Unknown" (#719). A fold ("connected if
+byte-for-byte its pre-#1134 behaviour, kept for the initial-frame guarantee it was shipped for (see
+below) rather than for a live reader. `HostConnectionDotsControl` was this store's one production reader
+until [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) moved it onto
+`selectRelayLinkStatusFor`, so `selectRelayLinkStatus` now has **zero** production readers — only its own
+tests and `relayLinkBridge.test.ts` reference it. Retiring it is out of scope for #1199 and this doc is
+not an argument for keeping it; `sessionStore`'s app-wide twin, `selectStatus`, is **not** in the same
+position (it keeps four genuinely app-wide consumers — see [session store](session-store.md)), so do not
+retire the pair together on the strength of this one. `ConversationScreen.tsx`'s `relayLeg` takes
+`RelayLinkStatus | null` and it is `null` that maps to "Relay Unknown" (#719); a fold ("connected if
 any server's link is") was considered and rejected — it would change what the sidebar's relay dot
 says today.
 
@@ -198,9 +203,12 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
 
 \#330 (shipped): useRelayLinkStore(selectRelayLinkStatus) → relayLeg(status) → combined with
   daemonLeg(sessionStore's ConnectionStatus) at render time, in ConnectionStatusIndicatorControl
+  — this reader is gone since #1199 (below); ConnectionStatusIndicatorControl itself was retired by #962
 
-\#1070 (expected): useRelayLinkStore(selectRelayLinkStatusFor(serverId)) → per-row relay dot, `?? null`
-  into the same relayLeg mapping — not yet wired; no whole-map selector ships until it exists to want one
+\#1199 (shipped): useRelayLinkStore(selectRelayLinkStatusFor(serverId)) → HostConnectionDotsControl's
+  relay leg, `?? initialRelayLinkState.status` (not `?? null`, so a silent server lands on the store's own
+  launch-frame value rather than a restated literal) → the same relayLeg mapping. serverId is the sidebar's
+  FIRST paired server; #1070 loops this per row. No whole-map selector ships until #1070 wants one.
 ```
 
 ## Configuration and usage

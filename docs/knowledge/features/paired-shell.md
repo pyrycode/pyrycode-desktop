@@ -190,7 +190,7 @@ src/renderer/src/
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above; since [#670](../codebase/670.md) it is the shell's always-mounted sidebar rather than an alternative screen
-- [Channel List § The host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834) /
+- [Channel List § The host row](channel-list-host-row.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834) /
   [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) — added the sidebar's `min-width: 0`
   above, needed once the host row started carrying an operator-typed name long enough to reach the
   sidebar's own min-content floor

@@ -272,9 +272,11 @@ export function useSessionStore<T>(selector: (s: SessionStore) => T): T {
 
 /**
  * The APP-WIDE status: the most recently written one, across every connection. Unchanged in name,
- * signature and return type by #1133, which is what leaves its five consumers — the composer status
- * row, the connection banner, the repair control, `HostConnectionDotsControl`'s daemon leg, and
- * `composerSend`'s plain-argument taker — working untouched.
+ * signature and return type by #1133, which is what left its consumers working untouched. #1199 then
+ * moved ONE of them off it — the sidebar host row's daemon leg now reads `selectStatusFor(serverId)`,
+ * because a row that names one machine must report that machine — leaving FOUR: the composer status
+ * row, the connection banner, the repair control, and `composerSend`'s plain-argument taker. All four
+ * are app-wide surfaces by intent, so this cell keeps a real purpose rather than surviving on inertia.
  */
 export const selectStatus = (s: SessionState): ConnectionStatus => s.status
 

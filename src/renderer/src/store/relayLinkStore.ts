@@ -62,10 +62,15 @@ export interface RelayLinkState {
    * The MOST RECENTLY WRITTEN status, across every connection — byte-for-byte what this cell has
    * always held, since it was already last-writer-wins the moment #1117 gave the registry one
    * connection per paired server. #1134 keeps it in place rather than re-shaping it into the index
-   * below: `HostConnectionDotsControl` reads it through `selectRelayLinkStatus`, and a field nothing
-   * rewrote is the cheapest possible guarantee that the sidebar's relay dot renders identically —
+   * below: `HostConnectionDotsControl` read it through `selectRelayLinkStatus`, and a field nothing
+   * rewrote was the cheapest possible guarantee that the sidebar's relay dot rendered identically —
    * "Relay Unknown" on the first frame of every launch (#719), and no false green. A fold
    * ("connected if any server's link is") was considered and rejected for exactly that reason.
+   *
+   * #1199 MOVED that reader to `statuses` below, so this field now has no production reader at all —
+   * see `selectRelayLinkStatus`'s header for what that means for its fate. The initial-frame guarantee
+   * it was kept for survives the move unchanged, because the host row now collapses a silent server to
+   * `initialRelayLinkState.status` — this same `null`, read as a constant rather than restated.
    */
   status: RelayLinkStatus | null
   /**
@@ -153,9 +158,16 @@ export function useRelayLinkStore<T>(selector: (s: RelayLinkStore) => T): T {
 
 /**
  * The APP-WIDE status: the most recently written one, across every connection. Unchanged in name,
- * signature and RETURN TYPE by #1134, which is what leaves `HostConnectionDotsControl` — its one
+ * signature and RETURN TYPE by #1134, which is what left `HostConnectionDotsControl` — then its one
  * production reader — working untouched. The `| null` is load-bearing rather than incidental:
  * `relayLeg` takes `RelayLinkStatus | null` and it is `null` that maps to "Relay Unknown" (#719).
+ *
+ * #1199 moved that reader onto `selectRelayLinkStatusFor`, so this selector now has ZERO production
+ * readers — only `relayLinkStore.test.ts` and `relayLinkBridge.test.ts` reference it. Retiring it was
+ * out of scope there and this header is not an argument for keeping it; whoever decides its fate should
+ * know it survives on nothing but the export. The session store's app-wide twin is NOT in the same
+ * position — `selectStatus` keeps four genuinely app-wide consumers — so do not retire the pair
+ * together on the strength of this one.
  */
 export const selectRelayLinkStatus = (s: RelayLinkState): RelayLinkStatus | null => s.status
 

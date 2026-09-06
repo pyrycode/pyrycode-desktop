@@ -156,7 +156,7 @@ border-box` is likewise load-bearing — `index.css` sets no global rule, so `co
 **The sidebar carries the symmetric `min-width: 0` too, added by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).**
 `flex: 0 0 400px` fixes the basis but, like the pane before this fix, leaves `min-width: auto` — which
 floors a flex item at its *content's* min-content width regardless of the basis. It went unnoticed until
-\#834 gave the [sidebar's host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
+\#834 gave the [sidebar's host row](channel-list-host-row.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
 an operator-typed name up to `MAX_HOST_LABEL_LENGTH` (128) with `white-space: nowrap`: a nowrap string's
 min-content size is the whole string, measured at ~1063px, which took the sidebar with it and left the
 label unable to ellipsize no matter what `channels.css` said. `.channel-list`'s `overflow-x` (computed

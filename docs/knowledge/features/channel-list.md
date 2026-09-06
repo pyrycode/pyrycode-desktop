@@ -48,9 +48,12 @@ transport, or new store/wire code, so not security-sensitive.
   (Figma `106:3094`). The row repeats in both trees on purpose — the two trees are not
   deduplicated into a shared heading. It renders a 12px server-rack glyph beside the operator's
   stored host label, falling back to the client-owned word `'Server'` with no usable label (never
-  stored, unreadable, or settling). Added by [#710](../codebase/710.md); the operator-typed label
-  shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) (§ below). Multi-host
-  is still deferred.
+  stored, unreadable, or settling), and ends with two trailing connection dots reporting the named
+  server's own daemon and relay legs. Added by [#710](../codebase/710.md); the operator-typed label
+  shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834); both the label and the
+  dots read by server id since [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) (§
+  below). The row itself stays single per tree — one row per paired server is
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).
 - Below each host row, rows now group by **workspace** — one group per distinct `cwd`, each headed
   by a 28px workspace row one indent deeper than the host row (Figma `106:3098`). A workspace is a
   conversation's `cwd`; there is no separate wire concept for it. Both trees group independently,
@@ -160,137 +163,13 @@ convergence on Figma node 103:2968: a derived (never declared) 24px height, shru
 the corner moved onto the fill's painted surface, 4px between rows via an adjacent-sibling rule rather
 than a column `gap`, the body-small label, the deleted time, and the status dot's now-settled centring.
 
-### The host row (`ChannelList.tsx`, added by #710, the operator's label by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834))
+### The host row and its connection dots (`ChannelList.tsx`, added by #710/#718, per-server keying by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199))
 
-`HostRow({ label }): JSX.Element` — the file's sixth inline-glyph idiom instance, alongside
-`SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save buttons — is now an
-**exported pure view**, mirroring `HostConnectionDots`/`HostConnectionDotsControl` twenty lines
-below it (§ below). It renders a non-interactive `<div className="channel-list__host">` holding a
-12px inline Material `dns` (server-rack) glyph and `<span className="channel-list__host-label">{label}</span>`.
-A module-private `HostRowControl(): JSX.Element` reads `useHostLabelStore(selectHostLabel)`, passes
-it through `hostRowLabel` (below), and renders `<HostRow label={…} />`; `renderBody` mounts
-`HostRowControl`, not `HostRow`, at both call sites. The pure/container split exists for the same
-reason as its neighbour: a Zustand singleton seeded before a `renderToStaticMarkup` call is
-invisible to it — the server renderer reads `getServerSnapshot()`, wired to the state captured at
-store *creation* — so `HostRowControl` can only ever render the store's initial `loading` cell, and
-`hostRowLabel`/`HostRow` are the only seam the unit tier can reach the four-arm matrix through.
-
-**The collapse — `hostRowLabel(value: HostLabelValue): string`.** Returns the operator's label only
-when the [host-label window store](host-label-window-store.md)'s value is `stored` *and* that label
-has non-whitespace content; `loading`, `not-stored`, `error`, and a `stored` label that is blank or
-whitespace-only all yield `HOST_ROW_FALLBACK_LABEL = 'Server'` (renamed from `#710`'s
-`HOST_ROW_LABEL`, since it is no longer the whole label — just what's shown absent one). Three
-decisions worth keeping straight, none of them a type error if reversed:
-
-- **`loading` falls back to the same word, never a `'Loading…'` placeholder.** This is the one place
-  `ServerRow.tsx`'s precedent (a details-list value showing "Loading…" pre-settle) does *not*
-  transfer: this is a *name* slot, and a placeholder in it would read as the machine's name. The
-  pre-settle tick is indistinguishable from the not-stored steady state, which is the point — both
-  mean "no name to show yet."
-- **The predicate trims (`label.trim() === ''`); the displayed label is verbatim.** `''` is the case
-  AC2 names; a whitespace-only label renders equally blank, so the same rule covers both. Trimming
-  only ever decides *whether* to fall back, never *what* is shown — the row never displays a value
-  that differs from what is stored.
-- **Nothing slices.** A 128-character (`MAX_HOST_LABEL_LENGTH`, `shared/ipc/pairing.ts:41`) label
-  returns whole; the truncation AC4 asks for is CSS (`.channel-list__host-label`'s ellipsize rule,
-  § CSS), so the accessible text stays complete.
-
-**Mount site.** `<HostLabelData />` (the [host-label window store](host-label-window-store.md)'s
-headless one-shot loader, shipped dormant by #833) mounts in the `ChannelList` **container**, a
-sibling of `<ChannelListView />` — the `SettingsScreen` idiom (`<ServerInfoData />` beside
-`<ServerRowControl />`) applied to the screen that actually renders the row. It renders `null`, so
-DOM order is immaterial, and it dereferences `window.pyry` only inside its effect, so the container
-stays server-renderable. Two alternatives were rejected: an app-level mount fires once at launch,
-before pairing, and never re-runs, leaving the row stale after a same-session pair; mounting it in
-`SettingsScreen` is exactly what "populated with no Settings visit" forbids. Because `ChannelList` is
-rendered at the same element position on both the `list` and `thread` routes ([paired
-shell](paired-shell.md)), React preserves it across that flip and no re-read fires there — it *does*
-remount on return from `settings`/`archive`/`pairServer`, which re-reads, which is what keeps a
-mid-session re-pair (Settings → "Pair another server") from leaving a stale name on the row. This is
-also why the [host-label window store](host-label-window-store.md) stays out of
-`clearPairingScopedState`: the remount-driven re-read already resolves the staleness the store's own
-edge-case note flagged as unresolved before this ticket.
-
-**The untrusted-text sink.** `label` is untrusted, unbounded-in-content text off disk
-(`hostLabelHandler.ts:69-71` hands the "escaped text only" obligation to this row) and reaches the
-DOM only as an auto-escaped React child on `.channel-list__host-label`, never an attribute — no
-`title` (the reflex AC3 exists to guard: the standard companion to ellipsized text is `title={label}`,
-which is exactly CLAUDE.md's "never into an attribute" case), no `aria-label`, no `id`/`key`/lookup
-path, no log line. Same four declined sinks `WorkspaceRow`'s comment block already enumerates for
-daemon-derived text, applied here for the first client-side-stored (not per-message) string in this
-file.
-
-`renderBody` mounts one `<HostRowControl />` inside *each* of the two existing `channels.length > 0` /
-`discussions.length > 0` gates, directly after the `<header className="channel-list__section-header">`
-and before that tree's rows. Because the row lives inside the same gate that already decides
-whether the section header renders, "a tree with zero rows renders neither a header nor a host
-row" holds by construction — no new condition was added, and the promote specs' "a zero-row
-section renders no header" proxy still holds for a second element under it.
-
-The row repeats once per tree deliberately — the operator confirmed the repetition (2026-08-21);
-the two trees are not merged under one shared host heading. There is exactly one host row per tree
-this milestone, since the app pairs with exactly one daemon (`pairedServerStore.save` overwrites on
-re-pair) — the design already draws a `Host container` per tree in anticipation of a future
-multi-host case, not built here.
-
-**Selector-safety by construction.** `channel-list__host`/`__host-icon`/`__host-label` share no
-class token *and no substring* with any existing selector in the file (`channel-list__row`,
-`__row-open`, `__section-header`, …), and the shipped label contains neither "Channels" nor
-"Chats" case-folded either way. Both guard the same failure mode: Playwright's strict mode turns an
-added element that joins an *existing* locator's match set into a violation rather than an
-assertion failure — at fixture-launch scale for the unfiltered `.channel-list__row-open` click 28
-specs ride (`launchPairedApp.ts:224`), not just the two `.channel-list__section-header` + `hasText`
-promote-spec locators. See [#710 codebase notes](../codebase/710.md) for the full hazard writeup.
-
-### The host row's connection dots (`ChannelList.tsx`, added by #718)
-
-Split from #672 (the not-yet-known relay state half is [#719](../codebase/719.md), which shipped
-as a fourth `LegCategory` picked up here with no code change — see below). Each host row ends with
-two label-less 6px dots at its trailing edge — the host (daemon)
-leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
-mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962)
-verbatim rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
-})` renders `<span className="channel-list__host-status">` holding two
-`<span className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label}
-/>`; a module-local `HostConnectionDotsControl` reads `useSessionStore(selectStatus)` and
-`useRelayLinkStore(selectRelayLinkStatus)` through their shipped narrow selectors and mounts as
-`HostRow`'s last child, so a relay flap re-renders only the four dots, not the row or the
-conversation list beneath it.
-
-Two reuse decisions, at the two levels the contract exists on:
-
-- **TypeScript.** `relayLeg`/`daemonLeg`/`ConnectionLeg` are imported straight from
-  `conversation/ConversationScreen.tsx` — the established cross-screen-import idiom in this
-  codebase — rather than lifted into a shared module first. Order is the design's, and is the
-  *reverse* of `ConnectionStatusIndicator(relay, daemon)`'s call site: host/daemon first here,
-  relay first there. Both props share one type, so a copied call site would swap them silently;
-  a leg-order test pins it.
-- **CSS.** The colour contract lives one level below the TS mapping, in `.conn-dot--up` /
-  `--in-progress` / `--down` / `--unknown` — declared in **this file**, `channels.css`, directly below
-  `.channel-list__host-dot`, since [#962](https://github.com/pyrycode/pyrycode-desktop/issues/962)
-  moved the four rules here from `conversation.css` when it deleted the row that used to host their
-  first (and, until #962, only other) consumer, `ConnectionStatusIndicator`. The sidebar dot wears the
-  modifier *without* a `.conn-dot` base class — `.conn-dot` itself had no surviving consumer once that
-  indicator went and was deleted with it — `.channel-list__host-dot` supplies 6px geometry only. This
-  keeps the category → colour binding to one copy in the renderer
-  (`grep -rn "color-success" src/renderer --include='*.css'` proves it), and the move closed the
-  cross-file dependency the node-environment unit tier could not see: before #962 a `.conn-dot--*`
-  rule leaving `conversation.css` would have blanked these dots with no test failure; now both halves
-  live in the same file, and `e2e/connection-dot-colours.spec.ts` (added by #962) reads the shipped
-  `getComputedStyle().backgroundColor` back off all four to guard the CSS-deletion risk directly. See
-  [conversation-shell-chrome.md](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-leg-mapping-330-its-render-retired-from-this-screen-by-962).
-
-The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/"Relay
-Unknown"/etc. — on a
-`role="img"` span (a bare `<span>`'s `aria-label` is dropped by the accessible-name computation,
-so this is load-bearing, not decorative). The wrapper carries no role or name of its own, unlike
-\#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
-two-pane layout shows the conversation status row at the same time, so a per-group name would
-put three identically-named groups in one window. The dots add no text node.
-
-"Pyrycode" — not the Figma's "Host" or #710's visible "Server" — was kept as the host leg's label
-word: any other word would re-derive the label half of #330's contract, and the dot reports the
-*daemon session*, not the machine — a machine can be up while `pyry` is not.
+Split out to its own page: [the host row and its connection dots](channel-list-host-row.md) — the row
+naming the paired machine a tree's conversations live on, and the two trailing dots reporting that
+machine's daemon and relay legs. #1199 moved both off app-wide "most recently written" singleton reads
+onto reads keyed by the row's own `serverId`, taken from this client's `serverInfoStore` list and never
+from the wire, so a second paired machine's status can no longer steer this row's dots.
 
 ### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
 
@@ -325,128 +204,10 @@ writeup.
 
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
-Split from #676, the last of the three ([#799](conversation-status.md)'s resolver,
-[#800](conversation-status-dot.md)'s leaf, and this ticket's wiring). A module-private, nullary-prop-free
-`ConversationStatusDotControl({ conversationId })`, mirroring `HostConnectionDotsControl`'s shape one level
-down: four narrow per-id subscriptions —
-`useModalStore(selectHasOutstandingFor(id))`,
-`useConversationActivityStore(selectActivityFor(id))`, `useConversationTimelineStore(selectTimelineFor(id))`,
-`useConversationLastReadStore(selectLastReadFor(id))` — reduced through
-[`isConversationUnread`](conversation-unread.md) then [`resolveConversationStatus`](conversation-status.md)
-and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first child**, ahead of the
-`.channel-list__row-open` button, in both `renderBody` map sites (`:558`, `:589`) — so both trees, every
-workspace group, get exactly one unconditional dot, idle included.
-
-[#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added
-[`resolveConversationStatus`](conversation-status.md)'s leading `inputRequired` parameter, landing
-correct-but-unreachable behind a literal `false` at this call site.
-[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) closed that seam: a fourth per-id
-subscription, `useModalStore(selectHasOutstandingFor(conversationId))` imported from `modalStore` (the
-`selectHasOutstandingFor` re-export site, `modalStore.ts:45` — `PermissionModal.tsx:192-194` is the shipped
-precedent for taking the read surface from that one site rather than from `modalPrompts` directly), replaces
-the literal. `selectHasOutstandingFor` is total and answers an unseen id `false`
-([modal-prompt model](modal-prompt-model.md)), so it needs no memoization: it returns a plain `boolean`,
-`Object.is`-stable by value, and the merged-selector ban the three original subscriptions justify by
-held-reference stability does not transfer to it — the header now records that the ban holds for this
-fourth read too, but for a different reason (a merged object would be freshly allocated regardless of what
-its fields are). No change to `Row`, to `resolveConversationStatus`, or to `ConversationStatusDot` — the
-join is entirely inside this control.
-
-**The one wrong answer a green typecheck hides.** `resolveConversationStatus(inputRequired, activity,
-unread)` takes `boolean` in both first and third position, so a call transposing them —
-`resolveConversationStatus(isConversationUnread(...), activity, inputRequired)` — typechecks and builds
-clean. A precedence test that seeds input-required, working, and unread all on the *same* row cannot catch
-this: the transposed call reads that row's own `unread === true` in first position and still resolves
-`input-required`, for the wrong reason. The test gives each rival its own row instead — the row holding
-input-required against working with nothing else unread is the one a transposition actually mis-resolves.
-Worth remembering wherever a resolver's precedence order and its parameter order are the same list.
-
-**Test teardown trap: the modal store's clear must be `reconnected`, never `dismissed` per seeded prompt.**
-`dismissed` moves the id onto the `resolved` slice, and the `shown` arm treats a seen-then-resolved id as a
-no-op rather than an append ([modal-prompt model](modal-prompt-model.md)). A `dismissed`-based `afterEach`
-therefore leaves a later test's seed silently doing nothing, and that test renders `--idle` while asserting
-`--input-required` — a failure that reads as a bug in the wiring rather than in the test's own teardown.
-`reconnected` clears `outstanding` and `resolved` together and is the only teardown that returns the store to
-its initial state.
-
-This is also the answer to the question [`conversationUnread.ts`](conversation-unread.md) deliberately left
-open — **where the two-store unread composition lives.** It lives here, per row, keyed by the row's own
-conversation id: never the open conversation's, so a chat the operator has never opened still shows its
-working or unread state correctly.
-
-**Placement — a sibling of the open button, not a child of it.** `ConversationStatusDot` ships a named
-`role="img" aria-label` on all four statuses, idle included, so nesting the dot inside
-`.channel-list__row-open` would fold "Idle" (and, live, "Assistant working") into the button's own
-accessible name, mutating it as the daemon works. `RunConfigSections.tsx:270-280` already declined exactly
-this shape for the run-config sheet's unselected radios — a named `role="img"` stays a sibling of an
-interactive row, not nested in it. As a sibling the dot is announced in reading order and the button's
-name stays the row's title — since [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097)
-deleted the trailing time, that is the button's whole text, where it used to read title + time.
-
-The geometry cost of that choice is real and is paid in CSS, not layout: in the row's ordinary flex flow
-the dot would push the button's left edge to x≈22, notching the `:hover`/`:focus-visible` fill short of the
-row's leading edge. `channels.css` instead takes the dot **out of flow** —
-`.channel-list__row { position: relative }` plus `.channel-list__row > .conversation-status-dot { position:
-absolute; left: var(--space-4); top: 50%; transform: translateY(-50%); pointer-events: none }` — landing
-both of the Figma's x-values (16px dot, 32px title) exactly while the button keeps spanning the full row and
-its hover/focus rectangles unchanged. `.channel-list__row-open`'s own left padding widened from `--space-4`
-to `--space-8` to reserve the 32px the dot no longer claims in flow (sidebar-only: `channel-list__row*`
-appears in this file alone, so the archive screen's rows are untouched). `pointer-events: none` is what
-keeps a click on the dot's box opening the conversation rather than being swallowed by it; it has no effect
-on the accessibility tree, so the dot's `role="img"` label is still announced.
-
-Making `.channel-list__row` a positioned element was checked for blast radius rather than assumed
-harmless: it moves the row into the positioned-descendants paint layer, where the two sticky top-right
-siblings (`.channel-list__actions`, `.channel-list__fab`) win on document order alone — both already carry
-`z-index: 1`, so rows still paint under them, and no fixed-position element renders inside a row. No
-regression, but worth recording since it's the one edit here whose cost isn't local to the row itself.
-
-**Vertical alignment is a measurement, not an inheritance — and it doesn't work the way this file's own
-prior reasoning for `.channel-list__host-dot` claimed.** The Figma frame's `Status dot` instance sits a few
-pixels below the `Channel` row title's own centre (`cy` at row-relative y=15 in a 24px frame whose centre is
-y=12). At the time #801 shipped this, porting that 3px offset onto the row would have been meaningless
-anyway, since the shipped row wasn't yet the design's 24px frame — it carried its own vertical padding, a
-larger title type scale, and a trailing `.channel-list__time` the design node has no equivalent for — so
-\#801 centred the dot (`top: 50%; transform: translateY(-50%)`) and deferred the question to the pass that
-would converge the row's full geometry.
-
-[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) is that pass (see
-[the row's desktop geometry](channel-list-desktop-row-geometry.md)), and it **settles** the question
-rather than re-deferring it: the row is now the design's
-24px frame, so the excuse for not measuring expired. Measured directly, the 3px drop is an artifact of the
-Figma component's own 14px-tall, 6px-wide dot *wrapper* — its painted circle sits at `cy=11` inside that
-wrapper, landing at y=15 in a 24px row whose centre is y=12. The app draws a bare 6px dot with no such
-wrapper, so porting the offset would copy the wrapper's internal padding without the wrapper itself. The dot
-stays centred, and the CSS comment records this as a ruling rather than a deferral — cheap to flip later
-(one `top` value) if the drawn offset turns out to be wanted. [The dot's own
-doc](conversation-status-dot.md#edge-cases-and-limitations) records the matching correction: its "no
-wrapper needed to centre a 6px dot against the row's line box" claim, written for
-`.channel-list__host-dot`, does not hold for this node's Figma metadata and did not transfer here.
-
-**Testing: two traps in wiring a store into a `renderToStaticMarkup` component, not specific to this
-ticket.** Both surfaced while extending `ChannelList.test.tsx` and apply to any future row that reads a
-Zustand store under this repo's `environment: 'node'` renderer tier:
-
-- **Seeding a store singleton's setter is invisible to the render.** React's server renderer resolves
-  `useSyncExternalStore` through `getServerSnapshot()` and never subscribes, and Zustand v5 wires that
-  argument to `api.getInitialState()` — the snapshot captured at the store's **module-load** creation, which
-  no setter ever moves. Calling `conversationActivityStore.getState().setTurnRunning(id, true)` before
-  rendering therefore renders as if nothing were seeded; the naive "seed the singleton, then
-  `renderToStaticMarkup`" fixture shape (the one the architecture spec itself proposed) passes green while
-  asserting nothing. The fix is a `vi.mock` per test file that redirects only the three `useXStore` **React
-  bindings** onto a fresh per-file `createXStore()` instance, keeping `...importActual` for everything else
-  — the selectors, the predicate, the resolver — so the real logic under test stays real and only the
-  binding that `renderToStaticMarkup` can't see gets swapped.
-- **An `indexOf`-based ordering assertion passes vacuously when the needle is absent**, since `-1` compares
-  less than every real index. "The dot leads the row" cases must pin presence (`indexOf !== -1`) before
-  they pin ordering, or a row that draws no dot at all reads as a passing test.
-
-No new e2e spec: all four ACs are statically assertable in the unit tier with seeded stores (a per-row
-chunk sliced out of the markup by title, mirroring the file's existing `ROW_MARKER`/`ROW_OPEN_MARKER`
-slicing idiom), and the live path that feeds the activity store for a non-open conversation is #748's
-shipped coverage, not this ticket's. The `prefers-reduced-motion` clone of
-`e2e/composer-status-reduced-motion.spec.ts` that `channels.css:862` hands forward stays explicitly out of
-scope — a per-component e2e spec is a separate concern, filed only if wanted.
+Split out to its own page: [the row's status dot](channel-list-status-dot.md) — the
+`ConversationStatusDotControl` every row leads with, joining four per-id store reads through
+`isConversationUnread`/`resolveConversationStatus` into the leaf `ConversationStatusDot`, and the
+placement/geometry/testing lessons from wiring it in.
 
 ### CSS (`channels.css`)
 
@@ -519,18 +280,14 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
-- **The host row now shows the operator's stored label**, not a placeholder — closed by
-  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834); see § The host row above. One
-  residual staleness: the label changing while the sidebar stays mounted (a mid-session re-pair to a
-  different host) only refreshes on the next `ChannelList` remount (a return from
-  `settings`/`archive`/`pairServer`), never live — bounded, since that remount is the only route by
-  which the label can change at all.
-- **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md), split from the
-  same #672 as #718: `relayLeg(null)` now returns a fourth category, `unknown`/`Relay Unknown`,
-  instead of being collapsed into `down`/`Relay Offline`. Both #330's status row and this screen's
-  sidebar dots picked it up with no code change here, since both render `relayLeg`'s output
-  unchanged — only the shared mapping and its CSS colour binding
-  (`conversation-shell.md`) changed.
+- **The host row shows the label and connection state of the specific server it names**, not a
+  singleton — closed by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); see
+  [the host row and its connection dots](channel-list-host-row.md) for the full detail, including the
+  residual staleness a mid-session re-pair leaves until the next `ChannelList` remount.
+- **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md): `relayLeg(null)` returns
+  a fourth category, `unknown`/`Relay Unknown`, instead of being collapsed into `down`/`Relay Offline`.
+  See [the host row and its connection dots](channel-list-host-row.md) for how this screen's dots
+  consume it.
 - **Two workspaces whose last path segment matches render two identically-labelled groups.**
   Deliberately deferred to #716 — a display question, not a trust one, since the groups keep
   distinct `cwd` keys and are never merged.
@@ -540,12 +297,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   coming back (component-local state under the sidebar's stable mount position, ADR 0006) but is
   gone on every fresh app start — every group renders expanded by default, and there is no store,
   disk, or wire involvement.
-- **Every idle row's status dot is still announced.** Since [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)
-  wired the [status dot](conversation-status-dot.md) into every row, a long sidebar of mostly-idle
-  conversations announces "Idle" once per row (`role="img" aria-label="Idle"` ships on all three
-  statuses). Built exactly as #799/#800/#801's specs intend and confirmed in #801's code review;
-  the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change to
-  `ConversationStatusDot` alone, not a conditional wrapper here. Not filed as a follow-up ticket yet.
+- **Every idle row's status dot is still announced.** See [the row's status
+  dot](channel-list-status-dot.md) for the detail and the cheap fix, if wanted.
 
 ## Related
 
@@ -573,52 +326,23 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#709 codebase notes](../codebase/709.md) — relabelled the non-promoted section header from the
   mobile-era "Recent discussions" to the desktop design's "Chats" (Figma `106:3258`); the code-level
   `discussions` partition, CSS classes and store fields kept their names.
-- [#710 codebase notes](../codebase/710.md) — added the host row heading each tree (Figma
-  `106:3094`), a client-owned `'Server'` placeholder label ahead of the operator-typed one.
-- [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
-  the store `HostRowControl` reads and the loader `<HostLabelData />` mounts; shipped dormant, given
-  its mount site and consumer by #834.
-- [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) — put the operator's stored label on
-  the host row: the `hostRowLabel` four-arm collapse, the `HostRow`/`HostRowControl` split, the
-  `<HostLabelData />` mount site, and the label's ellipsize treatment. Also fixed a `min-width: auto`
-  gap on `.paired-shell__sidebar` the 128-character label made reachable — see [Paired
-  shell](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
+- [Channel List — the host row and its connection dots](channel-list-host-row.md) — the full detail
+  behind § The host row and its connection dots above: #710/#718's original build, #834's operator-typed
+  label, and #1199's per-server-id keying of both the label and the two dots.
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
   disclosure control; renderer-only and unpersisted.
-- [#718 codebase notes](../codebase/718.md) — added the host row's two trailing connection dots
-  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330)
-  across screens rather than a second copy of it.
-- [#719 codebase notes](../codebase/719.md) — gave the relay leg's `null` sentinel its own
-  `unknown`/`Relay Unknown` category instead of collapsing it into `down`/`Relay Offline`; reaches
-  this screen's dots via the shared mapping with no edit here.
-- [Conversation status dot](conversation-status-dot.md) / [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)
-  — the presentational leaf every row now leads with; see § The row's status dot above for the
-  #801/#874 call site.
-- [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
-  — the pure join `ConversationStatusDotControl` calls to reduce a row's four per-id facts to one
-  status; [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added its leading
-  `inputRequired` parameter.
-- [Conversation unread predicate](conversation-unread.md) / [#778](https://github.com/pyrycode/pyrycode-desktop/pull/795)
-  — composed at the row alongside the resolver above; #801 is the ticket that finally answers where
-  this composition lives.
-- [Conversation activity store](conversation-activity-store.md) / [#747](../codebase/747.md) and
-  [conversation timeline holder](conversation-timeline-holder.md) / [conversation last-read
-  store](conversation-last-read-store.md) — three of the four per-id stores `ConversationStatusDotControl`
-  subscribes to through their shipped selector factories.
-- [Modal-prompt model](modal-prompt-model.md) and [modal store bridge](modal-store-bridge.md) — the
-  reducer and store `selectHasOutstandingFor(conversationId)` is defined on, re-exported from
-  `modalStore.ts` and read as the fourth per-id subscription by
-  [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874).
-- [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
-- [#874 spec](../../specs/architecture/874-input-required-dot-call-site.md) — the fourth subscription
-  that composes the input-required status into it.
+- [Channel List — the row's status dot](channel-list-status-dot.md) — the full detail behind § The
+  row's status dot above: #799/#800/#801's three-part split, #874's fourth `input-required` subscription,
+  and the wiring/testing lessons.
 - [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
   desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
   time, the shrunk affordances, and the settled status-dot centring.
   [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) then filled the open row. See
   [the row's desktop geometry](channel-list-desktop-row-geometry.md).
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), multi-host (see § The host row), #716 (same-last-segment workspace label
-  ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).
+  (per-row open), one host row per paired server ([#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070),
+  see [the host row and its connection dots](channel-list-host-row.md)), #716 (same-last-segment
+  workspace label ambiguity), a possible follow-up to suppress the idle dot's announced label (see
+  [the row's status dot](channel-list-status-dot.md)).

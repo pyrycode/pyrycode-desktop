@@ -250,3 +250,51 @@ The timeline agrees: the installed binary was built 2026-09-05 18:14, pyrycode#2
 **pyrycode#2172 is the durable fix and stays open regardless.** Rebuilding the host settles this ticket; a capability string for the on-demand model list is what turns the next stale daemon into a skip naming its cause instead of a red routed back to an agent that cannot rebuild a Go binary. Filed on board #1, sized XS, and out of scope here.
 
 **The verifier NIT is folded in.** `EffortDefaultData`'s effect read `selectSessionId(sessionIdStore.getState())` twice — once for the decision, once for `changeSetting`'s deps. The body is fully synchronous so nothing could intervene and the two were provably equal, which is why this is a NIT and not a defect. It is now read once into `addressedSessionId` and reused, making "the frame addresses the session the decision was taken against" true by construction rather than by inspecting the lines in between — the property a later edit inserting anything between them would otherwise break silently.
+
+### 2026-09-06 — AC5 is discharged; the gate's remaining red is a different ticket's defect (#1204)
+
+**No production change and no spec change this leg.** The real-claude gate ran with the rebuilt daemon and
+`real-claude-effort-default.spec.ts` **passed**. What follows is the triage of the one spec that did not,
+which is not this ticket's.
+
+**AC5 is met on its own terms.** The gate executed 14 tests (13 passed, 1 failed, 0 skipped) against a floor
+of 10, and this ticket's spec — `a level set before a chat's first message survives into the first turn` —
+is among the passing, at 6.9s. That is exactly what the criterion asks: a spec under `e2e/real-*.spec.ts`
+that `npm run e2e:real:gate` reports as **actually executed**, read off the executed count rather than the
+exit code. The previous four laps' environmental blocker is gone and the drive passed on its merits the
+first time it was reachable.
+
+**The failing spec is `real-claude-attachment.spec.ts` (#1055 AC4), and the cause is a wire-contract drift
+between this client and the rebuilt daemon.** It failed at its outcome assertion with
+`attachment-invalid-chunk` — "The host rejected part of the upload." — where it expected "File attached.".
+
+The daemon removed the follow-active cursor as the upload's destination resolver and now requires the client
+to name the conversation on every chunk: pyrycode#2142 added `conversation_id` to `attachment_chunk`
+published inert, and pyrycode#2143 made the daemon honour it, its commit message stating that **absent**,
+unknown and foreign are one answer on the wire — `attachment.invalid_chunk` — with **no fallback** to the
+cursor. This client still sends the pre-#2142 payload: `AttachmentChunkPayload` is documented in
+`src/shared/wire/types.ts` as the published eight fields with no `conversation_id`, and `types.test.ts` pins
+that absence deliberately. Every chunk it sends now hits the absent-id arm.
+
+Established from the binary actually installed on the gate host rather than from source: `~/.local/bin/pyry`
+(built 2026-09-06 19:50) carries #2143's `KnownConversation` membership seam and **no longer carries**
+`followActiveCursor`.
+
+**Why it is not this branch's, and why the two are nonetheless connected.** This diff is a null-rendering
+leaf plus two store modules; it touches no attachment, upload or wire code. It is also provably *inert* in
+that spec: `withIsolatedElectronApp` mkdtemps a fresh `--user-data-dir` per launch, so `pyry.lastEffort` is
+empty there, `effortDefaultToApply`'s rule 2 returns `null`, and the leaf sends no frame and writes nothing.
+The config is `workers: 1, fullyParallel: false`, so there is no cross-spec channel either. The connection
+is the environment alone: the rebuild that unblocked this ticket's model-list precondition (pyrycode#2124,
+#2125) is the same rebuild that carried #2143 past the attachment contract. The runbook's last green
+attachment run was 2026-09-04, against the older daemon.
+
+**Filed as [#1204](https://github.com/pyrycode/pyrycode-desktop/issues/1204)** (board #7, Inbox) rather than
+fixed here: the fix adds a field to a shared wire type and reverses two committed comments and an assertion
+that pin its absence, which is squarely outside this ticket's scope. The spec is deliberately **left failing
+and visible** — a behavioural skip would drop the tier's executed count and hide a real defect behind the
+silent-skip failure mode the gate exists to prevent.
+
+**Consequence worth stating plainly:** the gate cannot go green until #1204 lands, so re-running it against
+this branch will fail again on the same spec for the same reason. That is a property of the tier and the
+daemon, not of this PR.

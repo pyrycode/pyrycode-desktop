@@ -341,4 +341,18 @@ assertion.
 
 ## Revisions
 
-None yet.
+**2026-09-06 — both open questions resolved, no design change.**
+
+1. **Channel string.** `'pyry:host-label-server'` is unused across `src/` and `e2e/`, and is
+   consistent with every other `pyry:`-prefixed channel. Taken as planned; pinned by
+   `hostLabel.test.ts` alongside `HOST_LABEL_CHANNEL` and asserted distinct from it.
+2. **No import cycle** from `hostLabel.ts` importing `MAX_SERVER_ID_LENGTH` from `./unpair`, as
+   predicted — `unpair.ts` imports only `./pairing`, which imports neither. Confirmed by a green
+   `npm run build` (both typecheck passes and all three bundles).
+
+**2026-09-06 — the security review's SHOULD FIX landed and was mutation-proven.** AC2's
+malformed-request test asserts that `loadFor` was never called, not merely that the outcome is
+`error`. Verified by deleting the guard line and re-running: exactly one test reddens, and it is
+that one — which also confirms the finding's premise, since every outcome-only assertion in it
+survives the deletion (a `null` or `undefined` request makes `request.serverId` throw, and the
+classify-don't-forward `catch` turns that throw into the very `error` the test expected).

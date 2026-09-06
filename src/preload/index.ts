@@ -14,7 +14,11 @@ import {
   type UnpairResult
 } from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
-import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabel'
+import {
+  HOST_LABEL_CHANNEL,
+  HOST_LABEL_SERVER_CHANNEL,
+  type HostLabelResult
+} from '../shared/ipc/hostLabel'
 import {
   ATTACHMENT_PASTE_SOURCE,
   ATTACHMENT_UPLOAD_CHANNEL,
@@ -163,8 +167,39 @@ const api = {
    * truncated label. HOST_LABEL_CHANNEL is fixed here so the renderer cannot address arbitrary
    * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the renderer store
    * and the sidebar host row are #826.
+   *
+   * It stays ZERO-ARGUMENT through #1157, which adds the keyed sibling below rather than changing
+   * this signature — `hostLabelLoader` passes THIS function as a bare reference into a one-shot
+   * loader that calls it with no arguments, so a newly required parameter would break that caller at
+   * the type level. Since #1156 the label it answers with comes from the keyed collection's most
+   * recently stored entry when one exists, and from a pre-#1156 bare blob verbatim otherwise; either
+   * way ONE label, never the envelope text, a list, or a count of the machines paired.
    */
   hostLabel: (): Promise<HostLabelResult> => ipcRenderer.invoke(HOST_LABEL_CHANNEL),
+
+  /**
+   * Ask the background process for the host label stored for ONE NAMED machine (#1157), so a
+   * surface showing several paired hosts can label them apart instead of showing one name over all
+   * of them. The narrow counterpart to `hostLabel` above, which names no machine in particular;
+   * both stay wired until #1070 moves the sidebar onto this one. Reads AT-REST state, so it answers
+   * whether or not a connection is live. Request/response (ipcRenderer.invoke) on its own fixed
+   * channel, so the renderer can address neither an arbitrary channel nor the zero-argument query by
+   * malforming this request; ipcRenderer never crosses the bridge.
+   *
+   * The `serverId` is the ONE value that leaves the renderer here, and building the request object
+   * in the bridge is a convenience, NOT a defence: the renderer is untrusted and can invoke the
+   * channel with anything, so the main side validates the shape and the length on its own merits
+   * regardless. Only the three-outcome union comes back (stored / not-stored / error) — never the
+   * token, server key, relay URL or keychain path, never a truncated label, and never the id itself
+   * echoed on a non-stored outcome. A refusal is indistinguishable from an unreadable label, so a
+   * compromised renderer cannot learn which of its guesses was well-formed.
+   *
+   * On a machine installed before #1156 this answers `not-stored` for every id until the next
+   * pairing writes a keyed envelope — the documented one-way loss, since the store cannot name the
+   * machine a pre-keyed bare label belonged to. `hostLabel` above still returns that bare text.
+   */
+  hostLabelFor: (serverId: string): Promise<HostLabelResult> =>
+    ipcRenderer.invoke(HOST_LABEL_SERVER_CHANNEL, { serverId }),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

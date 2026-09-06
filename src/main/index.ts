@@ -25,7 +25,7 @@ import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairHandler, registerUnpairServerHandler } from './unpairHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
-import { registerHostLabelHandler } from './hostLabelHandler'
+import { registerHostLabelHandler, registerHostLabelServerHandler } from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -268,10 +268,30 @@ app.whenReady().then(() => {
   //
   // It keeps its zero-argument shape and its `load`-only handle through #1156, which re-keyed the
   // writers: `load` now recognises the keyed envelope those writers produce and still answers with
-  // one label, so this channel needs no change here. #1157 owns its request argument, #1070 the
-  // sidebar's move onto a keyed read.
+  // one label, so this channel needs no change here. #1157 added the KEYED arm below rather than
+  // changing this one, so this registration is untouched and its renderer caller unaffected; #1070
+  // owns the sidebar's move onto that keyed read.
   const unregisterHostLabel = registerHostLabelHandler(ipcMain, { store: hostLabelStore })
   app.on('will-quit', () => unregisterHostLabel())
+
+  // The PER-SERVER stored-host-label query (#1157): the same question asked of ONE named machine, so
+  // the sidebar can label two paired pyryboxes apart instead of showing one name over both. Reuse the
+  // SAME hostLabelStore constructed above — do not build a second store — and the same instance the
+  // pairing write and both unpair erases already hold, so a label written at pairing confirm is
+  // visible on the very next invoke here.
+  //
+  // Its handle is `loadFor`-only, one level finer than the arm above and still read-only: no `save`,
+  // `saveFor`, `clear` or `clearFor` is reachable from it, so this channel — the one host-label seam
+  // a compromised renderer can drive with an id of its own choosing — structurally cannot overwrite
+  // or erase anything, and cannot reach the un-keyed read either. The untrusted id is guarded at the
+  // boundary before any store call and is only ever compared with `===` against a decoded entry's own
+  // field, never composed into the persistence name. Only the three-outcome union crosses back, with
+  // a guard refusal indistinguishable from an unreadable label. `will-quit` removes the handler,
+  // symmetric with unregisterHostLabel. No caller is wired yet — the consumer is #1070.
+  const unregisterHostLabelServer = registerHostLabelServerHandler(ipcMain, {
+    store: hostLabelStore
+  })
+  app.on('will-quit', () => unregisterHostLabelServer())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

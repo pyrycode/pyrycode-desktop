@@ -189,8 +189,15 @@ export interface ComposerPermissionModeMenuModel {
  * is the outer guard for the same reason a `?? false` would be wrong: a miss is the unknown reading.
  *
  * THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor — the
- * same string and the same rule EffortSection and both neighbouring triggers join, and this is that
- * helper's FIFTH caller. No family derivation, no substring, prefix, case fold or trim anywhere on this
+ * same string and the same rule both neighbouring triggers join, and #1022 was that helper's fifth
+ * caller. #1168 NARROWED THAT SENTENCE and the count behind it: the two EFFORT surfaces now go through
+ * `effortRowFor`, which is this same rule plus one substitution — an empty model, the wire's inherited
+ * daemon default, looks up the row the daemon publishes for that default instead of missing every row.
+ * THIS MENU DELIBERATELY DID NOT FOLLOW THEM, and the branch was put in that separate home precisely so
+ * it could not: an empty model reaching this lookup would resolve the inherited-default row, and a row
+ * saying `supports_auto_mode: false` would then hide the `auto` entry on every chat nobody has set a
+ * model on. A miss stays the UNKNOWN reading here, which is what keeps that entry offered.
+ * No family derivation, no substring, prefix, case fold or trim anywhere on this
  * path. The caller passes the EFFECTIVE model (pending pick > client-confirmed > snapshot base), which is
  * what makes picking a model that refuses `auto` drop the entry at once, and a rejected model pick bring
  * it back, with no code of its own here.

@@ -16,11 +16,17 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // which rendered from a client-side catalog and so needed no daemon frame at all. #975 deleted that
 // catalog: the rows are now exactly the entries of the daemon's published `model_list` frame, which
 // the daemon emits from claude's OWN announcement. #976 then made the Effort segments read the same
-// published rows through `publishedRowFor`, so with no row matched the section renders an inert
-// current-effort line and offers no segment (the state `e2e/run-config-settings.spec.ts` pins at the
-// fake tier). Claude-less there is no announcement, so no `model_list` frame, so neither control can
-// ever appear here — this spec was red on main from PR #982 until this rewrite, failing at the first
-// sheet read while parking every other spec in the all-or-nothing gate.
+// published rows, so with NO FRAME AT ALL the section renders an inert current-effort line and offers no
+// segment (the state `e2e/run-config-settings.spec.ts` pins at the fake tier). Claude-less there is no
+// announcement, so no `model_list` frame, so neither control can ever appear here — this spec was red on
+// main from PR #982 until this rewrite, failing at the first sheet read while parking every other spec
+// in the all-or-nothing gate.
+//
+// #1168 NARROWED THAT REASON WITHOUT CHANGING THIS SPEC'S PREMISE. An empty session model now resolves
+// the row the daemon publishes for its inherited default (`effortRowFor`), so *no row matched* is no
+// longer the reason this section stays inert here — *no frame received* is, and that is the state this
+// claude-less tier is permanently in. Nothing to add: this spec receives no `model_list` frame, so it
+// cannot reach the new branch's populated arm at all.
 //
 // `YoloSection` is the one control that takes no published rows: a role="switch" whose write path
 // (`UpdateSettings`, a persisted session-pool mutation) and read path (`cfg.YOLO`) both answer with no

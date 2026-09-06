@@ -319,3 +319,27 @@ describe('ComposerModelMenuView', () => {
     expect(markup).toContain('aria-current="true">Beta tier<')
   })
 })
+
+// #1168 — the guard for a change made in a NEIGHBOURING file. That slice re-points the two EFFORT
+// surfaces so an empty session model resolves the inherited-default row (`default`), in its own home
+// rather than inside publishedRowFor — which this file's TWO lookups also call. Placed one layer down,
+// the marking below would start claiming the inherited-default row was picked on a chat where nobody
+// picked anything, and #1053's answer for this control (LAYERING, never a widened join) would be
+// silently overwritten. Whether this trigger should mark that row is a separate question, deliberately
+// out of that ticket's scope; this pins that it does not start doing so by accident.
+describe('composerModelMenuModel — an inherited-default session (#1168)', () => {
+  const INHERITED = row({ value: 'default', display_name: 'Inherited default' })
+  const list: ModelListEntry = { models: [...ROWS, INHERITED], droppedModels: 0 }
+
+  it('marks nothing when picked and stored are both empty, whatever the announcement shows', () => {
+    const menu = composerModelMenuModel(list, layers({ announced: 'gamma' }))
+    expect(menu?.currentId).toBeNull()
+    expect(menu?.label).toBe('Gamma tier')
+  })
+
+  it('labels an unmatched announcement verbatim rather than resolving the inherited-default row', () => {
+    const menu = composerModelMenuModel(list, layers({ announced: 'unpublished-identifier' }))
+    expect(menu?.label).toBe('unpublished-identifier')
+    expect(menu?.currentId).toBeNull()
+  })
+})

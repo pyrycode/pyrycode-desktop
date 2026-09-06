@@ -4,7 +4,7 @@ import { useModelListStore, selectModelListFor, type ModelListEntry } from '../.
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
-import { publishedRowFor } from './RunConfigSections'
+import { effortRowFor } from './RunConfigSections'
 import { changeSetting } from './runSettingsControls'
 
 // #989: the composer footer's EFFORT menu (Figma 115:3688) — the row's last control before the context
@@ -20,7 +20,7 @@ import { changeSetting } from './runSettingsControls'
 // model trigger LOOKS UP its label (a row's display_name, joined on the session's model), while this
 // one's label IS the session's value. Claude's own control displays these levels lowercase and
 // byte-identical to the machine values, so there is no display convention to reproduce and no
-// relabelling to do — publishedRowFor is used here only to find the LEVELS.
+// relabelling to do — the row lookup (effortRowFor since #1168) is used here only to find the LEVELS.
 
 // The PANEL's accessible name, and a client-owned constant — NOT the trigger's visible text. This
 // trigger reads claude-authored text, and aria-label is an ATTRIBUTE: a sink CLAUDE.md's daemon-text
@@ -87,10 +87,20 @@ export interface ComposerEffortMenuModel {
  * no level list in this repo to fall back to — #976 deleted the last one — and re-minting one here
  * would put a second copy of the vocabulary back in the place it was removed from.
  *
- * THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor: the
- * same string and the same rule EffortSection and the model trigger both join, and this is that
- * helper's fourth caller. No family derivation, no substring, prefix, case fold or trim anywhere on
- * this path — `value` is an argument (`default`, `sonnet`, `opus[1m]`), not a parseable identifier.
+ * THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` — the same string and the same
+ * rule EffortSection and the model trigger both join. No family derivation, no substring, prefix, case
+ * fold or trim anywhere on this path — `value` is an argument (`default`, `sonnet`, `opus[1m]`), not a
+ * parseable identifier.
+ *
+ * #1168 MOVED THAT LOOKUP FROM publishedRowFor TO effortRowFor, the one home the two EFFORT surfaces
+ * share, and it is the whole of that slice here. An empty model is the wire's inherited daemon default
+ * rather than an absence, and it now resolves the row the daemon publishes for that default instead of
+ * missing every row — so an unconfigured chat reaches the MENU rendering above where it used to reach
+ * the inert one permanently, which measured live is the common case rather than an edge. Nothing else
+ * moved: the label, the currentId, the options mapping, the `effort === ''` rendering and both arms are
+ * untouched, and with no inherited-default row published this still resolves nothing and still draws the
+ * inert label. The three OTHER callers of publishedRowFor keep missing on an empty model deliberately —
+ * effortRowFor's docblock names them and why, one being the permission-mode trigger beside this one.
  *
  * `?? []` guards the shape rather than the type: `effort_levels` is a non-optional `string[]`, but
  * WireModelOption's docblock records that a frame reached through a bare `as` can yield undefined, and
@@ -116,7 +126,7 @@ export function composerEffortMenuModel(
   effort: string
 ): ComposerEffortMenuModel | null {
   if (effort === '') return null
-  const levels = publishedRowFor(models, model)?.effort_levels ?? []
+  const levels = effortRowFor(models, model)?.effort_levels ?? []
   return {
     label: effort,
     currentId: effort,

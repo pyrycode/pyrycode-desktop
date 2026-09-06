@@ -307,3 +307,26 @@ over props.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+**2026-09-06 — a third production file, comment-only.** The plan named two production files.
+`ComposerPermissionModeMenu.tsx` is a third, and nothing executable in it changed: its docblock claimed
+"the same rule EffortSection and both neighbouring triggers join, and this is that helper's FIFTH
+caller", and this slice falsified both halves — the two effort surfaces now join through `effortRowFor`,
+and `publishedRowFor` has one fewer call site. Leaving a claim this diff makes false is the divergence the
+committed plan exists to prevent, so the paragraph was narrowed in place and now records why this menu
+deliberately did NOT follow the two effort surfaces. Two smaller instances of the same correction:
+`ComposerEffortMenu.tsx`'s file header named `publishedRowFor` as what finds the levels, and
+`e2e/real-daemon-session-settings.spec.ts`'s header gave *no row matched* as the reason its section stays
+inert — which is now *no frame received*, the state that claude-less tier is permanently in. That spec's
+premise and its assertions are untouched.
+
+**Open question 1 resolved as expected:** the function shipped as `effortRowFor`.
+
+**Open question 2 resolved as expected:** `INHERITED_DEFAULT_MODEL_VALUE` stayed module-private, and all
+four test files seed the literal `'default'` themselves.
+
+**No design change.** The two call sites, the substitution-on-the-argument shape, the precedence rule and
+every rendering are exactly as designed above; the security review's one SHOULD FIX was honoured — the
+diff adds no log statement on either path.

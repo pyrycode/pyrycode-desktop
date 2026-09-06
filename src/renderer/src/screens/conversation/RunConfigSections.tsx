@@ -65,11 +65,66 @@ import { contextUsagePercent } from './contextUsage'
 // second copy this docblock exists to prevent, and lifting the rule into a new co-located module would be
 // a refactor that ticket does not need. It stays declared here, beside the two of three callers that
 // already read it.
+//
+// #1168 DID NOT TOUCH IT, and that is a decision rather than an omission — see effortRowFor below. The
+// two EFFORT surfaces now resolve an empty model to the inherited-default row; the other three callers
+// must not, and the cheapest way to be sure of that is that this body never learned about the case.
 export function publishedRowFor(
   models: ModelListEntry | null | undefined,
   model: string
 ): WireModelOption | undefined {
   return models?.models.find((row) => row.value === model)
+}
+
+// #1168 — the row `value` the daemon publishes for its own inherited default. One of the measured set
+// ModelSection's docblock records (`default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`), and
+// pyrycode#2124's captured `initialize` reply reports it resolving to `claude-sonnet-5`: the daemon
+// publishes the inherited default as an ORDINARY ROW, which is what makes this a join rather than a
+// fallback list.
+//
+// Client-owned, and it meets daemon strings only by being handed to publishedRowFor's `===` — the
+// EFFORT_LEVELS_FIELD idiom in this same file: a linear scan by equality, never an object keyed by
+// claude-authored text. It is deliberately NOT exported. The tests seed the literal themselves, so
+// changing this value has to fail a test rather than be followed silently by one.
+const INHERITED_DEFAULT_MODEL_VALUE = 'default'
+
+/**
+ * #1168 — the row whose `effort_levels` an effort surface offers, and the ONE home of that rule for both
+ * of them: EffortSection below and composerEffortMenuModel in ComposerEffortMenu.tsx.
+ *
+ * It is publishedRowFor with ONE substitution, on the lookup ARGUMENT: the empty model — which the wire
+ * contract calls the inherited daemon default and explicitly NOT absent (`WireSessionSettings.model`) —
+ * looks up INHERITED_DEFAULT_MODEL_VALUE instead. Every other model is passed through untouched, and the
+ * comparing is still entirely publishedRowFor's single `===`. So no family derivation, no substring, no
+ * prefix, no case fold and no trim exists on this path, before or after the substitution: `''` is the
+ * only input that takes the branch, and ` `, `Default` and `default-x` all miss exactly as they did.
+ *
+ * WHY A SEPARATE FUNCTION RATHER THAN A BRANCH INSIDE publishedRowFor. That helper has five callers
+ * joining three different strings, and three of them must NOT gain this case:
+ * `RunningModelSection` joins what claude ANNOUNCED (a different identifier answering a different
+ * question — an announcement of `''` is a real one the daemon emitted and renders verbatim);
+ * `composerModelMenuModel` joins the session model for its marking, which #1053 settled by LAYERING and
+ * would start claiming a row was picked on a chat where nobody picked one; and
+ * `composerPermissionModeMenuModel` reads `supports_auto_mode` off the row it resolves, so it would
+ * start hiding the `auto` entry on every inherited-default chat — a behaviour change to a third control,
+ * invisible to every criterion this slice is judged by. All three are pinned by tests in their own files.
+ *
+ * IT IS A JOIN, NEVER A VOCABULARY. With no inherited-default row published, or no `model_list` frame
+ * received, this returns `undefined` and both surfaces render exactly what they rendered before #1168 —
+ * the sheet's UNKNOWN line and the footer's inert label. #976 deleted the last client-side level list and
+ * nothing here re-mints one: the only client-owned string added is the row value to look up, and the
+ * levels themselves stay entirely the daemon's.
+ *
+ * PRECEDENCE, so a cold read need not guess: the empty-model branch resolves to
+ * INHERITED_DEFAULT_MODEL_VALUE and consults no other row. A daemon publishing a row whose `value` is
+ * literally `''` is not a case this path arbitrates — one rule, one answer. ComposerModelMenu's docblock
+ * keeps its own separate answer to that question for its own control, and #1168 does not reopen it.
+ */
+export function effortRowFor(
+  models: ModelListEntry | null | undefined,
+  model: string
+): WireModelOption | undefined {
+  return publishedRowFor(models, model === '' ? INHERITED_DEFAULT_MODEL_VALUE : model)
 }
 
 // #975 — the Model section's two non-populated readings, which the store deliberately keeps apart and
@@ -414,10 +469,16 @@ function ModelSection({
 // at all while the other rows publish all five, so a fixed strip offered Haiku five choices it cannot
 // use and asked the daemon for something it will not do.
 //
-// THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor —
-// the same string and the same rule the Model rows above mark a row selected by. Not `announced.model`,
-// which is a different identifier for a different question, and not a family derived from `value`,
-// which is not parseable.
+// THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` — the same string and the same
+// rule the Model rows above mark a row selected by. Not `announced.model`, which is a different
+// identifier for a different question, and not a family derived from `value`, which is not parseable.
+//
+// #1168 MOVED THIS ONE CALL FROM publishedRowFor TO effortRowFor, which is the whole of that slice here.
+// An empty model is the wire's inherited daemon default, not an absence, and it now resolves the row the
+// daemon publishes for that default rather than missing every row. Everything below is unchanged and
+// applies its shipped readings to whatever that row carries: the four inputs still map to the same three
+// renderings, the cut report is still read per field, and no arm, element or sentence was added. The
+// Model rows above and the running-model line still call publishedRowFor directly and are unmoved.
 //
 // FOUR INPUTS, THREE RENDERINGS:
 //
@@ -475,7 +536,7 @@ function EffortSection({
   error?: boolean
   busy?: boolean
 }): JSX.Element {
-  const row = publishedRowFor(models, model)
+  const row = effortRowFor(models, model)
   const levels = row?.effort_levels ?? []
   // `null` and `[]` say the identical thing per the wire contract, so the test is membership rather
   // than presence. Read PER FIELD: a report naming only `display_name` says nothing about this list.

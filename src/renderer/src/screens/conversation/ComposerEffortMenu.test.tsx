@@ -266,3 +266,92 @@ describe('ComposerEffortMenuView', () => {
     expect(countOf(markup, 'aria-current')).toBe(0)
   })
 })
+
+// #1168: the session model '' — the wire contract's inherited daemon default, explicitly not absent —
+// which the daemon publishes as an ordinary row valued `default`. It matched no row before this slice,
+// so an unconfigured chat drew the inert label above permanently. The JOIN re-points; the trigger, the
+// label, the marking and both arms are the ones already asserted above.
+describe('composerEffortMenuModel / View — the inherited-default session (#1168)', () => {
+  // The row value is TYPED rather than imported: the module keeps that constant private on purpose, so
+  // a changed value must fail here rather than be followed. The DISPLAY strings stay invented, the
+  // sibling files' rule, and the levels stay mutually non-substring with GRADED's.
+  const INHERITED = row({
+    value: 'default',
+    display_name: 'Inherited default',
+    effort_levels: ['calm', 'urgent']
+  })
+  const INHERITED_LEVELS = INHERITED.effort_levels
+  // Both readings in one list, so each case below picks its row by the MODEL it joins on. GRADED sits
+  // beside it and must never be what an empty model resolves to.
+  const WITH_INHERITED: ModelListEntry = { models: [GRADED, INHERITED, FLAT], droppedModels: 0 }
+
+  it('resolves that row levels for an empty model, label and marking unchanged (AC1)', () => {
+    expect(composerEffortMenuModel(WITH_INHERITED, '', EFFORT)).toStrictEqual({
+      label: EFFORT,
+      currentId: EFFORT,
+      options: INHERITED_LEVELS.map((level) => ({ id: level, label: level }))
+    })
+  })
+
+  it('resolves THAT row, never a neighbouring published one (AC1)', () => {
+    const options = composerEffortMenuModel(WITH_INHERITED, '', EFFORT)?.options ?? []
+    expect(options.map((each) => each.id)).toStrictEqual([...INHERITED_LEVELS])
+    for (const level of LEVELS) expect(options.map((each) => each.id)).not.toContain(level)
+  })
+
+  // The arm FLIP, as markup: the openable menu where an inert span stands today. The two arms render
+  // structurally different elements, which is the only way a repo that cannot click observes this.
+  it('draws the openable menu where it drew an inert label (AC1)', () => {
+    const markup = view(WITH_INHERITED, '', EFFORT)
+    expect(markup).toContain('class="composer-options-anchor"')
+    expect(markup).toContain('class="composer__footer-button composer__effort"')
+    expect(markup).toContain('aria-haspopup="menu"')
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('composer__effort-icon')
+    expect(markup).toContain(`<span class="composer__effort-label">${EFFORT}</span>`)
+  })
+
+  // AC2: the offers-nothing arm is the SHIPPED one, reached with a different input — no new element and
+  // no sentence of its own. The whole markup is asserted, as the AC3 arm above is.
+  it('stays inert when the inherited-default row publishes no levels (AC2)', () => {
+    const list: ModelListEntry = {
+      models: [GRADED, row({ value: 'default', display_name: 'Inherited default' })],
+      droppedModels: 0
+    }
+    expect(composerEffortMenuModel(list, '', EFFORT)?.options).toStrictEqual([])
+    expect(view(list, '', EFFORT)).toBe(
+      `<span class="composer__footer-button"><span class="composer__effort-label">${EFFORT}</span></span>`
+    )
+  })
+
+  // AC3: no inherited-default row published, or no frame at all, and the rendering is today's. LIST
+  // publishes three levels on a row an empty model must not fall back to.
+  it.each([
+    ['no frame has arrived', null],
+    ['the daemon published no rows at all', EMPTY],
+    ['no inherited-default row is published', LIST]
+  ])('offers nothing and stays inert when %s (AC3)', (_why, models) => {
+    expect(composerEffortMenuModel(models as ModelListEntry | null, '', EFFORT)).toStrictEqual({
+      label: EFFORT,
+      currentId: EFFORT,
+      options: []
+    })
+    expect(view(models as ModelListEntry | null, '', EFFORT)).not.toContain('aria-haspopup')
+  })
+
+  // AC3: the empty model is the ONLY input taking the new branch — a trim, case fold, prefix or
+  // substring introduced on this path fails here rather than passing quietly.
+  it.each([' ', '  ', 'DEFAULT', 'Default', 'defaul', 'default-x', ' default', 'default '])(
+    'takes the new branch for the empty model alone, never for %j (AC3)',
+    (model) => {
+      expect(composerEffortMenuModel(WITH_INHERITED, model, EFFORT)?.options).toStrictEqual([])
+    }
+  )
+
+  // The first rendering is untouched: an unknown effort still draws nothing at all, even where the empty
+  // model now resolves a row publishing levels.
+  it('still renders nothing when the session effort is not known (AC2)', () => {
+    expect(composerEffortMenuModel(WITH_INHERITED, '', '')).toBeNull()
+    expect(view(WITH_INHERITED, '', '')).toBe('')
+  })
+})

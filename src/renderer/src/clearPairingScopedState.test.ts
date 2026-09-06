@@ -30,8 +30,13 @@ import {
   selectConversationsFor
 } from './store/conversationListStore'
 import { createQueueStore, selectBacklogFor, EMPTY_BACKLOG } from './store/queueStore'
+import {
+  createBackgroundTaskRosterStore,
+  selectRosterFor
+} from './store/backgroundTaskRosterStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
+  BackgroundTask,
   ConversationCreatedPayload,
   MessagePayload,
   QueuedItem,
@@ -91,6 +96,7 @@ function spyDeps(): {
   clearAllModelLists: ReturnType<typeof vi.fn>
   clearAllConversations: ReturnType<typeof vi.fn>
   clearAllBacklogs: ReturnType<typeof vi.fn>
+  clearAllRosters: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -103,6 +109,7 @@ function spyDeps(): {
   const clearAllModelLists = vi.fn()
   const clearAllConversations = vi.fn()
   const clearAllBacklogs = vi.fn()
+  const clearAllRosters = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -116,6 +123,7 @@ function spyDeps(): {
       clearAllModelLists,
       clearAllConversations,
       clearAllBacklogs,
+      clearAllRosters,
       dispatchSession,
       clearAllLastRead
     },
@@ -128,6 +136,7 @@ function spyDeps(): {
     clearAllModelLists,
     clearAllConversations,
     clearAllBacklogs,
+    clearAllRosters,
     dispatchSession,
     clearAllLastRead
   }
@@ -154,7 +163,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all eleven clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all twelve clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -166,6 +175,7 @@ describe('clearPairingScopedState', () => {
       clearAllModelLists,
       clearAllConversations,
       clearAllBacklogs,
+      clearAllRosters,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -203,6 +213,12 @@ describe('clearPairingScopedState', () => {
     // input of them: a queued item's `text` is untrusted daemon-relayed content, so a clear taking an
     // id would let the DEPARTING daemon choose which of its own messages outlive the pairing.
     expect(clearAllBacklogs).toHaveBeenCalledWith()
+    expect(clearAllRosters).toHaveBeenCalledTimes(1)
+    // #1139, the same nullary property as the five whole-map clears above and against the sharpest
+    // input of all of them: a held task's `description` for `taskType: local_bash` IS the literal
+    // command line claude ran, so a clear taking an id would let the DEPARTING daemon choose which of
+    // its own command lines outlive the pairing.
+    expect(clearAllRosters).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -212,12 +228,13 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these eleven stores', () => {
+  it('the pairing-scoped set is exactly these twelve stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so an ELEVENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
+    // names, so a THIRTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
     // compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
-    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth and #1138 the eleventh, and each
+    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh and #1139 the
+    // twelfth, and each
     // updated this pin, which is the intended cost of adding one; loosening it is not.
     const { deps } = spyDeps()
 
@@ -227,6 +244,7 @@ describe('clearPairingScopedState', () => {
       'clearAllConversations',
       'clearAllLastRead',
       'clearAllModelLists',
+      'clearAllRosters',
       'clearAllSlashCommandLists',
       'clearAllTimelines',
       'clearAnnouncedModel',
@@ -264,6 +282,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(clearAllModelLists.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the roster clear runs BEFORE the one effect that can throw (#1139)', () => {
+    // The same constraint as the two cases above, for the same reason and against the sharpest content
+    // in the whole set. `clearAllLastRead` is the only effect here with an external side effect
+    // (`localStorage`) and so the only one that can throw; placed last, a throw from it aborts nothing.
+    // Placed BEFORE the roster clear, such a throw would abort it — leaving the ended pairing's
+    // `local_bash` command lines and patch text live on screen, attributed to a machine the operator
+    // has left, with no re-assertion path of any kind to overwrite them. Position is otherwise free
+    // among the in-memory clears; this is the half that is not.
+    const { deps, clearAllRosters, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(clearAllRosters.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -575,6 +610,63 @@ describe('clearPairingScopedState', () => {
     expect(queue.getState().backlogs.size).toBe(0)
     expect(selectBacklogFor('c-drained')(queue.getState())).toBe(EMPTY_BACKLOG)
   })
+
+  it('real stores: a background task started on the ended pairing cannot outlive it, and the connected edge alone would NOT evict it (#1139 AC4)', () => {
+    const rosters = createBackgroundTaskRosterStore()
+    const row: BackgroundTask = {
+      task_id: 'bt-1',
+      task_type: 'local_bash',
+      description: 'rm -rf /srv/deploy/stale && ./deploy.sh --machine-we-just-left',
+      truncated_fields: null
+    }
+    rosters.getState().setRoster({ conversationId: 'c-listed', tasks: [row], droppedTasks: 0 })
+    // Held under a conversation NO server's list carries — a background task can start for one whose
+    // list has not arrived, and every scoped reset leaves such an entry alone by construction.
+    rosters.getState().setStartedTask({
+      conversationId: 'c-unlisted',
+      taskId: 'bt-2',
+      toolCallId: 'tc-9',
+      taskType: 'local_bash',
+      description: 'tail -f /var/log/pyry/server-a.log',
+      truncatedFields: null
+    })
+
+    // FIRST, the half that makes this store's membership necessary rather than defensive. Scoping the
+    // reconnect reset to the reconnecting server's own conversations (#1139) is what removed the
+    // self-heal that kept this store out of the set: the new pairing's first `connected` finds no
+    // conversation list in its slot yet, so the scoped reset resolves an EMPTY id set, matches no held
+    // key, and hands the state object straight back. Simulated directly here rather than through the
+    // bridge, because the claim is about what the edge CANNOT do.
+    const before = rosters.getState()
+    rosters.getState().resetRostersFor(new Set())
+    expect(rosters.getState()).toBe(before)
+    expect(selectRosterFor('c-listed')(rosters.getState())).not.toBeNull()
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        createQueueStore(),
+        rosters
+      )
+    )
+
+    // SECOND, the half this ticket adds, and it is harsher than the queue's: NOTHING re-asserts a
+    // roster — no frame in this family is in the daemon's reconcile-on-connect set and this app sends
+    // no `last_event_id` — so without this clear both entries latch for the life of the process. The
+    // unlisted one is the sharper of the two, since no scoped reset can ever reach it.
+    expect(rosters.getState().rosters.size).toBe(0)
+    expect(selectRosterFor('c-listed')(rosters.getState())).toBeNull()
+    expect(selectRosterFor('c-unlisted')(rosters.getState())).toBeNull()
+  })
 })
 
 function realDeps(
@@ -591,7 +683,9 @@ function realDeps(
   // asserts on the conversation rows needs to hold a reference to the store being cleared.
   conversations: ReturnType<typeof createConversationListStore> = createConversationListStore(),
   // #1138's eleventh, defaulted for the same reason.
-  queue: ReturnType<typeof createQueueStore> = createQueueStore()
+  queue: ReturnType<typeof createQueueStore> = createQueueStore(),
+  // #1139's twelfth, defaulted for the same reason.
+  rosters: ReturnType<typeof createBackgroundTaskRosterStore> = createBackgroundTaskRosterStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -603,6 +697,7 @@ function realDeps(
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     clearAllConversations: () => conversations.getState().clearAllConversations(),
     clearAllBacklogs: () => queue.getState().clearAllBacklogs(),
+    clearAllRosters: () => rosters.getState().clearAllRosters(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

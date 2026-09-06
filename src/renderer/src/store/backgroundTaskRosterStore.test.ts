@@ -474,16 +474,31 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldIds(store, 'c1')).toEqual(['t2'])
   })
 
-  it('resetRosters clears recorded patches along with everything else (AC5)', () => {
+  it('resetRostersFor clears recorded patches along with everything else it drops (#573 AC5)', () => {
     const store = createBackgroundTaskRosterStore()
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started({ conversationId: 'c2', taskId: 't9' }))
     store.getState().setUpdatedTask(updated({ conversationId: 'c1', taskId: 't1' }))
     store.getState().setUpdatedTask(updated({ conversationId: 'c2', taskId: 't9' }))
-    store.getState().resetRosters()
+    store.getState().resetRostersFor(new Set(['c1', 'c2']))
 
-    // A patch key may carry command text, so the connected edge clearing it is what keeps a previous
-    // PAIRING's text from ever appearing. Nothing here is persisted, so nothing survives the reset.
+    // A patch key may carry command text, so the connected edge clearing it is what keeps the
+    // RECONNECTING server's previous connection out of the next one. Nothing here is persisted, so
+    // nothing survives. The previous-PAIRING half of that guarantee is `clearAllRosters` since #1139.
+    expect(selectRosterFor('c1')(store.getState())).toBeNull()
+    expect(selectRosterFor('c2')(store.getState())).toBeNull()
+  })
+
+  it('clearAllRosters clears recorded patches along with everything else (#573 AC5, AC4)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setStartedTask(started({ conversationId: 'c2', taskId: 't9' }))
+    store.getState().setUpdatedTask(updated({ conversationId: 'c1', taskId: 't1' }))
+    store.getState().setUpdatedTask(updated({ conversationId: 'c2', taskId: 't9' }))
+    store.getState().clearAllRosters()
+
+    // The pairing-boundary half, and the one that takes NO id at all: a departed pairing's patch text
+    // and command lines go whether or not any server's conversation list ever named the conversation.
     expect(selectRosterFor('c1')(store.getState())).toBeNull()
     expect(selectRosterFor('c2')(store.getState())).toBeNull()
   })
@@ -605,38 +620,171 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldFor(store, 'c2')?.droppedTasks).toBe(2)
   })
 
-  it('resetRosters returns every conversation to never-observed, started-sourced included (AC5)', () => {
+  it('resetRostersFor returns the listed conversations to never-observed, started-sourced included (#573 AC5)', () => {
     const store = createBackgroundTaskRosterStore()
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started({ conversationId: 'c2' }))
-    store.getState().resetRosters()
+    store.getState().resetRostersFor(new Set(['c1', 'c2']))
 
     expect(store.getState().rosters.size).toBe(0)
-    // Back to null, NOT to an observed-empty entry — a previous pairing's command lines are gone,
-    // whichever frame reported them, and the reader cannot mistake the cleared state for "the
-    // daemon says nothing is running".
+    // Back to null, NOT to an observed-empty entry — the reconnecting server's previous connection is
+    // gone whichever frame reported each task, and the reader cannot mistake the cleared state for
+    // "the daemon says nothing is running".
     expect(selectRosterFor('c1')(store.getState())).toBeNull()
     expect(selectRosterFor('c2')(store.getState())).toBeNull()
   })
 
-  it('resetRosters on an already-empty map is a same-reference no-op (first connect)', () => {
+  it('resetRostersFor on an already-empty map is a same-reference no-op (first connect)', () => {
     const store = createBackgroundTaskRosterStore()
     const before = store.getState()
-    store.getState().resetRosters()
+    store.getState().resetRostersFor(new Set(['c1']))
     // Returning the identical state lets zustand's Object.is short-circuit — `connected` fires on
     // every (re)handshake, so a no-op reset must churn no listener.
     expect(store.getState()).toBe(before)
   })
 
-  it('reset then a new roster repopulates one conversation — replacement truth unchanged (AC5)', () => {
+  it('a scoped reset then a new roster repopulates one conversation — replacement truth unchanged (#573 AC5)', () => {
     const store = createBackgroundTaskRosterStore()
     store.getState().setStartedTask(started())
-    store.getState().resetRosters()
+    store.getState().resetRostersFor(new Set(['c1']))
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
 
     // The cleared toolCallId does not come back: nothing repopulates a started frame after a
     // (re)handshake, so the task reads roster-sourced again. That is #569's gap, stated honestly.
     expect(heldTask(store, 'c1', 't1')).toEqual(heldNoCut)
+  })
+
+  // #1139 — since #1117 the app holds one live connection per paired server, so a `connected` edge
+  // means "THIS server's connection came back" and the reset must drop only that server's held
+  // rosters. The caller resolves which conversations those are from the server-keyed conversation
+  // list; this store only ever sees the resulting id set, which is therefore CLIENT-held.
+  describe('resetRostersFor (scoped reconnect reset, #1139)', () => {
+    /** Two servers' worth of held state: `a1` on server A, `b1` on server B, and `orphan` under a
+     *  conversation no server's list names — a background task can legitimately start for one whose
+     *  list has not arrived. */
+    const twoServers = (): Store => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setRoster({ conversationId: 'a1', tasks: [noCut], droppedTasks: 0 })
+      store.getState().setRoster({ conversationId: 'b1', tasks: [cutDescription], droppedTasks: 3 })
+      store.getState().setRoster({ conversationId: 'orphan', tasks: [noCut], droppedTasks: 0 })
+      return store
+    }
+
+    it('drops exactly the listed conversations and leaves every other held one (AC1)', () => {
+      const store = twoServers()
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      expect(selectRosterFor('b1')(store.getState())).toBeNull()
+      expect(heldIds(store, 'a1')).toEqual(['t1'])
+      expect(heldIds(store, 'orphan')).toEqual(['t1'])
+    })
+
+    it('leaves a roster whose conversation is in NO list alone — the accepted consequence (AC2)', () => {
+      // Pinned so a later widening of the reset's scope is a deliberate change rather than drift.
+      // `clearAllRosters` is the only thing that ever collects such an entry.
+      const store = twoServers()
+      store.getState().resetRostersFor(new Set(['a1']))
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      expect(heldIds(store, 'orphan')).toEqual(['t1'])
+    })
+
+    it('drops nothing for an empty id set — the not-loaded and loaded-empty reading (AC2)', () => {
+      // `selectConversationIdsFor` collapses "this server has no list yet" and "it reported zero
+      // conversations" into the one `EMPTY_CONVERSATION_IDS` reference; both mean drop nothing. A new
+      // pairing's first `connected` is exactly this case, which is why `clearAllRosters` exists.
+      const store = twoServers()
+      const before = store.getState()
+      store.getState().resetRostersFor(new Set())
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('hands the state object straight back when no held key is listed (subscriber short-circuit)', () => {
+      // The generalisation of the old whole-map reset's `size === 0` guard: a reconnect of a server
+      // that holds nothing here must make zustand's Object.is fire and wake NO listener at all.
+      const store = twoServers()
+      const before = store.getState()
+      store.getState().resetRostersFor(new Set(['c-not-held', 'c-also-not-held']))
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('returns every surviving entry BY REFERENCE — a watcher of another conversation never re-renders', () => {
+      const store = twoServers()
+      const beforeA = heldFor(store, 'a1')
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      expect(heldFor(store, 'a1')).toBe(beforeA)
+    })
+
+    it('drops a conversation whole — started-sourced tasks and recorded patches go with it (#573 AC5)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setStartedTask(started({ conversationId: 'b1', taskId: 't9' }))
+      store.getState().setUpdatedTask(updated({ conversationId: 'b1', taskId: 't9' }))
+      store.getState().setStartedTask(started({ conversationId: 'a1', taskId: 't9' }))
+      store.getState().setUpdatedTask(updated({ conversationId: 'a1', taskId: 't9' }))
+      store.getState().resetRostersFor(new Set(['b1']))
+
+      // The reset deletes the map key, so it cannot half-drop an entry: the `toolCallId` only the
+      // started frame reports and the patch only the update frame reports go together.
+      expect(selectRosterFor('b1')(store.getState())).toBeNull()
+      expect(heldTask(store, 'a1', 't9')?.toolCallId).toBe('tc-1')
+      expect(heldTask(store, 'a1', 't9')?.latestUpdate?.patch).toBe('{"is_backgrounded":true}')
+    })
+
+    it('treats __proto__, constructor and the empty string as ordinary conversation keys', () => {
+      // The reset iterates a Map's held keys and tests membership with Set.has — never a bare object
+      // keyed by id, per `ServerOrigin`'s docblock — so these ids drop and survive like any other.
+      // Swapping either collection for a `Record<string, …>` reddens here rather than silently
+      // reading `Object.prototype` back out of the store.
+      const store = createBackgroundTaskRosterStore()
+      for (const id of ['__proto__', 'constructor', '']) {
+        store.getState().setRoster({ conversationId: id, tasks: [noCut], droppedTasks: 0 })
+      }
+      expect(heldIds(store, '__proto__')).toEqual(['t1'])
+
+      store.getState().resetRostersFor(new Set(['__proto__', '']))
+      expect(selectRosterFor('__proto__')(store.getState())).toBeNull()
+      expect(selectRosterFor('')(store.getState())).toBeNull()
+      expect(heldIds(store, 'constructor')).toEqual(['t1'])
+    })
+  })
+
+  // #1139 — the pairing-boundary drop. It exists because scoping the reconnect reset above removed the
+  // self-heal that kept this store out of `clearPairingScopedState`: a new pairing's first `connected`
+  // resolves an empty conversation list and drops nothing, and NOTHING re-asserts a roster.
+  describe('clearAllRosters (pairing-boundary drop, #1139)', () => {
+    it('returns every conversation to never-observed, listed or not (AC4)', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setRoster({ conversationId: 'a1', tasks: [noCut], droppedTasks: 0 })
+      store.getState().setStartedTask(started({ conversationId: 'b1' }))
+      store.getState().setRoster({ conversationId: 'orphan', tasks: [cutDescription], droppedTasks: 0 })
+      store.getState().clearAllRosters()
+
+      expect(store.getState().rosters.size).toBe(0)
+      // Including the entry every scoped reset leaves alone: this clear is the only thing that ever
+      // collects a roster held for a conversation no server's list carried.
+      expect(selectRosterFor('a1')(store.getState())).toBeNull()
+      expect(selectRosterFor('b1')(store.getState())).toBeNull()
+      expect(selectRosterFor('orphan')(store.getState())).toBeNull()
+    })
+
+    it('is a same-reference no-op on an already-empty map (subscriber short-circuit)', () => {
+      const store = createBackgroundTaskRosterStore()
+      const before = store.getState()
+      store.getState().clearAllRosters()
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('returns initialBackgroundTaskRosterState BY REFERENCE, the clearAllBacklogs shape', () => {
+      const store = createBackgroundTaskRosterStore()
+      store.getState().setRoster({ conversationId: 'a1', tasks: [noCut], droppedTasks: 0 })
+      store.getState().clearAllRosters()
+
+      expect(store.getState().rosters).toBe(initialBackgroundTaskRosterState.rosters)
+    })
   })
 
   it('keeps two stores independent (DI)', () => {
@@ -669,7 +817,8 @@ describe('backgroundTaskRosterStore', () => {
     const setRoster = store.getState().setRoster
     const setStartedTask = store.getState().setStartedTask
     const setUpdatedTask = store.getState().setUpdatedTask
-    const resetRosters = store.getState().resetRosters
+    const resetRostersFor = store.getState().resetRostersFor
+    const clearAllRosters = store.getState().clearAllRosters
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started())
     store.getState().setUpdatedTask(updated())
@@ -677,6 +826,7 @@ describe('backgroundTaskRosterStore', () => {
     expect(store.getState().setRoster).toBe(setRoster)
     expect(store.getState().setStartedTask).toBe(setStartedTask)
     expect(store.getState().setUpdatedTask).toBe(setUpdatedTask)
-    expect(store.getState().resetRosters).toBe(resetRosters)
+    expect(store.getState().resetRostersFor).toBe(resetRostersFor)
+    expect(store.getState().clearAllRosters).toBe(clearAllRosters)
   })
 })

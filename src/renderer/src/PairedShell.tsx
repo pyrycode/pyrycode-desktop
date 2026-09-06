@@ -33,6 +33,7 @@ import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { modelListStore } from './store/modelListStore'
 import { conversationListStore } from './store/conversationListStore'
 import { queueStore } from './store/queueStore'
+import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -126,6 +127,14 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // what stopped a re-pairing's first `connected` from blanking the map on its way past, so the two
   // mechanisms now split the work rather than one covering for the other.
   clearAllBacklogs: () => queueStore.getState().clearAllBacklogs(),
+  // #1139: every conversation's background-task roster, dropped as one — the same direct, nullary
+  // shape as the five clears above, and the SECOND member whose store the `connected` edge also
+  // clears. Scoping that edge to the reconnecting server (which is what #1139 does) is what stopped a
+  // re-pairing's first `connected` from blanking the map on its way past, and this family re-asserts
+  // nothing at all, so without this entry a departed pairing's command lines would latch for the life
+  // of the process. Adding it to THIS object is what makes both pairing-change paths below drop it;
+  // neither call site needed an edit.
+  clearAllRosters: () => backgroundTaskRosterStore.getState().clearAllRosters(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

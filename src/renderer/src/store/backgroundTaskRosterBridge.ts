@@ -23,6 +23,39 @@ import {
   type BackgroundTaskStartedSnapshot,
   type BackgroundTaskUpdatedSnapshot
 } from './backgroundTaskRosterStore'
+import {
+  conversationListStore,
+  selectConversationIdsFor,
+  type ConversationListOrigin
+} from './conversationListStore'
+
+/**
+ * Read the server this event came from (#1139), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * `queueBridge.ts`'s `originOf` is the same idiom for the queue leg, `relayLinkBridge.ts`'s for the
+ * relay leg, `conversationListBridge.ts`'s for the list leg and `daemonEventBridge.ts`'s for the daemon
+ * leg — a copy rather than an import, for the reason each of those states: taking another's would
+ * couple two deliberately independent single-arm subscribers and drag this path's key domain onto that
+ * store's.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload. The `connected` arm carries the
+ * daemon's own `ack.server_id`, which is a DISTINCT value the daemon chose; the stamp is bound
+ * main-side at construction from a paired record this client holds, so a hostile or confused daemon
+ * cannot make its reconnect clear another server's background-task rosters.
+ */
+function originOf(event: DaemonEvent): ConversationListOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null selects the unstamped slot: no producer can
+  // emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot rather
+  // than throwing is what keeps this total inside a daemon-event listener.
+  return typeof serverId === 'string' ? serverId : undefined
+}
 
 /**
  * The roster filter: map the one owned arm to its snapshot, every other DaemonEvent to `null`. A FRESH
@@ -116,15 +149,27 @@ export function translateBackgroundTaskUpdated(
 }
 
 /**
- * Subscribe via the injected `onDaemonEvent`. A `connected` event is the (re)handshake edge (AC5): it
- * `resetRosters()` and returns, so tasks from a previous connection — or a previous PAIRING, since a
- * new pairing always re-handshakes — never appear. THIS BRANCH IS THE SOLE ENFORCEMENT OF AC5: it is
- * why the store is deliberately NOT added to `clearPairingScopedState` (whose docstring excludes stores
- * the `connected` edge already clears), so folding it into the translator or gating it behind a
- * condition would kill the security property silently. The reset reads only the discriminant — it
- * ignores `event.ack`. Nothing repopulates afterwards: rosters are not in the daemon's
- * reconcile-on-connect set and this app advertises no `last_event_id` (#569 owns that gap), so there is
- * no re-send ordering to reason about here.
+ * Subscribe via the injected `onDaemonEvent`. A `connected` event is the (re)handshake edge (#573's
+ * AC5): it resets and returns, so tasks from the reconnecting server's previous connection never
+ * appear. Nothing repopulates afterwards: rosters are not in the daemon's reconcile-on-connect set and
+ * this app advertises no `last_event_id` (#569 owns that gap), so there is no re-send ordering to
+ * reason about here.
+ *
+ * SCOPED TO THE RECONNECTING SERVER (#1139). Since #1117 the background process holds one live
+ * connection per paired server, so `connected` means "THIS server's connection came back" and the reset
+ * carries the origin `originOf` read off the stamp. The branch reads the discriminant and the stamp,
+ * never `event.ack` — the daemon's own `server_id` must not steer whose rosters survive. Turning the
+ * origin into the conversations to drop is the CALLER's job (`BackgroundTaskRosterData` below), so this
+ * bridge stays store-free and drivable with a plain spy.
+ *
+ * THIS BRANCH IS NO LONGER THE SOLE ENFORCEMENT OF #573's AC5, and the change is deliberate rather
+ * than a weakening. It was, and this docblock used to say so, adding that gating it behind a condition
+ * would kill the security property silently — which is exactly what scoping it does. The reconnect half
+ * survives here; the previous-PAIRING half moved to `clearAllRosters` in
+ * `clearPairingScopedState`'s dep set, because a new pairing's first `connected` resolves an empty
+ * conversation list, matches no held key, and would otherwise drop nothing at all. Do not "restore"
+ * the whole-map reset to get the pairing guarantee back: that reintroduces the cross-server erase this
+ * ticket fixes. The two mechanisms now split the work, the `queueStore` posture since #1138.
  *
  * The reset is a separate branch rather than a translator mapping, unlike modalBridge's `reconnected`
  * action: that translator returns members of an ACTION union, where a payload-free member is natural,
@@ -144,13 +189,13 @@ export function translateBackgroundTaskUpdated(
 export function subscribeBackgroundTaskRoster(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void,
-  resetRosters: () => void,
+  resetRostersForServer: (origin: ConversationListOrigin) => void,
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void,
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
-      resetRosters()
+      resetRostersForServer(originOf(event))
       return
     }
     const snapshot = translateBackgroundTaskRoster(event)
@@ -185,14 +230,27 @@ export function BackgroundTaskRosterData(): null {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the queueBridge idiom). Each roster replaces its conversation's
     // held membership; each started frame upserts one task into it; each update records one task's
-    // latest patch, or is dropped when it matches none; a connected edge clears every one of them
-    // (AC5). All four write paths ride this one listener, dispatched synchronously in arrival order,
-    // so there is no gap between reading and writing the store that a concurrent handler could
-    // interleave into.
+    // latest patch, or is dropped when it matches none; a connected edge clears the reconnecting
+    // server's (#573's AC5, scoped by #1139). All four write paths ride this one listener, dispatched
+    // synchronously in arrival order, so there is no gap between reading and writing the store that a
+    // concurrent handler could interleave into.
+    //
+    // THE COMPOSITION ROOT for #1139's scoping, and the only place the two singletons meet: the origin
+    // the bridge read off the stamp resolves to that server's conversation ids through #1086's shared
+    // resolution, and only those keys are dropped. The list is read HERE, at reset time, not at
+    // subscribe time — on a first connect the server's slot holds no list yet (the list request rides
+    // the same edge) so nothing is dropped; on a reconnect the slot still holds the previous episode's
+    // rows, since only `clearAllConversations` at a pairing boundary empties it, so the reconnecting
+    // server's conversations are known even though nothing re-sends these frames. Nothing can
+    // interleave between the read and the write: both stores are written from this one synchronous
+    // dispatch, with no await between them.
     return subscribeBackgroundTaskRoster(
       window.pyry.onDaemonEvent,
       (snapshot) => backgroundTaskRosterStore.getState().setRoster(snapshot),
-      () => backgroundTaskRosterStore.getState().resetRosters(),
+      (origin) =>
+        backgroundTaskRosterStore
+          .getState()
+          .resetRostersFor(selectConversationIdsFor(origin)(conversationListStore.getState())),
       (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot),
       (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot)
     )

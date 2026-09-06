@@ -1,17 +1,21 @@
 # Server-info channel
 
-The renderer→main IPC surface that lets the window read the paired server's **non-secret identity**
-— its server id and relay URL — from the at-rest [paired-server store](paired-server-store.md),
+The renderer→main IPC surface that lets the window read **every paired server's** non-secret identity
+— each one's server id and relay URL — from the at-rest [paired-server store](paired-server-store.md),
 **including while disconnected**.
 
-Introduced in [#339](../codebase/339.md). It is the **third twin** in the [pairing-status
-signal](pairing-status-signal.md) (#79) / [unpair channel](unpair-channel.md) (#173) family: same
-four-layer shape (shared contract, main handler, preload bridge, composition-root registration), same
-injected-target / stateless-handler / classify-don't-forward discipline. The one structural difference
-from both siblings: its present arm **carries data** — `serverId` + `relayUrl` — rather than being
-fully value-free. Its caller is the [server-info store](server-info-store.md)'s one-shot loader
-([#340](../codebase/340.md)); the visible Settings row is [#334](../codebase/334.md). Same "ship the IPC
-boundary ahead of its consumer" shape as [#131→#134](diagnostics-channel.md) and
+Introduced in [#339](../codebase/339.md), single-valued (the newest paired record only). It is the
+**third twin** in the [pairing-status signal](pairing-status-signal.md) (#79) / [unpair
+channel](unpair-channel.md) (#173) family: same four-layer shape (shared contract, main handler, preload
+bridge, composition-root registration), same injected-target / stateless-handler / classify-don't-forward
+discipline. The one structural difference from both siblings: its present arm **carries data** —
+`serverId` + `relayUrl` — rather than being fully value-free.
+[#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) then widened the present arm from one
+pair to a list, one entry per paired server, matching [#1069](paired-server-store.md)'s collection —
+Settings had caught up with the store everywhere except this read path. Its caller is the [server-info
+store](server-info-store.md)'s one-shot loader ([#340](../codebase/340.md)); the visible Settings rows
+are [#334](../codebase/334.md) and [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148).
+Same "ship the IPC boundary ahead of its consumer" shape as [#131→#134](diagnostics-channel.md) and
 [#173→#166/#167](unpair-channel.md).
 
 ## Why a new channel, not `pairingStatus`
@@ -25,11 +29,13 @@ and confines the two-field surface to a new, separately-reviewed boundary.
 
 One typed round trip, `window.pyry.serverInfo()` → `Promise<ServerInfo>`:
 
-- **`{ status: 'available', serverId, relayUrl }`** — [`pairedServerStore.load()`](paired-server-store.md)
-  returned a present record; `serverId` ← `record.server`, `relayUrl` ← `record.relay`.
-- **`{ status: 'unavailable' }`** — every non-readable case: not paired (`load()` → `null`) **or** the
-  stored record could not be read (`load()` threw `MalformedPairedServerRecordError` or a propagated
-  decrypt failure). All three collapse to this one outcome; the error type is never surfaced.
+- **`{ status: 'available', servers }`** — [`pairedServerStore.list()`](paired-server-store.md)
+  ("every paired entry, oldest-saved first") returned a non-empty collection; `servers` carries one
+  `{ serverId, relayUrl }` entry per record, in `list()`'s own order — the handler never re-sorts.
+- **`{ status: 'unavailable' }`** — every non-readable case: nothing paired (`list()` → `[]`) **or** the
+  stored collection could not be read (`list()` threw `MalformedPairedServerRecordError` or a propagated
+  decrypt failure). All three collapse to this one outcome; the error type is never surfaced, and there
+  is deliberately no third arm distinguishing empty from unreadable.
 
 **Disconnected-safe source.** Both fields come from the **persisted** record, never the live
 `hello_ack.server_id` (a distinct value set on a `connected` daemon event, in `sessionStore`). This is
@@ -50,16 +56,25 @@ when no connection is up.
 ```ts
 export const SERVER_INFO_CHANNEL = 'pyry:server-info' as const
 
+export interface ServerInfoEntry {
+  serverId: string
+  relayUrl: string
+}
+
 export type ServerInfo =
-  | { status: 'available'; serverId: string; relayUrl: string }
+  | { status: 'available'; servers: ServerInfoEntry[] }
   | { status: 'unavailable' }
 ```
 
-- **Value-free-by-construction, relaxed to exactly two non-secret fields.** The present arm declares
-  **only** `serverId` + `relayUrl` — `token` and `server_static_pubkey` are structurally absent from
-  the type, so the handler *cannot* serialize them back even under a bug. The `status` discriminant is
-  structural (matches its two siblings' shape); the security property is that the record's other two
-  fields have no field to ride on, not the discriminant itself.
+- **Value-free-by-construction, relaxed to exactly two non-secret fields PER ENTRY.** The present arm
+  declares **only** a list of `ServerInfoEntry` — `token` and `server_static_pubkey` are structurally
+  absent from the type, so the handler *cannot* serialize them back even under a bug, however many
+  servers are paired. The `status` discriminant is structural (matches its two siblings' shape); the
+  security property is that the record's other two fields have no field to ride on, not the
+  discriminant itself. `servers` is non-empty on the available arm by handler construction (an empty
+  collection returns the absent arm instead); that invariant is documented, not encoded — a non-empty
+  tuple type would need an unchecked cast to satisfy, which production code here forbids, and nothing
+  downstream depends on it (the renderer maps an empty `servers` to the same value as `unavailable`).
 - **No request guard.** The invoke carries zero arguments, mirroring `pairingStatus`/`unpair` — there
   is no untrusted request field to validate.
 - **Absent arm carries nothing** — no error-reason field, same discipline as `unpair`'s `error` arm (a
@@ -68,7 +83,7 @@ export type ServerInfo =
 
 ### 2. The main-process handler (`src/main/serverInfoHandler.ts`)
 
-Clone of `pairingStatusHandler.ts`, ~8 lines:
+Clone of `pairingStatusHandler.ts` in shape; since #1148 the one read is `list()` rather than `load()`:
 
 ```ts
 export interface ServerInfoHandleTarget {
@@ -78,30 +93,42 @@ export interface ServerInfoHandleTarget {
 
 export function registerServerInfoHandler(
   target: ServerInfoHandleTarget,
-  deps: { store: PairedServerStore }
+  deps: { store: Pick<MultiPairedServerStore, 'list'> }
 ): () => void
 ```
 
 ```ts
 const listener = async (): Promise<ServerInfo> => {
   try {
-    const record = await store.load()
-    return record === null
-      ? { status: 'unavailable' }
-      : { status: 'available', serverId: record.server, relayUrl: record.relay }
+    const records = await store.list()
+    if (records.length === 0) return { status: 'unavailable' }
+    return {
+      status: 'available',
+      servers: records.map((record) => ({ serverId: record.server, relayUrl: record.relay }))
+    }
   } catch {
     return { status: 'unavailable' }   // classify-don't-forward: the caught object is DROPPED
   }
 }
 ```
 
-- **Explicit two-field literal, never a spread.** The available arm names `record.server` /
-  `record.relay` individually — never `...record` — so `token` / `server_static_pubkey` cannot ride
-  along even at runtime, independent of the type check.
-- **Store dep typed against the base `PairedServerStore`** (only `load()` is needed), not
-  `ClearablePairedServerStore` — the fake needs only `save`/`load` stubs.
+- **Explicit two-field literal per entry, never a spread.** The map body names `record.server` /
+  `record.relay` individually — never `...record`, never a pass-through of the record object — so
+  `token` / `server_static_pubkey` cannot ride along even at runtime, independent of the type check.
+  Widening the read from one record to N is exactly what makes a lazy spread cost N bearer tokens
+  instead of one, so the explicitness is load-bearing, not stylistic.
+- **Store dep typed against `Pick<MultiPairedServerStore, 'list'>`** — the narrowest surface carrying
+  the one method the handler calls, following `hostLabelHandler`'s `Pick<HostLabelStore, 'load'>` and
+  `connectionRegistry`'s own `Pick`. Naming the whole `MultiPairedServerStore` would drag `save` /
+  `clear` / `loadById` / `clearServer` into the type and into every fake for no gain, and would put a
+  mutator within this read channel's reach. The fake needs only a `list` stub.
 - **Stateless** — reads the store fresh on every invoke (no cache), so a re-pair is observed
-  immediately.
+  immediately, and the read takes a single consistent snapshot (`fileSecretPersistence` writes
+  temp-then-rename, so a concurrent `save` yields the pre- or post-write collection, never a torn one).
+- **Sources the at-rest record, never the live `hello_ack.server_id`.** Both fields come off the
+  persisted `PairedServerRecord`, so they're available whether or not that server's connection is live
+  — a distinction that grew teeth with #1117, which now dials one live connection per record and so
+  makes a per-server live id available to reach for instead. Do not.
 - **Classify-don't-forward + log-free by construction.** Every throw (`MalformedPairedServerRecordError`
   or a propagated decrypt failure) collapses to `unavailable` without inspecting the error type; the
   caught object is dropped — never logged, interpolated, or returned. No `console.*` anywhere in the
@@ -135,9 +162,9 @@ yet — the consumer is #340) but groups with its twins for readability.
 
 ```
 renderer window.pyry.serverInfo()  →  ipcRenderer.invoke(SERVER_INFO_CHANNEL)   [no body]
-  →  ipcMain handler listener  →  PairedServerStore.load()
-       present record  →  { status: 'available', serverId: record.server, relayUrl: record.relay }
-       null OR throw   →  { status: 'unavailable' }                              [no detail]
+  →  ipcMain handler listener  →  MultiPairedServerStore.list()
+       non-empty  →  { status: 'available', servers: records.map(r => ({ serverId: r.server, relayUrl: r.relay })) }
+       empty OR throw  →  { status: 'unavailable' }                              [no detail]
 ```
 
 ## Security posture
@@ -146,10 +173,12 @@ renderer window.pyry.serverInfo()  →  ipcRenderer.invoke(SERVER_INFO_CHANNEL) 
 three twins whose present arm carries data). Key findings:
 
 - **No untrusted input to validate** — zero-argument invoke, same as its siblings.
-- **Exactly two non-secret fields cross, statically enforced.** `token`/`server_static_pubkey` are
-  structurally absent from `ServerInfo`; pinned by a test asserting `JSON.stringify` on the available
-  arm contains `server`/`relay` but not `token`/`server_static_pubkey`, plus an `Object.keys` pin on
-  the arm's exact key set.
+- **Exactly two non-secret fields cross, per entry, statically enforced.** `token`/`server_static_pubkey`
+  are structurally absent from `ServerInfoEntry`; pinned by a test asserting `JSON.stringify` on the
+  available arm contains every entry's `server`/`relay` but none of two DISTINCT records' credentials,
+  plus an `Object.keys` pin on the top-level arm **and on each entry** — the per-entry pin is the
+  load-bearing half since #1148, because the top-level pin alone (`['servers', 'status']`) still passes
+  while a credential rides along inside an entry.
 - **No new class of power.** A renderer that can already `submitPairingPaste`/`confirmPairing`
   (establish or overwrite these very values) gaining read access to two non-secret fields is a strict,
   minimal relaxation — it would observe them anyway once #334 renders them.
@@ -162,14 +191,17 @@ three twins whose present arm carries data). Key findings:
 ## Edge cases and limitations
 
 - **Caller: the [server-info store](server-info-store.md)'s one-shot loader** ([#340](../codebase/340.md)),
-  which maps this union into `{ serverId, relayUrl } | null` via a single `window.pyry.serverInfo()`
-  invoke per mount. That store ships dormant too — the visible Settings row is
-  [#334](../codebase/334.md).
+  which maps this union into a `ServerInfoValue[]` via a single `window.pyry.serverInfo()` invoke per
+  mount. The visible Settings rows are [#334](../codebase/334.md) and
+  [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) (one row per entry).
 - **No error sub-reason**, same discipline as `pairingStatus`/`unpair` — the unavailable arm never
   distinguishes not-paired from malformed from undecrypted. A future consumer needing that distinction
   extends the union additively.
-- **Repeated invokes are cheap** — each is an independent local `store.load()`, no amplification, no
+- **Repeated invokes are cheap** — each is an independent local `store.list()`, no amplification, no
   state mutation, no secret returned.
+- **Response size is unbounded in N, deliberately not a finding.** N is the number of servers the user
+  paired by hand through the QR flow — not attacker-controlled, not remotely inflatable — and each entry
+  is two short strings.
 
 ## Related
 
@@ -189,3 +221,7 @@ three twins whose present arm carries data). Key findings:
 - [#339 codebase notes](../codebase/339.md) — implementation summary, patterns established.
 - [Server-info store](server-info-store.md) / [#340 codebase notes](../codebase/340.md) — the renderer
   store + one-shot loader that consumes this channel.
+- [Paired-server store](paired-server-store.md) / [#1069](paired-server-store.md) — the
+  `MultiPairedServerStore.list()` collection this channel widened to answer for, per
+  [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) · Spec:
+  `docs/specs/architecture/1148-settings-lists-every-paired-server.md`.

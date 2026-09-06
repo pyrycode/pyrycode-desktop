@@ -3,81 +3,99 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ServerInfo } from '@shared/ipc/serverInfo'
 import { mapServerInfo, loadServerInfo, ServerInfoData } from './serverInfoLoader'
-import { createServerInfoStore, selectServerInfo } from './serverInfoStore'
+import { createServerInfoStore, selectServers } from './serverInfoStore'
 
 // Pure-map tests + injected-fake-bridge tests (the sessionIdBridge.test idiom): no React, no Electron.
-// The real store is wired only for the absent → held seam test. Unlike sessionIdBridge this is a
-// one-shot invoke, not a subscription, so there is no subscribe/off/last-write-wins block — a single
-// invoke maps the ServerInfo union into the { serverId, relayUrl } | null store shape.
+// The real store is wired only for the absent → held seam test. This is a one-shot invoke, not a
+// subscription, so there is no subscribe/off/last-write-wins block — a single invoke maps the
+// ServerInfo union into the { serverId, relayUrl }[] store shape.
 
-const available: ServerInfo = {
-  status: 'available',
-  serverId: 'srv-1',
-  relayUrl: 'wss://relay.example/v1'
-}
+// Held separately from the response so the rebuild test can compare entry identities.
+const bridgeEntries = [
+  { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
+  { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
+]
+const twoServers: ServerInfo = { status: 'available', servers: bridgeEntries }
 const unavailable: ServerInfo = { status: 'unavailable' }
 
 describe('mapServerInfo', () => {
-  it('maps an available response to the { serverId, relayUrl } pair, dropping status (AC2)', () => {
-    const mapped = mapServerInfo(available)
-    expect(mapped).toEqual({ serverId: 'srv-1', relayUrl: 'wss://relay.example/v1' })
-    // The store must never hold the discriminant — a fresh literal, not a pass-through.
-    expect(mapped).not.toHaveProperty('status')
+  it('maps an available response to every entry, in order, dropping status (AC1)', () => {
+    expect(mapServerInfo(twoServers)).toEqual([
+      { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
+      { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
+    ])
   })
 
-  it('maps an unavailable response to null (AC3)', () => {
-    expect(mapServerInfo(unavailable)).toBeNull()
+  it('rebuilds each entry rather than passing the bridge objects through (AC4)', () => {
+    // The renderer-side half of the handler's field-by-field defence: a structured-clone'd IPC object
+    // can carry own properties the type does not declare, so nothing that crossed the bridge is
+    // retained by reference. Fresh literals, and exactly the two vetted keys on each.
+    const mapped = mapServerInfo(twoServers)
+    mapped.forEach((entry, index) => {
+      expect(entry).not.toBe(bridgeEntries[index])
+      expect(Object.keys(entry).sort()).toEqual(['relayUrl', 'serverId'])
+    })
+  })
+
+  it('maps an unavailable response to an empty list (AC3)', () => {
+    expect(mapServerInfo(unavailable)).toEqual([])
+  })
+
+  it('maps an available response with an empty list to the same empty list (AC3)', () => {
+    // The handler never builds this arm, but the renderer treats it identically to unavailable, so the
+    // non-empty invariant is documented rather than depended upon.
+    expect(mapServerInfo({ status: 'available', servers: [] })).toEqual([])
   })
 })
 
 describe('loadServerInfo', () => {
-  it('writes the mapped pair once on an available response — never partial (AC2/AC5)', async () => {
-    const invoke = vi.fn(async () => available)
-    const setServerInfo = vi.fn()
+  it('writes the mapped list once on an available response — never partial (AC1)', async () => {
+    const invoke = vi.fn(async () => twoServers)
+    const setServers = vi.fn()
 
-    await loadServerInfo(invoke, setServerInfo)
+    await loadServerInfo(invoke, setServers)
 
     expect(invoke).toHaveBeenCalledTimes(1)
-    expect(setServerInfo).toHaveBeenCalledTimes(1)
-    expect(setServerInfo).toHaveBeenCalledWith({
-      serverId: 'srv-1',
-      relayUrl: 'wss://relay.example/v1'
-    })
+    expect(setServers).toHaveBeenCalledTimes(1)
+    expect(setServers).toHaveBeenCalledWith([
+      { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
+      { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
+    ])
   })
 
-  it('writes null once on an unavailable response (AC3)', async () => {
+  it('writes an empty list once on an unavailable response (AC3)', async () => {
     const invoke = vi.fn(async () => unavailable)
-    const setServerInfo = vi.fn()
+    const setServers = vi.fn()
 
-    await loadServerInfo(invoke, setServerInfo)
+    await loadServerInfo(invoke, setServers)
 
-    expect(setServerInfo).toHaveBeenCalledTimes(1)
-    expect(setServerInfo).toHaveBeenCalledWith(null)
+    expect(setServers).toHaveBeenCalledTimes(1)
+    expect(setServers).toHaveBeenCalledWith([])
   })
 
-  it('writes null once on a rejected invoke and never rejects into the caller (AC3)', async () => {
-    const invoke = vi.fn(async () => {
+  it('writes an empty list once on a rejected invoke and never rejects into the caller (AC5)', async () => {
+    const invoke = vi.fn(async (): Promise<ServerInfo> => {
       throw new Error('handler absent')
     })
-    const setServerInfo = vi.fn()
+    const setServers = vi.fn()
 
     // The returned promise resolves — the loader swallows the rejection.
-    await expect(loadServerInfo(invoke, setServerInfo)).resolves.toBeUndefined()
+    await expect(loadServerInfo(invoke, setServers)).resolves.toBeUndefined()
 
-    expect(setServerInfo).toHaveBeenCalledTimes(1)
-    expect(setServerInfo).toHaveBeenCalledWith(null)
+    expect(setServers).toHaveBeenCalledTimes(1)
+    expect(setServers).toHaveBeenCalledWith([])
   })
 
-  it('drives a real store from absent (null) to the held pair via the real setter (seam, AC5)', async () => {
+  it('drives a real store from absent to both held entries via the real setter (seam, AC1)', async () => {
     const store = createServerInfoStore()
-    const invoke = vi.fn(async () => available)
+    const invoke = vi.fn(async () => twoServers)
 
-    expect(selectServerInfo(store.getState())).toBeNull()
-    await loadServerInfo(invoke, store.getState().setServerInfo)
-    expect(selectServerInfo(store.getState())).toEqual({
-      serverId: 'srv-1',
-      relayUrl: 'wss://relay.example/v1'
-    })
+    expect(selectServers(store.getState())).toEqual([])
+    await loadServerInfo(invoke, store.getState().setServers)
+    expect(selectServers(store.getState())).toEqual([
+      { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
+      { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
+    ])
   })
 })
 

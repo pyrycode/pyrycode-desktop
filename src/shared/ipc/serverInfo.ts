@@ -12,11 +12,14 @@
 // sibling): the query carries NO body — the renderer invokes with zero arguments — so there is no
 // untrusted request field to validate at the boundary.
 //
-// UNLIKE its fully value-free twins, the present arm DOES carry two fields — but only the two
-// NON-SECRET ones: `serverId` (the server id) and `relayUrl` (the relay URL). The credentials `token`
-// and `server_static_pubkey` are STRUCTURALLY ABSENT from this union, so the handler cannot serialize
-// them back across the boundary — value-free-by-construction relaxed to exactly two non-secret fields,
-// statically enforced by the type (CLAUDE.md "Keep the transport out of the window"; ADR 0002).
+// UNLIKE its fully value-free twins, the present arm DOES carry two fields PER ENTRY — but only the
+// two NON-SECRET ones: `serverId` (the server id) and `relayUrl` (the relay URL). The credentials
+// `token` and `server_static_pubkey` are STRUCTURALLY ABSENT from this union, so the handler cannot
+// serialize them back across the boundary — value-free-by-construction relaxed to exactly two
+// non-secret fields, statically enforced by the type (CLAUDE.md "Keep the transport out of the
+// window"; ADR 0002). #1148 made the present arm LIST-shaped so Settings can name every paired
+// server; that carries the rule forward per entry rather than dropping it, and it is what makes a
+// `...record` spread in the handler's map cost one bearer token PER PAIRED SERVER.
 //
 // Imports nothing from src/main (layering: shared is loaded by preload and renderer and must not pull
 // main-only code). Relative imports only — src/main and src/preload have no @shared alias.
@@ -29,22 +32,41 @@
 export const SERVER_INFO_CHANNEL = 'pyry:server-info' as const
 
 /**
- * The paired server's NON-SECRET identity, discriminated on `status`, sourced from
- * pairedServerStore.load():
- *   - available   → a record was read; the two non-secret fields cross: serverId ← record.server,
- *                   relayUrl ← record.relay (the at-rest record, so both are available whether or not
- *                   a live connection exists — the live hello_ack.server_id is a DISTINCT value and
- *                   must NOT be used).
- *   - unavailable → no server info: not paired (load() → null) OR the stored record could not be read
- *                   (load() threw MalformedPairedServerRecordError or a propagated decrypt failure).
- *                   Every non-readable case collapses here; the error type is never surfaced.
+ * One paired server's NON-SECRET identity: serverId ← record.server, relayUrl ← record.relay, both
+ * off the AT-REST paired-server record, so both are available whether or not a live connection exists.
+ * The live hello_ack.server_id is a DISTINCT, daemon-asserted value and must NOT be used — a trap that
+ * grew teeth with #1117, which dials one live connection per record and so makes a per-server live id
+ * available to reach for.
  *
- * Value-free BY CONSTRUCTION, RELAXED to exactly two non-secret fields: the present arm declares ONLY
- * serverId + relayUrl, so the handler cannot serialize `token` or `server_static_pubkey` back across
- * the boundary (ADR 0002) — statically enforced by the union type. Keep it minimal: do NOT add any
- * field to the present arm, and do NOT add an error-reason field to the absent arm (a coarse category
- * could leak backend detail, and the ticket mandates the error type is not surfaced).
+ * Keep it minimal: do NOT add a field here. These two are the whole relaxation.
+ */
+export interface ServerInfoEntry {
+  serverId: string
+  relayUrl: string
+}
+
+/**
+ * Every paired server's NON-SECRET identity, discriminated on `status`, sourced from
+ * pairedServerStore.list():
+ *   - available   → at least one record was read; `servers` carries one entry per paired server in
+ *                   list() order (oldest-saved first), which the handler passes through unsorted.
+ *   - unavailable → no server info: nothing paired (list() → []) OR the stored collection could not be
+ *                   read (list() threw MalformedPairedServerRecordError or a propagated decrypt
+ *                   failure). Every non-readable case collapses here, together with the empty one; the
+ *                   error type is never surfaced, and there is deliberately no third arm telling
+ *                   empty from unreadable — no consumer reads that distinction.
+ *
+ * `servers` is non-empty on the available arm by handler construction (an empty collection returns the
+ * absent arm instead). That invariant is documented, not encoded: nothing depends on it — the renderer
+ * maps an empty `servers` to the same value it maps `unavailable` to — and a non-empty tuple type would
+ * need an unchecked cast to satisfy, which production code here forbids.
+ *
+ * Value-free BY CONSTRUCTION, RELAXED to exactly two non-secret fields PER ENTRY: the present arm
+ * declares ONLY a list of ServerInfoEntry, so the handler cannot serialize `token` or
+ * `server_static_pubkey` back across the boundary (ADR 0002) — statically enforced by the union type.
+ * Do NOT add an error-reason field to the absent arm either (a coarse category could leak backend
+ * detail, and the ticket mandates the error type is not surfaced).
  */
 export type ServerInfo =
-  | { status: 'available'; serverId: string; relayUrl: string }
+  | { status: 'available'; servers: ServerInfoEntry[] }
   | { status: 'unavailable' }

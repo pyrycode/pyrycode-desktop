@@ -1,6 +1,6 @@
 import {
   useServerInfoStore,
-  selectServerInfo,
+  selectServers,
   type ServerInfoValue
 } from '../../store/serverInfoStore'
 
@@ -45,12 +45,48 @@ export function ServerRow({ serverInfo }: { serverInfo: ServerInfoValue | null }
 }
 
 /**
- * The store-bound container (the ConnectionStatusIndicatorControl posture) — reads the single
- * `serverInfo` slice via the store's own selector and hands it to the pure view. No effects, no
- * window.pyry, no IPC: a pure read, so the narrow slice re-renders the row only when the loader resolves.
- * The one-shot fetch is owned by ServerInfoData (#340), mounted alongside this control in SettingsScreen.
+ * One Server row per paired server (#1148) — the pure, exported, props-in/markup-out list view. Renders
+ * a fragment, so each row is a direct child of `.settings__section-body`: that is already a plain flex
+ * column and each row carries its own padding, so N rows stack with settings.css untouched, and no
+ * separator or spacing rule is added. The "Server" label repeats per row rather than being hoisted into
+ * a section header, and the trailing chevron (Figma 17:16) stays omitted on every row.
+ *
+ * An EMPTY list renders exactly one `ServerRow` with a null value — the existing "not yet loaded"
+ * placeholder, byte for byte. Nothing paired, nothing fetched yet and an unreadable collection all
+ * arrive here as `[]` and share that rendering: no blank section, no empty row, and no distinct
+ * "no servers" copy string.
+ *
+ * The loop lives on this EXPORTED VIEW rather than inside ServerRowControl because the container's
+ * populated branch is unreachable under renderToStaticMarkup (zustand v5 reads getInitialState()), and
+ * `e2e/` covers this row in neither tier — so on the container its only detector would be a vi.mock of
+ * the store module, the ceremony ServerRow.test.tsx already declined in favour of injected props. Here
+ * a two-entry injection is an ordinary server render.
+ *
+ * Keyed by `serverId`: unique by store construction (a repeated `server` id makes the whole collection
+ * raise MalformedPairedServerRecordError, which collapses to the absent outcome before it reaches the
+ * renderer) and stable across refetches, which index keys are not. A React key is a reconciliation
+ * identity and never reaches the DOM, so this is not one of the attribute / URL / lookup-path sinks the
+ * daemon-text rule closes.
+ */
+export function ServerRows({ servers }: { servers: ServerInfoValue[] }): JSX.Element {
+  if (servers.length === 0) return <ServerRow serverInfo={null} />
+
+  return (
+    <>
+      {servers.map((server) => (
+        <ServerRow key={server.serverId} serverInfo={server} />
+      ))}
+    </>
+  )
+}
+
+/**
+ * The store-bound container (the ConnectionStatusIndicatorControl posture) — reads the `servers` slice
+ * via the store's own selector and hands it to the pure list view. No effects, no window.pyry, no IPC:
+ * a pure read, so the narrow slice re-renders the rows only when the loader resolves. The one-shot fetch
+ * is owned by ServerInfoData (#340), mounted alongside this control in SettingsScreen.
  */
 export function ServerRowControl(): JSX.Element {
-  const serverInfo = useServerInfoStore(selectServerInfo)
-  return <ServerRow serverInfo={serverInfo} />
+  const servers = useServerInfoStore(selectServers)
+  return <ServerRows servers={servers} />
 }

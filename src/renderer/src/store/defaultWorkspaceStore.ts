@@ -71,7 +71,7 @@ export type DefaultWorkspaceStore = DefaultWorkspaceState & {
  * DI-friendly, React-free store — one isolated instance per test, wired to the injected port.
  * Hydration: initial state reads the persisted value once at construction (the "restore" half).
  * Set-through: `setDefaultWorkspace` persists via the port THEN records the value in state (the "persist"
- * half), replacing the whole value unconditionally — no merge, no coercion — exactly as setServerInfo
+ * half), replacing the whole value unconditionally — no merge, no coercion — exactly as setServers
  * does. A `null` clears the stored default back to the daemon default.
  */
 export function createDefaultWorkspaceStore(storage: WorkspacePrefStorage) {

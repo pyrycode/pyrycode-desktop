@@ -175,3 +175,23 @@ Accepted limitation, stated rather than papered over (the sibling real specs' ow
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+### 2026-09-06 — the real-claude gate's FAIL on `real-claude-effort-default.spec.ts`
+
+**What the gate reported.** `a level set before a chat's first message survives into the first turn` failed at the post-turn label read: `.composer__effort-label` **element(s) not found**, i.e. the composed effort was `''`. Whole-test duration 16.7s against a 15s timeout on that one assertion — so the entire drive ahead of it took ~1.7s, which is less than one cold claude turn. **No turn ran at any point in that drive.**
+
+**Both defects are in the spec, not in the implementation.** No production file changes.
+
+1. **Every turn gate was vacuous.** The drive used a bare closing `toHaveCount(0)` on `.bubble__cursor` as its quiesce signal. That locator is 0 from launch, so it resolves before the send it is meant to wait on has done anything. The rest of the drive then ran against a chat whose turn had not started. Corrected to `real-claude.spec.ts`'s idiom, transcribed: poll `nonEmptyAssistantCount` **up** first (content-agnostic, strips the cursor span and the meta row), and only then wait the cursor back down. Positive read first, mutation check second.
+
+2. **The one real turn was spent in the wrong conversation, which is the defect that actually reddened the assertion.** The apply is gated on the remembered level appearing in the levels published for the target chat's model (`effortDefaultToApply`'s membership rule). The daemon builds `model_list` from claude's own `initialize` reply, one exchange per child spawn, so a never-messaged conversation has no list of its own and depends on pyrycode#2124's daemon-wide fallback — whose source is `Pool.Default()`, **the bootstrap session's** retained list. The harness binds its one seeded conversation to that bootstrap session, while `create_conversation` mints a dedicated session for every FAB-created chat. The old drive spent its turn in a FAB-created chat, so the bootstrap child never spawned, the fallback stayed empty, the never-messaged chat got no levels, and the apply correctly refused — AC4's second arm, firing for an arrangement reason rather than a product one. The turn now runs in the seeded row.
+
+3. **The pick is waited out to its settle.** The old drive read the optimistic overlay and immediately switched chats. Because the remembered level is written when the **confirm** is folded (`foldWriteEvent`), a switch before the settle clears the pending record, drops the confirm unmatched and remembers nothing. The drive now waits #558's `aria-busy` off `.run-config__effort` and then re-reads the marked segment with `.run-config__error` at zero — `real-daemon-session-settings.spec.ts`'s three-step confirm/reject discrimination, which is the only place in this drive where a daemon reply gates a DOM transition rather than the overlay.
+
+**The wire premise was verified independently before any of this was rewritten**, with a throwaway claude-less probe (`spawnClaude: false`, gated on `pyry` alone): a FAB-created, never-messaged conversation renders an operable `YoloSection` (⇒ addressable session id) and a `set_session_settings` against it settles and holds with no `.run-config__error` (⇒ the daemon accepts and confirms it). So pyrycode#2085's eager bind holds over the real wire and the design's moment is reachable. The probe also showed the claude-less tier's effort section at zero segments with an empty current line, which is what made the model-list provenance above the obvious suspect. It was deleted rather than kept: it duplicates `real-daemon-session-settings.spec.ts`'s write coverage and its own new half (never-messaged addressability) is what step 3 of the real-claude drive asserts as part of AC5.
+
+**Two verifier NITs folded in.** The segment click no longer compiles a daemon-published level into a `RegExp`; it addresses `segment.nth(pickedIndex)` into the array the drive already read. And § Testing strategy above describes the fake drive as two chats where it shipped as three — chat C exists because A's own "nothing was sent" reading is vacuous at launch, and the reason is recorded in `e2e/composer-effort-default.spec.ts`'s header.
+
+**Open question 3 is resolved by the same change.** The fake drive must push the new chat's model list before polling the frame count; the real drive's equivalent is the separate "segments are visible on the never-messaged chat" assertion, placed before the label read so a daemon that publishes nothing for a childless conversation fails there, saying so, rather than as a blank label that could mean anything.

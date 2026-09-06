@@ -39,9 +39,18 @@ const modalShown: DaemonEvent = {
   defaultOptionId: 'deny'
 }
 
+// #1140: the injected "which conversations belong to this server" resolution — a plain stub, since the
+// bridge is deliberately store-free. `noConversations` is what a not-loaded or loaded-empty slot answers
+// (`EMPTY_CONVERSATION_IDS`), so the clear it produces matches nothing, exactly as a first connect's does.
+const noConversations = (): ReadonlySet<string> => new Set()
+const listing =
+  (...ids: readonly string[]) =>
+  (): ReadonlySet<string> =>
+    new Set(ids)
+
 describe('translateModalEvent — the owned arms', () => {
   it('modalShown → a ModalEvent shown with the same fields, a fresh object', () => {
-    const translated = translateModalEvent(modalShown)
+    const translated = translateModalEvent(modalShown, noConversations)
     expect(translated).toEqual({
       type: 'shown',
       // Deliberately distinct from `modalId` below: both fields are `string`, so tsc cannot catch
@@ -65,7 +74,7 @@ describe('translateModalEvent — the owned arms', () => {
 
   it('modalDismissed → a ModalEvent dismissed with the same fields, a fresh object', () => {
     const event: DaemonEvent = { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' }
-    const translated = translateModalEvent(event)
+    const translated = translateModalEvent(event, noConversations)
     expect(translated).toEqual({ type: 'dismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' })
     // The discriminant is renamed across the boundary: modalDismissed → 'dismissed'.
     expect(translated?.type).toBe('dismissed')
@@ -74,7 +83,7 @@ describe('translateModalEvent — the owned arms', () => {
 
   it('modalAnswerRejected → a ModalEvent rejected carrying only the modalId, a fresh object (#249)', () => {
     const event: DaemonEvent = { type: 'modalAnswerRejected', modalId: 'mdl-9' }
-    const translated = translateModalEvent(event)
+    const translated = translateModalEvent(event, noConversations)
     // Content-free: the translated event carries ONLY the correlation nonce — no daemon error text (AC3).
     expect(translated).toEqual({ type: 'rejected', modalId: 'mdl-9' })
     // The discriminant is renamed across the boundary: modalAnswerRejected → 'rejected'.
@@ -83,12 +92,66 @@ describe('translateModalEvent — the owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
-  it('connected → a payload-free reconnected ModalEvent, ignoring the ack (#415)', () => {
+  it('connected → a reconnected ModalEvent carrying the reconnecting server’s conversations (#415, #1140)', () => {
     const event: DaemonEvent = { type: 'connected', ack }
-    const translated = translateModalEvent(event)
-    // The re-handshake reset — carries nothing from the HelloAckPayload; the reset needs no field off it.
-    expect(translated).toEqual({ type: 'reconnected' })
+    const translated = translateModalEvent(event, listing('conv-a', 'conv-b'))
+    // The re-handshake reset. It carries nothing from the HelloAckPayload — only the conversations the
+    // injected resolution answered for the event's own origin.
+    expect(translated).toEqual({ type: 'reconnected', conversationIds: new Set(['conv-a', 'conv-b']) })
     expect(translated?.type).toBe('reconnected')
+  })
+})
+
+describe('translateModalEvent — the reconnect is scoped by the CLIENT-BOUND stamp (#1140)', () => {
+  // The origin is a total, opaque lookup key over `ConversationListOrigin`'s three-valued domain, so
+  // each of the three selects its own slot and nothing wider — the unstamped cases fall out of the
+  // ordinary path rather than needing a special case (AC3).
+  const seen = (event: DaemonEvent): unknown[] => {
+    const origins: unknown[] = []
+    translateModalEvent(event, (origin) => {
+      origins.push(origin)
+      return new Set<string>()
+    })
+    return origins
+  }
+
+  it('a stamped connected resolves against that server id', () => {
+    expect(seen({ type: 'connected', ack, serverId: 'srv-a' } as DaemonEvent)).toEqual(['srv-a'])
+  })
+
+  it('an unstamped-null connected resolves against the null slot, not a real id', () => {
+    expect(seen({ type: 'connected', ack, serverId: null } as DaemonEvent)).toEqual([null])
+  })
+
+  it('a connected with no stamp at all resolves against the undefined slot', () => {
+    expect(seen({ type: 'connected', ack })).toEqual([undefined])
+  })
+
+  it('reads the STAMP, never the daemon’s own ack.server_id (AC5)', () => {
+    // The adversarial case, and the reason `event.ack` is untouched: the ack's `server_id` is a value
+    // the DAEMON chose, while the stamp is bound main-side from a paired record this client holds. A
+    // hostile daemon naming another server here must not steer whose prompts a reconnect clears.
+    const hostileAck: HelloAckPayload = { ...ack, server_id: 'srv-victim' }
+    const event = { type: 'connected', ack: hostileAck, serverId: 'srv-a' } as DaemonEvent
+    expect(seen(event)).toEqual(['srv-a'])
+  })
+
+  it('passes the resolved set through verbatim, by reference', () => {
+    // No copy, no filter, no widening between the resolution and the reducer: whatever the client's own
+    // conversation list answers IS the clear's key set.
+    const ids: ReadonlySet<string> = new Set(['conv-a'])
+    const translated = translateModalEvent({ type: 'connected', ack }, () => ids)
+    expect(translated).toEqual({ type: 'reconnected', conversationIds: ids })
+    expect(translated?.type === 'reconnected' && translated.conversationIds).toBe(ids)
+  })
+
+  it('calls the resolution only on the connected arm', () => {
+    const resolve = vi.fn(() => new Set<string>())
+    translateModalEvent(modalShown, resolve)
+    translateModalEvent({ type: 'disconnected' }, resolve)
+    expect(resolve).not.toHaveBeenCalled()
+    translateModalEvent({ type: 'connected', ack }, resolve)
+    expect(resolve).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -322,7 +385,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         droppedModels: 2
       }
     ]
-    for (const event of others) expect(translateModalEvent(event)).toBeNull()
+    for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()
   })
 })
 
@@ -350,14 +413,14 @@ describe('subscribeModal', () => {
 
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeModal(bridge.onDaemonEvent, vi.fn())
+    subscribeModal(bridge.onDaemonEvent, vi.fn(), noConversations)
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('dispatches a translated event for an owned arm', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
-    subscribeModal(bridge.onDaemonEvent, dispatch)
+    subscribeModal(bridge.onDaemonEvent, dispatch, noConversations)
 
     bridge.emit(modalShown)
     expect(dispatch).toHaveBeenCalledTimes(1)
@@ -380,7 +443,7 @@ describe('subscribeModal', () => {
   it('dispatches nothing for an unowned arm', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
-    subscribeModal(bridge.onDaemonEvent, dispatch)
+    subscribeModal(bridge.onDaemonEvent, dispatch, noConversations)
 
     bridge.emit({ type: 'connecting' })
     expect(dispatch).not.toHaveBeenCalled()
@@ -388,7 +451,7 @@ describe('subscribeModal', () => {
 
   it('returns the off handle from onDaemonEvent as the cleanup (one-listener guarantee)', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeModal(bridge.onDaemonEvent, vi.fn())
+    const cleanup = subscribeModal(bridge.onDaemonEvent, vi.fn(), noConversations)
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
   })
@@ -396,7 +459,7 @@ describe('subscribeModal', () => {
   it('a modalShown then modalDismissed with the same modalId drives outstanding [1] → [], no React', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-7f3a'))
 
     bridge.emit(modalShown)
     expect(selectOutstanding(store.getState())).toHaveLength(1)
@@ -408,7 +471,7 @@ describe('subscribeModal', () => {
   it('a modalDismissed with an unknown id leaves outstanding [1], same-state no-churn, no React', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-7f3a'))
 
     bridge.emit(modalShown)
     const afterShown = store.getState()
@@ -421,7 +484,7 @@ describe('subscribeModal', () => {
   it('a modalAnswerRejected drives rejections [] → [1] via the translated rejected event, no React (#249)', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-7f3a'))
 
     bridge.emit({ type: 'modalAnswerRejected', modalId: 'mdl-9' })
     expect(selectRejections(store.getState())).toEqual(['mdl-9'])
@@ -438,7 +501,7 @@ describe('subscribeModal', () => {
   it('reconnect variant 1: a still-held modal re-sent after the reconnect connected surfaces exactly once (#416)', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-7f3a'))
 
     // Initial connect (empty outstanding → the `reconnected` clear is a no-op), then the modal shows.
     bridge.emit({ type: 'connected', ack })
@@ -474,7 +537,7 @@ describe('subscribeModal', () => {
   it('reconnect variant 2: a resolved-while-away modal (not re-sent) is gone after the reconnect connected (#416)', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-7f3a'))
 
     bridge.emit({ type: 'connected', ack })
     bridge.emit(modalShown)
@@ -484,5 +547,20 @@ describe('subscribeModal', () => {
     // so nothing repopulates it — the prompt is gone.
     bridge.emit({ type: 'connected', ack })
     expect(selectOutstanding(store.getState())).toEqual([])
+  })
+
+  it('reconnect variant 3: server B’s reconnect leaves server A’s prompt on screen (#1140 AC1)', () => {
+    // The whole path in one case: two servers each waiting on a decision, B's link drops and comes back,
+    // and the resolution answers B's conversations only. Before #1140 this emptied the store.
+    const bridge = fakeBridge()
+    const store = createModalStore()
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e), listing('conv-b'))
+
+    bridge.emit({ ...modalShown, conversationId: 'conv-a', modalId: 'mdl-a' })
+    bridge.emit({ ...modalShown, conversationId: 'conv-b', modalId: 'mdl-b' })
+    expect(selectOutstanding(store.getState())).toHaveLength(2)
+
+    bridge.emit({ type: 'connected', ack, serverId: 'srv-b' } as DaemonEvent)
+    expect(selectOutstanding(store.getState()).map((p) => p.modalId)).toEqual(['mdl-a'])
   })
 })

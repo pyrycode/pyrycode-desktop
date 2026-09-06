@@ -52,9 +52,18 @@ function rejectionDismissed(modalId: string): ModalEvent {
   return { type: 'rejectionDismissed', modalId }
 }
 
-// #415: the transport (re)handshake. Payload-free — the reset needs nothing from the connect ack.
-function reconnected(): ModalEvent {
-  return { type: 'reconnected' }
+// #415: the transport (re)handshake, scoped by #1140 to the reconnecting server. The caller resolves
+// which conversations belong to that server (#1138's `selectConversationIdsFor`) and the event carries
+// them, so every site states what it means to clear. No argument = the empty set = clear nothing, which
+// is what a first connect resolves to.
+function reconnected(...conversationIds: readonly string[]): ModalEvent {
+  return { type: 'reconnected', conversationIds: new Set(conversationIds) }
+}
+
+// #1140: the pairing-boundary drop, dispatched locally by `clearPairingScopedState` — never by the
+// bridge. Payload-free and unscoped: every slice belongs to the pairing that ended.
+function reset(): ModalEvent {
+  return { type: 'reset' }
 }
 
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
@@ -244,14 +253,14 @@ describe('reduceModal — purity', () => {
     const start = run([shown('m1'), dismissed('m1')])
     const startResolved = start.resolved
 
-    const next = reduceModal(start, reconnected())
+    const next = reduceModal(start, reconnected('conv-m1'))
 
     // A real change: a freshly emptied resolved array.
     expect(next.resolved).not.toBe(start.resolved)
     expect(next.resolved).toEqual([])
     // Old references intact and unmutated.
     expect(start.resolved).toBe(startResolved)
-    expect(start.resolved).toEqual(['m1'])
+    expect(start.resolved).toEqual([{ conversationId: 'conv-m1', modalId: 'm1' }])
   })
 })
 
@@ -314,7 +323,7 @@ describe('reduceModal — the two surfaces are orthogonal', () => {
 
 describe('reduceModal — reconnect reconcile (#415)', () => {
   it('clears outstanding on reconnect (resolved-while-away → cleared, AC1/AC2)', () => {
-    const state = run([shown('m1'), shown('m2'), reconnected()])
+    const state = run([shown('m1'), shown('m2'), reconnected('conv-m1', 'conv-m2')])
     expect(state.outstanding).toEqual([])
   })
 
@@ -323,8 +332,8 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     // believing that prevented a double-show — but the daemon's connect-time reconcile enumerates only
     // STILL-OUTSTANDING modals, so retention guarded nothing and cost the swallowed-answer bug.
     const before = run([shown('m1'), dismissed('m1')])
-    expect(before.resolved).toEqual(['m1'])
-    const after = reduceModal(before, reconnected())
+    expect(before.resolved).toEqual([{ conversationId: 'conv-m1', modalId: 'm1' }])
+    const after = reduceModal(before, reconnected('conv-m1'))
     expect(after.resolved).toEqual([])
     expect(after.resolved).not.toBe(before.resolved)
   })
@@ -334,13 +343,15 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     // to refill.
     const before = run([shown('m1'), rejected('r1')])
     expect(before.rejections).toEqual(['r1'])
-    const after = reduceModal(before, reconnected())
+    const after = reduceModal(before, reconnected('conv-m1'))
     expect(after.rejections).toBe(before.rejections)
     expect(after.rejections).toEqual(['r1'])
   })
 
   it('returns the same state reference when outstanding is already empty — first connect (AC4)', () => {
-    const after = reduceModal(initialModalState, reconnected())
+    // The set names a conversation on purpose: what makes this a no-op is that the store holds
+    // nothing, not that the reconnecting server resolved to nothing.
+    const after = reduceModal(initialModalState, reconnected('conv-m1'))
     expect(after).toBe(initialModalState)
   })
 
@@ -351,14 +362,14 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     // would re-render the container for no state change.
     const before = run([shown('m1'), dismissed('m1')])
     expect(before.outstanding).toEqual([])
-    const after = reduceModal(before, reconnected())
+    const after = reduceModal(before, reconnected('conv-m1'))
     expect(after).not.toBe(before)
     expect(after.outstanding).toBe(before.outstanding)
     expect(after.resolved).toEqual([])
   })
 
   it('a still-held prompt re-sent after the reset surfaces exactly once (AC2)', () => {
-    const state = run([shown('m1'), reconnected(), shown('m1')])
+    const state = run([shown('m1'), reconnected('conv-m1'), shown('m1')])
     expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1'])
     expect(state.outstanding).toHaveLength(1)
   })
@@ -368,7 +379,7 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     // never reached the daemon (`answerModal` early-returns on a null driver), so the daemon re-sends the
     // still-outstanding prompt. The reset cleared `resolved`, so it re-surfaces instead of the user's
     // explicit answer decaying into a deny-on-timeout.
-    const state = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected(), shown('m1')])
+    const state = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected('conv-m1'), shown('m1')])
     expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1'])
   })
 
@@ -376,7 +387,7 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     const state = run([
       shown('m1'),
       dismissed('m1', 'allow', 'local'),
-      reconnected(),
+      reconnected('conv-m1'),
       shown('m1', { title: 'Re-delivered' })
     ])
     expect(state.outstanding).toHaveLength(1)
@@ -384,7 +395,7 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
   })
 
   it('the re-surfaced prompt can be answered again, re-recording resolved (#510 AC1)', () => {
-    const before = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected(), shown('m1')])
+    const before = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected('conv-m1'), shown('m1')])
     expect(before.outstanding).toHaveLength(1) // precondition: it really did re-surface
     // A live, answerable entry — not a display artefact: the re-answer genuinely REMOVES it (a new state,
     // not a no-op) and re-records `resolved`, which the NEXT reconnect clears again — so the fix
@@ -392,7 +403,7 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     const after = reduceModal(before, dismissed('m1', 'allow', 'local'))
     expect(after).not.toBe(before)
     expect(after.outstanding).toEqual([])
-    expect(after.resolved).toEqual(['m1'])
+    expect(after.resolved).toEqual([{ conversationId: 'conv-m1', modalId: 'm1' }])
   })
 
   it('re-surfaces the answered prompt alongside a sibling still held, exactly once each (#510 AC1)', () => {
@@ -400,11 +411,154 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
       shown('m1'),
       shown('m2'),
       dismissed('m1', 'allow', 'local'),
-      reconnected(),
+      reconnected('conv-m1', 'conv-m2'),
       shown('m1'),
       shown('m2')
     ])
     expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1', 'm2'])
+  })
+})
+
+describe('reduceModal — the reconnect clear is scoped to one server (#1140)', () => {
+  // Two servers, one conversation each. `shown`'s fixture derives `conv-<modalId>`, so these override
+  // the conversation explicitly: the point of every case here is that the prompt's conversation, not its
+  // modal id, decides whether a clear reaches it.
+  const promptOnA = shown('m-a', { conversationId: 'conv-a' })
+  const promptOnB = shown('m-b', { conversationId: 'conv-b' })
+
+  it("a reconnect on B leaves A's prompt outstanding and clears B's (AC1)", () => {
+    const before = run([promptOnA, promptOnB])
+    const after = reduceModal(before, reconnected('conv-b'))
+    expect(after.outstanding.map((p) => p.modalId)).toEqual(['m-a'])
+  })
+
+  it("B's reconnect keeps A's suppression while B's prompt re-surfaces (AC2)", () => {
+    // The half that would ship green if only `outstanding` were scoped: A answered its prompt
+    // (optimistically, #237) and B answered its own, so both ids are suppressed. B reconnects.
+    const before = run([
+      promptOnA,
+      promptOnB,
+      dismissed('m-a', 'allow', 'local'),
+      dismissed('m-b', 'allow', 'local')
+    ])
+    const after = reduceModal(before, reconnected('conv-b'))
+    // A's connection never dropped, so a duplicate delivery there must STILL be suppressed — clearing
+    // `resolved` wholesale would re-surface a prompt the operator already answered (#195's bug).
+    expect(reduceModal(after, promptOnA)).toBe(after)
+    // B genuinely reconnected, so its daemon's re-send is unanswered work and must re-surface (#510).
+    expect(reduceModal(after, promptOnB).outstanding.map((p) => p.modalId)).toEqual(['m-b'])
+  })
+
+  it('a reconnect resolving no conversations clears nothing and returns the SAME state object (AC3)', () => {
+    // What a first connect resolves to: the server's slot holds no list yet, so
+    // `selectConversationIdsFor` answers `EMPTY_CONVERSATION_IDS`. Same object ⇒ zustand's
+    // `Object.is(next, state)` fires and no selector re-renders (#415's AC4).
+    const before = run([promptOnA, promptOnB, dismissed('m-a', 'allow', 'local')])
+    const after = reduceModal(before, reconnected())
+    expect(after).toBe(before)
+  })
+
+  it('leaves a prompt whose conversation is in NO list alone, and its suppression with it (AC3)', () => {
+    // The accepted consequence of scoping by the conversation list, pinned so a later widening is a
+    // deliberate change rather than drift: a prompt can be raised for a conversation whose
+    // `list_conversations` reply has not landed. Nothing but the pairing clear ever collects it.
+    const orphan = shown('m-x', { conversationId: 'conv-unlisted' })
+    const before = run([orphan, shown('m-y', { conversationId: 'conv-unlisted' }), dismissed('m-y')])
+    const after = reduceModal(before, reconnected('conv-a', 'conv-b'))
+    expect(after).toBe(before)
+    expect(after.outstanding.map((p) => p.modalId)).toEqual(['m-x'])
+    expect(after.resolved).toEqual([{ conversationId: 'conv-unlisted', modalId: 'm-y' }])
+  })
+
+  it('clears both slices for the named server in one step', () => {
+    const before = run([promptOnA, promptOnB, dismissed('m-b', 'allow', 'local')])
+    const after = reduceModal(before, reconnected('conv-b'))
+    expect(after.outstanding.map((p) => p.modalId)).toEqual(['m-a'])
+    expect(after.resolved).toEqual([])
+  })
+
+  it('keeps an unchanged slice BY REFERENCE when only the other one matches', () => {
+    // PermissionModal selects `outstanding` under Object.is, so a fresh [] would re-render it for no
+    // state change. Here only B's suppression entry matches — B answered its prompt, so it holds
+    // nothing outstanding — and `outstanding` must come back by reference even though the state changed.
+    const before = run([promptOnA, promptOnB, dismissed('m-b', 'allow', 'local')])
+    const after = reduceModal(before, reconnected('conv-b'))
+    expect(after).not.toBe(before)
+    expect(after.outstanding).toBe(before.outstanding)
+    expect(after.resolved).toEqual([])
+  })
+
+  it('records the held prompt’s conversation when it is dismissed', () => {
+    // Where the suppression entry gets its conversation: the `dismissed` arm removes the prompt whose
+    // conversation id it is, so the information is already in hand. A never-outstanding dismissal
+    // records nothing, so no conversation is invented for an id that was never held.
+    const state = run([promptOnA, dismissed('m-a', 'allow', 'local'), dismissed('ghost')])
+    expect(state.resolved).toEqual([{ conversationId: 'conv-a', modalId: 'm-a' }])
+  })
+
+  it('does not mutate the input state or either array on a scoped clear', () => {
+    // Both slices genuinely move here: B holds one outstanding prompt AND one answered.
+    const answeredOnB = shown('m-b2', { conversationId: 'conv-b' })
+    const before = run([promptOnA, promptOnB, answeredOnB, dismissed('m-b2', 'allow', 'local')])
+    const startOutstanding = before.outstanding
+    const startResolved = before.resolved
+    const survivor = before.outstanding[0]
+
+    const after = reduceModal(before, reconnected('conv-b'))
+
+    expect(after.outstanding.map((p) => p.modalId)).toEqual(['m-a'])
+    expect(after.resolved).toEqual([])
+    // Old references intact and unmutated.
+    expect(before.outstanding).toBe(startOutstanding)
+    expect(before.outstanding).toHaveLength(2)
+    expect(before.resolved).toBe(startResolved)
+    expect(before.resolved).toEqual([{ conversationId: 'conv-b', modalId: 'm-b2' }])
+    // The surviving prompt is carried across by reference, never rebuilt.
+    expect(after.outstanding[0]).toBe(survivor)
+  })
+
+  it('preserves rejections by reference across a scoped clear', () => {
+    // Unchanged from #415: `rejections` has no daemon repopulation path, so the reconnect edge never
+    // touches it. Only the pairing clear below does.
+    const before = run([promptOnB, rejected('r1')])
+    const after = reduceModal(before, reconnected('conv-b'))
+    expect(after.rejections).toBe(before.rejections)
+  })
+})
+
+describe('reduceModal — the pairing-ended clear (#1140)', () => {
+  it('drops every prompt, suppression entry and rejection, whatever their conversation (AC4)', () => {
+    // Including a prompt held for a conversation no server's list ever carried — the one thing no
+    // scoped clear can reach, and the reason this arm is unscoped rather than a wider reconnect.
+    const before = run([
+      shown('m-a', { conversationId: 'conv-a' }),
+      shown('m-x', { conversationId: 'conv-unlisted' }),
+      dismissed('m-a', 'allow', 'local'),
+      rejected('r1')
+    ])
+    const after = reduceModal(before, reset())
+    expect(after.outstanding).toEqual([])
+    expect(after.resolved).toEqual([])
+    expect(after.rejections).toEqual([])
+  })
+
+  it('returns initialModalState BY REFERENCE, so a redundant clear wakes no listener', () => {
+    const before = run([shown('m-a', { conversationId: 'conv-a' })])
+    expect(reduceModal(before, reset())).toBe(initialModalState)
+    expect(reduceModal(initialModalState, reset())).toBe(initialModalState)
+  })
+
+  it('takes no daemon-supplied id: the action is payload-free (AC4)', () => {
+    // The `dispatchSession({ type: 'reset' })` shape. Nothing on the wire can steer which of a departed
+    // daemon's prompts outlive the pairing, because the arm has nothing to steer.
+    expect(reset()).toEqual({ type: 'reset' })
+  })
+
+  it('does not mutate the input state', () => {
+    const before = run([shown('m-a', { conversationId: 'conv-a' }), rejected('r1')])
+    reduceModal(before, reset())
+    expect(before.outstanding).toHaveLength(1)
+    expect(before.rejections).toEqual(['r1'])
   })
 })
 
@@ -478,8 +632,20 @@ describe('selectHasOutstandingFor — the per-conversation read (#878)', () => {
   it('reports false after a reconnect clears outstanding (AC3)', () => {
     const before = run([shown('m1')])
     expect(selectHasOutstandingFor('conv-m1')(before)).toBe(true)
-    const after = reduceModal(before, reconnected())
+    const after = reduceModal(before, reconnected('conv-m1'))
     expect(selectHasOutstandingFor('conv-m1')(after)).toBe(false)
+  })
+
+  it('still reports true for a conversation the reconnecting server does not list (#1140)', () => {
+    // The sidebar's input-required dot reads this selector, so scoping the clear is what decides
+    // whether the dot survives another server's reconnect — the visible half of AC1.
+    const before = run([
+      shown('m1', { conversationId: 'conv-a' }),
+      shown('m2', { conversationId: 'conv-b' })
+    ])
+    const after = reduceModal(before, reconnected('conv-b'))
+    expect(selectHasOutstandingFor('conv-a')(after)).toBe(true)
+    expect(selectHasOutstandingFor('conv-b')(after)).toBe(false)
   })
 
   it('answers two conversations independently — one prompt never answers for another (AC4)', () => {

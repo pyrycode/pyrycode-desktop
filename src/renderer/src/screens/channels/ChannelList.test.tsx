@@ -774,18 +774,21 @@ describe('ChannelListView', () => {
     // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Four
     // clears, one per store, because no single boundary helper owns all four.
     //
-    // The modal clear is `reconnected` and MUST NOT be a `dismissed` per seeded prompt. `dismissed` moves
-    // the id onto the `resolved` slice, where the `shown` arm reads a seen-then-resolved id as a no-op
-    // rather than an append (modalPrompts.ts:154) — so a `dismissed`-based teardown leaves a later case's
-    // seed silently doing nothing, and that case renders an `--idle` row while asserting
-    // `--input-required`, a failure that reads as a product bug in the wiring #874 adds. `reconnected`
-    // clears `outstanding` and `resolved` together (modalPrompts.ts:202-220) and is the only teardown
-    // that returns the store to its initial state.
+    // The modal clear MUST NOT be a `dismissed` per seeded prompt. `dismissed` moves the id onto the
+    // `resolved` slice, where `reduceModal`'s `shown` arm reads a seen-then-resolved id as a no-op rather
+    // than an append — so a `dismissed`-based teardown leaves a later case's seed silently doing nothing,
+    // and that case renders an `--idle` row while asserting `--input-required`, a failure that reads as a
+    // product bug in the wiring #874 adds.
+    //
+    // It is `reset`, not `reconnected`, since #1140: the reconnect arm now clears only the conversations
+    // the event names, so a teardown built on it would have to enumerate every id these cases seed and
+    // would silently stop clearing the moment one was added. `reset` is the pairing-boundary arm and
+    // returns the store to its initial state whatever it holds — which is exactly what a teardown wants.
     afterEach(() => {
       activityStore.getState().clearAllActivity()
       timelineStore.getState().clearAllTimelines()
       lastReadStore.getState().clearAllLastRead()
-      promptStore.getState().dispatch({ type: 'reconnected' })
+      promptStore.getState().dispatch({ type: 'reset' })
     })
 
     // The seeds, named for the STATUS they produce rather than for the store they write, so each case

@@ -45,17 +45,30 @@ defend an unobserved need (the same call #202 made for the timeline store).
 ### The translator + binding (`src/renderer/src/store/modalBridge.ts`)
 
 ```ts
-translateModalEvent(event: DaemonEvent): ModalEvent | null
-// Owns exactly modalShown / modalDismissed / modalAnswerRejected, each rebuilt as a fresh
+originOf(event: DaemonEvent): ConversationListOrigin
+// #1140 — reads #1068's client-bound stamp ONLY, never event.ack.server_id (the daemon's own value).
+// A module-private copy of the relayLinkBridge/conversationListBridge/daemonEventBridge/queueBridge/
+// backgroundTaskRosterBridge idiom — a SIXTH precedent — not an import, so this subscriber stays
+// independent of theirs.
+
+translateModalEvent(event: DaemonEvent, conversationIdsFor: (origin: ConversationListOrigin) => ReadonlySet<string>): ModalEvent | null
+// Owns exactly modalShown / modalDismissed / modalAnswerRejected / connected, each rebuilt as a fresh
 // named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
 // fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// `connected` returns { type: 'reconnected', conversationIds: conversationIdsFor(originOf(event)) } —
+// conversationIdsFor is INJECTED (#1140), never read from a store here, so the translator stays a pure
+// arm-to-value map drivable with a plain stub under this repo's node-environment renderer tests.
 
-subscribeModal(onDaemonEvent, dispatch): () => void
-// onDaemonEvent(event => { const me = translateModalEvent(event); if (me) dispatch(me) })
-// returns the exact off handle (the subscribeTimeline idiom) — pure, spy-testable, no React.
+subscribeModal(onDaemonEvent, dispatch, conversationIdsFor): () => void
+// onDaemonEvent(event => { const me = translateModalEvent(event, conversationIdsFor); if (me) dispatch(me) })
+// returns the exact off handle (the subscribeTimeline idiom) — pure, spy-testable, STORE-FREE, no React.
 
 useModalBridge(): void
-// useEffect(() => subscribeModal(window.pyry.onDaemonEvent, e => modalStore.getState().dispatch(e)), [])
+// useEffect(() => subscribeModal(
+//   window.pyry.onDaemonEvent,
+//   e => modalStore.getState().dispatch(e),
+//   origin => selectConversationIdsFor(origin)(conversationListStore.getState())   // #1140, event-time read
+// ), [])
 // StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener.
 ```
 
@@ -113,6 +126,15 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
   '@renderer/store/modalStore'` and `import { useModalBridge } from '@renderer/store/modalBridge'`.
+- **The `connected` → `reconnected` mapping is scoped to the reconnecting server
+  ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)).** Since
+  [#1117](daemon-connection-routing.md) the background process holds one live connection per paired
+  server, so `connected` no longer means "the app's one connection came back." `translateModalEvent`
+  reads the origin off `event`'s `serverId` stamp (never `event.ack.server_id`, the daemon's own value)
+  via a module-private `originOf`, and the injected `conversationIdsFor` resolves it to that server's
+  conversation ids through #1138's shared `selectConversationIdsFor`. The list read happens inside
+  `useModalBridge`'s effect, at event time, not at subscribe time — see [modal-prompt
+  model](modal-prompt-model.md) for what the reducer does with the set.
 - **Conversation-id scoping now reaches the store, but not this bridge's own surface.** `modal_shown`
   carries a `conversation_id` on the wire ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)),
   decoded onto the `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)),
@@ -219,6 +241,16 @@ notes](../codebase/249.md) for the render design.
 - [#877 codebase notes](../codebase/877.md) — carries `conversation_id` the last hop onto `ModalEvent`'s
   `shown` arm; `translateModalEvent` copies it by name into the existing fresh literal. No new case, no
   new arm — this bridge's shape is otherwise unchanged.
+- [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) · Spec:
+  `docs/specs/architecture/1140-scoped-modal-reconnect-clear.md` — scopes the `connected` → `reconnected`
+  mapping to the reconnecting server (new `originOf`, injected `conversationIdsFor`), the sixth precedent
+  for the module-private-`originOf` idiom this bridge's siblings established. Kept the translator-arm
+  shape rather than moving to a pre-translator branch (the `queueBridge`/`backgroundTaskRosterBridge`
+  posture) precisely because this translator returns an *action union* member, where a payload addition
+  costs no widening — see [modal-prompt model](modal-prompt-model.md) for the reducer side (the scoped
+  `reconnected` clear and the new pairing-boundary `reset` arm) and
+  [`clearPairingScopedState`](paired-shell.md#related) for the pairing-boundary dispatch this ticket also
+  wires in.
 - [Question-batch model](question-batch-model.md) § The bridge — the question vertical's clone of this
   file's shape ([#900](https://github.com/pyrycode/pyrycode-desktop/issues/900), a fourth independent
   subscriber on the same channel), diverging in one place: the question family rebuilds each row

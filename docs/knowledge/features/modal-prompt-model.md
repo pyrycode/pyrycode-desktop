@@ -53,17 +53,35 @@ type ModalEvent =
   // #249: a LOCAL user action — dismissing a rejection banner. Never produced by the bridge.
   | { type: 'rejectionDismissed'; modalId: string }
   // #415: the transport (re)connected — fires on EVERY supervisor (re)handshake, including the first
-  // connect. Payload-free; produced by the bridge from the `connected` DaemonEvent, ignoring its ack.
-  // #510: also clears `resolved` — see below.
-  | { type: 'reconnected' }
+  // connect. Produced by the bridge from the `connected` DaemonEvent, ignoring its ack. #510: also
+  // clears `resolved`. #1140: gained a payload — the conversations belonging to the RECONNECTING
+  // server, resolved by the bridge's composition root (never by this pure reducer) — since `connected`
+  // means "this server's connection came back" (#1117), not the app's one connection. An empty set
+  // (a not-yet-loaded or loaded-empty list) clears nothing and returns the same state (AC4 holds).
+  | { type: 'reconnected'; conversationIds: ReadonlySet<string> }
+  // #1140: the pairing that held these prompts has ended — dispatched locally by
+  // `clearPairingScopedState` (the `rejectionDismissed` precedent), never produced by the bridge.
+  // Payload-free and UNSCOPED across all three slices, `rejections` included: every slice is scoped to
+  // the pairing that ended and none has a cross-pairing meaning. The only clear that reaches a prompt
+  // held for a conversation no server's list ever carried.
+  | { type: 'reset' }
 
 interface ModalState {
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]   // #249: modalIds of round-tripped rejections, arrival order, deduped
-  resolved: readonly string[]     // #195: modalIds that left `outstanding` via `dismissed` — internal
-                                   // bookkeeping only, no selector. #510: PER-CONNECTION memory, cleared
-                                   // on `reconnected` — not permanent (see Edge cases)
+  // #195: modalIds that left `outstanding` via `dismissed` — internal bookkeeping only, no selector.
+  // #510: PER-CONNECTION memory, cleared on `reconnected` — not permanent (see Edge cases). #1140:
+  // narrowed one notch further to per-connection-OF-ONE-SERVER, and each entry became a record —
+  // `{ conversationId, modalId }` — because the scoped clear needs the conversation to match on, and
+  // it can only be recorded when the id is appended (the `dismissed` arm already holds the prompt).
+  // MUST NOT BE PERSISTED: these ids are daemon-side and a re-pair to the same box reuses them.
+  resolved: readonly ResolvedModal[]
 }
+
+// #1140: one suppression entry. `conversationId` is COPIED off the held `ModalPrompt` at dismissal,
+// never derived from `modalId` — the id is a one-time opaque nonce (ADR 0009). A scoping label only,
+// exactly as on `ModalPrompt`: it authorises nothing and selects no resource, so no branded type.
+interface ResolvedModal { conversationId: string; modalId: string }
 ```
 
 `ModalPrompt` is the durable, held content; `ModalEvent` is the renderer-local (camelCase) input the
@@ -89,7 +107,9 @@ already gone by the time a rejection can round-trip (#237's optimistic clear), s
 state, never a re-surfaced prompt. It holds bare `modalId` strings, not objects: the `rejected` event is
 content-free, so there is genuinely nothing else to carry (unlike `dismissed`'s `outcome`/`source`,
 which mirror wire fields). Each id doubles as the stable React key when more than one rejection banner
-shows.
+shows. `resolved` is the one slice that **does** hold objects rather than bare ids — see
+[#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) below — because a scoped clear needs a
+conversation to match on and a `modalId` alone doesn't carry one.
 
 ### The reducer
 
@@ -99,11 +119,12 @@ on `event.type` with an `assertNever` default — the same discipline as `reduce
 
 | event | effect |
 |---|---|
-| `shown` | idempotent on `modalId` ([#195](../codebase/195.md)), checked in this order: (1) `modalId ∈ resolved` → **same `state` reference**, a no-op — already answered/dismissed **within the current connection** ([#510](../codebase/510.md) scopes this to per-connection; see below); (2) `modalId ∈ outstanding` → replace that entry in place with the fresh `ModalPrompt` built from the **re-delivered** fields (match-and-replace takes the latest values), position and length preserved, no duplicate; (3) else → append, exactly as first-delivery always did. Always spreads `state` so `rejections`/`resolved` survive. |
-| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4) — and does **not** touch `resolved`, the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal also records the id into `resolved` via `appendUnique` — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. Untouched by [#510](../codebase/510.md) — the rejected alternative shape would have had to relax this arm; that is why it was rejected (see Edge cases). |
+| `shown` | idempotent on `modalId` ([#195](../codebase/195.md)), checked in this order: (1) `modalId` matches an entry in `resolved` → **same `state` reference**, a no-op — already answered/dismissed **within the current connection of that server** ([#510](../codebase/510.md)/[#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) scope this; see below); (2) `modalId ∈ outstanding` → replace that entry in place with the fresh `ModalPrompt` built from the **re-delivered** fields (match-and-replace takes the latest values), position and length preserved, no duplicate; (3) else → append, exactly as first-delivery always did. Always spreads `state` so `rejections`/`resolved` survive. |
+| `dismissed` | looks the prompt up in `outstanding` **first** ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) — the no-op guard moved here because the arm now needs the held prompt's `conversationId`); no match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4), and `resolved` is **not** touched — the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal (`removeById`, spreads `state` so `rejections` survives) also appends `{ conversationId, modalId }` to `resolved` via `appendResolved`, the conversation copied off the prompt just found — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
 | `rejected` ([#249](../codebase/249.md)) | append `modalId` to `rejections`, de-duplicated (`appendUnique`). Repeat id → **same `state` reference** (no churn); `outstanding` is untouched. |
 | `rejectionDismissed` ([#249](../codebase/249.md)) | remove `modalId` from `rejections` (`removeRejection`). Unknown/already-dismissed id → **same `state` reference**, a non-throwing no-op; `outstanding` is untouched. |
-| `reconnected` ([#415](../codebase/415.md); [#510](../codebase/510.md)) | clears **both** `outstanding` and `resolved` so the daemon's connect-time re-sends become the sole repopulation truth for the connection just started; a still-held prompt re-appends via the `shown` arm exactly once, and a prompt the client answered while disconnected (send swallowed, `resolved` recorded it anyway) now re-surfaces instead of staying suppressed — [#510](../codebase/510.md), reversing #415 AC3. `rejections` still survives by reference untouched (no daemon repopulation path). Each slice is guarded independently: an already-empty `outstanding` keeps its reference (`PermissionModal` selects it under `Object.is`), and a reconnect with **nothing at all** to clear returns the same `state` reference (AC4 — first connect, or reconnect after nothing was ever shown). |
+| `reconnected` ([#415](../codebase/415.md); [#510](../codebase/510.md); [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)) | drops, from **both** `outstanding` and `resolved`, only the rows whose `conversationId` is in the event's `conversationIds` set (one shared helper, `dropListed`), so the daemon's connect-time re-sends become the sole repopulation truth for **that server's** conversations; a still-held prompt re-appends via the `shown` arm exactly once, and a prompt the client answered while disconnected (send swallowed, `resolved` recorded it anyway) now re-surfaces instead of staying suppressed. A prompt or suppression entry whose conversation is in **no** server's list survives every `reconnected` — the accepted, pinned consequence of scoping by the list; only `reset` ever collects one. `rejections` still survives by reference untouched (no daemon repopulation path, and never scoped — see #1140 below). Each slice is guarded independently inside `dropListed`: a slice the set does not touch keeps its reference (`PermissionModal` selects `outstanding` under `Object.is`), and an empty set — first connect, or a server holding nothing here — returns the same `state` reference (AC4). |
+| `reset` ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)) | the pairing boundary: returns `initialModalState` **by reference**, clearing all three slices including `rejections` (never touched by `reconnected`) and any prompt/suppression entry `reconnected` could never reach because its conversation was in no server's list. Dispatched only by `clearPairingScopedState`, never by the bridge. |
 
 Note that `shown`/`dismissed` originally built their return value as `{ outstanding: … }` — #249 changed
 both to `{ ...state, outstanding: … }` so they stop silently dropping the (then-new) `rejections` field;
@@ -122,19 +143,35 @@ internal reducer bookkeeping only, never read outside `reduceModal` itself.
 ### Internal helpers (unexported)
 
 - `removeById(outstanding, modalId)` — filters by `modalId`, returning the **same array reference**
-  when nothing was removed, so `dismissed` can return the same `state` on an unknown id. Mirrors
-  `threadTimeline`'s `fillResult` same-reference-on-no-match discipline.
+  when nothing was removed. Since [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) its
+  sole caller (`dismissed`) looks the prompt up **before** calling, because the arm needs the held
+  prompt's `conversationId` to record it, so this helper's own no-match path is no longer what does the
+  work — kept rather than inlined, since the contract is the discipline `removeRejection`/`dropListed`
+  also hold and a helper that cannot no-op is a trap for the next caller. Mirrors `threadTimeline`'s
+  `fillResult` same-reference-on-no-match discipline.
 - `appendUnique(rejections, modalId)` ([#249](../codebase/249.md)) — appends if absent, else returns the
   **same array reference** (defends #248's FIFO window redelivering an id in a race). Mirrors
-  `removeById`'s same-reference-on-no-change contract for the append direction.
+  `removeById`'s same-reference-on-no-change contract for the append direction. Used only by `rejected`
+  as of [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) — `dismissed` moved to
+  `appendResolved` once `resolved` became record-shaped (see below).
 - `removeRejection(rejections, modalId)` ([#249](../codebase/249.md)) — `removeById`'s twin over
   `readonly string[]`.
+- `appendResolved(resolved, entry)` ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140))
+  — `appendUnique`'s sibling for the record-shaped slice: de-duplicates on `entry.modalId`, returning the
+  **same array reference** on a repeat. Kept separate from `appendUnique` rather than generalised into
+  one helper, because the two dedupe on different things (a whole string vs. one field of a record) and
+  collapsing them would hide which.
+- `dropListed(rows, conversationIds)` ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140))
+  — the one generic helper both scoped slices share: keeps every row whose `conversationId` is **not**
+  in the set, returning the **same array reference** when nothing matched. One helper for both
+  `outstanding` and `resolved` because they are scoped by the same key, so a future change to what
+  "belongs to this server" means has one place to land and the two slices cannot drift into a
+  half-scoped clear. Membership is `Set.has` over own field values, never a bare object keyed by id or
+  a re-key of either slice by `conversationId` — `ServerOrigin`'s docblock rules a `Set` for any
+  daemon-id-indexed lookup (a `__proto__` id would otherwise resolve onto `Object.prototype`), and
+  `selectHasOutstandingFor`'s docblock rules the array-scan form for the same prototype reason.
 - `assertNever(event)` — the compile-time exhaustiveness guard, reused verbatim from
   `threadTimeline`.
-
-`appendUnique` ([#249](../codebase/249.md)) is also reused verbatim by `dismissed`
-([#195](../codebase/195.md)) to record a resolved id — a generic `readonly string[]` same-reference
-dedup op, not rejection-specific despite its origin.
 
 ## Configuration and usage
 
@@ -187,6 +224,17 @@ prompts) and reversed it: the `reconnected` arm now clears `resolved` too, so a 
 disconnected — its send swallowed by the transport, its id recorded into `resolved` anyway — re-surfaces
 instead of silently decaying into a deny-on-timeout.
 
+**[#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) (shipped)** — since
+[#1117](daemon-connection-routing.md) the background process holds one live connection per paired
+server, so `connected` (and this arm's `reconnected`) means "**this** server's connection came back,"
+not the app's one connection. A payload-free `reconnected` took down a prompt another server was still
+waiting on and dropped that server's suppression bookkeeping with it. Scoped both `outstanding` and
+`resolved` to the reconnecting server's own conversations (a new `conversationIds` payload, resolved by
+[modal store + bridge](modal-store-bridge.md)'s composition root via #1138's shared resolution), gave
+`resolved` a conversation-carrying element shape (`ResolvedModal`) so it can be scoped the same way, and
+added a payload-free `reset` arm — dispatched by `clearPairingScopedState` — as the pairing-boundary
+counterweight the scoped edge now needs (see § Edge cases).
+
 ## Edge cases and limitations
 
 - **`shown` for an already-outstanding `modalId` now replaces in place** ([#195](../codebase/195.md)),
@@ -198,28 +246,51 @@ instead of silently decaying into a deny-on-timeout.
   [thread timeline](thread-timeline.md)'s orphan `tool_result`. It also deliberately does **not** record
   the id into `resolved` — the ordering-edge guard ([#195](../codebase/195.md)): recording an
   unknown-id dismiss would permanently suppress a later legitimate `shown` of that same id.
-- **`resolved` is per-connection memory, cleared on every `reconnected` edge ([#510](../codebase/510.md)),
-  not retained forever.** #195 and #415 originally reasoned that `modalId`s are one-time nonces, so a
-  retained id could "never legitimately need to re-surface" — and shipped #415 AC3 preserving `resolved`
-  across the reset on that basis. [#510](../codebase/510.md) found the premise wrong: the outbound answer
-  send is fire-and-forget (`answerModal` early-returns on a null driver while disconnected), so a
-  `resolved` id can mean "the client *tried* to answer" rather than "the daemon has it." The daemon's
-  connect-time reconcile re-sends only **still-outstanding** modals (`Registry.Snapshot()`, pyrycode
-  #876/#877) — so retaining `resolved` across a reconnect suppressed exactly the case it needed to let
-  through: an Allow clicked while the link was down, decaying into a deny-on-timeout with no way to
-  re-answer. Within a single connection `resolved` still dedupes as before — it is deliberately **not**
-  removed outright, since it backstops duplicate within-connection delivery (AC2's ordering edge).
+- **`resolved` is per-connection-of-one-server memory, scoped-cleared on every `reconnected` edge
+  ([#510](../codebase/510.md); [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)), not
+  retained forever, and not cleared wholesale.** #195 and #415 originally reasoned that `modalId`s are
+  one-time nonces, so a retained id could "never legitimately need to re-surface" — and shipped #415 AC3
+  preserving `resolved` across the reset on that basis. [#510](../codebase/510.md) found the premise
+  wrong: the outbound answer send is fire-and-forget (`answerModal` early-returns on a null driver while
+  disconnected), so a `resolved` id can mean "the client *tried* to answer" rather than "the daemon has
+  it." The daemon's connect-time reconcile re-sends only **still-outstanding** modals (`Registry.Snapshot()`,
+  pyrycode #876/#877) — so retaining `resolved` across a reconnect suppressed exactly the case it needed
+  to let through: an Allow clicked while the link was down, decaying into a deny-on-timeout with no way
+  to re-answer. [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) narrowed the clear one
+  notch further, from "every reconnect" to "the reconnecting server's own conversations": clearing the
+  slice wholesale on server B's reconnect would re-surface, on server A, a prompt the operator already
+  answered there — the exact bug this bookkeeping exists to prevent, just on the other server. Within a
+  single connection of a server `resolved` still dedupes as before — it is deliberately **not** removed
+  outright, since it backstops duplicate within-connection delivery (AC2's ordering edge). A `resolved`
+  entry for a conversation no server's list ever carried survives every reconnect; only `reset` collects
+  it (see below).
 - **`outcome`/`source` still have no home in this state.** A resolved prompt is removed outright, so
   that metadata is carried on the `dismissed` event but never lands in `ModalState`. The anticipated
   "resolution toast" this comment referred to shipped as [#249](../codebase/249.md)'s rejection surface
   — but it consumes a *different*, content-free event (`rejected`, carrying only `modalId`), not
   `dismissed`'s `outcome`/`source`; those two fields remain genuinely unconsumed.
-- **Reset-on-reconnect ([#415](../codebase/415.md); [#510](../codebase/510.md)).** A fresh Noise
-  handshake resetting client control state (#879's third sub-rule) clears **both** `outstanding` and
-  `resolved` via the `reconnected` arm, produced by `modalBridge.ts` from the `connected` `DaemonEvent`
-  that fires on every supervisor (re)handshake. `rejections` still survives by reference — it has no
-  daemon repopulation path. The sibling `queue_state` reset (a different store) shipped as
-  [#197](../codebase/197.md).
+- **Reset-on-reconnect ([#415](../codebase/415.md); [#510](../codebase/510.md);
+  [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)).** A fresh Noise handshake resetting
+  client control state (#879's third sub-rule) clears, from **both** `outstanding` and `resolved`, the
+  rows belonging to the reconnecting server via the `reconnected` arm, produced by `modalBridge.ts` from
+  the `connected` `DaemonEvent` that fires on every supervisor (re)handshake — scoped since #1140 to that
+  server's own conversations rather than the whole store, since [#1117](daemon-connection-routing.md)
+  made `connected` mean "this server's connection came back." `rejections` still survives by reference —
+  it has no daemon repopulation path and is never scoped, only ever cleared by `reset`. The sibling
+  `queue_state` reset (a different store) shipped as [#197](../codebase/197.md).
+- **Pairing-boundary clear, unscoped ([#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)).**
+  Scoping the `reconnected` edge opened a hole at the pairing boundary: a new pairing's first `connected`
+  resolves the new server's (empty) conversation list, matches nothing, and drops nothing, so a departed
+  pairing's `outstanding` prompts and `resolved` entries would otherwise latch for the life of the
+  process — the residue is actionable, not merely stale, since a retained prompt is a live control
+  carrying a departed daemon's untrusted `title`/`prompt`/`options[].label`, answerable with a
+  `modal_answer` for a `modalId` the currently paired daemon never issued. The `reset` `ModalEvent`
+  (payload-free, dispatched by `clearPairingScopedState`, never by the bridge) closes it by returning
+  `initialModalState` — all three slices, `rejections` included, since every slice is scoped to the
+  pairing that ended. This retired `modalStore`'s exclusion from `clearPairingScopedState`'s dep set —
+  see [`clearPairingScopedState`](paired-shell.md#related), which had cited this store by name as
+  self-healing. Same sequence [#1086](conversation-list-store.md), [#1138](queue-store.md) and
+  [#1139](background-task-roster-store.md) each ran through.
 - **Nothing to gate on here.** The `--allow-remote-permissions` grant is a daemon-side, per-device
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
@@ -290,6 +361,18 @@ instead of silently decaying into a deny-on-timeout.
 - [#510 codebase notes](../codebase/510.md) — the `reconnected` arm also clears `resolved`, reversing
   #415 AC3: a prompt answered while disconnected re-surfaces after the reconnect instead of staying
   suppressed.
+- [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) · Spec:
+  `docs/specs/architecture/1140-scoped-modal-reconnect-clear.md` — scopes `reconnected` to the
+  reconnecting server's own conversations (`conversationIds`, resolved by [modal store +
+  bridge](modal-store-bridge.md) via #1138's shared resolution), gives `resolved` the `ResolvedModal`
+  element shape so it can be scoped the same way, and adds the pairing-boundary `reset` arm — the same
+  fix [#1138](conversation-list-store.md) and [#1139](background-task-roster-store.md) shipped for
+  `queueStore` and `backgroundTaskRosterStore`, applied to the store whose residue is the most
+  actionable of the three (a live permission control, not stale display). Security review PASS; the one
+  residual risk named — conversation ids are daemon-side and not globally unique across servers, so a
+  hostile daemon B listing an id server A also uses can clear A's matching prompt and suppression entry
+  — is strictly narrower than today's whole-store clear and is accepted pending a wire-level globally
+  unique conversation identity (out of scope, no ticket yet).
 - [#877 codebase notes](../codebase/877.md) — carries `conversation_id` (pyrycode#1065, decoded
   [#870](../codebase/870.md), carried onto `DaemonEvent` by [#871](../codebase/871.md)) the last hop
   onto `ModalEvent`'s `shown` arm, by name; the reducer did not yet read it.

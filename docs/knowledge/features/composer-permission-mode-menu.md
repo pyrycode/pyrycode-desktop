@@ -100,6 +100,14 @@ const hidesAuto = row !== undefined && row.supports_auto_mode === false
   menu](composer-effort-menu.md) reads, through `publishedRowFor`'s exact `value` equality — no case fold,
   no trim, no family derivation. That is what makes picking a model which refuses `auto` drop the entry at
   once, and a rejected model pick bring it back, with no code of this control's own.
+- **This menu still calls `publishedRowFor` directly, and #1168 is why it must.** That ticket gave the
+  model and effort menus a separate wrapper, `effortRowFor`, that resolves an empty session model — the
+  wire's inherited daemon default, not an absence — onto the row the daemon publishes for that default.
+  Joining through the same wrapper here would resolve that row too, and a row reporting
+  `supports_auto_mode: false` would then hide `auto` on every chat nobody has set a model on. Missing on
+  an empty model is what keeps `auto` offered there, so this control keeps the plain `publishedRowFor`
+  miss deliberately — see [Composer effort menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
+  for the wrapper itself.
 - **A session already running `auto` on a refusing model still labels the trigger `Auto` and marks nothing
   in the panel** — the same no-matching-entry branch a session in bypass already uses. `currentId` stays
   the session's mode verbatim; hiding an entry never changes what the trigger says.

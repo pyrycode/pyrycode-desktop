@@ -431,3 +431,33 @@ describe('ComposerPermissionModeMenuView', () => {
     expect(countOf(markup, 'aria-current')).toBe(0)
   })
 })
+
+// #1168 — the guard for a change made in a NEIGHBOURING file. That slice re-points the two EFFORT
+// surfaces so an empty session model resolves the inherited-default row (`default`), and it deliberately
+// does that in its own home rather than inside publishedRowFor — because this menu is one of the callers
+// left behind, and it reads `supports_auto_mode` off the row it resolves. Put the branch one layer down
+// and every
+// inherited-default chat would silently lose its `auto` entry, which no criterion of that ticket names.
+// This asserts the placement from the outside, in the file that would pay for getting it wrong.
+describe('composerPermissionModeMenuModel — an inherited-default session (#1168)', () => {
+  const INHERITED_REFUSING = row({
+    value: 'default',
+    display_name: 'Inherited default',
+    supports_auto_mode: false
+  })
+
+  it('still offers auto when the session model is empty and a refusing `default` row is published', () => {
+    const list: ModelListEntry = { models: [INHERITED_REFUSING, ACCEPTING], droppedModels: 0 }
+    const menu = composerPermissionModeMenuModel(list, '', 'plan')
+    expect(menu?.options.map((each) => each.id)).toStrictEqual([...SETTABLE_PERMISSION_MODES])
+    expect(menu?.options.map((each) => each.id)).toContain(AUTO_PERMISSION_MODE)
+  })
+
+  // The other direction of the same claim: a miss is the UNKNOWN reading and offers everything, so the
+  // empty model must keep missing here exactly as it does today.
+  it('hides auto only for a session model that NAMES the refusing row', () => {
+    const list: ModelListEntry = { models: [INHERITED_REFUSING, ACCEPTING], droppedModels: 0 }
+    const named = composerPermissionModeMenuModel(list, INHERITED_REFUSING.value, 'plan')
+    expect(named?.options.map((each) => each.id)).not.toContain(AUTO_PERMISSION_MODE)
+  })
+})

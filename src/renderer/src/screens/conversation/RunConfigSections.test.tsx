@@ -615,6 +615,130 @@ describe('RunConfigView — Effort segments from the published levels (#976)', (
   })
 })
 
+// #1168: the SESSION MODEL '' case, which the wire contract calls the inherited daemon default and
+// explicitly NOT absent, and which the daemon publishes as an ordinary row valued `default`. Before this
+// slice `''` matched no row, so an unconfigured session took the UNKNOWN arm permanently — the common
+// case, measured live, and a false statement besides, since the model that chat runs at does publish
+// levels. The JOIN re-points and nothing else does: every reading asserted below is one this section
+// could already produce, reached with a different input.
+describe('RunConfigView — Effort on an inherited-default session (#1168)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+  // PUBLISHED_ROWS[0] IS the inherited-default row, seeded as `default` before this slice existed, which
+  // is why this file needs no new list fixture for the AC1 case.
+  const INHERITED_DEFAULT = PUBLISHED_ROWS[0]
+  const NOT_DEFAULT = PUBLISHED_ROWS[1]
+  const entryFor = (row: WireModelOption): ModelListEntry => ({ models: [row], droppedModels: 0 })
+  // The row value is TYPED here rather than imported from the module. The constant is deliberately
+  // module-private, so changing it must fail a test rather than be followed silently by one.
+  const defaultRow = (over: Partial<WireModelOption>): WireModelOption =>
+    modelRow({ value: 'default', display_name: 'Inherited default', ...over })
+
+  it('offers the inherited-default row levels, in published order, marking the effort (AC1)', () => {
+    const level = INHERITED_DEFAULT.effort_levels[0]
+    const markup = renderToStaticMarkup(<RunConfigView {...base} effort={level} models={PUBLISHED} />)
+    expect(markup.match(/run-config__effort-segment/g)?.length).toBe(
+      INHERITED_DEFAULT.effort_levels.length
+    )
+    const positions = INHERITED_DEFAULT.effort_levels.map((each) => markup.indexOf(`>${each}<`))
+    expect(positions.every((at) => at >= 0)).toBe(true)
+    expect([...positions]).toEqual([...positions].sort((a, b) => a - b))
+    expect(segmentFor(markup, 'run-config__effort-segment', `>${level}<`)).toContain(
+      'aria-current="true"'
+    )
+    expect(markup.match(/aria-current="true"/g)?.length).toBe(1)
+    // The UNKNOWN arm is GONE rather than joined — the two are alternatives of one branch, and a menu
+    // beside a dead label would be the invented arm AC2 forbids.
+    expect(markup).not.toContain('run-config__effort-current')
+  })
+
+  it('offers THAT row and never a neighbouring one (AC1)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
+    expect(markup).toContain(`>${INHERITED_DEFAULT.effort_levels[0]}<`)
+    expect(markup).not.toContain(`>${NOT_DEFAULT.effort_levels[0]}<`)
+  })
+
+  it('moves to the offers-none sentence when that row publishes no levels (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} effort="high" models={entryFor(defaultRow({ effort_levels: [] }))} />
+    )
+    expect(markup).toContain(EFFORT_EMPTY)
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).not.toContain('run-config__effort-current')
+  })
+
+  it('reads a cut level list on that row as UNKNOWN, with the shipped cut marker (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        effort="high"
+        models={entryFor(defaultRow({ effort_levels: [], truncated_fields: ['effort_levels'] }))}
+      />
+    )
+    expect(markup).not.toContain(EFFORT_EMPTY)
+    expect(markup).toContain('class="run-config__effort-current">high<')
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).toContain(`class="run-config__effort-cut">${CUT}<`)
+  })
+
+  it('still offers a shortened list on that row, marked cut rather than complete (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        effort="high"
+        models={entryFor(defaultRow({ effort_levels: ['high'], truncated_fields: ['effort_levels'] }))}
+      />
+    )
+    expect(markup.match(/run-config__effort-segment/g)?.length).toBe(1)
+    expect(markup).toContain(`class="run-config__effort-cut">${CUT}<`)
+  })
+
+  // AC3's first half. THREE ways to have no inherited-default row and ONE rendering — today's. The third
+  // case is the one that fails if the empty model ever falls back to some other published row rather
+  // than to the one constant: that list publishes three levels and must still offer none.
+  it('draws exactly today rendering with no inherited-default row published (AC3)', () => {
+    for (const extra of [{}, { models: NO_FRAME }, { models: entryFor(NOT_DEFAULT) }]) {
+      const markup = renderToStaticMarkup(<RunConfigView {...base} effort="high" {...extra} />)
+      expect(markup).not.toContain('run-config__effort-segment')
+      expect(markup).toContain('class="run-config__effort-current">high<')
+      expect(markup).not.toContain(EFFORT_EMPTY)
+    }
+  })
+
+  // AC3's second half: the empty model is the ONLY input taking the new branch. A trim, case fold,
+  // prefix or substring introduced anywhere on this path fails here rather than passing quietly.
+  it.each([' ', '  ', 'DEFAULT', 'Default', 'defaul', 'default-x', ' default', 'default '])(
+    'takes the new branch for the empty model alone, never for %j (AC3)',
+    (model) => {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} model={model} effort="high" models={PUBLISHED} />
+      )
+      expect(markup).not.toContain('run-config__effort-segment')
+      expect(markup).toContain('class="run-config__effort-current">high<')
+    }
+  )
+
+  // AC4, and the sharpest guard in the file: the running-model line joins what claude ANNOUNCED, a
+  // different string answering a different question. An announcement of '' is a real one the daemon
+  // emitted and renders verbatim as a present, empty line. Were the empty-model branch put inside
+  // publishedRowFor, this line would start printing the inherited-default row's display name.
+  it('leaves the running-model line joining the announced identifier (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: '', truncated: false }} models={PUBLISHED} />
+    )
+    expect(markup).toContain('<p class="run-config__running-value"></p>')
+    // Scoped to the running-value ELEMENT: that display name legitimately renders in its own Model row,
+    // so a bare not.toContain would fail on a correct render.
+    expect(markup).not.toContain(`run-config__running-value">${INHERITED_DEFAULT.display_name}`)
+  })
+
+  // AC4: the Model rows mark by the SESSION's model through the unchanged helper, so an unconfigured
+  // session still marks nothing — the sheet does not start claiming a model was picked.
+  it('leaves the Model rows marking nothing on an inherited-default session (AC4)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
+    expect(markup).not.toContain('Current model')
+  })
+})
+
 describe('RunConfigView — YOLO', () => {
   it('reflects yolo:true as an on switch (aria-checked="true")', () => {
     const markup = renderToStaticMarkup(<RunConfigView model="" effort="" yolo={true} {...NO_USAGE} />)

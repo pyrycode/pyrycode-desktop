@@ -8,6 +8,8 @@ import {
   subscribeRunSettingsWrite,
   submitSettingsChange,
   RunSettingsWriteData,
+  confirmedEffortLevel,
+  foldWriteEvent,
   type SubmitSettingsChangeDeps
 } from './runSettingsWriteBridge'
 import type { RunSettingsWriteEvent, SettingsChange } from './runSettingsWriteStore'
@@ -258,5 +260,119 @@ describe('RunSettingsWriteData (container)', () => {
       markup = renderToStaticMarkup(createElement(RunSettingsWriteData))
     }).not.toThrow()
     expect(markup).toBe('')
+  })
+})
+
+// #1169 — REMEMBER ON CONFIRM. The confirm reply carries only a `changeId`, and the reducer deletes the
+// pending record as it commits, so the value that was confirmed is recoverable in exactly one place:
+// the pending map, read BEFORE the dispatch. Both helpers are injected and framework-free.
+
+describe('confirmedEffortLevel', () => {
+  const pendingWith = (change: SettingsChange): ReadonlyMap<string, SettingsChange> =>
+    new Map([['id-1', change]])
+
+  it('returns the confirmed effort value', () => {
+    expect(
+      confirmedEffortLevel(pendingWith({ field: 'effort', value: 'deep' }), {
+        type: 'settingsConfirmed',
+        changeId: 'id-1'
+      })
+    ).toBe('deep')
+  })
+
+  it('returns null for a confirmed change on any other field', () => {
+    const others: SettingsChange[] = [
+      { field: 'model', value: 'graded' },
+      { field: 'yolo', value: true },
+      { field: 'permissionMode', value: 'plan' }
+    ]
+
+    for (const change of others) {
+      expect(
+        confirmedEffortLevel(pendingWith(change), { type: 'settingsConfirmed', changeId: 'id-1' })
+      ).toBeNull()
+    }
+  })
+
+  it('returns null when the changeId matches no pending record', () => {
+    // The store's own fail-closed rule (AC4 there): an uncorrelated confirm commits nothing, so it
+    // remembers nothing either. This is also what closes a replayed ack from a hostile relay.
+    expect(
+      confirmedEffortLevel(pendingWith({ field: 'effort', value: 'deep' }), {
+        type: 'settingsConfirmed',
+        changeId: 'other-id'
+      })
+    ).toBeNull()
+  })
+
+  it('returns null for a rejection, a reconnect and a conversation switch', () => {
+    const pending = pendingWith({ field: 'effort', value: 'deep' })
+    const events: RunSettingsWriteEvent[] = [
+      { type: 'settingsRejected', changeId: 'id-1' },
+      { type: 'changeDispatched', changeId: 'id-1', change: { field: 'effort', value: 'deep' } },
+      { type: 'reconnected' },
+      { type: 'conversationSwitched' }
+    ]
+
+    for (const event of events) {
+      expect(confirmedEffortLevel(pending, event)).toBeNull()
+    }
+  })
+
+  it('returns null for a confirmed empty effort', () => {
+    // `''` is the wire's ABSENCE of a level, so a confirm carrying it is not a level that was used.
+    expect(
+      confirmedEffortLevel(pendingWith({ field: 'effort', value: '' }), {
+        type: 'settingsConfirmed',
+        changeId: 'id-1'
+      })
+    ).toBeNull()
+  })
+})
+
+describe('foldWriteEvent', () => {
+  it('reads the pending map BEFORE dispatching, then remembers the confirmed level', () => {
+    // The ordering IS the helper. The reducer deletes the pending record on a confirm, so a getPending
+    // called after the dispatch would read an already-emptied map and remember nothing — a change that
+    // compiles, passes every count assertion, and silently never persists anything.
+    const order: string[] = []
+    const pending = new Map<string, SettingsChange>([['id-1', { field: 'effort', value: 'deep' }]])
+    const getPending = vi.fn(() => {
+      order.push('read')
+      return pending as ReadonlyMap<string, SettingsChange>
+    })
+    const dispatch = vi.fn(() => {
+      order.push('dispatch')
+      pending.delete('id-1')
+    })
+    const rememberEffort = vi.fn(() => order.push('remember'))
+
+    foldWriteEvent({ getPending, dispatch, rememberEffort }, {
+      type: 'settingsConfirmed',
+      changeId: 'id-1'
+    })
+
+    expect(order).toEqual(['read', 'dispatch', 'remember'])
+    expect(rememberEffort).toHaveBeenCalledWith('deep')
+  })
+
+  it('dispatches every event and remembers nothing on the ones that are not an effort confirm', () => {
+    const dispatch = vi.fn()
+    const rememberEffort = vi.fn()
+    const getPending = () =>
+      new Map<string, SettingsChange>([['id-1', { field: 'model', value: 'graded' }]])
+    const events: RunSettingsWriteEvent[] = [
+      { type: 'settingsConfirmed', changeId: 'id-1' },
+      { type: 'settingsRejected', changeId: 'id-1' },
+      { type: 'reconnected' },
+      { type: 'conversationSwitched' }
+    ]
+
+    for (const event of events) {
+      foldWriteEvent({ getPending, dispatch, rememberEffort }, event)
+    }
+
+    expect(dispatch).toHaveBeenCalledTimes(events.length)
+    expect(rememberEffort).not.toHaveBeenCalled()
   })
 })

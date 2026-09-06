@@ -278,13 +278,22 @@ function snapshotPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
-/** A `session_settings` plaintext, wrapping an arbitrary payload (#491). */
-function sessionSettingsPlaintext(payload: unknown): Uint8Array {
+/**
+ * A `session_settings` plaintext, wrapping an arbitrary payload (#491).
+ *
+ * `inReplyTo` is REQUIRED since #1176, and passing it is no longer decoration: the reply is
+ * correlation-gated, so a frame naming an envelope id this client never sent draws no event at all.
+ * Callers reach it through `requested()` below, which sends a real request and hands back its id, so
+ * a test cannot accidentally pin the gate open with a literal. Spelled `number | undefined` rather
+ * than optional so OMITTING it is a deliberate `undefined` at the call site — that is the
+ * no-in_reply_to reject branch, and it should read as a choice.
+ */
+function sessionSettingsPlaintext(payload: unknown, inReplyTo: number | undefined): Uint8Array {
   return encodeEnvelope({
     id: 45,
     type: 'session_settings',
     ts: FIXED_TS,
-    in_reply_to: 812,
+    in_reply_to: inReplyTo,
     payload
   })
 }
@@ -5853,12 +5862,37 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     window_tokens: 200000
   }
 
+  /** The conversation the request names, and therefore the one the reply describes (#1176). */
+  const CONV = 'conv-alpha'
+
   async function connected(): Promise<ReturnType<typeof build>> {
     const ctx = build()
     ctx.connection.start()
     await tick()
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
     return ctx
+  }
+
+  /** The envelope id of the LAST request_session_settings this connection put on the wire. */
+  function lastRequestId(ctx: ReturnType<typeof build>): number {
+    const sent = ctx.drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const requests = sent.filter((e) => e.type === 'request_session_settings')
+    return requests[requests.length - 1].id
+  }
+
+  /**
+   * Connected, with one outstanding `request_session_settings` naming `conversationId` — the
+   * correlation every reply below must match (#1176). Returns its envelope id, read off the frame
+   * actually sent rather than assumed, so a change to the client's numbering cannot silently make
+   * every reply here uncorrelatable-and-therefore-dropped while the assertions still read as if the
+   * gate were being exercised.
+   */
+  async function requested(
+    conversationId: string = CONV
+  ): Promise<ReturnType<typeof build> & { replyTo: number }> {
+    const ctx = await connected()
+    ctx.connection.requestSessionSettings(conversationId)
+    return { ...ctx, replyTo: lastRequestId(ctx) }
   }
 
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
@@ -5892,14 +5926,15 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(request?.payload).toEqual({ conversation_id: 'conv-42' })
   })
 
-  it('decodes an inbound session_settings into runConfigReceived with all seven fields', async () => {
-    const { sink, drivers } = await connected()
+  it('decodes an inbound session_settings into runConfigReceived with all eight fields', async () => {
+    const { sink, drivers, replyTo } = await requested()
 
-    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG) })
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
 
     expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([
       {
         type: 'runConfigReceived',
+        conversationId: CONV,
         sessionId: 'sess-a',
         model: 'claude-opus-4-8',
         effort: 'high',
@@ -5916,9 +5951,9 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     // snake, IPC is camel"); `used_tokens` / `window_tokens` are the two legacy exceptions on it and
     // are not a precedent to extend. Asserting the ABSENCE of the snake key is what proves the emit is
     // a named copy rather than a spread of the decoded payload — a spread would carry both spellings.
-    const { sink, drivers } = await connected()
+    const { sink, drivers, replyTo } = await requested()
 
-    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG) })
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
     expect(event).toHaveProperty('permissionMode', 'bypassPermissions')
@@ -5929,11 +5964,14 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     // The all-zero reply. '' is the one zero on this payload that names no real posture, and it
     // arrives beside `session_id: ''` — both cross verbatim, so a reader can see the pair. Coercing
     // it to a mode name or to null here would invent a posture the daemon never reported.
-    const { sink, drivers } = await connected()
+    const { sink, drivers, replyTo } = await requested()
 
     drivers[0].emit({
       type: 'message',
-      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: '', permission_mode: '' })
+      plaintext: sessionSettingsPlaintext(
+        { ...RUN_CONFIG, session_id: '', permission_mode: '' },
+        replyTo
+      )
     })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
@@ -5945,11 +5983,11 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     // The accepted coupling, pinned: a daemon predating pyrycode#1687 omits the key, the required
     // decode rejects the frame whole, and NO partial event crosses. This is what makes the sheet and
     // the three footer controls go inert against an old daemon, which the real-daemon gate detects.
-    const { sink, drivers } = await connected()
+    const { sink, drivers, replyTo } = await requested()
 
     drivers[0].emit({
       type: 'message',
-      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, permission_mode: undefined })
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, permission_mode: undefined }, replyTo)
     })
 
     expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
@@ -5959,11 +5997,11 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     // '' is the daemon saying "I have no session to address". The sheet's gate must be able to see
     // it: coercing it to null here would make it indistinguishable from "no reply yet" and re-open
     // the inert-sheet defect one layer down (#491).
-    const { sink, drivers } = await connected()
+    const { sink, drivers, replyTo } = await requested()
 
     drivers[0].emit({
       type: 'message',
-      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: '' })
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: '' }, replyTo)
     })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
@@ -5972,14 +6010,127 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
   })
 
   it('emits nothing for a malformed session_settings (fail-closed, never a partial event)', async () => {
-    const { sink, drivers } = await connected()
+    const { sink, drivers, replyTo } = await requested()
 
     drivers[0].emit({
       type: 'message',
-      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, window_tokens: undefined })
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, window_tokens: undefined }, replyTo)
     })
 
     expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
+  })
+
+  // #1176 — the reply carries no conversation id of its own, so the one it describes is resolved
+  // HERE: the request's envelope id is recorded against the conversation it named, and the reply is
+  // matched back by Envelope.in_reply_to. Fail-closed on anything uncorrelatable, the
+  // session-settings-updated arm's shape applied to the read leg.
+
+  it('resolves the conversation the request named onto the reply (#1176, AC1)', async () => {
+    const { sink, drivers, replyTo } = await requested('conv-named')
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+
+    // Asserted against a value distinct from every other string on the frame and from the describe's
+    // default, so resolving the wrong field — or a fallback onto some ambient id — cannot pass.
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    expect(event).toHaveProperty('conversationId', 'conv-named')
+  })
+
+  it('emits nothing for a session_settings carrying no in_reply_to (#1176, AC4)', async () => {
+    // The unsolicited frame: a daemon that broadcasts this reply, or one impersonating it. There is
+    // nothing to attribute it to, so it reaches neither store — and the outstanding request stays
+    // outstanding, which the follow-up reply below proves by still correlating.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, undefined) })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toHaveLength(1)
+  })
+
+  it('emits nothing for a session_settings whose in_reply_to matches no outstanding request (#1176, AC4)', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    // One past the real id — a plausible-looking neighbour rather than an obviously absurd value, so
+    // an off-by-one in the recorded id would be caught by this test rather than passing it.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo + 1)
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
+  })
+
+  it('emits nothing for a second reply re-using an already-matched in_reply_to (#1176, AC4)', async () => {
+    // The entry is deleted on match, so a duplicate — or a daemon replaying an old reply — finds
+    // nothing. Without the delete this is the arm that would let one request answer forever.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toHaveLength(1)
+  })
+
+  it('keys the correlation by envelope id, so two interleaved requests each draw their own conversation back (#1176, AC1)', async () => {
+    // Replies OUT OF REQUEST ORDER, deliberately: a FIFO would hand each reply the other's id and
+    // still emit two events, so only crossing the order distinguishes a keyed map from a queue.
+    const ctx = await connected()
+    ctx.connection.requestSessionSettings('conv-first')
+    const first = lastRequestId(ctx)
+    ctx.connection.requestSessionSettings('conv-second')
+    const second = lastRequestId(ctx)
+    expect(first).not.toBe(second)
+
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, second) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, first) })
+
+    expect(
+      emitted(ctx.sink)
+        .filter((e) => e.type === 'runConfigReceived')
+        .map((e) => (e as { conversationId: string }).conversationId)
+    ).toEqual(['conv-second', 'conv-first'])
+  })
+
+  it('records no pending entry when the send throws — a later matching reply emits nothing (#1176)', async () => {
+    // The registration order this pins: the entry is written only AFTER driver.sendMessage returns
+    // (the setSessionSettings / answerModal record-after-send precedent). A throwing send advances no
+    // envelope id, so the id it would have claimed is re-minted by the next request — and a phantom
+    // entry under it would answer that request with the throwing call's conversation instead.
+    const { connection, sink, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    connection.requestSessionSettings('conv-never-sent')
+    const before = emitted(sink).length
+
+    // The would-be minted id is 2 (a fresh connect starts nextEnvelopeId at 2); echoing it correlates
+    // to nothing, because no entry was recorded.
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, 2) })
+
+    expect(emitted(sink).slice(before)).toEqual([])
+  })
+
+  it('clears the correlation map on reconnect — a reply for an abandoned request emits nothing (#1176, AC4)', async () => {
+    const ctx = await connected()
+
+    ctx.connection.requestSessionSettings(CONV)
+    const id = lastRequestId(ctx)
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(ctx.sink).length
+
+    // dial() abandoned the outstanding request; a reply echoing the old id (ids also recycle from 2)
+    // correlates to nothing on the fresh connection. This is what makes the recycled numbering safe:
+    // without the clear, the next connection's request would inherit this one's conversation.
+    ctx.drivers[1].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, id) })
+
+    expect(emitted(ctx.sink).slice(before)).toEqual([])
   })
 })
 

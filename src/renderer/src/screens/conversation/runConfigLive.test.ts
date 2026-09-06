@@ -116,6 +116,8 @@ describe('createRunConfigRefreshTrigger', () => {
       { type: 'conversationsReceived', conversations: [] },
       {
         type: 'runConfigReceived',
+        // The conversation the reply describes (#1176); inert on this path, which reads other fields.
+        conversationId: 'conv-1',
         sessionId: 'sess-a',
         model: '',
         effort: '',

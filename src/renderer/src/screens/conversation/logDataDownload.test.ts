@@ -71,6 +71,8 @@ describe('toDownloadAction', () => {
       { type: 'disconnected' },
       {
         type: 'runConfigReceived',
+        // The conversation the reply describes (#1176); inert on this path, which reads other fields.
+        conversationId: 'conv-1',
         sessionId: 'sess-1',
         model: 'Opus 4.7',
         effort: 'high',

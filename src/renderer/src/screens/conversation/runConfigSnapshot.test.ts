@@ -11,6 +11,13 @@ import {
 // Framework-free data-path tests with injected spies (the composerSend / logDataDownload idiom):
 // no React, no store, no Electron.
 
+// The conversation the OPEN chat is, in the subscribeRunConfig gate below (#1176). Every reply
+// fixture in this file names it unless a test is deliberately exercising the mismatch.
+const OPEN = 'conv-open'
+// A second, real conversation — the one a reply still in flight when the operator switched chats
+// describes. Shares no substring with OPEN, so a `toContain`-style miss cannot read as a match.
+const OTHER = 'conv-elsewhere'
+
 const message: MessagePayload = {
   conversation_id: 'c',
   message_id: 'm',
@@ -24,6 +31,7 @@ describe('toRunConfigSnapshot', () => {
     // wire snake_case (used_tokens / window_tokens) to the store's camelCase.
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: '',
       effort: '',
@@ -45,6 +53,7 @@ describe('toRunConfigSnapshot', () => {
   it('carries non-empty values through verbatim', () => {
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: 'claude-x',
       effort: 'high',
@@ -72,6 +81,7 @@ describe('toRunConfigSnapshot', () => {
     for (const mode of modes) {
       const event: DaemonEvent = {
         type: 'runConfigReceived',
+        conversationId: OPEN,
         sessionId: 'sess-a',
         model: 'claude-x',
         effort: 'high',
@@ -91,6 +101,7 @@ describe('toRunConfigSnapshot', () => {
     // inferred from `yolo: false`. It is the same verbatim-hold the empty session_id already gets.
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: '',
       model: '',
       effort: '',
@@ -106,6 +117,7 @@ describe('toRunConfigSnapshot', () => {
   it('carries window_tokens: 0 (usage unavailable) through as windowTokens: 0, not coerced', () => {
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: '',
       effort: '',
@@ -185,6 +197,7 @@ describe('toSnapshotSessionId', () => {
   it('maps a runConfigReceived to its session id', () => {
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: 'opus',
       effort: 'high',
@@ -202,6 +215,7 @@ describe('toSnapshotSessionId', () => {
     // the daemon just said it cannot resolve. The gate, not this mapper, turns '' into inert.
     const event: DaemonEvent = {
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: '',
       model: '',
       effort: '',
@@ -247,17 +261,18 @@ describe('subscribeRunConfig', () => {
 
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn())
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn(), () => OPEN)
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('writes the verbatim snapshot on a runConfigReceived event (AC3/AC5)', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn(), () => OPEN)
 
     bridge.emit({
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: '',
       effort: '',
@@ -280,7 +295,7 @@ describe('subscribeRunConfig', () => {
   it('does not call setSnapshot for an unrelated event', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn(), () => OPEN)
 
     bridge.emit({ type: 'connecting' })
     expect(setSnapshot).not.toHaveBeenCalled()
@@ -289,10 +304,11 @@ describe('subscribeRunConfig', () => {
   it('a later event replaces the held value — most recent snapshot wins (AC4)', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn(), () => OPEN)
 
     bridge.emit({
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: 'a',
       effort: 'low',
@@ -303,6 +319,7 @@ describe('subscribeRunConfig', () => {
     })
     bridge.emit({
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: 'b',
       effort: 'high',
@@ -331,7 +348,7 @@ describe('subscribeRunConfig', () => {
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn())
+    const cleanup = subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn(), () => OPEN)
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
   })
@@ -343,10 +360,11 @@ describe('subscribeRunConfig', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
     const setSessionId = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId)
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId, () => OPEN)
 
     bridge.emit({
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: 'sess-a',
       model: 'opus',
       effort: 'high',
@@ -365,10 +383,11 @@ describe('subscribeRunConfig', () => {
   it('writes an empty session id through, so the gate can close on it', () => {
     const bridge = fakeBridge()
     const setSessionId = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId)
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId, () => OPEN)
 
     bridge.emit({
       type: 'runConfigReceived',
+      conversationId: OPEN,
       sessionId: '',
       model: '',
       effort: '',
@@ -384,9 +403,97 @@ describe('subscribeRunConfig', () => {
   it('does not call setSessionId for an unrelated event', () => {
     const bridge = fakeBridge()
     const setSessionId = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId)
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId, () => OPEN)
 
     bridge.emit({ type: 'connecting' })
     expect(setSessionId).not.toHaveBeenCalled()
+  })
+
+  // #1176 — the attribution gate. A reply describes exactly one conversation, resolved in the
+  // background process from the request it answers; a reply describing anything but the open one
+  // changes nothing here.
+
+  /** A reply naming `conversationId`, with values distinct enough to spot in a wrong-chat write. */
+  function reply(conversationId: string): DaemonEvent {
+    return {
+      type: 'runConfigReceived',
+      conversationId,
+      sessionId: `sess-${conversationId}`,
+      model: `model-${conversationId}`,
+      effort: 'high',
+      yolo: false,
+      permissionMode: 'default',
+      used_tokens: 1000,
+      window_tokens: 200000
+    }
+  }
+
+  it('leaves BOTH stores untouched for a reply naming another conversation (AC2)', () => {
+    // AC2 is a claim about both writes, so both are asserted: gating only the snapshot would leave
+    // the write controls addressing the other chat's session, which is the sharp half of the defect.
+    const bridge = fakeBridge()
+    const setSnapshot = vi.fn()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId, () => OPEN)
+
+    bridge.emit(reply(OTHER))
+
+    expect(setSnapshot).not.toHaveBeenCalled()
+    expect(setSessionId).not.toHaveBeenCalled()
+  })
+
+  it('leaves BOTH stores untouched for a reply arriving while no conversation is open (AC3)', () => {
+    // Landed NOWHERE rather than latching. Before #1176 this reply waited in the stores for whichever
+    // chat opened next; a null open id now matches no reply, since the resolved id is always a string.
+    const bridge = fakeBridge()
+    const setSnapshot = vi.fn()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId, () => null)
+
+    bridge.emit(reply(OPEN))
+
+    expect(setSnapshot).not.toHaveBeenCalled()
+    expect(setSessionId).not.toHaveBeenCalled()
+  })
+
+  it('reads the open conversation PER EVENT, not once at subscribe time (AC2)', () => {
+    // The mistake this exists to redden: resolving the id into a closure at subscription. That
+    // compiles, passes every single-event test above, and reinstates the whole defect — the listener
+    // is app-lifetime, so a captured id would freeze at whatever was open when the leaf mounted.
+    // One subscription, one moving getter, two events: the first lands, the second must not.
+    const bridge = fakeBridge()
+    const setSnapshot = vi.fn()
+    const setSessionId = vi.fn()
+    let open: string | null = OPEN
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId, () => open)
+
+    bridge.emit(reply(OPEN))
+    expect(setSnapshot).toHaveBeenCalledTimes(1)
+
+    open = OTHER
+    bridge.emit(reply(OPEN))
+
+    expect(setSnapshot).toHaveBeenCalledTimes(1)
+    expect(setSessionId).toHaveBeenCalledTimes(1)
+  })
+
+  it('still lands a reply naming the open conversation in both stores, verbatim (AC3)', () => {
+    // The positive half, so the three drops above cannot pass by gating everything.
+    const bridge = fakeBridge()
+    const setSnapshot = vi.fn()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId, () => OPEN)
+
+    bridge.emit(reply(OPEN))
+
+    expect(setSnapshot).toHaveBeenCalledWith({
+      model: `model-${OPEN}`,
+      effort: 'high',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 1000,
+      windowTokens: 200000
+    })
+    expect(setSessionId).toHaveBeenCalledWith(`sess-${OPEN}`)
   })
 })

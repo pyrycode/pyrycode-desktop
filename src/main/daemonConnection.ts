@@ -640,6 +640,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // inside a synchronous createWorkspaceFolder / onDriverEvent body, no await between a read and a write
   // (the nextEnvelopeId / outstandingAnswers / pendingSettings single-writer rationale).
   const pendingCreateFolders = new Set<number>()
+  // envelopeId → the conversation id that request_session_settings named, for the run-config read's
+  // attribution (#1176). The reply carries no conversation id of its own and the wire cannot grow one
+  // (ADR 0002), so the conversation a reply describes is whichever one this client asked about under
+  // that envelope id — which makes this map the ONLY place that fact exists.
+  //
+  // A MAP, like pendingSettings and unlike pendingCreateFolders' bare Set: there is a value to carry
+  // per entry, and a lookup by exactly one key is the whole query. Its key is a number this client
+  // MINTED (nextEnvelopeId), not a daemon-supplied string, so no prototype setter is reachable through
+  // it under any inbound frame — a bare object would still be wrong here, and a later widening that
+  // keys this by anything daemon-supplied must keep the Map for the reason the Set has one.
+  //
+  // Set after a SUCCESSFUL send in requestSessionSettings, matched by the reply's Envelope.in_reply_to
+  // and deleted in onDriverEvent, and cleared on each dial(). The ordering is load-bearing twice over:
+  // a build or send that throws advances no envelope id, so an entry left under an unspent id would
+  // answer whichever request re-mints it with the wrong conversation (pendingSettings' and
+  // pendingCreateFolders' stated ordering), and it is what keeps this map's cost strictly smaller than
+  // the encrypted frame build and socket write that necessarily precede it — so a daemon flapping
+  // turn_state to drive requests gains nothing here that it did not already have on the wire.
+  // Single-writer — every mutation runs to completion inside a synchronous requestSessionSettings /
+  // onDriverEvent body, no await between a read and a write (the nextEnvelopeId / outstandingAnswers /
+  // pendingSettings single-writer rationale).
+  const pendingConfigRequests = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
   // files can be attached in one session, and a lone slot would have to abandon the first to admit the
   // second. Membership plus a scan is the whole query — the success reply is looked up by
@@ -935,7 +957,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             }
             return
           }
-          case 'session-settings':
+          case 'session-settings': {
+            // CORRELATION-GATED SINCE #1176, fail-closed, in the shape the session-settings-updated
+            // arm below already uses. The reply names no conversation, so the one it describes is the
+            // one this client asked about under the envelope id it answers: match by
+            // Envelope.in_reply_to, then carry the recorded id. A reply with an absent in_reply_to
+            // short-circuits BEFORE the map lookup; a reply matching no outstanding entry — a stale
+            // reply from a connection whose ids were cleared, a duplicate of one already matched, or a
+            // hostile daemon forging a snapshot for a request this client never sent — is ignored
+            // entirely, with no coercion and no partial event. Both branches are SILENT: the only
+            // values a diagnostic could carry are the conversation id and the wire routing id, and
+            // neither may reach a sink.
+            //
+            // The drop is deliberately total rather than "emit without the id". A run-config reply
+            // this client cannot attribute is exactly the input every consumer downstream must not
+            // accept: the renderer would have to guess a conversation, and correlationRouter would
+            // learn a session→server binding off a frame tied to no request.
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo === undefined) return
+            const conversationId = pendingConfigRequests.get(inReplyTo)
+            if (conversationId === undefined) return
+            pendingConfigRequests.delete(inReplyTo)
             // The run-configuration data path (#491). A fresh literal with named fields, never a
             // spread of inbound.sessionSettings — so a future decoder that grew a field cannot
             // smuggle it across. snake→camel for the id (`sessionId`, matching the sessionTransition
@@ -948,8 +990,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // layer down. `permission_mode: ''` is the SAME reading arriving on the same frame — no
             // session was resolved — and crosses verbatim for the same reason. The two are read as a
             // pair; neither is inferred from the other, and neither is inferred from `yolo`.
+            // `conversationId` is the map's value, never a field of the decoded payload — the reply
+            // has none — and the numeric in_reply_to it was resolved from is NOT placed on the event:
+            // the renderer receives the id it supplied, not the wire routing id.
             emitDaemonEvent(sink, {
               type: 'runConfigReceived',
+              conversationId,
               sessionId: inbound.sessionSettings.session_id,
               model: inbound.sessionSettings.model,
               effort: inbound.sessionSettings.effort,
@@ -959,6 +1005,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               window_tokens: inbound.sessionSettings.window_tokens
             })
             return
+          }
           case 'assistant-delta':
             // The interactive-stream data path (#199, widened by #751). snake→camel here (wire is snake,
             // IPC is camel). A fresh literal with named fields carrying the turn id, the seq, the text and
@@ -1874,9 +1921,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // The id is forwarded verbatim; the builder owns the "absent → `conversation_id: ''`" rule, so
       // nothing here has to know the wire's present-always shape. Never logged (#945): the catch
       // below still drops its caught object and adds no line.
-      const bytes = buildRequestSessionSettings({ id: nextEnvelopeId, ts: now(), conversationId })
+      //
+      // ONE local for the envelope id, read three times (#1176), so the id sent, the id counted and
+      // the id recorded can never be three different expressions — main/index.ts's own rule for the
+      // conversation id, applied to the correlation key.
+      const envelopeId = nextEnvelopeId
+      const bytes = buildRequestSessionSettings({ id: envelopeId, ts: now(), conversationId })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      // Record AFTER the send, so a build or send that throws leaves no entry under an id the next
+      // request will re-mint (#1176). An absent id records `''`: it is what went on the wire, and it
+      // can never equal an open conversation, so the reply it draws is dropped renderer-side rather
+      // than attributed to whatever chat happens to be open. Unreachable in production —
+      // requestRunConfigSnapshot refuses to send an unaddressable id and main/index.ts routes on the
+      // same scalar — and fail-closed if it ever becomes reachable.
+      pendingConfigRequests.set(envelopeId, conversationId ?? '')
     } catch {
       // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
       // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
@@ -2548,6 +2607,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
     // create-folder set.
     pendingCreateFolders.clear()
+    // Reset the run-config request correlation map (#1176, AC4): a reconnect abandons outstanding
+    // reads, so a reply correlated against a previous connection's envelope ids can never match on the
+    // reconnected one — which is what makes the recycled ids safe here too. Without it, the fresh
+    // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
+    // rationale, applied to the read leg.
+    pendingConfigRequests.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal

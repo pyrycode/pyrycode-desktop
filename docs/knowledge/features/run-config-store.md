@@ -132,10 +132,15 @@ third consumer of that shape after `conversationLastReadBridge.ts` and this modu
 `conversationLastReadBridge.ts`'s note that a third consumer is the signal for a
 `selectOpenConversationId` selector is now genuinely due, and remains unactioned as adjacent refactoring.
 
-**What this does not reach.** `sessionIdStore`'s other writer, `sessionIdBridge`'s unsolicited
-`session_transition` marker, carries no conversation id and answers no request, so there is nothing to
-correlate against — filed as
-[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192).
+**What this does not reach — closed by a sibling ticket, not this mechanism.**
+`sessionIdStore`'s other writer, `sessionIdBridge`'s unsolicited `session_transition` marker, answers
+no request, so there is nothing to correlate against the way this section's envelope-id map does.
+[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) closed it a different way: it brought
+`SessionTransitionPayload` into line with the daemon (which has carried `conversation_id` on this
+frame since upstream #740/#741 — this repo's port had simply gone stale) and gave
+`subscribeSessionId` the same shape of gate as this module's, one early return comparing the event's
+own routing key against `getOpenConversationId()`. See [Session-id store](session-id-store.md) §
+Related.
 
 ## What it does
 
@@ -490,7 +495,8 @@ construction through `activateConversation` — a member there would guard state
   request, not which conversation a reply "belongs to" independent of having been asked. A duplicate
   reply (sheet-open landing alongside an edge-driven request) is still simply idempotent, since
   `setSnapshot` always replaces the whole snapshot. See § Conversation-attributed since #1176 above for
-  the mechanism, and its final paragraph for the one ingress ([#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)) this does not reach.
+  the mechanism, and its final paragraph for the one ingress ([#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192),
+  since closed by a wire-level gate rather than envelope-id correlation) this does not reach.
 - **A daemon that flaps `turn_state` costs one request per genuine transition, not per re-assertion**
   — the per-conversation `Set` in `createRunConfigRefreshTrigger` absorbs re-asserted phases (#810).
   If a real daemon is ever observed flapping transitions rapidly enough to matter, a debounce belongs
@@ -601,7 +607,12 @@ construction through `activateConversation` — a member there would guard state
   attribution gap: envelope-id correlation in `daemonConnection.ts`, a required `conversationId` on
   `runConfigReceived`, and a gate in `subscribeRunConfig`. See § Conversation-attributed since #1176
   above. Filed [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) for the one ingress
-  into `sessionIdStore` it cannot reach (`sessionIdBridge`'s unsolicited `session_transition`).
+  into `sessionIdStore` it could not reach (`sessionIdBridge`'s unsolicited `session_transition`).
+- **[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)** — closed that remaining
+  ingress, by a different mechanism: since the marker answers no request, there was no envelope id to
+  correlate against, so this ticket instead brought `SessionTransitionPayload` into line with the
+  daemon's already-shipped `conversation_id` (upstream #740/#741) and gave `subscribeSessionId` the
+  same shape of gate `subscribeRunConfig` uses. See [Session-id store](session-id-store.md) § Related.
 - **[#1167](https://github.com/pyrycode/pyrycode-desktop/issues/1167)** — added `clearSnapshot`, called
   by `activateConversation` and `exitActiveConversation` through the shared `clearRunConfig` dep member
   that also resets [Run configuration write store](run-settings-write-store.md). See § Scoped to the

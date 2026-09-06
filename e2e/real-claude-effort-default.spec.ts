@@ -30,12 +30,22 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // leaves the fallback empty and every never-messaged chat without levels. That is a property of where the
 // turn lands, not of how long the drive waits for it.
 //
-// AND WHY EVERY TURN GATE HERE IS POSITIVE-THEN-MUTATION. A bare closing `toHaveCount(0)` on the
-// streaming cursor passes before the send's own work has even started, because the locator was 0 all
-// launch — the first gate run's whole drive completed in under two seconds with no turn in it. Each turn
-// below therefore polls `nonEmptyAssistantCount` UP first (real-claude.spec.ts's content-agnostic
-// liveness read, transcribed as the sibling real specs transcribe it) and only then waits the cursor
-// back down.
+// AND WHY EVERY TURN GATE HERE IS POSITIVE-THEN-MUTATION, AND WHY THE POSITIVE HALF IS BASE-RELATIVE.
+// A bare closing `toHaveCount(0)` on the streaming cursor passes before the send's own work has even
+// started, because the locator was 0 all launch — the first gate run's whole drive completed in under two
+// seconds with no turn in it. So each turn below polls `nonEmptyAssistantCount` UP first
+// (real-claude.spec.ts's content-agnostic liveness read, transcribed as the sibling real specs transcribe
+// it) and only then waits the cursor back down.
+//
+// But UP AGAINST WHAT is the second half of that lesson, and it is what the SECOND gate run bought. The
+// count is polled against a baseline read immediately before the send, never against a bare `>= 1`.
+// real-claude.spec.ts can use `>= 1` for its first turn only because the chat it drives was minted empty
+// by the FAB two lines earlier; it switches to base-relative the moment a turn has already landed in that
+// thread. This drive's first turn runs in the SEEDED row — a pre-existing daemon conversation whose thread
+// this spec never established as empty — so `>= 1` there is satisfiable by whatever the daemon's history
+// reply already rendered, and the drive would sail past a send that never produced a turn. That is the same
+// vacuous-gate family as the cursor trap, one direction over: an opening absence and an already-satisfied
+// presence fail identically, by resolving against state the action did not cause.
 //
 // REAL-CLAUDE DIVERGENCES from the fake twin (the only deltas — the real-daemon-workspace.spec.ts doc
 // discipline):
@@ -156,22 +166,35 @@ test('a level set before a chat’s first message survives into the first turn',
 
   // --- Turn 1, in the seeded chat: one real turn against the BOOTSTRAP session, which is what puts a
   // vocabulary behind the daemon-wide model-list fallback every never-messaged chat below reads from.
-  // Nothing about the reply is asserted beyond its existence. ---
+  // Nothing about the reply is asserted beyond its existence. The baseline is read here rather than
+  // assumed zero — see the header: this row is pre-existing daemon state, so its thread is not this
+  // spec's to declare empty, and only a count that MOVED proves the send produced a turn. ---
+  const baseBeforeTurn1 = await nonEmptyAssistantCount(page)
   await composer.fill(message(1))
   await sendButton.click()
   await expect
     .poll(() => nonEmptyAssistantCount(page), {
       timeout: TURN_TIMEOUT_MS,
-      message: 'turn 1: no non-empty assistant reply streamed within the timeout'
+      message: 'turn 1: no ADDITIONAL non-empty assistant reply streamed within the timeout'
     })
-    .toBeGreaterThanOrEqual(1)
+    .toBeGreaterThan(baseBeforeTurn1)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- 1. Pick a level here, through the run-configuration sheet. The segments existing at all is itself
   // the proof that the daemon published a row with levels on it for this chat's model — the join #1168
   // widened to the inherited default, exercised against a chat nobody set a model on. ---
   await openRunConfiguration()
-  await expect(segment.first()).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  // Named, because this is a DAEMON-side precondition and its failure has one actionable cause. The chat
+  // whose bound session just spawned a child has to have a `model_list`; if none arrived, no level can be
+  // picked here and nothing downstream can be read. The message is what keeps a stale daemon on the gate
+  // host from presenting as an anonymous timeout three assertions later.
+  await expect(
+    segment.first(),
+    'the seeded chat published no effort levels after its first turn — the daemon served no model_list ' +
+      'for a conversation whose bound session has a live child, so there is no vocabulary to pick from. ' +
+      'This is a daemon-side precondition, not a client assertion: check that the installed `pyry` is ' +
+      'current before reading it as a defect in this feature.'
+  ).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   const published = (await segment.allInnerTexts()).map((text) => text.trim())
   // `aria-current` sits ON the segment (it is both the a11y marker and the CSS selection hook), so the
@@ -232,6 +255,9 @@ test('a level set before a chat’s first message survives into the first turn',
   // accepted-then-dropped would show itself. ---
   await composer.fill(message(2))
   await sendButton.click()
+  // `>= 1` is sound HERE and only here: this chat was minted by the FAB and its thread was asserted empty
+  // above, so the baseline is established rather than assumed — real-claude.spec.ts's own condition for
+  // the same shape.
   await expect
     .poll(() => nonEmptyAssistantCount(page), {
       timeout: TURN_TIMEOUT_MS,

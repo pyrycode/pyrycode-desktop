@@ -101,6 +101,17 @@ export interface EffortDefaultInput {
  * sharp hazard `subscribeRunConfig`'s docblock names. `changeSetting` re-checks it downstream as its own
  * gate; this rule is here so the decision is complete as data, not as a substitute for that gate.
  *
+ * THAT GUARD COVERS BOTH INGRESSES INTO `sessionIdStore`, AND ONLY SINCE #1192 — worth naming, because
+ * the argument above is about `runConfigReceived` alone and would be incomplete on its own. The other
+ * ingress is `sessionIdBridge`'s `sessionTransition` marker, which is app-lifetime rather than
+ * conversation-scoped; before #1192 it wrote `event.newSessionId` verbatim whichever chat the marker
+ * described, so a marker fired by an eviction elsewhere could have satisfied rule 5 with a FOREIGN session
+ * id in the window after a switch where the new chat's `model_list` had landed but its `runConfigReceived`
+ * had not. #1192 gates that ingress on the marker naming the open conversation, which closes the window
+ * for this decision and for the operator-driven footer controls alike. The conclusion is therefore
+ * conditional on that gate rather than unconditional: a future widening of `subscribeSessionId`'s
+ * attribution check re-opens it here, silently, because nothing in THIS file would change.
+ *
  * RULE 6 IS A MEMBERSHIP SCAN BY EQUALITY, never an object keyed by claude-authored text — the
  * `EFFORT_LEVELS_FIELD` idiom, and the reason no `__proto__`-as-key hazard arises on a value that took a
  * round trip through local storage. It is ALSO the single trust boundary this feature adds: a persisted
@@ -134,14 +145,21 @@ export function effortDefaultToApply(input: EffortDefaultInput): string | null {
  * into it would fuse two unrelated concerns and make the control's own tests answer for a decision they
  * do not own. A `null`-rendering sibling costs some zustand subscriptions and no render.
  *
- * THE HOOKS ARE THE WAKE SIGNAL; THE EFFECT BODY IS THE READ. The effect resolves current state through
- * `getState()` rather than the render-time closure, for two reasons that both matter. `main.tsx` wraps
- * the app in `React.StrictMode`, which double-invokes an effect against the SAME closure — a render-time
- * `effort` of `''` would still read `''` on the second invocation even though the first already
- * dispatched. And the composed effort is what rule 4 needs to be true of the STORE, not of a render that
- * has already been superseded. `RunSettingsWriteData` reads its own store the same way for the same class
- * of reason. The ref closes the double-send independently (a ref survives StrictMode's simulated
- * remount), so the two guards are genuinely independent rather than one restated.
+ * THE HOOKS ARE THE WAKE SIGNAL; THE EFFECT BODY RE-READS THE FOUR STORE-BACKED INPUTS. The effect
+ * resolves the session id, the snapshot, the write state and the remembered level through `getState()`
+ * rather than through the render-time closure, for two reasons that both matter. `main.tsx` wraps the app
+ * in `React.StrictMode`, which double-invokes an effect against the SAME closure — a render-time `effort`
+ * of `''` would still read `''` on the second invocation even though the first already dispatched. And the
+ * composed effort is what rule 4 needs to be true of the STORE, not of a render that has already been
+ * superseded. `RunSettingsWriteData` reads its own store the same way for the same class of reason. The
+ * ref closes the double-send independently (a ref survives StrictMode's simulated remount), so the two
+ * guards are genuinely independent rather than one restated.
+ *
+ * `models` IS THE ONE EXCEPTION and is deliberately taken from the render closure, so the sentence above
+ * is four-of-five rather than universal. It is in the dependency array, so no wake is missed; and zustand
+ * hands out the same object identity across a StrictMode double-invoke, so there is no stale-closure
+ * hazard of the kind `getState()` exists to close. Re-reading it would mean rebuilding the memoised
+ * per-conversation selector inside the effect for no change in outcome.
  *
  * `conversationId` arrives as a PROP rather than as another store read, the settled house idiom:
  * Composer already subscribes to `activeConversationId`, so the prop costs no subscription. It is NOT the

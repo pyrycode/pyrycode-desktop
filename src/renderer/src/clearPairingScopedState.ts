@@ -187,8 +187,13 @@ export interface ClearPairingScopedStateDeps {
  * Actions-menu grey-out reads it, so a stale one steers behaviour rather than merely showing a stale
  * label. That same absent request half is why the `connected` edge must NOT clear it: a reconnect to the
  * same daemon leaves the menu correct, and blanking it there would blank it permanently.
- * The published model menus (#977) latch for exactly those reasons — same push-only `initialize` lane,
- * same absent request half, same `connected`-edge answer — and are sharper again on two axes. Their
+ * The published model menus (#977) latch for MOST of those reasons — same `initialize` lane, same
+ * `connected`-edge answer — and are sharper again on two axes. The one clause that no longer transfers is
+ * the absent request half: #1166 gave that path one, so "blanking it there would blank it permanently" is
+ * false for the model menus. The `connected`-edge answer survives on a different reason, and it is the
+ * true one for them: that ask is PER-CONVERSATION, fired when a conversation is activated, so a
+ * daemon-wide edge would blank every BACKGROUND conversation's list with nothing to re-assert it. Read
+ * this as a correction to the stated reason, never as licence to start clearing on `connected`. Their
  * rows are CLAUDE-authored rather than workspace-authored, a HIGHER trust tier; and a retained list is
  * not merely attributed to the wrong machine but ACTIONABLE against it, because #975's sheet offers
  * those rows and picking one sends a model argument the newly paired daemon validates and rejects.

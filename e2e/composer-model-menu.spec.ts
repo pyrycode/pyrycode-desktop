@@ -211,14 +211,12 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // case-insensitive SUBSTRING by default, and the panel rows carry these same names.
   const trigger = (name: string) => page.getByRole('button', { name, exact: true })
 
-  // --- The snapshot has to arrive before this control can say anything, and the app asks for one on the
-  // connected edge and at each TURN END (runConfigLive). The connected edge lands before a conversation is
-  // active, so nothing is asked for then — which is why the context reading beside this control is also
-  // absent on a fresh launch, and why the model control renders NOTHING at all until a snapshot exists
-  // (the ContextUsageControl posture, shared by both items in this row). A pushed thinking → idle pair is
-  // that turn-end edge, unsolicited exactly as the daemon sends it, and the reply is the fake's own
-  // baseline: no input is manufactured that production does not produce. ---
-  await expect(page.locator('.composer__model-label')).toHaveCount(0)
+  // --- The snapshot has to arrive before this control can say anything. Since #1166 the app asks for one
+  // on CONVERSATION OPEN as well as on the connected edge and at each TURN END (runConfigLive), and
+  // `launchPairedApp` navigates by clicking the seeded row — so the fake's baseline reply has already
+  // landed here and this control is live from launch. The pushed thinking → idle pair is still the
+  // turn-end edge, unsolicited exactly as the daemon sends it, and it re-asks for the same baseline: no
+  // input is manufactured that production does not produce. ---
   daemon.pushFrame(turnStateFrame('thinking'))
   daemon.pushFrame(turnStateFrame('idle'))
 

@@ -26,7 +26,7 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 - [Routing and layout](paired-shell-routing.md) — The route model and its transition, the pure view and its container, the two-pane desktop layout, the seams at either end, and the data flow between them.
 - [The pair server route](paired-shell-pair-server-route.md) — The pairServer route: how the shell reaches the pairing surface and what it does while it is there.
-- [Conversation exits and stamps](paired-shell-conversation-exits.md) — What happens to the open thread when its conversation is deleted or archived, and the last-read and view stamps written as the user moves between conversations.
+- [Conversation exits and stamps](paired-shell-conversation-exits.md) — What happens to the open thread when its conversation is deleted or archived, the last-read and view stamps written as the user moves between conversations, and (#1166) the run-configuration and model-list requests fired on every activation.
 
 ## What it does
 
@@ -314,6 +314,12 @@ src/renderer/src/
   `title`/`prompt`/`options[].label`, answerable with a `modal_answer` the currently paired daemon never
   issued, and `selectHasOutstandingFor` lights the sidebar's input-required dot off the same slice — the
   phantom is visible before anyone clicks it.
+- [Run configuration store](run-config-store.md) / [Model-list store](model-list-store.md) /
+  [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) — `activateDeps` gains a seventh
+  member, `requestConversationConfig`, firing `requestRunConfigSnapshot` and the new `requestModelList`
+  on every activation so the composer footer is live from the moment a chat opens rather than only after
+  a turn ends. See [§ The run-configuration and model-list
+  ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
 - [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) · Spec:
   `docs/specs/architecture/1141-pairing-another-server-clears-nothing.md` — deletes the
   `clearPairingScopedState` call from the `pairedAnotherServer` path. Since #1117 and #1084 the

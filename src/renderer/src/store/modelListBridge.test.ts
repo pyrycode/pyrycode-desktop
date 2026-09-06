@@ -3,7 +3,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, WireModelOption } from '@shared/wire/types'
-import { translateModelList, subscribeModelList, ModelListData } from './modelListBridge'
+import {
+  translateModelList,
+  subscribeModelList,
+  requestModelList,
+  ModelListData
+} from './modelListBridge'
 import { createModelListStore, selectModelListFor } from './modelListStore'
 
 // Framework-free data-path tests with injected spies (the announcedModelBridge / slashCommandListBridge
@@ -255,9 +260,10 @@ describe('subscribeModelList', () => {
     // Pinned specifically. Copying backgroundTaskRosterBridge's `connected` reset would be wrong
     // twice over: that branch is the sole enforcement of ITS AC5, and this store's pairing-scoped
     // clear is #977's, landing in clearPairingScopedState's dep set where a reconnect never reaches
-    // it. A reconnect to the same daemon does not invalidate a published list, and nothing on this
-    // path could re-fetch one — there is no request half. The held entry must survive a re-handshake
-    // by reference, so nothing re-notifies a subscriber either.
+    // it. A reconnect to the same daemon does not invalidate a published list, and #1166's request half
+    // does not change that: it is fired per conversation on activation, so a daemon-wide edge has no one
+    // list to re-assert. The held entry must survive a re-handshake by reference, so nothing re-notifies
+    // a subscriber either.
     bridge.emit({ type: 'connected', ack })
     expect(selectModelListFor('conv-1')(store.getState())).toBe(held)
     expect(selectModelListFor('conv-1')(store.getState())).toEqual({
@@ -278,6 +284,48 @@ describe('subscribeModelList', () => {
       droppedCommands: 3
     })
     expect(selectModelListFor('conv-1')(store.getState())).toBeNull()
+  })
+})
+
+describe('requestModelList', () => {
+  it('sends exactly one requestModelList naming the conversation (#1166)', () => {
+    const sendCommand = vi.fn()
+
+    requestModelList(sendCommand, 'conv-1')
+
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'requestModelList',
+      payload: { conversation_id: 'conv-1' }
+    })
+  })
+
+  it('puts NOTHING but the conversation id on the payload (#1166)', () => {
+    // The wire bound is `buildRequestModelList`'s fresh literal, but the renderer half owes the same
+    // discipline: a caller that later hands this an object to spread must not be able to widen the
+    // payload from here.
+    const sendCommand = vi.fn()
+
+    requestModelList(sendCommand, 'conv-1')
+
+    const command = sendCommand.mock.calls[0][0] as {
+      payload: Record<string, unknown>
+    }
+    expect(Object.keys(command.payload)).toEqual(['conversation_id'])
+  })
+
+  it('sends nothing for an empty id, and nothing for null — asserted separately (#1166)', () => {
+    // Two assertions rather than one parameterised case: `''` and `null` take the same falsy branch, so
+    // a guard written for only one of them passes a test that checks only the other. `''` is the case
+    // the boundary guard deliberately still ACCEPTS structurally, which is why refusing it has to be
+    // proven here.
+    const emptyId = vi.fn()
+    requestModelList(emptyId, '')
+    expect(emptyId).not.toHaveBeenCalled()
+
+    const noId = vi.fn()
+    requestModelList(noId, null)
+    expect(noId).not.toHaveBeenCalled()
   })
 })
 

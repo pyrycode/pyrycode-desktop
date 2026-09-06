@@ -91,10 +91,19 @@ shape.
 
 ## What it does
 
-Requests the session settings on three occasions — every time the Run configuration sheet opens,
-every rising edge to `connected`, and every running → not-running turn transition (#810) — and
-holds the arriving `model` / `effort` / `yolo` / `permissionMode` (#1020, see § Permission mode
-below) plus the two usage figures (#192) in a read-only store until the next one arrives.
+Requests the session settings on four occasions — every time the Run configuration sheet opens,
+every rising edge to `connected`, every running → not-running turn transition (#810), and, since
+[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166), every conversation activation
+(including a re-open of the chat already open) — and holds the arriving `model` / `effort` / `yolo` /
+`permissionMode` (#1020, see § Permission mode below) plus the two usage figures (#192) in a read-only
+store until the next one arrives. The fourth occasion fires the same `requestRunConfigSnapshot` sender as
+the sheet's own per-open request, from `PairedShell`'s activation seam rather than the sheet — see
+[Paired shell — conversation exits and stamps § The run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+It exists because a chat that has never had a turn crosses none of the other three edges, so before #1166
+its footer controls and the sheet sat inert until one eventually fired; the daemon has answered a
+never-messaged conversation with its own bound `session_id` and stored values since pyrycode#2085, which
+is what made asking on open worth doing.
 Deliberately **not** a [session store](session-store.md) facet: a settings arrival never touches
 connection/messages state and vice versa, so it re-renders only components selecting this slice.
 
@@ -328,10 +337,13 @@ daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,pe
   `import { useRunConfigStore, selectSnapshot } from '@renderer/store/runConfigStore'`.
 - **Mount point:** `src/renderer/src/screens/conversation/ConversationScreen.tsx`, inside
   `<StatusSheet>` — `RunConfigData` (write) first, `RunConfigSections` (read, #188) second.
-- **Names the active conversation, since #946.** Both request sites resolve
-  `activeConversationStore.getState().activeConversation?.id ?? null` at call time and send nothing
-  when that is unaddressable — see § Conversation-keyed since 2026-08-20 above.
-  `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is not read by this path.
+- **Names the active conversation, since #946.** All three request sites — the sheet's own per-open
+  request, `runConfigLive.ts`'s two-edge refresh, and, since #1166, `PairedShell`'s activation seam —
+  resolve or receive the conversation id and send nothing when it is unaddressable; the first two resolve
+  `activeConversationStore.getState().activeConversation?.id ?? null` at call time (see § Conversation-keyed
+  since 2026-08-20 above), while the third is handed `conversation.id` directly by `activateConversation`,
+  which never reaches a caller with nothing to name. `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is
+  not read by this path.
 
 ## Running model section (#560, resolved onto the published rows by #975)
 
@@ -383,7 +395,14 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   conversation rather than, say, the edge's own conversation: whichever id goes out is the one whose
   values land, unconditionally, whenever the reply arrives. A duplicate reply (sheet-open landing
   alongside an edge-driven request) is simply idempotent, since `setSnapshot` always replaces the
-  whole snapshot.
+  whole snapshot. Since [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166), every
+  conversation switch is itself a fourth request occasion, so a reply from conversation A still in
+  flight when the operator switches to B can land after B is active and be attributed to B — pre-existing
+  (the other two edges already produced in-flight replies) and not widened per occurrence (B's own
+  request is already in flight behind A's, so an in-order reply self-corrects one round trip later rather
+  than latching until B's first turn ends), but now reachable on every switch instead of only one that
+  follows a completed turn. Filed as
+  [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176), not fixed here.
 - **A daemon that flaps `turn_state` costs one request per genuine transition, not per re-assertion**
   — the per-conversation `Set` in `createRunConfigRefreshTrigger` absorbs re-asserted phases (#810).
   If a real daemon is ever observed flapping transitions rapidly enough to matter, a debounce belongs
@@ -484,3 +503,9 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
 - [Model-list wire types](model-list-wire-types.md) — `WireModelOption.supports_auto_mode`, whose
   docblock names the same `set_session_settings.permission_mode` field this store's read half mirrors
   (corrected by #1020 to stop saying `set_permission_mode`).
+- **[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166)** — added the fourth request
+  occasion, conversation activation, via `PairedShell`'s `activateDeps.requestConversationConfig`; see
+  § What it does above and [Paired shell — conversation exits and stamps § The run-configuration and
+  model-list ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+  Narrows, but does not close, the pre-existing late-reply attribution gap named there — filed as
+  [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176).

@@ -338,14 +338,83 @@ with no `await` anywhere. The order relative to `stampLastRead` itself is not fo
 function never reads the open conversation, so either order records the same mark. Appending after it
 was chosen because it leaves #777's line untouched.
 
-**Cross-wire hazard, named rather than defended by type.** `markViewed` and `stampLastRead` now have
-*identical* signatures — `(conversationId: string) => void` — so swapping them at a deps site compiles,
-and every `toHaveBeenCalledWith(conversation.id)` spy assertion still passes for both. What catches a swap
-is that the two land in *different* stores: with real stores wired, a swap leaves one store unmarked and
-the other unpromoted, so #777's and #786's own tests fail together
-(`activateConversation.test.ts`'s `realDeps` cases). At the one production site
-(`activateDeps` above) the defence is that the two arrow bodies are visibly different and each member
-name matches the store method it calls — no branded type for a two-member wiring object.
+**Cross-wire hazard, named rather than defended by type.** `markViewed`, `stampLastRead` and, since
+[#1166](#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166) below,
+`requestConversationConfig` all share the *identical* signature — `(conversationId: string) => void` — so
+swapping any two at a deps site compiles, and every `toHaveBeenCalledWith(conversation.id)` spy assertion
+still passes for all three. What catches a swap is that the three land in three different places: with
+real deps wired, a swap leaves one conversation unstamped or unpromoted **and** no request sent, so
+\#777's, #786's and #1166's own tests fail together (`activateConversation.test.ts`'s `realDeps` cases). At
+the one production site (`activateDeps` above) the defence is that the three arrow bodies are visibly
+different and each member name matches the effect it performs — no branded type for a three-member wiring
+object.
+
+## The run-configuration and model-list ask (`activateConversation.ts`, `modelListBridge.ts`, #1166)
+
+Opening a conversation crosses neither of [Run configuration store](run-config-store.md)'s two refresh
+edges (the `connected` edge, each turn-end transition) nor [Model-list
+store](model-list-store.md)'s two push lanes (a conversation's `initialize` reply, the connect-time
+reconcile) — so a chat that has never had a turn, or was created after this app connected, sat with an
+inert footer until one of those edges eventually fired. Since pyrycode#2085 the daemon answers
+`request_session_settings` for a never-messaged conversation with that conversation's own bound
+`session_id` and its stored model, effort and permission mode (rather than the old all-zero reply), which
+is what makes asking immediately on open worth doing.
+
+`ActivateConversationDeps` gains a **seventh, required** member, called **last** and **outside** the
+id-change gate — so every activation asks, including a re-open of the chat already open:
+
+```
+previous = getActiveConversation()
+if (previous?.id !== conversation.id) { dispatchTimeline({type:'reset'}); clearSessionId() }
+setActiveConversation(conversation)
+stampLastRead(conversation.id)              // #777, unchanged
+markViewed(conversation.id)                 // #786, unchanged
+requestConversationConfig(conversation.id)  // #1166, new — outside the gate, last
+```
+
+**One member firing two requests, not two members.** `PairedShell`'s `activateDeps.requestConversationConfig`
+arrow calls `requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)` then
+`requestModelList(window.pyry.sendCommand, conversationId)` — two visibly different named calls, no
+branch, no local state. The two are one act (re-ask for what `clearSessionId` just invalidated), they
+always fire together, and neither is meaningful for the footer without the other; folding them into one
+member also holds this interface at three identical `(conversationId: string) => void` members rather
+than four (see the cross-wire note above). Both sends are fire-and-forget and both replies are
+whole-value replaces landing through app-lifetime subscribers already listening
+(`subscribeRunConfig`/`subscribeModelList`), so the two calls need no ordering between them and a
+duplicate ask (a re-open landing beside an edge-driven refresh) costs nothing.
+
+**Last, and the ordering is load-bearing in one direction.** `clearSessionId` (inside the gate, above)
+wipes the very value the run-configuration reply refills — the ask must follow it, or a reply landing in
+the same tick would be blanked by the clear it was sent to repair. Nothing downstream of the request
+needs the store writes to have completed first.
+
+**The no-usable-id decision lives in the two senders, not here.** `requestRunConfigSnapshot` and
+`requestModelList` (`modelListBridge.ts`) each already refuse a falsy conversation id — a faithful pair,
+down to the guard — so `activateConversation` gains no branch of its own and an activation with no
+addressable id (the empty-string case; the only one this function can see, since it takes a conversation
+already) sends neither request. The notification-activated `open` dispatch (#393) carries no conversation
+at all and does not call `activateConversation`, so it sends nothing by construction.
+
+**The four comments this made false.** Before #1166, `modelListBridge.ts`, `modelListStore.ts`,
+`App.tsx`'s `ModelListData` leaf and `clearPairingScopedState.ts` each stated that the model-list path had
+no request half — two of them as a standing prohibition ("none may be added"). #1166 corrected all four in
+place, without touching the no-retry rule underneath any of them: a one-shot ask fired only on activation
+is not a retry, delivery is still best-effort, and no consumer may block a model menu on this frame. See
+[Model-list store § The request half](model-list-store.md#the-request-half-requestmodellist-1166) for the
+corrected reasoning.
+
+**Known gap, filed rather than fixed here: a late reply can land after a switch.** Neither
+`SessionSettingsPayload` nor the `runConfigReceived` event carries a `conversation_id`, so a reply in
+flight when the operator switches A → B still lands wherever `runConfigStore`/`sessionIdStore` are
+listening when it arrives, attributed to whichever conversation is active at that moment. This is
+pre-existing — the `connected` and turn-end edges already produced in-flight replies — and #1166 does not
+widen the exposure per occurrence (B's own request is already in flight behind A's stale one, so an
+in-order reply now self-corrects one round trip later instead of latching until B's first turn ends); what
+it changes is the *frequency*, since every switch now produces a catchable request rather than only a
+switch that happens to follow a completed turn. Filed as
+[#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176), deliberately not attempted here — the
+real fix needs a daemon-side `conversation_id` on the payload or an `in_reply_to` correlation map spanning
+main, the event channel and the bridge.
 
 **Security consequence: the tail is no longer an operator-only region.** `activateConversation` is also
 reached ungated from a daemon-confirmed create (`useConversationCreatedNav`, above) — the store's own

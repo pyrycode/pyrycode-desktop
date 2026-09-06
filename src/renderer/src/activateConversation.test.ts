@@ -54,12 +54,14 @@ function spyDeps(previous: ConversationCreatedPayload | null): {
   setActiveConversation: ReturnType<typeof vi.fn>
   stampLastRead: ReturnType<typeof vi.fn>
   markViewed: ReturnType<typeof vi.fn>
+  requestConversationConfig: ReturnType<typeof vi.fn>
 } {
   const dispatchTimeline = vi.fn()
   const clearSessionId = vi.fn()
   const setActiveConversation = vi.fn()
   const stampLastRead = vi.fn()
   const markViewed = vi.fn()
+  const requestConversationConfig = vi.fn()
   return {
     deps: {
       getActiveConversation: () => previous,
@@ -67,13 +69,15 @@ function spyDeps(previous: ConversationCreatedPayload | null): {
       dispatchTimeline,
       clearSessionId,
       stampLastRead,
-      markViewed
+      markViewed,
+      requestConversationConfig
     },
     dispatchTimeline,
     clearSessionId,
     setActiveConversation,
     stampLastRead,
-    markViewed
+    markViewed,
+    requestConversationConfig
   }
 }
 
@@ -127,6 +131,25 @@ describe('activateConversation', () => {
     expect(markViewed).toHaveBeenCalledWith(next.id)
   })
 
+  it('every activation asks the daemon for that conversation, switch or re-open (#1166 AC1)', () => {
+    // Outside the id gate, and that placement IS the AC: "on every activation — including a re-open of
+    // the chat that is already open". Both replies replace whole values, so a duplicate costs nothing.
+    const switched = spyDeps(conversation('a'))
+    activateConversation(switched.deps, conversation('b'))
+    expect(switched.requestConversationConfig).toHaveBeenCalledTimes(1)
+    expect(switched.requestConversationConfig).toHaveBeenCalledWith('b')
+
+    const reopened = spyDeps(conversation('a'))
+    activateConversation(reopened.deps, conversation('a'))
+    expect(reopened.requestConversationConfig).toHaveBeenCalledTimes(1)
+    expect(reopened.requestConversationConfig).toHaveBeenCalledWith('a')
+
+    const first = spyDeps(null)
+    activateConversation(first.deps, conversation('b'))
+    expect(first.requestConversationConfig).toHaveBeenCalledTimes(1)
+    expect(first.requestConversationConfig).toHaveBeenCalledWith('b')
+  })
+
   it('compares against the PREVIOUS active conversation — both clears run before the set', () => {
     // The ordering constraint AC3 rests on: a re-read after the write would see 'b' === 'b' and clear
     // nothing. The real store is wired in so the read genuinely observes the write.
@@ -141,12 +164,22 @@ describe('activateConversation', () => {
       dispatchTimeline: () => void order.push('reset'),
       clearSessionId: () => void order.push('clearSessionId'),
       stampLastRead: () => void order.push('stamp'),
-      markViewed: () => void order.push('markViewed')
+      markViewed: () => void order.push('markViewed'),
+      // #1166: LAST, and the position is load-bearing. `clearSessionId` wipes the very value the reply
+      // refills, so a request placed ahead of it could be answered into a store the clear then blanks.
+      requestConversationConfig: () => void order.push('requestConfig')
     }
 
     activateConversation(deps, conversation('b'))
 
-    expect(order).toEqual(['reset', 'clearSessionId', 'set', 'stamp', 'markViewed'])
+    expect(order).toEqual([
+      'reset',
+      'clearSessionId',
+      'set',
+      'stamp',
+      'markViewed',
+      'requestConfig'
+    ])
     expect(active.getState().activeConversation?.id).toBe('b')
   })
 
@@ -373,6 +406,10 @@ function realDeps(
         },
         conversationId
       ),
-    markViewed: (conversationId) => timelines.getState().markViewed(conversationId)
+    markViewed: (conversationId) => timelines.getState().markViewed(conversationId),
+    // #1166: inert in these store-level cases — they assert what the two stamps landed WHERE, and no
+    // store observes the request. A cross-wire of this member with either stamp still fails them, which
+    // is the defence the interface's CROSS-WIRE NOTE names.
+    requestConversationConfig: () => {}
   }
 }

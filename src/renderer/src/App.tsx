@@ -226,11 +226,12 @@ function App(): JSX.Element {
   // VERBS the working directory will accept — so the App-level rationale is identical and equally
   // sharpened: a frame arrives for a conversation the operator may NEVER HAVE OPENED and long before
   // any of the four consumers is mounted, and without this mount every other criterion still passes
-  // against an injected subscribe function while nothing ever writes the singleton. Reactive-only, no
-  // gate, no request half — the list is pushed, never asked for, and delivery is best-effort, so a
-  // conversation with no list is a normal permanent state rather than something to retry. Ships
-  // dormant. No `connected` branch, for the reason its twin has none; its pairing-scoped clear is
-  // clearPairingScopedState's (#977), not this leaf's.
+  // against an injected subscribe function while nothing ever writes the singleton. THIS LEAF is
+  // reactive-only and has no gate: the list is pushed here, and since #1166 the request half that also
+  // exists is fired from the conversation-activation path — the only place the conversation to name is
+  // known — never from this mount. Delivery stays best-effort, so a conversation with no list is a normal
+  // permanent state rather than something to retry. Ships dormant. No `connected` branch, for the reason
+  // its twin has none; its pairing-scoped clear is clearPairingScopedState's (#977), not this leaf's.
   return (
     <>
       <ConversationListData />

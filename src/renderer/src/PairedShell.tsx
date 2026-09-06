@@ -27,6 +27,8 @@ import {
   exitActiveConversation,
   type ExitActiveConversationDeps
 } from './exitActiveConversation'
+import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
+import { requestModelList } from './store/modelListBridge'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
@@ -70,7 +72,20 @@ const activateDeps: ActivateConversationDeps = {
   // order — the write path that arms the ten-slice bound. Unlike `stampLastRead` above it reaches its
   // store DIRECTLY, the `clearTimelineFor` / `clearAllTimelines` shape below: there is no sampling branch
   // to keep in one tested place, because the store method takes the id and nothing else.
-  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId)
+  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId),
+  // #1166: ask the daemon for the opened conversation's run configuration and its published model list.
+  // Both senders are the tested, React-free helpers on their own paths and each already refuses a falsy
+  // id, so this arrow holds no branch — only the two calls, in the order the two lanes were built. The
+  // sequence does not matter (both are fire-and-forget and their replies are whole-value replaces landing
+  // through app-lifetime subscribers), which is exactly why no gate or await appears here.
+  //
+  // `window.pyry` is dereferenced INSIDE the arrow body, the `getState()` shape every member above uses:
+  // it runs only when a conversation is activated, never at module load and never during render, so this
+  // module stays server-renderable and PairedShell still subscribes to no store.
+  requestConversationConfig: (conversationId) => {
+    requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
+    requestModelList(window.pyry.sendCommand, conversationId)
+  }
 }
 
 /**

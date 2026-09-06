@@ -186,10 +186,11 @@ test('composer footer: the permission-mode menu hides auto on a model that refus
   // loudly instead of quietly weakening the drive.
   expect(UNCONDITIONAL_MODES).toContain(BASELINE_MODE)
 
-  // --- The snapshot has to arrive before this control can say anything, and the app asks for one on the
-  // connected edge and at each TURN END (runConfigLive). The connected edge lands before a conversation is
-  // active, so nothing is asked for then — which is why the row is empty on a fresh launch. ---
-  await expect(label).toHaveCount(0)
+  // --- The snapshot has to arrive before this control can say anything. Since #1166 the app asks for one
+  // on CONVERSATION OPEN as well as on the connected edge and at each TURN END (runConfigLive), and
+  // `launchPairedApp` navigates by clicking the seeded row — so the fake's baseline reply has already
+  // landed here and the row is live from launch. The pushed thinking → idle pair is still that turn-end
+  // edge, and it re-asks for the same baseline. ---
   daemon.pushFrame(turnStateFrame('thinking'))
   daemon.pushFrame(turnStateFrame('idle'))
   await expect(label).toHaveText(displayed(BASELINE_MODE), { timeout: ROUNDTRIP_TIMEOUT_MS })

@@ -7,13 +7,15 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
 import type { ThreadEvent } from './store/threadTimeline'
 
 /**
- * The six effects activateConversation performs, injected to keep it pure:
- *  - `getActiveConversation` — reads the CURRENTLY active conversation (activeConversationStore).
- *  - `setActiveConversation` — records the newly activated one (the same store's setter).
- *  - `dispatchTimeline`      — timelineStore's dispatch; carries #528's `reset`.
- *  - `clearSessionId`        — sessionIdStore's #529 clear.
- *  - `stampLastRead`         — #777's last-read stamp for the conversation being opened.
- *  - `markViewed`            — #786's view stamp, conversationTimelineStore's eviction ranking.
+ * The seven effects activateConversation performs, injected to keep it pure:
+ *  - `getActiveConversation`     — reads the CURRENTLY active conversation (activeConversationStore).
+ *  - `setActiveConversation`     — records the newly activated one (the same store's setter).
+ *  - `dispatchTimeline`          — timelineStore's dispatch; carries #528's `reset`.
+ *  - `clearSessionId`            — sessionIdStore's #529 clear.
+ *  - `stampLastRead`             — #777's last-read stamp for the conversation being opened.
+ *  - `markViewed`                — #786's view stamp, conversationTimelineStore's eviction ranking.
+ *  - `requestConversationConfig` — #1166's ask for the opened conversation's run configuration and
+ *                                  model list.
  *
  * `getActiveConversation` is a GETTER, not a value threaded in by the caller. The previous
  * conversation must be read at invocation time: PairedShell's created-event callback is held in a
@@ -73,6 +75,34 @@ export interface ActivateConversationDeps {
    * name matches the store method it calls.
    */
   markViewed: (conversationId: string) => void
+  /**
+   * #1166: ask the daemon for the opened conversation's run configuration AND its published model list,
+   * one request each. It is the counterpart to `clearSessionId` above — that member wipes the address the
+   * footer's write controls need, and this one asks for the value that refills it, so a chat that has
+   * never had a turn no longer sits blank and inert until one ends.
+   *
+   * ONE member for two requests, not two members. The two are one act — re-ask for what the switch just
+   * invalidated — they always fire together, and neither is enough for the footer on its own. It also
+   * holds this interface at THREE identical `(conversationId: string) => void` members rather than four.
+   *
+   * REQUIRED, not optional, for `stampLastRead`'s and `markViewed`'s reason: `activateDeps` is
+   * module-private, `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo runs a
+   * React effect and the wiring itself is structurally uncoverable. `tsc` is the whole safety net and it
+   * only holds if the field is required.
+   *
+   * The no-usable-id decision is NOT here. Both senders already refuse a falsy id
+   * (`requestRunConfigSnapshot`, `requestModelList`), where a spy can reach the branch, so this function
+   * gains no branch of its own and the empty-string case is answered by construction.
+   *
+   * CROSS-WIRE NOTE for a reviewer: this makes THREE members with the identical
+   * `(conversationId: string) => void` signature, so a swap of any two compiles and survives every
+   * `toHaveBeenCalledWith(conversation.id)` assertion. The defence is unchanged and still holds at three:
+   * they land in three different places, so with the real deps wired a swap leaves one conversation
+   * unstamped or unpromoted AND no request sent, failing #777's mark tests, #786's order tests and
+   * #1166's request tests together. At the one production site the arrow bodies are visibly different and
+   * each member name matches the effect it performs.
+   */
+  requestConversationConfig: (conversationId: string) => void
 }
 
 /**
@@ -103,10 +133,12 @@ export interface ActivateConversationDeps {
  * one commit. Total — no return value, no throw path, and nothing to log (a diagnostic carrying the
  * conversation `id`, `name`, or `cwd` would breach ADR 0007's content-free rule for zero observed gain).
  *
- * One intended consequence: clearing the session id makes RunConfigSections' `onChange` `undefined`
- * (RunConfigSections.tsx:332-339), so the Run configuration controls render INERT from the switch until
- * the new conversation's `sessionTransition` marker arrives. That is the point, not a regression —
- * inert beats addressing a YOLO / auto-approval write to the previous conversation's running session.
+ * One intended consequence: clearing the session id makes `RunConfigSections`' `onChange` `undefined`, so
+ * the Run configuration controls render INERT from the switch until the new conversation's session id
+ * arrives. That is the point, not a regression — inert beats addressing a YOLO / auto-approval write to
+ * the previous conversation's running session. #1166 shortened that window rather than removing it: the
+ * ask below now goes out in the same move as the clear, so the wait is one round trip instead of "until
+ * this conversation's first turn ends".
  */
 export function activateConversation(
   deps: ActivateConversationDeps,
@@ -140,4 +172,14 @@ export function activateConversation(
   // `recordLastRead`'s `===` guard returns the state object and the cascade terminates at depth 2 with no
   // subscriber woken and no `localStorage` write.
   deps.markViewed(conversation.id)
+  // #1166, OUTSIDE the gate because that placement IS the behaviour: "on every activation — including a
+  // re-open of the chat that is already open". Both replies replace WHOLE values, so a duplicate costs
+  // nothing and needs no gate; the two frames are fire-and-forget, so nothing here can throw or block.
+  //
+  // LAST, and that ordering is load-bearing in one direction only. `clearSessionId` above wipes the very
+  // value the run-configuration reply refills, so the ask must follow it — ahead of it, a reply that
+  // happened to land inside the same tick would be blanked by the clear it was sent to repair. Nothing
+  // downstream of the request needs the store writes to have completed; putting it last is what makes the
+  // dependency on the clear unmistakable rather than incidental.
+  deps.requestConversationConfig(conversation.id)
 }

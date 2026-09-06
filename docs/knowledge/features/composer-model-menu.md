@@ -132,15 +132,27 @@ and that control belongs to #682.
 
 ## Turn-end dependency, shared with the context reading
 
-The run-config snapshot is requested only on the `connected` edge — which lands before a conversation is
-active, so the request sends nothing — and at each turn end (`runConfigLive`). A fresh app launch
-therefore has **no** snapshot: `effective.model` is `''`, and this control correctly renders nothing. The
-[context-usage reading](conversation-shell-composer-message-box.md#composer-footer-row-811) beside it has the exact
-same dependency and is absent for the exact same reason on a fresh launch. An e2e drive against either
-control needs a turn end first — an unsolicited `turn_state` thinking → idle pair, a frame the daemon
-sends unprovoked, keeping the "no manufactured inputs" rule intact. A lone `idle` push fires nothing:
-the refresh trigger is a running→idle *transition*, and `Set.delete` on an id that was never inserted
-returns `false`.
+The run-config snapshot used to be requested only on the `connected` edge — which lands before a
+conversation is active, so that request sent nothing — and at each turn end (`runConfigLive`); a fresh
+app launch therefore had **no** snapshot until a turn had run to completion, and this control correctly
+rendered nothing until then. **Since [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166), a
+third edge exists: opening a conversation.** `activateConversation` fires the same
+`requestRunConfigSnapshot` sender (alongside a new model-list request, see [Model-list
+store](model-list-store.md)) on every activation, including a re-open of the chat already open — see
+[Paired shell — conversation exits and stamps § The run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+A fresh launch now shows this control's stored-choice reading immediately, populated from the opened
+conversation's own bound session — the daemon has answered a never-messaged conversation with its real
+values since pyrycode#2085, which is what makes asking on open worth doing. The
+[context-usage reading](conversation-shell-composer-message-box.md#composer-footer-row-811) beside it shares the
+identical dependency and is populated on the same edge for the same reason.
+
+The `connected` and turn-end edges are unchanged by #1166 and still fire exactly as before — an e2e drive
+proving either edge in isolation still needs a turn end (an unsolicited `turn_state` thinking → idle pair;
+a lone `idle` push fires nothing, since the refresh trigger is a running→idle *transition* and
+`Set.delete` on an id never inserted returns `false`) or a fresh `connected` frame. What changed is only
+that a drive no longer needs either edge just to get *a* snapshot onto the screen — the activation that
+opens the conversation already supplied one.
 
 ## CSS: the shared footer-button treatment, lifted on its second consumer
 
@@ -273,15 +285,21 @@ stored choice that names a *different* row (label and `currentId` diverge — th
 model couldn't represent), a pick outranking both, and the all-empty-layers `null` case.
 
 A new e2e spec, `e2e/composer-model-announced.spec.ts`, drives the ordering directly rather than
-extending `composer-model-menu.spec.ts` (whose drive is ordered around *not* having an announcement, and
-whose fresh-launch `toHaveCount(0)` assertion needs to stay true). One launch, one continuous drive:
-`model_announced` pushed unsolicited before any snapshot exists shows the control with no turn-end dance
-needed at all — proof the announcement alone is sufficient, unlike every other snapshot-dependent control
-on this row (see § Turn-end dependency). `model_list` then resolves it to a display name; a `turn_state`
-thinking → idle pair brings in a *different* stored choice without moving the label off the announcement;
-and a picked third row moves the label at once and reverts to the announcement (not to the stored choice)
-on a withheld-reply, correlated-`error`-frame rejection — the same optimistic-overlay idiom above, now
-also proving where a reverted pick lands when an announcement is present.
+extending `composer-model-menu.spec.ts` (whose drive is ordered around *not* having an announcement). At
+the time this spec was written, a fresh launch had no run-config snapshot at all, so `model_announced`
+pushed unsolicited before any snapshot existed was the only way to show the control with no turn-end
+dance needed — proof the announcement alone is sufficient, unlike every other snapshot-dependent control
+on this row (see § Turn-end dependency). **Since #1166** the launch itself supplies a snapshot, so the
+spec's launch-state assertion became a presence check (the stored choice, not an empty label) and its
+step proving the announcement outranks a later stored choice moved from an absence-based barrier to
+`expect.poll`-counting the captured `request_session_settings` envelopes — see [Paired shell —
+conversation exits and stamps § The run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
+for why an absence barrier stopped being available. `model_list` still resolves the label to a display
+name; a `turn_state` thinking → idle pair still brings in a *different* stored choice without moving the
+label off the announcement; and a picked third row still moves the label at once and reverts to the
+announcement (not to the stored choice) on a withheld-reply, correlated-`error`-frame rejection — the same
+optimistic-overlay idiom above, proving where a reverted pick lands when an announcement is present.
 
 See [PR #1018](https://github.com/pyrycode/pyrycode-desktop/pull/1018) and
 `docs/specs/architecture/988-composer-model-menu.md` for #988's full plan, its security review, and its

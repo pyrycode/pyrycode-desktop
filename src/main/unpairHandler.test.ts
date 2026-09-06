@@ -11,7 +11,7 @@ import {
   MAX_SERVER_ID_LENGTH
 } from '../shared/ipc/unpair'
 import type { ClearablePairedServerStore, MultiPairedServerStore } from './pairedServerStore'
-import type { HostLabelStore } from './hostLabelStore'
+import type { HostLabelStore, MultiHostLabelStore } from './hostLabelStore'
 
 // A structural stand-in for Electron's ipcMain: only handle/removeHandler, spied. No Electron
 // harness needed — the handler is typed against the minimal target, not ipcMain (the
@@ -47,6 +47,17 @@ function storeWithClear(clear: ClearablePairedServerStore['clear']): ClearablePa
 // the label back and there is no label text here to leak. No keychain, no filesystem.
 function labelWithClear(clear: HostLabelStore['clear']): Pick<HostLabelStore, 'clear'> {
   return { clear }
+}
+
+// The PER-SERVER arm's handle since #1156 — Pick<MultiHostLabelStore, 'clearFor'>. Same instrument
+// pointed one level finer: it erases exactly one named server's label and still carries no reader,
+// so this module remains unable to materialise any label text. The whole-collection arm above keeps
+// the `clear`-only handle, because deleting the one blob the keyed collection lives in IS "no label
+// for any server".
+function labelWithClearFor(
+  clearFor: MultiHostLabelStore['clearFor']
+): Pick<MultiHostLabelStore, 'clearFor'> {
+  return { clearFor }
 }
 
 // A keychain/filesystem-shaped path a propagated secureStore.delete error could carry — the exact
@@ -492,7 +503,7 @@ describe('registerUnpairServerHandler', () => {
       registerUnpairServerHandler(target, {
         store,
         onUnpaired,
-        hostLabel: labelWithClear(clearLabel)
+        hostLabel: labelWithClearFor(clearLabel)
       })
 
       await expect(serverListenerOf(target)({}, request)).resolves.toEqual({ result: 'error' })
@@ -513,7 +524,7 @@ describe('registerUnpairServerHandler', () => {
     registerUnpairServerHandler(target, {
       store,
       onUnpaired,
-      hostLabel: labelWithClear(clearLabel)
+      hostLabel: labelWithClearFor(clearLabel)
     })
 
     await expect(
@@ -538,7 +549,7 @@ describe('registerUnpairServerHandler', () => {
         })
       ),
       onUnpaired,
-      hostLabel: labelWithClear(clearLabel)
+      hostLabel: labelWithClearFor(clearLabel)
     })
 
     const response = await serverListenerOf(target)({}, { serverId: SERVER_ID })
@@ -561,37 +572,60 @@ describe('registerUnpairServerHandler', () => {
     expect(serialized).not.toContain(SERVER_ID)
   })
 
-  // --- the host label, cleared only when nothing is left to describe (AC3) ----------------------
+  // --- the host label, erased for the named server and no other (#1156, AC2) -------------------
   describe('hostLabel', () => {
-    it('keeps the label when records remain: unpairing one of two leaves the survivor named', async () => {
+    it('erases the NAMED server’s label while other records remain (#1156)', async () => {
       const target = fakeServerTarget()
       const clearLabel = vi.fn(async () => {})
       registerUnpairServerHandler(target, {
         store: storeWithClearServer(vi.fn(async () => ({ matched: true, remaining: 1 }))),
-        hostLabel: labelWithClear(clearLabel)
+        hostLabel: labelWithClearFor(clearLabel)
       })
 
       expect(await serverListenerOf(target)({}, { serverId: SERVER_ID })).toEqual({ result: 'ok' })
 
-      // The single-slot label is not keyed by server, so erasing it here would wipe the name the
-      // STILL-PAIRED server is displayed under — the regression this arm must not introduce.
-      expect(clearLabel).not.toHaveBeenCalled()
+      // The inverse of the rule #1149 shipped and #1156 retires. While the label was a single
+      // un-keyed slot this erase had to be withheld whenever anything stayed paired, or it would
+      // wipe the name a STILL-PAIRED server is displayed under. Keyed, it erases exactly the one
+      // server named and leaves every survivor's label stored — so withholding it is now the bug.
+      expect(clearLabel).toHaveBeenCalledTimes(1)
+      expect(clearLabel).toHaveBeenCalledWith(SERVER_ID)
     })
 
-    it('erases the label exactly once, with no arguments, when the last record goes', async () => {
+    it('erases the named server’s label when it was the LAST record too', async () => {
       const target = fakeServerTarget()
       const clearLabel = vi.fn(async () => {})
       registerUnpairServerHandler(target, {
         store: storeWithClearServer(vi.fn(async () => ({ matched: true, remaining: 0 }))),
-        hostLabel: labelWithClear(clearLabel)
+        hostLabel: labelWithClearFor(clearLabel)
       })
 
       expect(await serverListenerOf(target)({}, { serverId: SERVER_ID })).toEqual({ result: 'ok' })
 
+      // No gate on `remaining` at all any more: the erase is unconditional on a matched unpair, so
+      // both counts take the identical path and the store deletes the blob once the last entry goes.
       expect(clearLabel).toHaveBeenCalledTimes(1)
-      // No argument: the store erases by its OWN name, so the untrusted id cannot reach a
-      // persistence key even here.
-      expect(clearLabel).toHaveBeenCalledWith()
+      expect(clearLabel).toHaveBeenCalledWith(SERVER_ID)
+    })
+
+    it('names the SAME id the record erase used, for any id including a hostile one', async () => {
+      for (const serverId of ['srv-1', '__proto__', 'constructor', '', '../pyrycode.paired_server']) {
+        const target = fakeServerTarget()
+        const clearServer = vi.fn(async () => ({ matched: true, remaining: 1 }))
+        const clearLabel = vi.fn(async () => {})
+        registerUnpairServerHandler(target, {
+          store: storeWithClearServer(clearServer),
+          hostLabel: labelWithClearFor(clearLabel)
+        })
+
+        expect(await serverListenerOf(target)({}, { serverId })).toEqual({ result: 'ok' })
+
+        // One already-guarded id, passed verbatim to both erases — never re-derived, never
+        // transformed. The store matches it with === against a decoded entry's own field, so it
+        // stays a JSON value and a comparand and never becomes a persistence name or object key.
+        expect(clearServer).toHaveBeenCalledWith(serverId)
+        expect(clearLabel).toHaveBeenCalledWith(serverId)
+      }
     })
 
     it('still resolves ok (never rejects) when the label erase throws — the record is already gone', async () => {
@@ -599,7 +633,7 @@ describe('registerUnpairServerHandler', () => {
       const onUnpaired = vi.fn()
       registerUnpairServerHandler(target, {
         store: storeWithClearServer(vi.fn(async () => ({ matched: true, remaining: 0 }))),
-        hostLabel: labelWithClear(
+        hostLabel: labelWithClearFor(
           vi.fn(async () => {
             throw new Error(`delete ${LABEL_TEXT} failed: ${SECRET_PATH}`)
           })
@@ -678,7 +712,7 @@ describe('registerUnpairServerHandler', () => {
           return { matched: true, remaining: 0 }
         })
       ),
-      hostLabel: labelWithClear(
+      hostLabel: labelWithClearFor(
         vi.fn(async () => {
           order.push('label')
         })
@@ -719,7 +753,7 @@ describe('registerUnpairServerHandler', () => {
       {}
     )
     await drive(vi.fn(async () => ({ matched: true, remaining: 0 })), {
-      hostLabel: labelWithClear(
+      hostLabel: labelWithClearFor(
         vi.fn(async () => {
           throw new Error(`delete ${LABEL_TEXT} failed: ${SECRET_PATH}`)
         })

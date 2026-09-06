@@ -36,10 +36,12 @@ const PAYLOAD: QrPayload = {
 const parseOk = (): ParsePairingResult => ({ ok: true, payload: PAYLOAD })
 const confirmationOf = (prepare: PairingConfirmation['prepare']): PairingConfirmation => ({ prepare })
 
-// The minimal host-label surface the handler declares — only `save` (#823). A spy, so "the label
-// reaches the store and nothing else" is asserted on the call, not on a keychain or the filesystem.
-function fakeHostLabel(save = vi.fn(async () => {})): { save: ReturnType<typeof vi.fn> } {
-  return { save }
+// The minimal host-label surface the handler declares — only `saveFor` since #1156 (only `save`
+// before it). A spy, so "the label reaches the store under the right id and nothing else" is
+// asserted on the call, not on a keychain or the filesystem. A `saveFor`-only handle still cannot
+// read any label back, so the string is never materialised in the handler under test.
+function fakeHostLabel(saveFor = vi.fn(async () => {})): { saveFor: ReturnType<typeof vi.fn> } {
+  return { saveFor }
 }
 
 describe('registerPairingHandler', () => {
@@ -272,7 +274,7 @@ describe('registerPairingHandler', () => {
 })
 
 // The operator-typed host label riding the confirm (#823). It reaches exactly one sink —
-// hostLabel.save — and only after the RECORD itself has persisted; it never enters prepare's frozen
+// hostLabel.saveFor — and only after the RECORD itself has persisted; it never enters prepare's frozen
 // snapshot, never crosses back in a response, and never reaches a log.
 describe('registerPairingHandler — host label on confirm (#823)', () => {
   const LABEL = 'Pyrybox'
@@ -281,13 +283,13 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
   function paired(
     overrides: {
       confirm?: ReturnType<typeof vi.fn>
-      hostLabel?: { save: ReturnType<typeof vi.fn> }
+      hostLabel?: { saveFor: ReturnType<typeof vi.fn> }
       onPaired?: ReturnType<typeof vi.fn>
     } = {}
   ): {
     listener: (event: unknown, request: unknown) => Promise<unknown>
     confirm: ReturnType<typeof vi.fn>
-    hostLabel: { save: ReturnType<typeof vi.fn> }
+    hostLabel: { saveFor: ReturnType<typeof vi.fn> }
     onPaired: ReturnType<typeof vi.fn>
   } {
     const target = fakeTarget()
@@ -304,14 +306,72 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     return { listener: listenerOf(target), confirm, hostLabel, onPaired }
   }
 
-  it('persists the label through the store exactly once, verbatim (AC1)', async () => {
+  it('persists the label through the store exactly once, verbatim, UNDER THE PAIRED SERVER’S ID (#1156)', async () => {
     const { listener, hostLabel } = paired()
 
     await listener({}, { type: 'submit', paste: 'good' })
 
     expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true })
-    expect(hostLabel.save).toHaveBeenCalledTimes(1)
-    expect(hostLabel.save).toHaveBeenCalledWith(LABEL)
+    expect(hostLabel.saveFor).toHaveBeenCalledTimes(1)
+    // The id is the `server` off the payload the submit parsed — the same object `prepare` froze —
+    // so the label is stored under exactly the record this confirm persisted.
+    expect(hostLabel.saveFor).toHaveBeenCalledWith(PAYLOAD.server, LABEL)
+  })
+
+  it('stores each pairing under its OWN id, so a second machine does not overwrite the first (AC1)', async () => {
+    const target = fakeTarget()
+    const hostLabel = fakeHostLabel()
+    const second: QrPayload = { ...PAYLOAD, server: 'srv-2' }
+    const parse = vi
+      .fn<(pasted: string) => ParsePairingResult>()
+      .mockReturnValueOnce({ ok: true, payload: PAYLOAD })
+      .mockReturnValueOnce({ ok: true, payload: second })
+    registerPairingHandler(target, {
+      parse,
+      confirmation: confirmationOf(
+        vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa:bb', confirm: vi.fn(async () => {}) }))
+      ),
+      hostLabel
+    })
+    const listener = listenerOf(target)
+
+    await listener({}, { type: 'submit', paste: 'first' })
+    await listener({}, { type: 'confirm', label: 'Pyrybox' })
+    await listener({}, { type: 'submit', paste: 'second' })
+    await listener({}, { type: 'confirm', label: 'Pyrybox II' })
+
+    // Two distinct ids, in order. Before #1156 both writes landed in one un-keyed slot and the
+    // second silently replaced the first machine's name.
+    expect(hostLabel.saveFor.mock.calls).toEqual([
+      ['srv-1', 'Pyrybox'],
+      ['srv-2', 'Pyrybox II']
+    ])
+  })
+
+  it('carries the id of the pairing being confirmed, not of a later submit that superseded it', async () => {
+    const target = fakeTarget()
+    const hostLabel = fakeHostLabel()
+    const parse = vi
+      .fn<(pasted: string) => ParsePairingResult>()
+      .mockReturnValueOnce({ ok: true, payload: PAYLOAD })
+      .mockReturnValueOnce({ ok: true, payload: { ...PAYLOAD, server: 'srv-2' } })
+    registerPairingHandler(target, {
+      parse,
+      confirmation: confirmationOf(
+        vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa:bb', confirm: vi.fn(async () => {}) }))
+      ),
+      hostLabel
+    })
+    const listener = listenerOf(target)
+
+    // A second submit supersedes the first prepared pairing, and the id must be superseded WITH it:
+    // the confirm handle and the id it belongs to are one slot, so they cannot come apart and label
+    // the wrong machine — this ticket's own defect, arriving from the other direction.
+    await listener({}, { type: 'submit', paste: 'first' })
+    await listener({}, { type: 'submit', paste: 'second' })
+    await listener({}, { type: 'confirm', label: LABEL })
+
+    expect(hostLabel.saveFor).toHaveBeenCalledWith('srv-2', LABEL)
   })
 
   it('writes nothing to the label store when no label is supplied (AC2)', async () => {
@@ -320,7 +380,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     await listener({}, { type: 'submit', paste: 'good' })
 
     expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
-    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(hostLabel.saveFor).not.toHaveBeenCalled()
   })
 
   it('saves an empty label — a supplied value, not absence', async () => {
@@ -329,7 +389,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     await listener({}, { type: 'submit', paste: 'good' })
 
     expect(await listener({}, { type: 'confirm', label: '' })).toEqual({ ok: true })
-    expect(hostLabel.save).toHaveBeenCalledWith('')
+    expect(hostLabel.saveFor).toHaveBeenCalledWith(PAYLOAD.server, '')
   })
 
   it('rejects a non-string label at the guard; the pairing does not proceed (AC3)', async () => {
@@ -342,7 +402,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
       ok: false,
       reason: 'malformed-request'
     })
-    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(hostLabel.saveFor).not.toHaveBeenCalled()
     expect(confirm).not.toHaveBeenCalled() // the record was not persisted either
 
     // The rejection leaves the prepared pairing intact: a malformed request must not burn a
@@ -361,7 +421,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     expect(
       await listener({}, { type: 'confirm', label: 'a'.repeat(MAX_HOST_LABEL_LENGTH + 1) })
     ).toEqual({ ok: false, reason: 'malformed-request' })
-    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(hostLabel.saveFor).not.toHaveBeenCalled()
     expect(confirm).not.toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -373,7 +433,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
       ok: false,
       reason: 'no-pending-pairing'
     })
-    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(hostLabel.saveFor).not.toHaveBeenCalled()
   })
 
   it('saves no label when the RECORD persist fails (a label for an unpersisted pairing)', async () => {
@@ -389,7 +449,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
       ok: false,
       reason: 'persist-failed'
     })
-    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(hostLabel.saveFor).not.toHaveBeenCalled()
   })
 
   it('a failed LABEL persist still reports the pairing as succeeded, and still connects (AC5)', async () => {
@@ -405,7 +465,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
 
     // The response reports on the RECORD, which persisted. A lost nickname is not a failed pairing.
     await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true })
-    expect(hostLabel.save).toHaveBeenCalledTimes(1)
+    expect(hostLabel.saveFor).toHaveBeenCalledTimes(1)
     expect(onPaired).toHaveBeenCalledTimes(1)
   })
 

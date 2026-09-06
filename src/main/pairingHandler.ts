@@ -18,7 +18,7 @@ import {
 } from '../shared/ipc/pairing'
 import type { ParsePairingResult } from './pairingPayload'
 import type { PairingConfirmation } from './pairingConfirmation'
-import type { HostLabelStore } from './hostLabelStore'
+import type { MultiHostLabelStore } from './hostLabelStore'
 
 /**
  * The minimal main-process invoke surface the handler needs. Electron's `ipcMain` satisfies this
@@ -57,21 +57,30 @@ export function registerPairingHandler(
      */
     onPaired?: () => void
     /**
-     * The write half of the host-label store (#822), used only when a confirm carries a label (#823).
-     * `Pick<…, 'save'>` follows PairingHandleTarget's minimal-structural-surface idiom: this handler
-     * therefore CANNOT load the label back or clear it — only append the operator's display text for
-     * the pairing it just persisted. Optional, mirroring onPaired above, so every existing call site
-     * compiles unchanged; the composition root always wires it.
+     * The write half of the host-label store (#822), used only when a confirm carries a label (#823),
+     * and keyed by server since #1156 so a second pairing stops overwriting the first machine's name.
+     * `Pick<…, 'saveFor'>` follows PairingHandleTarget's minimal-structural-surface idiom: this
+     * handler therefore CANNOT load any label back or clear one — only write the operator's display
+     * text for the pairing it just persisted, under that pairing's own id. Optional, mirroring
+     * onPaired above, so every existing call site compiles unchanged; the composition root always
+     * wires it. Widening to MultiHostLabelStore does NOT widen what is reachable here: a `Pick` of one
+     * member inherits nothing from the interface it extends.
      */
-    hostLabel?: Pick<HostLabelStore, 'save'>
+    hostLabel?: Pick<MultiHostLabelStore, 'saveFor'>
   }
 ): () => void {
   const { parse, confirmation, onPaired, hostLabel } = deps
 
   // At most one prepared pairing (AC4): the opaque confirm closure of the most-recently-fingerprinted
-  // record, or null. Only the closure is held — the fingerprint was already returned, and the
-  // record/token/key live inside #53's frozen snapshot, never in a field this module reads or returns.
-  let pendingConfirm: (() => Promise<void>) | null = null
+  // record, plus the `server` id that record carries, or null. Only the closure and the id are held —
+  // the fingerprint was already returned, and the token/key live inside #53's frozen snapshot, never
+  // in a field this module reads or returns.
+  //
+  // ONE slot holding both, never two parallel `let`s (#1156). The id is what decides which machine a
+  // label describes, so a path that replaced or cleared one and not the other would write this
+  // pairing's name onto another server — this ticket's own defect, arriving from the other direction.
+  // Held together, they are set together and consumed together and cannot come apart.
+  let pending: { confirm: () => Promise<void>; serverId: string } | null = null
 
   const listener = async (
     _event: unknown,
@@ -87,25 +96,33 @@ export function registerPairingHandler(
 
     if (request.type === 'submit') {
       // A new submit supersedes any prior prepared pairing (AC4): drop it up front, before parse,
-      // so even a failing submit leaves nothing confirmable.
-      pendingConfirm = null
+      // so even a failing submit leaves nothing confirmable — the id goes with it, in one statement.
+      pending = null
       const parsed = parse(request.paste)
       if (!parsed.ok) return { ok: false, reason: 'invalid-paste' }
       const prepared = confirmation.prepare(parsed.payload)
       // A rejected key produces no confirm handle at all (#53) — nothing to persist, nothing held.
       if (!prepared.ok) return { ok: false, reason: 'invalid-key' }
-      pendingConfirm = prepared.confirm
+      // The id comes off the SAME payload object `prepare` just froze `record.server` from, in the
+      // statement above, so the label's id and the persisted record's id cannot differ. `prepare`
+      // deliberately hands back only a fingerprint and an opaque callable — widening PreparedPairing
+      // to carry the id would put a record field on the return path of the one module whose whole
+      // purpose is that no record field leaves it, next to the bearer token. Reading it here instead
+      // materialises the `server` id and nothing else, and that id is already renderer-visible
+      // through the paired-server-info query.
+      pending = { confirm: prepared.confirm, serverId: parsed.payload.server }
       return { ok: true, fingerprint: prepared.fingerprint }
     }
 
     // request.type === 'confirm' — carries no record; at most the operator's display label (#823).
-    const confirm = pendingConfirm
-    if (confirm === null) return { ok: false, reason: 'no-pending-pairing' }
+    const prepared = pending
+    if (prepared === null) return { ok: false, reason: 'no-pending-pairing' }
     // Consume BEFORE awaiting so "persists exactly once" (AC3) is structural: a second/concurrent
-    // confirm reads null → no-pending-pairing, so there is no double-save race across the await.
-    pendingConfirm = null
+    // confirm reads null → no-pending-pairing, so there is no double-save race across the await. The
+    // pair is consumed as a unit, so neither half can survive into a later confirm on its own.
+    pending = null
     try {
-      await confirm()
+      await prepared.confirm()
       // The record persisted, so the label now describes something real: hand it to the host-label
       // store (#823), its ONE sink. Ordered here on purpose — AFTER the record (a label for a pairing
       // that did not persist is meaningless, and a failed persist takes the catch below without
@@ -117,7 +134,11 @@ export function registerPairingHandler(
       // a value the operator supplied and is saved as one.
       if (request.label !== undefined) {
         try {
-          await hostLabel?.save(request.label)
+          // Under the id of the pairing just persisted (#1156), so this machine's name replaces only
+          // its own previous name and leaves every other paired machine's untouched. The id is a JSON
+          // string value and a `===` comparand inside the store — never a persistence name, a path,
+          // or an object key — and it is not logged here, because no label branch logs at all.
+          await hostLabel?.saveFor(prepared.serverId, request.label)
         } catch {
           // The response reports on the RECORD (AC5): the pairing succeeded, so a lost nickname must
           // not be reported as a failed pairing — it is recoverable by re-entering the label. The

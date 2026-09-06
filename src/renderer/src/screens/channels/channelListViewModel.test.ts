@@ -8,6 +8,7 @@ import {
   partitionActive,
   workspaceLabelFor,
   groupByWorkspace,
+  groupByServer,
   formatLastActivity
 } from './channelListViewModel'
 
@@ -23,6 +24,13 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
     last_used_at: '2026-01-15T12:00:00.000Z',
     ...over
   }
+}
+
+// A row plus its server stamp (#1070). Structurally what `groupByServer` constrains on, and assignable
+// FROM the store's `ServerConversationSummary` — declared here rather than imported so this file stays
+// free of the store module, which is the property `groupByServer`'s own signature is shaped around.
+function stamped(serverId: string | null | undefined, over: Partial<ConversationSummary>) {
+  return { ...row(over), serverId }
 }
 
 describe('titleFor', () => {
@@ -228,6 +236,108 @@ describe('groupByWorkspace', () => {
 
   it('returns an empty array for empty input', () => {
     expect(groupByWorkspace([])).toEqual([])
+  })
+})
+
+describe('groupByServer (#1070)', () => {
+  // The ids the paired-server list supplies. Opaque, client-held, and deliberately NOT ordered
+  // alphabetically here: every ordering assertion below would pass vacuously if they were.
+  const PYRYBOX = 'server-pyrybox'
+  const MACBOOK = 'server-macbook'
+
+  const ids = (rows: readonly { id: string }[]): string[] => rows.map((r) => r.id)
+
+  it('files each row under its own server, in the LIST order and not the row order (AC1)', () => {
+    const { servers, unattributed } = groupByServer(
+      [PYRYBOX, MACBOOK],
+      [
+        stamped(MACBOOK, { id: 'm1' }),
+        stamped(PYRYBOX, { id: 'p1' }),
+        stamped(MACBOOK, { id: 'm2' })
+      ]
+    )
+    // Pairing order — oldest-paired first — even though the first row seen belongs to the second server.
+    expect(servers.map((s) => s.serverId)).toEqual([PYRYBOX, MACBOOK])
+    expect(servers.map((s) => ids(s.rows))).toEqual([['p1'], ['m1', 'm2']])
+    // Within a server, wire order is preserved: nothing sorts.
+    expect(unattributed).toEqual([])
+  })
+
+  it('keeps two servers sharing an IDENTICAL cwd apart (AC1, the silent-merge case)', () => {
+    // The collision this whole level exists to prevent: `groupByWorkspace`'s key is the raw path, and a
+    // path is unique only WITHIN one machine. Split by server first and each machine groups its own.
+    const shared = '/home/user/project'
+    const { servers } = groupByServer(
+      [PYRYBOX, MACBOOK],
+      [stamped(PYRYBOX, { id: 'p1', cwd: shared }), stamped(MACBOOK, { id: 'm1', cwd: shared })]
+    )
+    const grouped = servers.map((s) => groupByWorkspace(s.rows))
+    expect(grouped.map((groups) => groups.length)).toEqual([1, 1])
+    expect(grouped.map((groups) => groups.map((g) => ids(g.rows)))).toEqual([[['p1']], [['m1']]])
+    // Both groups carry the same key and the same label — that is the point. They are two groups anyway,
+    // because they were never handed to one grouper.
+    expect(grouped.map((groups) => groups[0].key)).toEqual([shared, shared])
+  })
+
+  it('gives a server with no rows in this section an empty group, never no group (AC2)', () => {
+    // The freshly-paired machine. Its group is what the caller draws a bare host row from.
+    const { servers } = groupByServer([PYRYBOX, MACBOOK], [stamped(PYRYBOX, { id: 'p1' })])
+    expect(servers.map((s) => s.serverId)).toEqual([PYRYBOX, MACBOOK])
+    expect(servers.map((s) => ids(s.rows))).toEqual([['p1'], []])
+  })
+
+  it('never drops a row: an unstamped or unknown-server row goes to unattributed', () => {
+    // `ConversationListOrigin` admits null and undefined, and a stamp naming an unpaired machine is the
+    // third shape. #1068 stamps every event main-side so none is reachable in production — but the type
+    // allows all three and a server-keyed tree has to answer for them. Silently dropping is the one
+    // outcome ruled out; filing them under the first paired server would name a machine on no evidence.
+    const rows = [
+      stamped(PYRYBOX, { id: 'p1' }),
+      stamped(null, { id: 'bound-but-unpaired' }),
+      stamped(undefined, { id: 'never-bound' }),
+      stamped('server-departed', { id: 'unknown-machine' })
+    ]
+    const { servers, unattributed } = groupByServer([PYRYBOX], rows)
+    expect(servers.map((s) => ids(s.rows))).toEqual([['p1']])
+    expect(ids(unattributed)).toEqual(['bound-but-unpaired', 'never-bound', 'unknown-machine'])
+    // Stated as the invariant rather than as three cases: the partition is TOTAL.
+    const filed = servers.reduce((n, s) => n + s.rows.length, 0) + unattributed.length
+    expect(filed).toBe(rows.length)
+  })
+
+  it('puts every row in unattributed when no server is paired yet', () => {
+    // The frames before the paired-server one-shot settles. The rows still render; no host row does.
+    const { servers, unattributed } = groupByServer([], [stamped(PYRYBOX, { id: 'p1' })])
+    expect(servers).toEqual([])
+    expect(ids(unattributed)).toEqual(['p1'])
+  })
+
+  it('collapses a repeated id to ONE group, so no two groups can share a React key', () => {
+    // Unreachable through `decodeCollection` (a repeated `server` reads as a malformed collection), but
+    // two groups sharing a key is a React-level defect rather than a rendering one, so the grouper
+    // refuses to emit it rather than trusting its caller.
+    const { servers } = groupByServer(
+      [PYRYBOX, PYRYBOX],
+      [stamped(PYRYBOX, { id: 'p1' }), stamped(PYRYBOX, { id: 'p2' })]
+    )
+    expect(servers.map((s) => s.serverId)).toEqual([PYRYBOX])
+    expect(servers.map((s) => ids(s.rows))).toEqual([['p1', 'p2']])
+  })
+
+  it('treats a `__proto__` stamp as an ordinary missing key, never a prototype read', () => {
+    // The `Map`-not-object rule, as a behaviour rather than a style note: on a `Record<string, T[]>` the
+    // lookup below resolves `Object.prototype` — a truthy non-array — and the row is pushed onto it or
+    // throws. Client-set stamps make this unreachable; the assertion is what keeps the Map deliberate.
+    const { servers, unattributed } = groupByServer(
+      [PYRYBOX],
+      [stamped('__proto__', { id: 'hostile' })]
+    )
+    expect(servers.map((s) => ids(s.rows))).toEqual([[]])
+    expect(ids(unattributed)).toEqual(['hostile'])
+  })
+
+  it('returns empty for empty input', () => {
+    expect(groupByServer([], [])).toEqual({ servers: [], unattributed: [] })
   })
 })
 

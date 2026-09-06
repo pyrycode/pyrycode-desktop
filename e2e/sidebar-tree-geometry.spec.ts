@@ -102,10 +102,14 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 20px list inde
   const titles = page.locator('.channel-list__title')
   const divider = page.locator('.channel-list__divider')
 
-  // The seed alone renders one section and no divider; minting the second row through the FAB brings
-  // the other section and the divider with it. Counted before any box is read.
+  // Since #1070 the seed alone already renders BOTH sections, both host rows and the divider — every
+  // paired machine gets a row in each section whether or not it has conversations there. The FAB is still
+  // what mints the second ROW, which is what the geometry below needs (an open row and a resting one, and
+  // a workspace group in each section). Counted before any box is read.
   await expect(rows).toHaveCount(1)
-  await expect(divider).toHaveCount(0)
+  await expect(divider).toHaveCount(1)
+  await expect(headers).toHaveCount(2)
+  await expect(hosts).toHaveCount(2)
   await page.getByRole('button', { name: 'New discussion' }).click()
   await expect(rows).toHaveCount(2)
   await expect(headers).toHaveCount(2)

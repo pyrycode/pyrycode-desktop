@@ -12,14 +12,13 @@ import {
 // the app up against TWO paired daemons inside ONE launch, so the per-server tickets (#1070 grouping,
 // #1150 unpair-scoped clear, #1152 per-server unpair) have a tier to prove themselves in.
 //
-// WHAT THIS SPEC DELIBERATELY DOES NOT ASSERT: two sidebar HOST rows. `ChannelList` still renders
-// exactly one `.channel-list__host` row per tree, and the second one is #1070's AC1 — not dropped, it
-// belongs to #1070's own spec, riding this fixture.
-//
-// The per-server DOTS are no longer deferred: #1199 moved that single row onto a keyed `hostLabelStore`
-// and onto `selectStatusFor` / `selectRelayLinkStatusFor`, so it names the first paired server and
-// reports that server's own two legs. `e2e/host-row-per-server.spec.ts` owns that claim and drives it on
-// this fixture — drop the OTHER server's client leg, and the row does not move.
+// WHAT THIS SPEC DELIBERATELY DOES NOT ASSERT: the sidebar's HOST rows. #1070 landed the second one —
+// `ChannelList` now draws one `.channel-list__host` per paired machine in each section — and #1199 gave
+// each of them its own label and its own two connection dots, off `hostLabelStore` and
+// `selectStatusFor` / `selectRelayLinkStatusFor`. Both claims belong to `e2e/host-row-per-server.spec.ts`,
+// which rides this same fixture: it counts the four rows, reads their labels, and drops ONE machine's
+// client leg to prove the other machine's dots do not follow. This spec stays about the FIXTURE — two
+// daemons, two forwarders, two pairings, one launch — and asserts only rows and Settings entries.
 //
 // SECRET HYGIENE, inherited from the fixture: both pasted payloads carry synthetic keys and synthetic
 // tokens only, and nothing below ever reaches one. Every assertion here reads DOM text or a small

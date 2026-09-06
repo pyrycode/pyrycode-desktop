@@ -23,9 +23,16 @@ export function titleFor(name: string | null): string {
  * `false` = an ad-hoc Recent discussion). Two order-preserving filters — no sort: the daemon's array
  * order is authoritative (AC2), so within each section rows keep their store order.
  */
-export function partitionByPromotion(rows: readonly ConversationSummary[]): {
-  channels: readonly ConversationSummary[]
-  discussions: readonly ConversationSummary[]
+// Generic over the row since #1070, so a filter never ERASES a property the caller put on its rows: the
+// sidebar hands in `ServerConversationSummary`s and needs the server stamp to survive to `groupByServer`.
+// Both partitions are `filter` calls, which preserve the element type at runtime already — this only
+// makes the signature say so. Every existing caller passes plain `ConversationSummary`s and infers
+// `T = ConversationSummary`, so their types are byte-identical to before.
+export function partitionByPromotion<T extends ConversationSummary>(
+  rows: readonly T[]
+): {
+  channels: readonly T[]
+  discussions: readonly T[]
 } {
   return {
     channels: rows.filter((r) => r.is_promoted),
@@ -41,9 +48,11 @@ export function partitionByPromotion(rows: readonly ConversationSummary[]): {
  * returns archived rows tagged `is_archived` (pyrycode#880) and the active list never filtered them,
  * so archived conversations leaked into both the active list and the Archive screen.
  */
-export function partitionActive(rows: readonly ConversationSummary[]): {
-  channels: readonly ConversationSummary[]
-  discussions: readonly ConversationSummary[]
+export function partitionActive<T extends ConversationSummary>(
+  rows: readonly T[]
+): {
+  channels: readonly T[]
+  discussions: readonly T[]
 } {
   return partitionByPromotion(rows.filter((r) => !r.is_archived))
 }
@@ -123,6 +132,82 @@ export function groupByWorkspace(
     groups.set(key, { label: label ?? UNKNOWN_WORKSPACE_LABEL, rows: [row] })
   }
   return Array.from(groups, ([key, group]) => ({ key, label: group.label, rows: group.rows }))
+}
+
+/**
+ * The minimum a row must carry to be filed under a server (#1070). A STRUCTURAL constraint, never an
+ * import of `conversationListStore`'s `ServerConversationSummary`: this module's header promises it is
+ * framework- and store-free so every derivation unit-tests without React or zustand, and importing that
+ * type for a single field would drag the store into the view-model's import graph. The store's
+ * `serverId: ConversationListOrigin` (`string | null | undefined`) satisfies this as written.
+ */
+type ServerStamped = { readonly serverId?: string | null }
+
+/** One server's subtree source: which machine, and that machine's rows in array order. */
+export type ServerGroup<T> = {
+  readonly serverId: string
+  readonly rows: readonly T[]
+}
+
+/**
+ * Split `rows` by the server they came from (#1070), one group per entry of `serverIds` — the level that
+ * sits ABOVE `groupByWorkspace`. It exists because that grouper's key is the raw `cwd` and a path is
+ * unique only WITHIN one machine: two servers both holding `/home/user/project` would otherwise merge
+ * into a single workspace group holding both machines' conversations, silently.
+ *
+ * THE JOIN DIRECTION IS THE SECURITY PROPERTY, and it is the reason this takes the ids as a parameter
+ * rather than reading them. `serverIds` is the CLIENT's own paired-server list; a row's stamp is only
+ * ever TESTED against it. So a stamp can select among existing keys and can never mint one, and the
+ * worst a confused or hostile daemon reaches is its own rows under its own host row. This is the
+ * read-side twin of the rule `selectConversationsFor`'s docblock states as a condition of its signature:
+ * a wire-sourced lookup key would let one server's conversations appear under another server's name.
+ *
+ * A `Map`, NEVER a `Record<string, T[]>` — and this one is load-bearing rather than stylistic, which is
+ * why it is written down. `ServerOrigin`'s docblock in `shared/ipc/events.ts` rules it for any consumer
+ * indexing by an id, and here the failure is concrete: on a plain object a `__proto__` stamp resolves
+ * `Object.prototype`, a truthy non-array whose `push` corrupts or throws. Client-set stamps make that
+ * unreachable today, so the Map is the free second fabric — do not "simplify" it away.
+ *
+ * Group order is `serverIds` order, which is `pairedServerStore.list()` order — oldest-saved first, so
+ * pairing order. Row order within a group is the array's; nothing sorts. A REPEATED id collapses to one
+ * group, because two groups sharing an id would be two React siblings sharing a key: unreachable through
+ * `decodeCollection` (a repeated `server` reads as a malformed collection), but refused here rather than
+ * trusted to the caller.
+ *
+ * THE PARTITION IS TOTAL. A row whose stamp is not a `string` key of the map — `null` (bound while no
+ * paired record was in hand), `undefined` (never bound), or a string naming no paired server — lands in
+ * `unattributed` and is rendered by the caller with NO host row above it. Three outcomes were available
+ * and two are wrong: dropping the row hides a real conversation, and filing it under the first paired
+ * server would put it under a machine's name on no evidence — the same lie the join direction above
+ * exists to prevent, arrived at by omission instead of by a hostile stamp. Naming no machine is exactly
+ * what is known about such a row. #1068 stamps every daemon event main-side so none of the three is
+ * reachable in production; the type admits them and a server-keyed tree has to answer.
+ *
+ * No `console.*`, here or on any path this feeds. The tempting log is one for an unattributed row, and
+ * every useful form of it carries the row — its `cwd`, its name or its stamp — which ADR 0007's
+ * content-free rule and CLAUDE.md both forbid.
+ */
+export function groupByServer<T extends ServerStamped>(
+  serverIds: readonly string[],
+  rows: readonly T[]
+): { readonly servers: readonly ServerGroup<T>[]; readonly unattributed: readonly T[] } {
+  const buckets = new Map<string, T[]>()
+  for (const serverId of serverIds) {
+    if (!buckets.has(serverId)) buckets.set(serverId, [])
+  }
+  const unattributed: T[] = []
+  for (const row of rows) {
+    const bucket = typeof row.serverId === 'string' ? buckets.get(row.serverId) : undefined
+    if (bucket === undefined) {
+      unattributed.push(row)
+      continue
+    }
+    bucket.push(row)
+  }
+  return {
+    servers: Array.from(buckets, ([serverId, serverRows]) => ({ serverId, rows: serverRows })),
+    unattributed
+  }
 }
 
 const MS_MINUTE = 60_000

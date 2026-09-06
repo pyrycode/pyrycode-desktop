@@ -97,6 +97,20 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) 0 var(--space-1) var(--space-4);
+  /* #1070 — the design's 16px between one machine's subtree and the next (103:2959's `Hosts` column,
+     gap-[16px]). It rides the host row rather than a per-server wrapper because this file's rendered
+     sequence is deliberately FLAT: React fragments emit no element, so there is no `Host container` box
+     to hang a `gap` on, and inventing one would make every server subtree a flex item of the
+     `.channel-list` column and move every existing e2e locator's tree position. */
+  margin-top: var(--space-4);
+}
+
+/* ...and the FIRST host row of each section takes none of it: its distance from the header is the
+   header's own 12px bottom padding (see that rule). Adjacency is exact rather than approximate — the
+   fragments above emit no DOM, so a section's first host row is always the header's next element
+   sibling — which is what leaves single-server geometry byte-identical to what shipped before #1070. */
+.channel-list__section-header + .channel-list__host {
+  margin-top: 0;
 }
 
 /* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __fab-icon); the
@@ -720,18 +734,11 @@
   display: block;
 }
 
-/* The loaded-but-empty state (no Figma node — mirrors mobile #312's empty state). A centered neutral
-   body-medium message. */
-.channel-list__empty {
-  margin: 0;
-  padding: var(--space-6) var(--space-4);
-  text-align: center;
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
-}
+/* `.channel-list__empty` — the loaded-but-empty state — was DELETED here by #1070 along with the
+   `No conversations yet` paragraph that was its only consumer: every paired machine now draws a host row
+   in both sections whether or not it has conversations, so a paired app is never empty. Recorded rather
+   than silently removed because two sibling empty states (`.archive__empty`, the conversation screen's)
+   cite this rule as the shape they mirror. */
 
 /* #274 — the Save-as-channel dialog (Figma 19:24, the naming half). Mirrors the conversation.css
    permission-modal chrome (overlay + scrim + centered M3 panel), but the overlay is `position: fixed`

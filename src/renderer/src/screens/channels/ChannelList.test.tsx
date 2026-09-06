@@ -83,7 +83,15 @@ const noop = (): void => {}
 const NOW = Date.parse('2026-01-15T12:00:00.000Z')
 const isoAgo = (msAgo: number): string => new Date(NOW - msAgo).toISOString()
 
-function row(over: Partial<ConversationSummary>): ConversationSummary {
+// The server every unstamped test row belongs to (#1070). One default machine keeps every case written
+// before this ticket meaning what it meant: its rows land under one host row per section, which is the
+// single-server sidebar those cases were describing. A case that cares about the server level names its
+// own ids; `SECOND_SERVER` is the second machine, and it is deliberately NOT alphabetically after the
+// first, so an ordering assertion cannot pass by accident.
+const DEFAULT_SERVER = 'server-pyrybox'
+const SECOND_SERVER = 'server-macbook'
+
+function row(over: Partial<SidebarRow>): SidebarRow {
   return {
     id: 'id',
     name: 'A conversation',
@@ -92,9 +100,13 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
     cwd: '/tmp',
     last_message_ts: isoAgo(5 * 60_000),
     last_used_at: isoAgo(5 * 60_000),
+    serverId: DEFAULT_SERVER,
     ...over
   }
 }
+
+/** A row as the sidebar sees it (#1086's stamp beside the wire fields), mirroring `ChannelList`'s own. */
+type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 
 // `openConversationId` DEFAULTS TO NULL (#1098) so every call site written before this ticket keeps
 // rendering exactly what it rendered — the store's own hydrated value, and the "nothing opened yet"
@@ -102,13 +114,20 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
 // optional argument here, which is the whole reason the read was lifted out of `Row`: zustand v5 serves
 // `getInitialState()` under `renderToStaticMarkup`, so a store-reading row could only ever render the
 // unfilled case and this tier could prove nothing about the open one.
+//
+// `serverIds` DEFAULTS TO THE ONE MACHINE `row()` stamps, for the same reason and with the same effect:
+// every call site written before #1070 keeps rendering the single-server sidebar it was describing, and a
+// case that cares about the server level passes its own list. An explicit `[]` is the launch frame before
+// the paired-server one-shot settles.
 const render = (
-  conversations: readonly ConversationSummary[] | null,
-  openConversationId: string | null = null
+  conversations: readonly SidebarRow[] | null,
+  openConversationId: string | null = null,
+  serverIds: readonly string[] = [DEFAULT_SERVER]
 ): string =>
   renderToStaticMarkup(
     <ChannelListView
       conversations={conversations}
+      serverIds={serverIds}
       openConversationId={openConversationId}
       onOpen={noop}
       onOpenSettings={noop}
@@ -290,17 +309,54 @@ const ariaLabelOf = (tag: string): string => {
 
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
+    // #1070 left this posture EXACTLY as it was — the null-vs-loaded-zero tri-state is untouched, and it
+    // is the one state where a paired machine still draws no host row, because the sidebar has not yet
+    // been told whether there is anything to draw one beside.
     const markup = render(null)
     expect(markup).toContain('aria-label="Conversations"')
     expect(markup).not.toContain('Channels')
     expect(markup).not.toContain('Chats')
+    expect(markup).not.toContain(HOST_ROW_MARKER)
     expect(markup).not.toContain('No conversations yet')
   })
 
-  it('loaded-but-empty ([]): renders the empty state, no section headers (AC4)', () => {
+  it('loaded-but-empty ([]) with a machine paired: both headers and its two host rows (#1070 AC2)', () => {
+    // The amendment, in its purest form: a freshly paired machine with no conversations at all. It used
+    // to render the `No conversations yet` paragraph and nothing else, which left it no route to its
+    // first chat — the host row is where the plus that starts one lives (#1185, #1189), and the floating
+    // button refuses to create while more than one server is paired (#1120).
     const markup = render([])
-    expect(markup).toContain('No conversations yet')
-    expect(markup).not.toContain('Chats')
+    expect(markup).toContain('>Channels<')
+    expect(markup).toContain('>Chats<')
+    expect(markup).toContain('channel-list__divider')
+    expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+    // Nothing under either row.
+    expect(countOf(markup, ROW_MARKER)).toBe(0)
+    expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(0)
+  })
+
+  it('renders the retired empty-state paragraph in NO state (#1070 AC2)', () => {
+    // Deleted, not hidden. Asserted across every state the view has rather than only the one that used
+    // to show it, so a re-introduction anywhere reddens here.
+    for (const markup of [
+      render(null),
+      render([]),
+      render([], null, []),
+      render([row({ id: 'd1' })]),
+      render([row({ id: 'a1', is_archived: true })])
+    ]) {
+      expect(markup).not.toContain('No conversations yet')
+      expect(markup).not.toContain('channel-list__empty')
+    }
+  })
+
+  it('nothing to draw — no machine paired and no row — renders the wrapper alone (#1070 AC2)', () => {
+    const markup = render([], null, [])
+    expect(markup).toContain('aria-label="Conversations"')
+    expect(markup).not.toContain('>Channels<')
+    expect(markup).not.toContain('>Chats<')
+    expect(markup).not.toContain('channel-list__divider')
+    expect(markup).not.toContain(HOST_ROW_MARKER)
   })
 
   it('both sections present: both headers, a divider, rows in array order (AC2)', () => {
@@ -316,23 +372,23 @@ describe('ChannelListView', () => {
     expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(markup.indexOf('leaky-faucet'))
   })
 
-  it('channels only: the Channels header, no discussions header, no divider (AC2)', () => {
-    const markup = render([row({ id: 'c1', name: 'only channel', is_promoted: true })])
-    expect(markup).toContain('Channels')
-    expect(markup).not.toContain('Chats')
-    expect(markup).not.toContain('channel-list__divider')
-  })
-
-  it('discussions only: the discussions header, no Channels header, no divider (AC2)', () => {
-    const markup = render([row({ id: 'd1', name: 'only discussion', is_promoted: false })])
-    // Anchored, not bare: `toContain('Chats')` would also pass against a header reading "Recent Chats",
-    // so it cannot fail in the direction AC1 cares about. `renderToStaticMarkup` emits no comment markers
-    // around a single static text child, so `>Chats<` pins the header's exact rendered text.
-    expect(markup).toContain('>Chats<')
-    // The Channels header text must be absent. Both are substring matches, and "Chats" and "Channels"
-    // share only the prefix "Cha" — neither contains the other — so each assertion sees only its header.
-    expect(markup).not.toContain('>Channels<')
-    expect(markup).not.toContain('channel-list__divider')
+  it('one populated section still draws BOTH headers and the divider (#1070 AC2)', () => {
+    // Until #1070 each header was gated on its own section holding a row and the divider on both holding
+    // one, so this input rendered one header and no divider. Both cases below assert the inversion, and
+    // between them they cover a rows-in-Channels-only and a rows-in-Chats-only sidebar.
+    for (const promoted of [true, false]) {
+      const markup = render([row({ id: 'only', name: 'the one row', is_promoted: promoted })])
+      // Anchored, not bare: `toContain('Chats')` would also pass against a header reading "Recent Chats",
+      // so it could not fail in the direction this cares about. `renderToStaticMarkup` emits no comment
+      // markers around a single static text child, so `>Chats<` pins the header's exact rendered text.
+      expect(markup).toContain('>Channels<')
+      expect(markup).toContain('>Chats<')
+      expect(markup).toContain('channel-list__divider')
+      // The empty section is empty — one host row, and no workspace row or conversation row under it.
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(markup, ROW_MARKER)).toBe(1)
+    }
   })
 
   it('renders the unnamed fallback for a null name, never a blank row (AC3)', () => {
@@ -419,16 +475,20 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain('archived-one')
   })
 
-  it('renders the empty state when every row is archived, not a blank body (#469)', () => {
+  it('draws the bare tree when every row is archived, not a blank body (#469)', () => {
     // A non-empty store where every row is archived: the raw-length guard would pass but the active
-    // partition is empty. The empty state must show rather than a blank body (spec § 2).
+    // partition is empty. What that empty partition renders MOVED in #1070 — it used to be the
+    // `No conversations yet` paragraph, and it is now the paired machine's two host rows with nothing
+    // under them. The regression #469 actually guards is unchanged and is the pair below: an archived
+    // row must not leak into the active list.
     const markup = render([
       row({ id: 'a', name: 'archived-a', is_archived: true, is_promoted: true }),
       row({ id: 'b', name: 'archived-b', is_archived: true, is_promoted: false })
     ])
-    expect(markup).toContain('No conversations yet')
     expect(markup).not.toContain('archived-a')
     expect(markup).not.toContain('archived-b')
+    expect(countOf(markup, ROW_MARKER)).toBe(0)
+    expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
   })
 
   it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
@@ -440,7 +500,8 @@ describe('ChannelListView', () => {
   })
 
   describe('the host row heading each tree (#710)', () => {
-    // One row per tree, so the row counts under AC5 are the counts they had before this ticket.
+    // One machine paired, so the counts here are the counts they were before #1070 — which is the point:
+    // this block describes the single-server sidebar, and the per-server block below describes the rest.
     const bothTrees = (): string =>
       render([
         row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
@@ -455,9 +516,11 @@ describe('ChannelListView', () => {
       expect(countOf(markup, HOST_ICON_MARKER)).toBe(2)
     })
 
-    it('heads a single present tree with exactly one host row (AC1)', () => {
-      expect(countOf(render([row({ id: 'c1', is_promoted: true })]), HOST_ROW_MARKER)).toBe(1)
-      expect(countOf(render([row({ id: 'd1', is_promoted: false })]), HOST_ROW_MARKER)).toBe(1)
+    it('heads the EMPTY tree too, with the same single row (#1070 AC2)', () => {
+      // What #1070 inverted. Each case below populates one section only, and the other section still
+      // gets its machine's row — the count is 2 either way, where it used to be 1.
+      expect(countOf(render([row({ id: 'c1', is_promoted: true })]), HOST_ROW_MARKER)).toBe(2)
+      expect(countOf(render([row({ id: 'd1', is_promoted: false })]), HOST_ROW_MARKER)).toBe(2)
     })
 
     it('sits below its section label and above that tree conversation rows (AC1)', () => {
@@ -466,12 +529,14 @@ describe('ChannelListView', () => {
       expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
     })
 
-    it('renders no host row when the list is empty or not yet loaded (AC3)', () => {
-      // A tree with zero rows renders neither a section label nor a host row — both promote specs use
-      // "a zero-row section renders no header" as their proxy for "the row moved sections", so an
-      // always-present host row would dissolve that proof.
+    it('renders no host row when nothing is paired, or the list is not yet loaded (#1070)', () => {
+      // The rule that replaced "a tree with zero rows renders no host row". A host row is drawn from the
+      // PAIRED-SERVER LIST now, not from the section's rows, so the two states without one are the
+      // not-yet-loaded frame and a client with no machine paired — never a merely empty section.
       expect(countOf(render(null), HOST_ROW_MARKER)).toBe(0)
-      expect(countOf(render([]), HOST_ROW_MARKER)).toBe(0)
+      expect(countOf(render([], null, []), HOST_ROW_MARKER)).toBe(0)
+      // And the row survives a section, and a whole list, holding nothing.
+      expect(countOf(render([]), HOST_ROW_MARKER)).toBe(2)
     })
 
     it('leaves each section label singly selectable (AC4)', () => {
@@ -506,14 +571,14 @@ describe('ChannelListView', () => {
       // and zustand wires that to the state captured at store CREATION, so a seeded container can only
       // ever render the initial `loading` cell.
       //
-      // `serverId={null}` (#1199) is the row's LAUNCH FRAME — the paired-server one-shot has not
-      // resolved, so the row names nobody. It is the only value this tier can meaningfully render: the
-      // dot subtree reads two singletons through the same `getServerSnapshot()` seam, so a non-null id
-      // would address slots the server renderer always sees empty and produce the identical markup. AC5
-      // is exactly the claim that this frame is unchanged, so pinning it here is the point rather than a
-      // limitation. The named-server matrix is the e2e tier's (`host-row-per-server.spec.ts`).
+      // The id was `null` here until #1070 — the launch frame before the paired-server one-shot resolved,
+      // back when the row rendered unconditionally. That frame is gone: a host row exists BECAUSE an id
+      // was in the paired list, so the prop narrowed to `string`. Any id renders the same markup on this
+      // tier anyway — the dot subtree reads two singletons through the same `getServerSnapshot()` seam,
+      // so every id addresses slots the server renderer always sees empty. The named-server matrix is the
+      // e2e tier's (`host-row-per-server.spec.ts`).
       const renderHostRow = (label: string): string =>
-        renderToStaticMarkup(<HostRow label={label} serverId={null} />)
+        renderToStaticMarkup(<HostRow label={label} serverId={DEFAULT_SERVER} />)
 
       // Read the SHIPPED fallback back out of the collapse rather than restating 'Server', the same
       // discipline `hostLabelsIn` applies to the render — a copy change that collides with a section
@@ -601,6 +666,119 @@ describe('ChannelListView', () => {
         const labels = hostLabelsIn(bothTrees())
         expect(labels).toEqual([FALLBACK, FALLBACK])
       })
+    })
+  })
+
+  describe('one subtree per paired server (#1070)', () => {
+    // Two machines, one row each, both UNPROMOTED so the whole populated tree is the Chats one — which
+    // makes the Channels section the "paired but empty here" case in the same render.
+    const twoServers = (over: Partial<SidebarRow> = {}): string =>
+      render(
+        [
+          row({ id: 'p1', name: 'kitchenclaw refactor', serverId: DEFAULT_SERVER, ...over }),
+          row({ id: 'm1', name: 'Taste Testers', serverId: SECOND_SERVER, ...over })
+        ],
+        null,
+        [DEFAULT_SERVER, SECOND_SERVER]
+      )
+
+    it('draws one host row per paired server in EACH section (AC1)', () => {
+      const markup = twoServers()
+      // Two machines × two sections. A tree that drew the servers once and shared them across sections
+      // fails here at 2, and one that kept #1199's single row fails at 2 as well but with no workspace
+      // rows under the second machine — the count below separates those.
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(4)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+    })
+
+    it('puts each server’s own rows under that server’s row, in pairing order (AC1)', () => {
+      const markup = twoServers()
+      // Document order IS the assertion: header, machine 1's row, machine 1's conversations, machine 2's
+      // row, machine 2's conversations. Read as indices so a row appearing under the wrong machine — the
+      // misattribution the client-held join direction exists to prevent — fails rather than passing on a
+      // count that is right in the wrong order.
+      const secondHostAt = markup.indexOf(HOST_ROW_MARKER, markup.lastIndexOf('>Chats<'))
+      const nextHostAt = markup.indexOf(HOST_ROW_MARKER, secondHostAt + 1)
+      expect(markup.indexOf('kitchenclaw refactor')).toBeGreaterThan(secondHostAt)
+      expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(nextHostAt)
+      expect(markup.indexOf('Taste Testers')).toBeGreaterThan(nextHostAt)
+    })
+
+    it('keeps two servers sharing an IDENTICAL cwd as two workspace groups (AC1)', () => {
+      // The silent merge this level exists to prevent. `groupByWorkspace`'s key is the raw path and a
+      // path is unique only within one machine, so a tree that grouped before splitting by server would
+      // render ONE workspace row here holding both machines' conversations.
+      const markup = twoServers({ cwd: '/home/user/project' })
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, ROW_MARKER)).toBe(2)
+      // Both groups render the same label — that is the point; they are two groups anyway.
+      expect(workspaceLabelsIn(markup)).toEqual(['project', 'project'])
+    })
+
+    it('gives a machine with nothing in a section its row alone (AC2)', () => {
+      // The freshly-paired machine, in the section where it has nothing. Both host rows render under the
+      // Channels header even though every row in this render is a Chat.
+      const markup = twoServers()
+      const channelsPart = markup.slice(
+        markup.indexOf('>Channels<'),
+        markup.indexOf('channel-list__divider')
+      )
+      expect(countOf(channelsPart, HOST_ROW_MARKER)).toBe(2)
+      expect(countOf(channelsPart, ROW_MARKER)).toBe(0)
+      expect(countOf(channelsPart, WORKSPACE_ROW_MARKER)).toBe(0)
+    })
+
+    it('renders an unstamped or unknown-machine row rather than dropping it', () => {
+      // `ConversationListOrigin` admits null and undefined and a stamp can name an unpaired machine;
+      // #1068 makes none reachable in production, but a server-keyed tree has to answer. They render
+      // under no host row: dropping hides a real conversation, and filing them under the first machine
+      // would name a machine on no evidence.
+      const markup = render(
+        [
+          row({ id: 'p1', name: 'belongs to pyrybox' }),
+          row({ id: 'x1', name: 'no stamp at all', serverId: null }),
+          row({ id: 'x2', name: 'a departed machine', serverId: 'server-gone' })
+        ],
+        null,
+        [DEFAULT_SERVER]
+      )
+      expect(markup).toContain('no stamp at all')
+      expect(markup).toContain('a departed machine')
+      expect(countOf(markup, ROW_MARKER)).toBe(3)
+      // One machine paired, so one host row per section — the two homeless rows added none.
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+      // And they trail their machine's rows rather than displacing them.
+      expect(markup.indexOf('belongs to pyrybox')).toBeLessThan(markup.indexOf('no stamp at all'))
+    })
+
+    it('draws every row before the paired-server list has settled, under no host row', () => {
+      // The frames after the daemon's list arrives and before the one-shot resolves. Withholding the
+      // rows there would blank a sidebar that has them in hand.
+      const markup = render([row({ id: 'd1', name: 'already listed' })], null, [])
+      expect(markup).toContain('already listed')
+      expect(countOf(markup, ROW_MARKER)).toBe(1)
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(0)
+    })
+
+    it('never interpolates a server id into the markup, key included', () => {
+      // The security-review finding this ticket carries: the id becomes a React KEY on each server's
+      // subtree fragment, which `HostRow`'s ban list had to be amended for. A key is reconciliation
+      // identity and reaches no sink — never serialised, never emitted here — and this is what pins that
+      // claim. The two ids are sentinels chosen to appear nowhere else in the markup.
+      const markup = twoServers()
+      expect(markup).not.toContain(DEFAULT_SERVER)
+      expect(markup).not.toContain(SECOND_SERVER)
+    })
+
+    it('adds no element to the row, row-open or section-header match sets (AC5)', () => {
+      // The 28-spec fixture hazard, at two machines: `launchPairedApp.ts` clicks an UNFILTERED
+      // `.channel-list__row-open`, and Playwright locators are strict — an element JOINING that set
+      // strict-violates at launch in every spec riding the fixture rather than failing an assertion in
+      // one. The server level emits no element of its own (React fragments), so these are unchanged.
+      const markup = twoServers()
+      expect(countOf(markup, ROW_MARKER)).toBe(2)
+      expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
     })
   })
 
@@ -743,9 +921,16 @@ describe('ChannelListView', () => {
       const markup = bothTrees()
       expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(2)
       expect(hostDotTagsIn(markup)).toHaveLength(4)
+      // ONE PAIR PER HOST ROW is the invariant, and since #1070 that is a pair per section per machine
+      // rather than a pair per populated section: this input holds one Channels row and no Chats row, and
+      // both host rows are drawn, so both carry their dots. It read 1 and 2 until the amendment.
       const single = render([row({ id: 'c1', is_promoted: true })])
-      expect(countOf(single, DOT_WRAPPER_MARKER)).toBe(1)
-      expect(hostDotTagsIn(single)).toHaveLength(2)
+      expect(countOf(single, DOT_WRAPPER_MARKER)).toBe(2)
+      expect(hostDotTagsIn(single)).toHaveLength(4)
+      // Two machines, two sections: the pair follows the row wherever the row goes.
+      const twoServers = render([row({ id: 'c1' })], null, [DEFAULT_SERVER, SECOND_SERVER])
+      expect(countOf(twoServers, DOT_WRAPPER_MARKER)).toBe(4)
+      expect(hostDotTagsIn(twoServers)).toHaveLength(8)
     })
 
     it('names both legs from the two stores it reads, with no false green (AC2/AC3)', () => {
@@ -771,8 +956,11 @@ describe('ChannelListView', () => {
     })
 
     it('renders no dots where there is no host row (AC1)', () => {
+      // Tracks the host row's own two no-row states since #1070, which are the not-yet-loaded frame and a
+      // client with no machine paired — never a merely empty section, which now has a row and its dots.
       expect(countOf(render(null), DOT_WRAPPER_MARKER)).toBe(0)
-      expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(0)
+      expect(countOf(render([], null, []), DOT_WRAPPER_MARKER)).toBe(0)
+      expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(2)
     })
   })
 

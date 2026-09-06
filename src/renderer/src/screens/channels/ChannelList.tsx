@@ -1,5 +1,5 @@
 import './channels.css'
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -36,7 +36,7 @@ import { HostLabelData } from '../../store/hostLabelLoader'
 // #1199: the paired-server list is what tells the row WHICH machine it names, and it is the list #1070
 // then iterates to draw one row per server. `ServerInfoData` is the shipped one-shot that fills it,
 // mounted here beside `HostLabelData` — the Settings idiom applied to the screen that draws the row.
-import { useServerInfoStore } from '../../store/serverInfoStore'
+import { useServerInfoStore, selectServers } from '../../store/serverInfoStore'
 import { ServerInfoData } from '../../store/serverInfoLoader'
 // #801's three per-row reads, #874's fourth, and the two pure modules that reduce them. All six are
 // consumed EXACTLY as shipped: none takes a `conversationId` except the four selector FACTORIES, which is
@@ -78,7 +78,7 @@ import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
 // screen's subtitle, WorkspacePickerSheet and ConversationScreen) and its own unit tests.
-import { titleFor, partitionActive, groupByWorkspace } from './channelListViewModel'
+import { titleFor, partitionActive, groupByWorkspace, groupByServer } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
 // PlaceholderList (#140). A pure render slice over the already-shipped #208 conversationListStore: the
@@ -138,6 +138,24 @@ export function ChannelList({
   // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
   // is the prop path #1097 freed by deleting `now`.
   const openConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
+  // #1070 — WHICH machines the sidebar draws a subtree for, read HERE rather than inside the host row.
+  // This is `openConversationId`'s ruling above, applied to a second piece of store state and for the
+  // same reason: zustand v5 serves `getInitialState()` under `renderToStaticMarkup`, so a component
+  // reading this list itself could only ever render the EMPTY launch list — the unit tier could prove the
+  // no-server frame and nothing else, leaving the whole of "one host row per paired server" to e2e. Read
+  // in the container it arrives as an injectable prop, which is the seam `ChannelList.test.tsx`'s
+  // `render()` helper already has.
+  //
+  // `selectServers` hands back the HELD array by reference, so the subscription is value-stable under
+  // `useSyncExternalStore` and this container re-renders once per loader write. The `.map` to ids happens
+  // at the JSX boundary below and NEVER inside the selector, where a fresh array every call would drive a
+  // re-render storm (`selectConversations`'s docblock states the same rule for the row union).
+  //
+  // The honest cost, stated rather than hidden: a pairing change now re-renders the whole sidebar where
+  // it used to wake one row. Accepted — a pairing change IS a whole-sidebar change, and the per-server
+  // label and dot reads stay inside their own leaves, so one machine's flap still wakes only that
+  // machine's two dots.
+  const servers = useServerInfoStore(selectServers)
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
@@ -179,6 +197,7 @@ export function ChannelList({
       <ServerInfoData />
       <ChannelListView
         conversations={conversations}
+        serverIds={servers.map((server) => server.serverId)}
         openConversationId={openConversationId}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
@@ -216,15 +235,19 @@ export function ChannelList({
 
 /**
  * The pure view. Always returns a stable `aria-label="Conversations"` root (the test hook, present in
- * every state); content varies by the store's three states:
- *  - `null` (not-yet-loaded) → the wrapper only, no rows and no empty state (AC4 — the neutral
- *    first-paint posture, like #203's Timeline returning null on empty).
- *  - `[]` (loaded-zero) → the empty state (AC4).
- *  - non-empty → the two `is_promoted` sections; a section with zero rows renders no header, and the
- *    divider appears only between two present sections (AC2).
+ * every state); content varies with the conversation store's tri-state AND the paired-server list:
+ *  - `conversations === null` (not-yet-loaded) → the wrapper only, no headers, no rows, no empty state
+ *    (the neutral first-paint posture, like #203's Timeline returning null on empty).
+ *  - loaded, but nothing to draw — no paired server AND no active row → the wrapper only.
+ *  - anything to draw → BOTH section headers and the divider, unconditionally, each header followed by
+ *    one host row per paired server in pairing order (#1070).
+ *
+ * The loaded-zero empty state is GONE since #1070, deleted rather than hidden: a paired app always has a
+ * host row to draw, and that row is where #1185/#1189 put the plus that starts a chat in a new workspace.
  */
 export function ChannelListView({
   conversations,
+  serverIds,
   openConversationId,
   onOpen,
   onOpenSettings,
@@ -233,7 +256,19 @@ export function ChannelListView({
   onSaveAsChannel,
   onRename
 }: {
-  conversations: readonly ConversationSummary[] | null
+  // Widened to `ServerConversationSummary` in all but name: the rows arrive carrying their server stamp
+  // (#1086), and `groupByServer`'s structural constraint is what reads it — this prop stays typed as the
+  // wire row so the three other screens reading the same selector are unaffected.
+  conversations: readonly (ConversationSummary & { readonly serverId?: string | null })[] | null
+  // #1070 — the paired servers to draw a subtree for, in pairing order (oldest-paired first). REQUIRED
+  // rather than optional, `openConversationId`'s reasoning: the container must decide, and a defaulted
+  // prop would let a future caller silently render a sidebar with no host row at all. An EMPTY array is
+  // the real launch state — the paired-server one-shot has not settled — and is what makes the two
+  // headers wait rather than flashing above nothing.
+  //
+  // Ids and not `ServerInfoValue`s: this view has no business with a relay URL, and the narrower prop is
+  // also the one the unit tier can inject in one literal.
+  serverIds: readonly string[]
   // #1098 — the id of the chat the pane is showing, or `null` when none has been opened this session.
   // REQUIRED rather than optional: the container must decide, and a defaulted prop would let a future
   // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
@@ -255,7 +290,7 @@ export function ChannelListView({
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
       </div>
-      {renderBody(conversations, openConversationId, onOpen, onSaveAsChannel, onRename)}
+      {renderBody(conversations, serverIds, openConversationId, onOpen, onSaveAsChannel, onRename)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -393,10 +428,19 @@ export function hostRowLabel(value: HostLabelValue): string {
   return HOST_ROW_FALLBACK_LABEL
 }
 
-// The host row heading each tree (Figma 106:3094) — which machine the tree's conversations live on. It is
-// rendered INSIDE each section's existing `length > 0` gate, so "a tree with zero rows renders neither a
-// section label nor a host row" holds by construction with no new condition — and the promote specs' use
-// of a zero-row section as their "the row moved sections" proxy survives. Do not hoist it out of the gate.
+// The host row heading each server's subtree (Figma 106:3094 in 103:2959) — which machine that subtree's
+// conversations live on. Since #1070 each section draws ONE OF THESE PER PAIRED SERVER, in pairing order,
+// and it is rendered from the paired-server list rather than from the section's rows: a server with no
+// conversations in a section shows its row alone, with nothing under it.
+//
+// That inverts what this paragraph said until #1070, and the inversion is the ticket. The row used to sit
+// inside each section's `length > 0` gate, so a zero-row tree rendered neither a header nor a host row —
+// which is also what the two promote specs used as their "the row moved sections" proxy. Operator ruling,
+// 2026-09-06: every paired machine gets a row in both sections regardless, because this row carries the
+// plus that starts a chat in a new workspace (#1185, #1189), and a freshly paired machine has no
+// conversations — under the old gate it had no row and so no route to its first chat from the desktop at
+// all, the floating button refusing to create while more than one server is paired (#1120). The promote
+// specs moved to the row's own affordance as their proxy; see `renderBody`.
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
@@ -443,20 +487,31 @@ export function hostRowLabel(value: HostLabelValue): string {
 // #1199 gave the row a `serverId`: WHICH machine it is about. The label arrives already resolved to text
 // (the container ran `hostRowLabel`), so the id is here for the dot subtree alone — pure pass-through,
 // rendered nowhere. It is a prop rather than a second store read inside the dots so the row's identity
-// is single-sourced, and because it is the shape #1070's loop needs when this becomes one row per server.
+// is single-sourced, and it is the shape #1070's loop hands down now that this is one row per server.
 //
-// `null` means "the paired-server list has not resolved yet", which is every launch's first frame.
+// #1070 NARROWED IT FROM `string | null` TO `string`. The `null` arm meant "the paired-server list has
+// not resolved yet", which was reachable while the row rendered unconditionally; it is not any more,
+// because a host row now exists BECAUSE an id was in that list. The branch and its collapse are deleted
+// rather than left as a dead arm whose comment describes a frame that cannot occur.
 //
 // THE ID GETS THE LABEL'S FOUR-SINK TREATMENT, plus the one a keyed store invites: the KEY is the server
-// id and the VALUE is the label, never the reverse. Neither becomes an attribute, a class name, a React
-// key, a title, a URL, a lookup path or a log line. The id's only use in this subtree is as an argument
-// to the three per-server selector factories.
+// id and the VALUE is the label, never the reverse. It becomes no attribute, no class name, no title, no
+// URL, no lookup path and no log line, and its only use in this subtree is as an argument to the three
+// per-server selector factories.
+//
+// ONE SINK LEFT THAT LIST IN #1070: the React key. `renderBody` keys each server's subtree fragment by
+// this id, and the ban is amended rather than quietly broken. The distinction is not a concession — the
+// six sinks above all either reach the DOM or reach persistence, where a React key is reconciliation
+// identity alone: never serialised, never emitted by `renderToStaticMarkup`, unobservable to the page.
+// The alternative is worse than the doc edit: an index key would cross-wire fold state and per-row
+// instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
+// rendering a sentinel id and asserting it appears nowhere in the markup.
 export function HostRow({
   label,
   serverId
 }: {
   label: string
-  serverId: string | null
+  serverId: string
 }): JSX.Element {
   return (
     <div className="channel-list__host">
@@ -481,23 +536,18 @@ export function HostRow({
 // READS and never writes; `setHostLabelFor` keeps exactly one caller, the loader mounted in `ChannelList`.
 // Module-private like its neighbour: production renders it from `renderBody` alone, and the unit tier
 // reaches everything it can prove through `hostRowLabel` and `HostRow` instead.
-// #1199 resolves WHICH server this row is about, once, and hands it down. The first paired server —
-// `serverInfoStore` holds them in `pairedServerStore.list()` order, oldest-paired first, so "the first"
-// is a stable, user-determined choice rather than whichever connection last spoke. The row stays SINGLE
-// here; #1070 turns this read into the loop that draws one row per paired server.
+// #1199 resolved WHICH server this row is about; #1070 turned that read into the loop's ARGUMENT. The id
+// arrives as a prop — this component no longer reads `serverInfoStore` at all, because `renderBody` is
+// already iterating the list and a second read here would let one row disagree with the tree drawing it.
 //
-// TAKEN FROM THE CLIENT'S OWN LIST, NEVER FROM THE WIRE. `serverInfoStore` is filled from
-// `window.pyry.serverInfo()`, which main answers out of its paired records — the same rule
+// TAKEN FROM THE CLIENT'S OWN LIST, NEVER FROM THE WIRE. The id traces back to `serverInfoStore`, filled
+// from `window.pyry.serverInfo()`, which main answers out of its paired records — the same rule
 // `conversationListStore`'s `selectConversationsFor` header states for its own read. A daemon-supplied
 // lookup key would let a confused or hostile server put one machine's name and connection onto another
-// machine's row, which is precisely the failure this ticket exists to remove.
-//
-// An inline arrow returning a PRIMITIVE, the `openConversationId` idiom twenty lines up: value-stable
-// under `useSyncExternalStore`, so the fresh closure per render costs one allocation and one `Object.is`
-// and never a re-subscription. `?? null` rather than a truthiness test, so an empty-string id would stay
-// an ordinary key instead of collapsing into "no server named".
-function HostRowControl(): JSX.Element {
-  const serverId = useServerInfoStore((s) => s.servers[0]?.serverId ?? null)
+// machine's row, which is precisely the failure that read exists to prevent. `groupByServer` keeps the
+// direction intact one level up: it iterates the client's ids and only ever TESTS a row's stamp against
+// them, so a stamp can select among existing keys and can never mint one.
+function HostRowControl({ serverId }: { serverId: string }): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
   return <HostRow label={hostRowLabel(hostLabel)} serverId={serverId} />
 }
@@ -592,17 +642,16 @@ export function HostConnectionDots({
 // app-wide and both stores were untouched. Reading the constants rather than restating `{ type:
 // 'disconnected' }` and `null` is what keeps that true if either store ever changes its initial cell.
 //
-// A `null` serverId — the frames before the paired-server one-shot resolves — never reaches a keyed
-// selector. `StatusOrigin` and `RelayLinkOrigin` both admit `null` as a REAL slot key (unstamped writes
-// land there), so passing it through would read someone else's cell rather than answering "not known";
-// the branch is what makes the no-server-named frame fall on the same collapse as a silent server.
-function HostConnectionDotsControl({ serverId }: { serverId: string | null }): JSX.Element {
-  const daemonStatus = useSessionStore((s) =>
-    serverId === null ? undefined : selectStatusFor(serverId)(s)
-  )
-  const relayStatus = useRelayLinkStore((s) =>
-    serverId === null ? undefined : selectRelayLinkStatusFor(serverId)(s)
-  )
+// #1070 DELETED THE `null` GUARD that used to wrap both reads. It existed because a `null` serverId — the
+// frames before the paired-server one-shot resolved — must never reach a keyed selector: `StatusOrigin`
+// and `RelayLinkOrigin` both admit `null` as a REAL slot key (unstamped writes land there), so passing it
+// through would read someone else's cell rather than answering "not known". That frame no longer exists:
+// a host row is drawn because its id was in the paired list, so the id is always a real one. The silent-
+// server collapse below is untouched and is a DIFFERENT case — a paired server that has reported nothing
+// yet — which is still very much reachable.
+function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Element {
+  const daemonStatus = useSessionStore(selectStatusFor(serverId))
+  const relayStatus = useRelayLinkStore(selectRelayLinkStatusFor(serverId))
   return (
     <HostConnectionDots
       host={daemonLeg(daemonStatus ?? initialSessionState.status)}
@@ -713,6 +762,12 @@ function WorkspaceRow({
  * yields two distinct instances holding two distinct cells. There is nothing to implement for it; there
  * is only something NOT to do, namely lift the state.
  *
+ * PER-SERVER INDEPENDENCE falls out of the same property since #1070, and needed nothing added for it
+ * either: each machine's groups are a sibling list inside that machine's own keyed <Fragment>, so one
+ * `cwd` present on two machines yields two instances holding two separate booleans — folding a workspace
+ * on Pyrybox leaves the identically-named workspace on Macbook expanded. This is the second reason the
+ * group key stayed the raw `cwd` rather than becoming a composite with the server id.
+ *
  * Returns a shorthand fragment, emitting NO element of its own — exactly like the keyed <Fragment> it
  * replaced. The rendered sequence under `.channel-list` stays flat (header, host, workspace, rows, …) and
  * every `.channel-list__row` keeps the ancestry 28 e2e specs depend on. No wrapper <div>, no role="group",
@@ -747,8 +802,75 @@ export function CollapsibleWorkspaceGroup({
   )
 }
 
+/** One row as the sidebar sees it: the wire fields plus the server stamp #1086 rides beside them. */
+type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
+
+/**
+ * One section's rows, grouped by server and then by workspace (#1070) — the level the design has always
+ * drawn (103:2959) and the app has never rendered, because the host row came from a single global.
+ *
+ * Shared by BOTH sections rather than written twice, so the two trees cannot drift: they differ only in
+ * which per-row affordance they hand down, which is what `renderRow` carries.
+ *
+ * WHY THE ROWS ARE SPLIT BY SERVER BEFORE GROUPING, rather than `groupByWorkspace` being re-keyed on
+ * `serverId + cwd`. It is the smaller change and it is also the correct one. The grouper's key is the raw
+ * `cwd` and a path is unique only WITHIN one machine, so two servers both holding `/home/user/project`
+ * would silently merge into one group holding both machines' conversations — but the fix is to hand each
+ * machine's rows to their own grouper call, not to fold a client-held id into the value a group is
+ * identified by. React scopes keys per sibling list, so each server's subtree living inside its own keyed
+ * <Fragment> already makes the raw-`cwd` group keys collision-free across servers, with nothing inside
+ * `groupByWorkspace` changed and no composite key to keep in step.
+ *
+ * The <Fragment> emits no element, exactly like `CollapsibleWorkspaceGroup` below it, so the rendered
+ * sequence under `.channel-list` stays the FLAT run of siblings (header, host, workspace, rows, host,
+ * workspace, rows) that every `.channel-list__row`'s ancestry depends on across 28 e2e specs. A wrapper
+ * <div> per server would instead become a flex item of the `.channel-list` column and move every existing
+ * locator's tree position.
+ *
+ * THE UNATTRIBUTED ROWS RENDER LAST, WITH NO HOST ROW. `ConversationListOrigin` admits `null` and
+ * `undefined`, and a stamp naming an unpaired machine is a third shape; #1068 stamps every daemon event
+ * main-side so none is reachable in production, but the type allows them and a server-keyed tree has to
+ * answer. Dropping such a row hides a real conversation, and filing it under the first paired server would
+ * put it under a machine's name on no evidence — the same misattribution the client-held join direction
+ * exists to prevent, arrived at by omission instead of by a hostile stamp. Naming no machine is exactly
+ * what is known about it.
+ */
+function renderServerTrees(
+  rows: readonly SidebarRow[],
+  serverIds: readonly string[],
+  renderRow: (row: SidebarRow) => JSX.Element
+): JSX.Element {
+  const { servers, unattributed } = groupByServer(serverIds, rows)
+  const workspaceGroups = (serverRows: readonly SidebarRow[]): JSX.Element[] =>
+    // `key={group.key}` pins the fold's IDENTITY as well as its position: a group whose rows change
+    // (renamed, added, archived) or whose position moves keeps its instance and its fold, because React
+    // reconciles by key and not by index. A group that leaves the list is unmounted and its fold is
+    // discarded — correct for ephemeral disclosure state. The two key namespaces cannot collide: React
+    // scopes keys per sibling list, so the group keys (cwd strings) and the row keys (c.id) never share
+    // one, and neither shares one with the server fragments a level up.
+    groupByWorkspace(serverRows).map((group) => (
+      <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
+        {group.rows.map(renderRow)}
+      </CollapsibleWorkspaceGroup>
+    ))
+  return (
+    <>
+      {servers.map((server) => (
+        <Fragment key={server.serverId}>
+          <HostRowControl serverId={server.serverId} />
+          {workspaceGroups(server.rows)}
+        </Fragment>
+      ))}
+      {workspaceGroups(unattributed)}
+    </>
+  )
+}
+
 function renderBody(
-  conversations: readonly ConversationSummary[] | null,
+  conversations: readonly SidebarRow[] | null,
+  // #1070 — the paired servers to draw, in pairing order. Data, so it leads the callbacks like the id
+  // below. Its EMPTINESS is meaningful: it is the launch frame before the one-shot settles.
+  serverIds: readonly string[],
   // #1098 — data, so it leads the callbacks. It is compared, never rendered: the id is daemon-asserted
   // and stays a comparison operand, never a class-name interpolation, an attribute value, a title, an
   // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
@@ -757,94 +879,72 @@ function renderBody(
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
-  // Not-yet-loaded: neither rows nor the empty state (distinct from loaded-zero, per #208). Stays the
-  // first check to preserve the null-vs-loaded-zero tri-state.
+  // Not-yet-loaded: neither rows nor chrome (distinct from loaded-zero, per #208). Stays the first check
+  // to preserve the null-vs-loaded-zero tri-state, which #1070 did not touch.
   if (conversations === null) return null
   // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
   const { channels, discussions } = partitionActive(conversations)
-  // The empty state decided from the ACTIVE partition, not the raw store count: a store holding only
-  // archived rows has rows but zero active rows to show. This one check covers both loaded-zero ([])
-  // and all-archived. Mobile #312's "Tap + to start a conversation" is adapted — the + FAB is #142,
-  // so this copy references no affordance that isn't here yet.
-  if (channels.length === 0 && discussions.length === 0) {
-    return <p className="channel-list__empty">No conversations yet</p>
-  }
+  // NOTHING TO DRAW — no paired machine and no active row. This one gate replaces both `length > 0`
+  // section gates AND the `No conversations yet` paragraph #1070 deleted, and it is decided from the
+  // ACTIVE partition rather than the raw store count, so a store holding only archived rows still counts
+  // as zero (the check the empty state already made).
+  //
+  // The server half is what the paired app answers on: a machine paired with no conversations at all
+  // renders both headers and its two host rows, because that row carries the plus that starts its first
+  // chat (#1185, #1189). The ROW half is not redundant with it — it covers the frames after the daemon's
+  // list arrives but before the paired-server one-shot settles, where the rows would otherwise be
+  // withheld from a sidebar that has them in hand. They render unattributed there, and the host rows
+  // appear a tick later.
+  if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
   return (
     <>
-      {channels.length > 0 && (
-        <>
-          <header className="channel-list__section-header">Channels</header>
-          <HostRowControl />
-          {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
-              only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
-              AC1) — the symmetric counterpart to Save-as-channel on Recent rows.
+      {/* Both headers and the divider render UNCONDITIONALLY inside the gate above (operator ruling,
+          2026-09-06). Until #1070 each was conditioned on its section holding a row, and the divider on
+          both holding one; a section is now a permanent home for one host row per paired machine, empty
+          or not, so there is nothing left for those conditions to express. `.channel-list__section-header`
+          therefore matches exactly two elements in every drawn state, which is what keeps the suite's
+          header locators single-match. */}
+      <header className="channel-list__section-header">Channels</header>
+      {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
+          only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
+          AC1) — the symmetric counterpart to Save-as-channel on Recent rows. Those two affordances are
+          also what the promote specs proxy "the row moved sections" on since #1070, the mutually
+          exclusive section headers having stopped being mutually exclusive. */}
+      {renderServerTrees(channels, serverIds, (c) => (
+        <Row
+          key={c.id}
+          row={c}
+          // #1098 — the comparison happens HERE, so `Row` takes a boolean about itself rather than a
+          // global id to reason about. `===` against a possibly-null id and never a truthiness test: an
+          // empty-string id stays an ordinary key instead of collapsing into "nothing open" (App.tsx's
+          // `openConversationId` header names the same trap).
+          isOpen={c.id === openConversationId}
+          onOpen={() => onOpen(c)}
+          onRename={() => onRename(c)}
+        />
+      ))}
+      <div className="channel-list__divider" />
+      {/* The header reads "Chats" (#709, Figma 106:3258); the code-level partition is still `discussions`
+          — renaming that vocabulary was explicitly out of scope.
 
-              #703 wraps the map one level: each workspace group's rows sit under their own workspace row.
-              #704 turned that wrapper from a keyed <Fragment> into CollapsibleWorkspaceGroup, which emits
-              no element either — so the rendered list stays a FLAT sequence of siblings (header, host,
-              workspace, rows, workspace, rows) and every `.channel-list__row` keeps the exact ancestry it
-              had. A per-group <div> would instead become a flex item of the `.channel-list` column and
-              move every existing locator's tree position. The two key namespaces cannot collide: React
-              scopes keys per sibling list, so the group keys (cwd strings) and the row keys (c.id) never
-              share one.
-
-              `key={group.key}` carries the exact meaning it did on the Fragment, and now also pins the
-              fold's IDENTITY: a group whose rows change (renamed, added, archived) or whose position
-              moves keeps its instance and its fold, because React reconciles by key and not by index. A
-              group that leaves the list is unmounted and its fold is discarded — correct for ephemeral
-              disclosure state, and not worth defending against. */}
-          {groupByWorkspace(channels).map((group) => (
-            <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
-              {group.rows.map((c) => (
-                <Row
-                  key={c.id}
-                  row={c}
-                  // #1098 — the comparison happens HERE, so `Row` takes a boolean about itself rather
-                  // than a global id to reason about. `===` against a possibly-null id and never a
-                  // truthiness test: an empty-string id stays an ordinary key instead of collapsing
-                  // into "nothing open" (App.tsx's `openConversationId` header names the same trap).
-                  isOpen={c.id === openConversationId}
-                  onOpen={() => onOpen(c)}
-                  onRename={() => onRename(c)}
-                />
-              ))}
-            </CollapsibleWorkspaceGroup>
-          ))}
-        </>
-      )}
-      {channels.length > 0 && discussions.length > 0 && (
-        <div className="channel-list__divider" />
-      )}
-      {discussions.length > 0 && (
-        <>
-          <header className="channel-list__section-header">Chats</header>
-          <HostRowControl />
-          {/* Chats rows pass the affordance so each row can be saved as a channel (#274, AC1). The
-              header reads "Chats" (#709, Figma 106:3258); the code-level partition is still
-              `discussions` — renaming that vocabulary was explicitly out of scope.
-
-              The two trees group independently (operator, 2026-08-21): the workspace level repeats here
-              rather than being shared, so a workspace with rows in both trees appears in both — and since
-              #704 their DISCLOSURE is independent too, for free: this map is a different sibling list from
-              the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
-              instances holding two separate booleans. */}
-          {groupByWorkspace(discussions).map((group) => (
-            <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
-              {group.rows.map((d) => (
-                <Row
-                  key={d.id}
-                  row={d}
-                  // Same comparison as the Channels tree above — one `Row` serves both, so the open
-                  // chat is marked in whichever tree it lives in and neither is a special case.
-                  isOpen={d.id === openConversationId}
-                  onOpen={() => onOpen(d)}
-                  onSaveAsChannel={() => onSaveAsChannel(d)}
-                />
-              ))}
-            </CollapsibleWorkspaceGroup>
-          ))}
-        </>
-      )}
+          The two trees group independently (operator, 2026-08-21): the server and workspace levels repeat
+          here rather than being shared, so a machine — and a workspace — with rows in both trees appears
+          in both. Since #704 their DISCLOSURE is independent too, for free: this is a different sibling
+          list from the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
+          instances holding two separate booleans. #1070 extends that property across servers by the same
+          mechanism and with nothing to implement for it. */}
+      <header className="channel-list__section-header">Chats</header>
+      {renderServerTrees(discussions, serverIds, (d) => (
+        <Row
+          key={d.id}
+          row={d}
+          // Same comparison as the Channels tree above — one `Row` serves both, so the open chat is
+          // marked in whichever tree it lives in and neither is a special case.
+          isOpen={d.id === openConversationId}
+          onOpen={() => onOpen(d)}
+          onSaveAsChannel={() => onSaveAsChannel(d)}
+        />
+      ))}
     </>
   )
 }

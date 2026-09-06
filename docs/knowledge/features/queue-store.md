@@ -234,7 +234,7 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
     → queueStore.resetBacklogsFor(ids)   [only the listed keys dropped, or same-ref no-op if none match]
   → (then, per non-empty conversation) daemon re-sends queue_state → the flow above repopulates it
 
-pairing ends (unpair, or pair-another-server) → clearPairingScopedState()   [#1138]
+pairing ends (unpair only, since #1141 — pairing another server adds a server rather than ending one) → clearPairingScopedState()   [#1138]
   → queueStore.clearAllBacklogs()   [every server's backlogs dropped, or same-ref no-op if already empty]
 ```
 

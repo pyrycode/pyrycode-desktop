@@ -159,7 +159,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md)); its unpair control dispatches `reset` ([#166](../codebase/166.md))
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
 - [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result triggers the pairing-ended clear ([#173](../codebase/173.md)); `runUnpair` itself no longer dispatches `reset` directly as of [#531](../codebase/531.md)
-- [Paired shell](paired-shell.md) — `clearPairingScopedState` ([#531](../codebase/531.md)), the shared helper both pairing-ending paths (unpair, pair-another-server) now dispatch `reset` through
+- [Paired shell](paired-shell.md) — `clearPairingScopedState` ([#531](../codebase/531.md)), the shared helper `reset` is dispatched through; unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — pairing another server adds a server rather than ending one, and stopped clearing anything
 - [Renderer→main diagnostics channel](diagnostics-channel.md) / [#134 codebase notes](../codebase/134.md) — the optional `observe` seam that logs every transition as a content-free record
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) · [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md)
 - [#2 codebase notes](../codebase/2.md) · [#166 codebase notes](../codebase/166.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`

@@ -118,9 +118,11 @@ Nothing imports this module yet.
   `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it.
   [#530](../codebase/530.md) (conversation switch, shipped) added the first dispatch site, via
   [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx), gated on the active
-  conversation's id actually changing. [#531](../codebase/531.md) (unpair / pair-another-server, shipped)
+  conversation's id actually changing. [#531](../codebase/531.md) (unpair, shipped)
   added the second, unconditional site, via
-  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) — since
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) the only pairing-change path that
+  reaches it (see below).
   [#652](../codebase/652.md) (the deleted-open-discussion exit, shipped) added the third, via
   [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
   gated on the id like #530's, but comparing against the just-deleted conversation's id rather than a
@@ -134,14 +136,17 @@ Nothing imports this module yet.
   `compacting` in one step while preserving `items` **by reference** — the Mode A/Mode B split held on
   the same connect. The [`modalStore` #415](../codebase/415.md) / `queueStore` #197 reconcile shape,
   applied a third time.
-- **[#531](../codebase/531.md) (shipped)** added `reset`'s second production dispatch site — unpair and
-  pair-another-server, the two paths that end a pairing rather than merely switch conversations, both
-  routed through the new `clearPairingScopedState` helper alongside three sibling clears
-  (`activeConversationStore`, `sessionIdStore`, `sessionStore`). Unlike `reconnected` above and unlike
+- **[#531](../codebase/531.md) (shipped)** added `reset`'s second production dispatch site — unpair,
+  the path that ends a pairing rather than merely switching conversations, routed through the new
+  `clearPairingScopedState` helper alongside three sibling clears (`activeConversationStore`,
+  `sessionIdStore`, `sessionStore`). Unlike `reconnected` above and unlike
   [#530](../codebase/530.md)'s conversation-switch dispatch, this one is unconditional — no id gate, no
   `connected`-edge trigger — because the pairing itself is ending and no state in which `items`
   legitimately survives. `reduceTimeline`'s `reset` arm is unmodified; this ticket only wires a second
-  call site.
+  call site. Until [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) pairing another
+  server ran through this same call site, on the argument that it too ends a pairing; it does not — it
+  adds a server beside those already paired, each with its own live connection since #1117/#1084, so
+  #1141 retired that call site and left this one exactly as `reset`'s second dispatch site: unpair alone.
 - **[#643](../codebase/643.md) (shipped)** widened the `toolUse` arm/`toolCall` item pair with one
   optional field, `input` — no new arm, no new item kind. `reduceTimeline`'s pre-existing `toolUse`
   arm and `fillResult` are otherwise unmodified; the reducer's appended literal gained one line

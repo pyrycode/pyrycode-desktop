@@ -172,8 +172,9 @@ exactly the thread the operator stepped away from.
   `activeConversationStore`'s id. See [Conversation shell § The open-conversation reader
   cutover](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758).
 - **Clears, as of [#757](../codebase/757.md):** `clearAllTimelines()` — nullary, drops every retained
-  slice — is wired into `clearPairingScopedState`, the shared helper both pairing-ending paths (unpair,
-  pair-another-server) already call. `clearTimelineFor(conversationId)` — drops exactly one slice, every
+  slice — is wired into `clearPairingScopedState`, the shared helper the unpair path calls (pairing
+  another server stopped calling it at [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)
+  — it adds a server rather than ending a pairing). `clearTimelineFor(conversationId)` — drops exactly one slice, every
   other conversation's held object untouched — is wired into `exitActiveConversation`, fired when the
   conversation on screen was deleted or archived out from under the operator. Both sit immediately after
   each helper's pre-existing flat `dispatchTimeline({ type: 'reset' })` call, the same dual-write position

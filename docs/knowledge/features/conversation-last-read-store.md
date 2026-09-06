@@ -122,7 +122,9 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   clears can persist a spurious `0` over a true mark (below).
   **Reader landed in [#778](conversation-unread.md). Clear landed in #779** — `clearAllLastRead()`, wired as
   the seventh and last effect of [`clearPairingScopedState`](paired-shell-pair-server-route.md#the-pairserver-route-152),
-  called from both paths that end a pairing. Served by `storage.write(new Map())`, not a dedicated port
+  called from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired
+  the pair-another-server call site (adding a server ends no pairing, so a still-paired server's read
+  marks have nothing to lose). Served by `storage.write(new Map())`, not a dedicated port
   `clear()` (#776 declined that method).
 
 ## Edge cases and limitations

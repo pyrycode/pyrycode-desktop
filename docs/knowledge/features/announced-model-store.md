@@ -9,9 +9,11 @@ Introduced in [#588](../codebase/588.md), consuming the `modelAnnounced` daemon 
 [#587](../codebase/587.md) already decodes off claude's `system` / `init` line. Shipped dormant at
 \#588; rendered by [#560](../codebase/560.md)'s `RunningModelSection`, the sixth section of
 `RunConfigView` — see [Run configuration store](run-config-store.md) § Running model section. Cleared
-when a pairing ends, both on the unpair route flip and the pair-another-server transition, by
-[#593](../codebase/593.md) — see § Edge cases below and [Paired shell](paired-shell.md) for the shared
-clear helper.
+on the unpair route flip by [#593](../codebase/593.md) — see § Edge cases below and [Paired
+shell](paired-shell.md) for the shared clear helper. Until
+[#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) the pair-another-server transition
+cleared it too; that call site is gone, and because this single app-wide slot is not keyed by server or
+conversation, that reopened a known, filed staleness — see § Edge cases.
 
 ## What it does
 
@@ -165,12 +167,21 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 - **No dedup of a verbatim repeat, by design.** N daemon frames — including an identical repeat — produce
   N writes and N fresh object identities, so a component selecting `selectAnnouncedModel` re-renders on
   a repeat too. #560 memoises if that ever matters; this store does not pre-empt it.
-- **Cleared on both pairing-change paths, since #593.** The store is pairing-scoped — nothing on a
-  fresh pairing re-asserts an announcement, the next one arrives only with the next turn's init line —
-  so it is a member of [`clearPairingScopedState`](paired-shell.md)'s shared set rather than cleared at
-  either call site. #588 shipped the store without this (the deferral was harmless while the slice
-  rendered nowhere); #560 made a stale value observable (the sheet would attribute server A's
-  identifier, and its `truncated` cut report, to server B with no provenance marker); #593 closed it.
+- **Cleared on unpair, since #593 — and, since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), only on unpair.**
+  The store is pairing-scoped — nothing on a fresh pairing re-asserts an announcement, the next one
+  arrives only with the next turn's init line — so it is a member of
+  [`clearPairingScopedState`](paired-shell.md)'s shared set rather than cleared at the call site. #588
+  shipped the store without this (the deferral was harmless while the slice rendered nowhere); #560 made
+  a stale value observable (the sheet would attribute server A's identifier, and its `truncated` cut
+  report, to server B with no provenance marker); #593 closed it for both pairing-change paths that
+  existed at the time. #1141 retired the pair-another-server call site — adding a server ends no pairing,
+  so nothing else in the thirteen-store set may clear there — and doing so reopened #560's staleness for
+  this one store, because it alone (among the set) is a single app-wide slot rather than keyed by server
+  or conversation: pairing server C while a server A conversation is open can leave the run-configuration
+  sheet showing A's last-announced model until C's own first turn. Filed as
+  [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146) rather than folded into #1141 —
+  display-only, since the *actionable* run-configuration write reads the per-conversation
+  [`modelListStore`](model-list-store.md), which this staleness does not touch.
   **Not** on the transport's `connected` edge — the mutually exclusive alternative mechanism
   `backgroundTaskRosterStore` uses — because a reconnect to the *same* daemon leaves the held
   announcement accurate; there is no re-handshake staleness case for this store the way there is for

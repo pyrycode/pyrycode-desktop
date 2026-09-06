@@ -379,14 +379,18 @@ new-discussion FAB's own subscription on the same event, #242)
   pairing boundary, attributing a departed machine's conversations to the operator's current session.
   `clearAllConversations` closes it as the tenth, nullary member of `ClearPairingScopedStateDeps`
   (`src/renderer/src/clearPairingScopedState.ts`, wired in `PairedShell.tsx`'s `clearPairingDeps`, so
-  both pairing-change paths drop it without either call site needing an edit). Nullary for the same
+  the unpair path drops it without a call-site edit; pairing another server stopped reaching this helper
+  at all as of [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)). Nullary for the same
   reason `clearAllModelLists`/`clearAllSlashCommandLists` are: no daemon-supplied conversation id may
   steer which server's rows survive the boundary. Idempotent via the subscriber short-circuit — an
   already-clear store hands back the same state object, so a redundant clear wakes no listener — not
   the side-effect guard `clearAllLastRead` needs, since this clear reaches nothing outside memory and
   cannot throw. **Per-server unpair does not exist in the renderer and this ticket does not build
-  toward it**: both pairing-change sites are whole-app, so this is a whole-set clear at the boundary
-  that exists today; per-server eviction is a later ticket's, once a per-server unpair exists.
+  toward it**: unpair is whole-app, so this is a whole-set clear at the boundary that exists today
+  (pairing another server no longer reaches this clear at all, since
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — it adds a server rather than ending
+  a pairing, and the new server's reply lands in its own `byServer` slot without disturbing the others);
+  per-server eviction on an eventual per-server unpair is a later ticket's.
 - **A store's exclusion from `clearPairingScopedState` is a claim about mechanisms elsewhere, and it
   can go stale without anyone touching the store.** `clearPairingScopedState.ts`'s docblock names the
   discriminator as "does a reconnect to the SAME daemon need to clear it?" — this store's answer

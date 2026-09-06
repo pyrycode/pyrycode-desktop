@@ -49,8 +49,11 @@ const activateDeps: ActivateConversationDeps = {
 // so nothing is dereferenced at module load, nothing is read during render, and the object closes over
 // no per-render value. sessionStore and announcedModelStore appear here and nowhere else in this
 // file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
-// set with the announced running model and #779 with the per-conversation read marks, and because both
-// call sites below pass this one object, each was a single edit rather than two.
+// set with the announced running model and #779 with the per-conversation read marks, and because the
+// call site below passes this one object, each was a single edit rather than a hunt across callers.
+// #1141 narrowed the callers to one (unpair, via applyPairingChange's `unpaired` arm below) without
+// touching this object at all — clearPairingScopedState still decides WHAT clearing means; the caller
+// count is a different question.
 const clearPairingDeps: ClearPairingScopedStateDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearAllTimelines: () => conversationTimelineStore.getState().clearAllTimelines(),
@@ -82,6 +85,16 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     dispatch({ type: 'open' })
   })
   useNotificationActivatedNav(() => dispatch({ type: 'open' }))   // #393 — no setActiveConversation, no paneKey change
+  // #1141 — the pairing-change wiring, built per-render because three of its four members close over
+  // per-render values (onUnpaired, dispatch). Free: PairedShell subscribes to no store and re-renders
+  // only on its own nav dispatch. clearPairingScopedState stays nullary here — applyPairingChange
+  // decides WHICH change clears, never WHAT the clear contains; that stays clearPairingDeps' job above.
+  const pairingChangeDeps: PairingChangeDeps = {
+    clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),
+    navigateToPairingScreen: onUnpaired,
+    navigateToNewServerList: () => dispatch({ type: 'pairServerPaired' }),
+    returnToSettings: () => dispatch({ type: 'pairServerCancelled' })
+  }
   return (
     <PairedShellView
       route={route}
@@ -94,16 +107,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
-      onUnpaired={() => {
-        clearPairingScopedState(clearPairingDeps)   // #531 — the pairing that just ended
-        onUnpaired()
-      }}
+      // #1141 — all three callbacks route through applyPairingChange, which owns the decision of
+      // which of them ends a pairing. Only `unpaired` does, and so only it clears.
+      onUnpaired={() => applyPairingChange(pairingChangeDeps, 'unpaired')}
       onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
-      onPairServerPaired={() => {
-        clearPairingScopedState(clearPairingDeps)   // #531 — same clear, the other path that ends one
-        dispatch({ type: 'pairServerPaired' })
-      }}
-      onPairServerCancelled={() => dispatch({ type: 'pairServerCancelled' })}
+      onPairServerPaired={() => applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')}
+      onPairServerCancelled={() =>
+        applyPairingChange(pairingChangeDeps, 'cancelledPairAnotherServer')
+      }
     />
   )
 }
@@ -187,17 +198,27 @@ all" position is an execution constraint tied to its throw risk, not an arrival 
 added after it — this one included — still has to land ahead of it in the call sequence. Skipping that
 would let a `localStorage` throw from `clearAllLastRead` abort `clearAllSlashCommandLists`, leaving
 server A's workspace-authored verb menu live for #681 to grey entries against.
-The two paths are not symmetric and that's why both need their own wrap rather than one shared
-remount-driven reset: unpair flips the app-level route to `pairing`, unmounting `PairedShell`
-entirely, while pair-another-server transitions `pairServer` → `list` *inside* this shell
-(`pairedRoute.ts:62-65`), so the shell never unmounts and nothing a remount would have cleared gets
-cleared. `onPairServerCancelled` is deliberately **not** wrapped — cancelling ends no pairing, so it
-clears nothing (AC4). Wrapping at this shared prop-handoff point, rather than threading a new
-dependency through `runUnpair` and its two `ConversationScreen.tsx` call sites, keeps both wirings on
-two adjacent lines in one file and inherits `runUnpair`'s existing ok-only fail-safe posture for free
-— see [#531 codebase notes](../codebase/531.md) for the full rationale and the divergence trap it
-closes (`sessionStore`'s reset used to live in `unpairAction.ts` alone; see [Session
-store](session-store.md) and [Unpair channel](unpair-channel.md)).
+Until [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), both nav sites wrapped their own
+call to the clear, on the argument that the two paths' asymmetry — unpair flips the app-level route to
+`pairing`, unmounting `PairedShell` entirely, while pair-another-server transitions `pairServer` → `list`
+*inside* this shell (`pairedRoute.ts:62-65`), so the shell never unmounts — meant nothing a remount would
+have cleared got cleared any other way. That argument was the wrong lesson: pairing another server leaves
+nothing behind because it ends no pairing, not because a remount would otherwise have caught it. Since
+\#1117 and #1084 the background process holds one live connection per paired server, so adding one leaves
+every server already paired connected, with everything above still theirs. #1141 lifted all three
+callbacks — `onUnpaired`, `onPairServerPaired`, `onPairServerCancelled` — into `applyPairingChange`
+(`src/renderer/src/applyPairingChange.ts`), a pure helper in the same framework-free, injected-effects
+shape as this file's other pairing helpers, and deleted the `clearPairingScopedState` call from the
+`pairedAnotherServer` arm. Only `unpaired` clears now. `onPairServerCancelled` was never wrapped —
+cancelling ends no pairing, so it clears nothing (AC4) — and routing it through the same helper turned
+that absence from an unobservable fact into a positive, spy-tested assertion for the first time
+(`applyPairingChange.test.ts`), the same test file that gives the unpair arm's clear-then-navigate
+ordering its first executable assertion since [#531](../codebase/531.md) removed the one
+`unpairAction.test.ts` case that pinned it. Wrapping at this shared prop-handoff point, rather than
+threading a dependency through `runUnpair` and its `ConversationScreen.tsx` call sites, still inherits
+`runUnpair`'s existing ok-only fail-safe posture for free — see [#531 codebase notes](../codebase/531.md)
+for that rationale and the divergence trap it closed (`sessionStore`'s reset used to live in
+`unpairAction.ts` alone; see [Session store](session-store.md) and [Unpair channel](unpair-channel.md)).
 
 **#777 widened `ActivateConversationDeps` with a fifth required member**,
 `stampLastRead: (conversationId: string) => void`, called unconditionally at the end of

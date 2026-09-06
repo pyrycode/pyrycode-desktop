@@ -51,9 +51,13 @@ machine for a discriminated-union action set to model. Shipped with no productio
 (navigation) added the first — `clearSessionId` is now called from
 [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx), gated on the active
 conversation's id actually changing — a same-id re-open leaves the held session id untouched.
-[#531](../codebase/531.md) (unpair / pair-another-server) added the second, unconditional call site, via
+[#531](../codebase/531.md) (unpair) added the second, unconditional call site, via
 [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) — the pairing
-itself is ending there, so unlike #530's gate there is no id to compare against.
+itself is ending there, so unlike #530's gate there is no id to compare against. Until
+[#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) this call site fired on pairing another
+server too; it no longer does — adding a server ends no pairing, so the open conversation's session id
+stays live, and `setSessionSettings` routes by session id (`correlations.routeSession`, #1119) to the
+daemon that owns it, never to whichever server was paired most recently.
 [#652](../codebase/652.md) (the deleted-open-discussion exit) added a third, via
 [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
 gated on the id like #530's, but comparing against a *deleted* conversation's id rather than a
@@ -118,7 +122,7 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   retry; the store keeps its last id until something explicitly clears it. [#529](../codebase/529.md)
   added `clearSessionId` as the manual path back to `initialSessionIdState`; [#530](../codebase/530.md)
   wired its first caller (a conversation switch), and [#531](../codebase/531.md) wired its second
-  (unpair / pair-another-server, unconditional).
+  (unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), unconditional).
 - **A late `sessionTransition` for the previous conversation can re-stale the id after a switch**
   ([#530](../codebase/530.md)). The marker carries no `conversation_id` (this store is single-conversation
   by design, see above), so if the previous conversation is still streaming when the switch happens, a
@@ -163,7 +167,8 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   switch, gated on the active conversation's id changing, via
   [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#531 codebase notes](../codebase/531.md) — `clearSessionId`'s second production caller: a pairing
-  ending (unpair / pair-another-server), unconditional, via
+  ending (unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)),
+  unconditional, via
   [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#652 codebase notes](../codebase/652.md) — `clearSessionId`'s third production caller: the open
   discussion being deleted, gated on the id like #530's, via

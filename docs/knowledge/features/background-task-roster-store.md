@@ -342,7 +342,7 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, stamped
                                                          same-ref no-op if none match]
   → NOT repopulated: none of the three frames is in the daemon's reconcile-on-connect set (#569 territory)
 
-pairing ends (unpair, or pair-another-server) → clearPairingScopedState()   [#1139]
+pairing ends (unpair only, since #1141 — pairing another server adds a server rather than ending one) → clearPairingScopedState()   [#1139]
   → backgroundTaskRosterStore.clearAllRosters()   [every conversation's roster dropped, or same-ref
                                                     no-op if already empty]
 ```

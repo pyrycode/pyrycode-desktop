@@ -49,6 +49,14 @@ const STEPS = [
   { usedTokens: 140_000, text: 'Context high: 70%', token: '--color-error' }
 ] as const
 
+// #1166: the figure the launch-time reply carries, and it is a FOURTH value sharing no reading text with
+// any step above. Since opening a chat now asks for the run configuration, this drive can no longer open
+// on an absent reading — and that absence was its proof that each step below was produced by the cycle
+// preceding it. This restores the proof as a POSITIVE one: the drive opens by pinning a reading no step
+// can produce, so a first cycle that changed nothing would still be caught. Comfortably inside the
+// primary band, so it also cannot be confused with either boundary.
+const LAUNCH = { usedTokens: 20_000, text: 'Context: 10%' } as const
+
 // A token's value as the CSSOM serialises a COLOUR — `#ffca45` becomes `rgb(255, 202, 69)`, the form
 // every getComputedStyle() reading is in. Painted onto a throwaway probe rather than parsed by hand, so
 // the conversion is the engine's own and cannot drift from it. Copied from composer-message-box.spec.ts,
@@ -99,9 +107,10 @@ test('composer footer: the context reading steps primary → warning → error a
   // consume-once queue. A duplicate `request_session_settings` (a sheet open landing beside a turn edge)
   // then answers with the same value instead of skipping a step, so the drive cannot desync on a request
   // it did not schedule.
-  // Annotated `number`, not inferred: STEPS is `as const`, so the initialiser's type is the literal 98000
-  // and every later assignment would be a type error.
-  let usedTokens: number = STEPS[0].usedTokens
+  // Annotated `number`, not inferred: LAUNCH is `as const`, so the initialiser's type is the literal
+  // 20000 and every later assignment would be a type error. It is mutated only inside the loop below,
+  // which the launch assertion gates, so the reply to the on-open request can only carry this value.
+  let usedTokens: number = LAUNCH.usedTokens
 
   const { page, daemon } = await launchPairedApp({
     buildReplyFrames: (inbound) => {
@@ -119,10 +128,13 @@ test('composer footer: the context reading steps primary → warning → error a
 
   const reading = page.locator('.composer__context')
 
-  // The reading mounts only once a run-config snapshot exists, and nothing pushes one: `session_settings`
-  // is reply-only and `request_session_settings` does NOT fire on conversation open. So it is absent here,
-  // which is also this drive's proof that each step below was produced by the cycle that preceded it.
-  await expect(reading).toHaveCount(0)
+  // The reading mounts only once a run-config snapshot exists, and nothing PUSHES one — `session_settings`
+  // is reply-only. Since #1166 the app asks on conversation open, and `launchPairedApp` navigates by
+  // clicking the seeded row, so the reply to that on-open request is what mounts this reading before any
+  // turn has run. Pinning its figure is this drive's proof that each step below was produced by the cycle
+  // that preceded it: LAUNCH shares no reading text with any step, so a cycle that produced nothing would
+  // leave this text standing and fail.
+  await expect(reading).toHaveText(LAUNCH.text, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   for (const step of STEPS) {
     usedTokens = step.usedTokens

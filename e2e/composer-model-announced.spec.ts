@@ -185,24 +185,30 @@ test('composer footer: the announced model shows when nothing was chosen, and la
   // EXACT is load-bearing on every trigger locator here: getByRole's `name` matches as a
   // case-insensitive SUBSTRING by default, and the panel rows carry these same names.
   const trigger = (name: string) => page.getByRole('button', { name, exact: true })
-  // The context reading mounts only once a run-config snapshot exists, so it is this drive's barrier for
-  // "the snapshot has landed" — the one event that is otherwise invisible, because the label deliberately
-  // does NOT move when it arrives.
+  // The context reading mounts only once a run-config snapshot exists. Since #1166 that happens on
+  // conversation open, so it marks the FIRST snapshot's arrival and stops being a per-cycle barrier —
+  // every later reply carries the same figures, so it cannot move. The AC2 step counts captured requests
+  // instead.
   const contextReading = page.locator('.composer__context')
 
-  // --- AC4. Nothing at any layer: no pick, no announcement, and no snapshot to carry a stored choice.
-  // The control draws nothing at all, exactly as before this ticket. ---
-  await expect(label).toHaveCount(0)
-  await expect(contextReading).toHaveCount(0)
+  // --- AC4, re-read for #1166. There is still no pick and no announcement at any layer — what changed is
+  // that the app now asks for the run configuration on conversation open, so the BOTTOM RUNG of the
+  // ranking is visible instead of empty: the control shows the daemon's stored choice, verbatim on the
+  // inert arm because no list has arrived to resolve it to a display name. Pinning that value is a
+  // stronger AC4 than the absence it replaces — an implementation that ranked the stored choice above the
+  // announcement would satisfy an emptiness check and is caught by the next step instead. ---
+  await expect(label).toHaveText(STORED_MODEL.value, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(contextReading).toHaveCount(1)
 
-  // --- AC1, and the state this ticket exists for. The announcement alone brings the control back, with
-  // NO snapshot of any kind — no turn has ended yet. No list has arrived either, so the identifier shows
-  // verbatim on the inert arm: no popup announced, and the footer holds only the anchors of the two
-  // controls that do not depend on the model (Actions, and the permission mode, which is itself still
-  // waiting on a snapshot here). ---
+  // --- AC1, and the state this ticket exists for. The announcement DISPLACES the stored choice the
+  // snapshot carries — since #1166 that is what this step shows, rather than the announcement filling a
+  // void, and it is the ranking claim stated more directly. No list has arrived, so the identifier shows
+  // verbatim on the inert arm: no popup announced, and the footer holds the anchors of the two controls
+  // that do not depend on the model — Actions, and the permission mode, which is operable here because
+  // the on-open snapshot named a mode. ---
   daemon.pushFrame(modelAnnouncedFrame(ANNOUNCED_MODEL.value))
   await expect(label).toHaveText(ANNOUNCED_MODEL.value, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(1)
+  await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
 
   // --- AC1's join. The list arrives unsolicited and the announced identifier resolves through the
   // published rows on exact `value` equality — the same rule the run-configuration sheet's Running model
@@ -215,7 +221,17 @@ test('composer footer: the announced model shows when nothing was chosen, and la
   // transition. The label does not move: the announcement outranks the stored choice. ---
   daemon.pushFrame(turnStateFrame('thinking'))
   daemon.pushFrame(turnStateFrame('idle'))
-  await expect(contextReading).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // The barrier for "this cycle's snapshot was asked for" — the context reading can no longer serve as
+  // one, because #1166's on-open request already mounted it and the fake answers every request with the
+  // same figures, so it cannot move. Counting the captured requests is the honest replacement (the
+  // `settingsFramesMatching` idiom below, applied to the read half): TWO of them means the on-open ask
+  // plus this turn end's. The fake answers in-process from `buildReplyFrames`, so by the time a poll
+  // interval has elapsed the reply it returned has landed.
+  await expect
+    .poll(() => captured.filter((e) => e.type === 'request_session_settings').length, {
+      timeout: ROUNDTRIP_TIMEOUT_MS
+    })
+    .toBeGreaterThanOrEqual(2)
   await expect(label).toHaveText(ANNOUNCED_MODEL.display_name)
 
   // --- AC5. The rows, and the MARKING — which is the session's model, never the announcement. This is

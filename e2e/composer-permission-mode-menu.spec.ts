@@ -179,13 +179,12 @@ test('composer footer: the permission-mode menu labels, offers, submits and reve
   const trigger = (name: string) => page.getByRole('button', { name, exact: true })
   const displayed = (mode: string): string => PERMISSION_MODE_LABELS[mode]
 
-  // --- The snapshot has to arrive before this control can say anything, and the app asks for one on the
-  // connected edge and at each TURN END (runConfigLive). The connected edge lands before a conversation is
-  // active, so nothing is asked for then — which is why every item in this row is absent on a fresh
-  // launch. A pushed thinking → idle pair is that turn-end edge, unsolicited exactly as the daemon sends
-  // it, and the reply is the fake's own baseline: no input is manufactured that production does not
-  // produce. ---
-  await expect(label).toHaveCount(0)
+  // --- The snapshot has to arrive before this control can say anything. Since #1166 the app asks for one
+  // on CONVERSATION OPEN as well as on the connected edge and at each TURN END (runConfigLive), and
+  // `launchPairedApp` navigates by clicking the seeded row — so the fake's baseline reply has already
+  // landed here and every item in this row is live from launch. The pushed thinking → idle pair is still
+  // that turn-end edge, unsolicited exactly as the daemon sends it, and it re-asks for the same baseline:
+  // no input is manufactured that production does not produce. ---
   daemon.pushFrame(turnStateFrame('thinking'))
   daemon.pushFrame(turnStateFrame('idle'))
 

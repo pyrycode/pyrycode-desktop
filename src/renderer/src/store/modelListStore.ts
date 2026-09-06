@@ -13,7 +13,9 @@
 // that one the VERBS the working directory will accept. It mirrors that store's DI-factory → singleton
 // → hook → selector structure and its copy-on-write `ReadonlyMap`, and like it — and unlike
 // `backgroundTaskRosterStore` — it has NO `connected`-edge reset and must never gain one: a reconnect
-// to the same daemon does not invalidate a published list, and nothing on this path could re-fetch one.
+// to the same daemon does not invalidate a published list, and since #1166 the re-fetch that does exist
+// is per-conversation on activation, so a daemon-wide edge could not re-assert a background
+// conversation's list anyway.
 // The pairing-scoped clear (`clearAllModelLists`, #977) lands in `clearPairingScopedState`'s injected
 // dep set rather than at either call site (the #588 → #593 and #954 → #955 precedent), so both
 // pairing-change paths drop every conversation's list by construction and neither this store nor the
@@ -26,9 +28,12 @@
 // DELIVERY IS BEST-EFFORT AND THE STORE MUST BE CORRECT WHEN NOTHING ARRIVES. The daemon pushes the
 // list unsolicited from a conversation's `initialize` reply, so a conversation with no list is a
 // NORMAL, PERMANENT state — not an error, not a spinner, not a retry. The answer to it is `null` from
-// the selector and nothing else. There is no request half on this path and there must never be one: a
-// client-side retry against a relay that withholds the frame would be a self-inflicted spin, and a
-// consumer must never BLOCK a model menu on this frame, whose delivery window is narrow and lossy.
+// the selector and nothing else. Since #1166 there IS a request half — `modelListBridge`'s
+// `requestModelList`, fired once when a conversation is activated, for the chats created after this app
+// connected that cross no delivery edge at all — and the rule it must not become is unchanged: it is a
+// one-shot ask on open, NEVER a retry, because a client-side retry against a relay that withholds the
+// frame would be a self-inflicted spin. A consumer must still never BLOCK a model menu on this frame,
+// whose delivery window is narrow and lossy.
 //
 // GROWTH, stated rather than defended: one entry per distinct `conversationId` seen since launch, each
 // holding one frame's rows. Each frame is already capped upstream by the daemon's producer cap, and the

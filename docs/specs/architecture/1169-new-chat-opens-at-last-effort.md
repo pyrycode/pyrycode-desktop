@@ -298,3 +298,49 @@ silent-skip failure mode the gate exists to prevent.
 **Consequence worth stating plainly:** the gate cannot go green until #1204 lands, so re-running it against
 this branch will fail again on the same spec for the same reason. That is a property of the tier and the
 daemon, not of this PR.
+
+### 2026-09-06 — the predicted re-fail happened; the base comparison now exists and is cross-branch
+
+**No production, spec or test change this leg.** The previous entry predicted that re-running the gate would
+fail again on `real-claude-attachment.spec.ts` for a reason outside this PR. It did, the dispatcher attributed
+it here because "no base comparison was available", and this entry records the comparison it could not make.
+
+**AC5 is discharged twice over, not once.** `real-claude-effort-default.spec.ts` — `a level set before a
+chat's first message survives into the first turn` — **passed** in both gate runs since the daemon rebuild:
+17:12 UTC at 6.9s and 18:01 UTC at 8.6s. The criterion asks for a spec the gate reports as actually executed,
+read off the executed count rather than the exit code, and that is what both runs report.
+
+**The failure is branch-independent, established from the dispatcher's own gate logs rather than argued from
+the diff.** Reconstructed from `pyrycode-desktop-agents/logs/`:
+
+| gate run (UTC) | branch | `real-claude-attachment` | `real-claude-effort-default` |
+|---|---|---|---|
+| 13:09, 13:45, 14:23 | `feature/1169` | passed | failed (this ticket's own defects, since fixed) |
+| 15:13 | `feature/1169` | passed | failed (last lap's defect, since fixed) |
+| 17:12 | `feature/1169` | **failed** | **passed** |
+| 17:43 | `feature/1070` | **failed** | passed |
+| 18:01 | `feature/1169` | **failed** | **passed** |
+
+The attachment spec passed four times on this branch and then went red on it, on `feature/1070`, and on it
+again — the crossing at 17:43 is the load-bearing row, because `feature/1070` is a sidebar-grouping change
+touching no attachment, composer or wire code. A defect that reddens two unrelated branches within
+thirty-one minutes of each other is not either branch's. `~/.local/bin/pyry` was rebuilt inside that window,
+which is the same rebuild the entry two above welcomed for clearing this ticket's own blocker.
+
+**The two failures on this branch are therefore opposite in kind, and the log distinguishes them.** The
+15:13-and-earlier reds were this ticket's own spec defects, found and fixed. The 17:12-onward red is a
+different spec entirely, and it is worth naming that the previous laps' hardest-won lesson applies here in
+reverse: *read which assertion failed off the stack, not off the shape of the failure.* The same routing
+label arrived for two unrelated causes, and only the log tells them apart.
+
+**Blocker set rather than worked around.** `blockedBy` now names \#1204 on this ticket. The alternative was to
+skip the attachment spec to green the gate, and that is declined for the reason the previous entry gave and
+the cross-branch evidence now strengthens: the spec is failing because a shipped product feature is genuinely
+broken against the current daemon — every attachment upload is refused — so a skip would hide a live defect
+behind exactly the silent-skip failure mode this tier exists to prevent, and would drop the executed count
+while doing it. The spec belongs to \#1055 and the fix belongs to \#1204; neither is this ticket's to move.
+
+**Recorded for whoever reads this next:** nothing on this branch can turn that gate green, and re-dispatching
+the builder cannot either. The decision is the parking comment's own — judge the attachment failure unrelated,
+drop `needs-real-claude`, and advance — or land \#1204 first. Sibling ticket \#1070 reached this same
+conclusion independently on its own branch and is parked on the same blocker awaiting the same call.

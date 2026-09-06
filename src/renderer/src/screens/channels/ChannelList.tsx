@@ -609,8 +609,9 @@ export function HostConnectionDots({
 // The store-bound container — `ConnectionStatusIndicatorControl`'s body with the two legs REORDERED. Reads
 // each leg through its own shipped narrow selector, so a relay flap re-renders these four dots and not a
 // single conversation row; lifting the reads to `ChannelList` would couple the whole sidebar to both legs'
-// state, and would also thread two more arguments through `renderBody`'s already-five-positional signature
-// for a value no intermediate uses.
+// state, and would also thread two more arguments through `renderBody`'s already-six-positional signature
+// for a value no intermediate uses. (#1070 added `serverIds` and made it six; the argument against
+// lifting only got stronger, since each added positional raises the cost of the next.)
 //
 // The honest cost: `ChannelListView` is no longer strictly pure — its subtree now reads two singletons,
 // which deviates from this file's own container-reads / pure-view doc comment. It is safe under the unit

@@ -24,6 +24,7 @@ export interface ExitActiveConversationDeps {
   clearTimelineFor: (conversationId: string) => void  // #757 — the keyed holder's single-key clear
   clearActiveConversation: () => void
   clearSessionId: () => void
+  clearRunConfig: () => void   // #1167 — both run-config stores, one member
   navigateToList: () => void
 }
 
@@ -33,6 +34,7 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   deps.clearTimelineFor(conversationId)
   deps.clearActiveConversation()
   deps.clearSessionId()
+  deps.clearRunConfig()   // #1167
   deps.navigateToList()
 }
 ```
@@ -49,9 +51,11 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   `conversationDeleted` unconditionally on decode with no `in_reply_to` correlation state threaded
   (#375's deliberate decision — the bare `id` is self-sufficient). The fail-direction is safe: every
   move the gate triggers is a clear.
-- **Clear, then navigate — four stores, not `clearPairingScopedState`'s eight.** `dispatchTimeline({
+- **Clear, then navigate — five clears, not `clearPairingScopedState`'s much larger set.** `dispatchTimeline({
   type: 'reset' })` → `clearTimelineFor(conversationId)` ([#757](../codebase/757.md)) →
-  `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so no observer sees the
+  `clearActiveConversation()` → `clearSessionId()` →
+  `clearRunConfig()` ([#1167](#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167),
+  see below), then `navigateToList()` last, so no observer sees the
   Channel List rendered against the deleted discussion's thread state. The pairing has **not** ended here
   — the daemon connection is alive and the operator lands on a working Channel List — so `sessionStore`'s
   reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s eight) are deliberately
@@ -75,7 +79,10 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
 - **The security payload**, the one `activateConversation` and `clearPairingScopedState` already
   document: clearing the session id makes `RunConfigSections`' `onChange` `undefined`, so the Run
   configuration controls render inert instead of addressing a YOLO / auto-approval write to a session
-  that belonged to a conversation the daemon has just destroyed.
+  that belonged to a conversation the daemon has just destroyed. **#1167 adds the read half:** the
+  controls no longer *display* the destroyed conversation's model, effort, permission mode and YOLO bit
+  either, so they say nothing rather than something false about a chat that is gone — see § The
+  run-configuration clear below.
 
 `conversationDeletedBridge.ts` is the event seam, the `conversationCreatedBridge` twin — three exports,
 the same `translate* → subscribe* → use*` shape, and **strictly narrower**: it subscribes to the
@@ -103,7 +110,11 @@ const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> =
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  clearRunConfig: () => {   // #1167 — the activateDeps body verbatim
+    runConfigStore.getState().clearSnapshot()
+    runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+  }
 }
 
 useConversationDeletedExit((conversationId) =>
@@ -425,6 +436,94 @@ docstring used to claim only the operator's activation could promote a key to th
 that claim, and the holder's docstring and package overview were corrected in the same change (see
 [Conversation timeline holder § The eviction invariant](conversation-timeline-holder.md#how-it-works) for
 the corrected reasoning and why it was accepted rather than gated — architect security review, PASS).
+
+## The run-configuration clear (`activateConversation.ts`, `exitActiveConversation.ts`, both stores, #1167)
+
+The snapshot half of the run-configuration defect is bounded by #1166 (asks on every activation) and
+\#1176 (refuses a reply naming a chat other than the open one, § above) — stale for at most one round
+trip. Neither sibling touches the **write** half: a `set_session_settings` ack carries only `session_id`
+and never rewrites the snapshot, so a `confirmed` override made in one chat composed over every later
+chat's [Run configuration store](run-config-store.md) snapshot **permanently**, through
+[Run configuration write store](run-settings-write-store.md)'s `selectEffectiveSettings` — no reply could
+ever displace it. `clearPairingScopedState` deliberately left the snapshot store alone ("re-requested",
+its own comment said) and never reached the write store at all; neither `activateConversation` nor
+`exitActiveConversation` reset either one. That permanent half is what #1167 closes, and the ticket names
+it as the half a detector should be built on — a drive that only shows the snapshot going stale races
+\#1166's round trip instead.
+
+Both `ActivateConversationDeps` and `ExitActiveConversationDeps` gain one shared, required, nullary
+member, `clearRunConfig`:
+
+```ts
+clearRunConfig: () => {
+  runConfigStore.getState().clearSnapshot()
+  runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+}
+```
+
+**One member for two stores, not two members** — the `requestConversationConfig` precedent from
+[§ The run-configuration and model-list ask](#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
+above, applied to the opposite direction: the two clears are one act ("this chat's run configuration is
+no longer the one to show"), they always fire together, and neither is sufficient alone — clearing only
+the snapshot store would leave a confirmed override standing over the newly opened chat's snapshot, and
+clearing only the write store would leave the departing chat's raw snapshot on display until a reply
+arrived.
+
+`activateConversation`'s full sequence, current as of #1167 (extending the #1166 snippet above by one
+line inside the gate):
+
+```
+previous = getActiveConversation()
+if (previous?.id !== conversation.id) {
+  dispatchTimeline({type:'reset'}); clearSessionId(); clearRunConfig()   // #1167, new — inside the gate
+}
+setActiveConversation(conversation)
+stampLastRead(conversation.id)              // #777, unchanged
+markViewed(conversation.id)                 // #786, unchanged
+requestConversationConfig(conversation.id)  // #1166, unchanged — outside the gate, last
+```
+
+**Placement differs between the two helpers, and each placement is load-bearing:**
+
+- **`activateConversation`** calls it *inside* the id-change gate, alongside `clearSessionId` — so a
+  re-open of the chat already open (AC2) leaves the run configuration standing, exactly like the timeline
+  and the session id. Being inside the gate also puts it ahead of `requestConversationConfig`, which
+  sits last and outside the gate: the ordering #1166 documents for `clearSessionId` applies unchanged
+  here — the clear must precede the ask, or a reply landing in the same tick would be blanked by the
+  clear sent to repair it.
+- **`exitActiveConversation`** calls it unconditionally past its own id gate, after `clearSessionId` and
+  before `navigateToList` — there is no successor chat to preserve it for, so unlike the activate path
+  there is no gate to sit inside.
+
+**Cross-wire hazard, worse here than at `activateConversation`'s existing three-identical-signature
+note.** `clearRunConfig` is nullary, so on `ActivateConversationDeps` it is swappable with
+`clearSessionId`, and on `ExitActiveConversationDeps` with `clearSessionId`, `clearActiveConversation`
+and `navigateToList` — every swap compiles, and a bare `toHaveBeenCalled()` passes for both halves. The
+defence is unchanged in kind: both test files' `realDeps` integration cases wire the real
+`createRunConfigStore`/`createRunSettingsWriteStore` instances alongside the other real stores, so a swap
+leaves one store uncleared and another wrongly cleared, failing several cases together.
+
+**Consequence, already carried by the session-id clear and now widened by one more reading.** Clearing
+the snapshot drops `usedTokens`/`windowTokens` with it, so the footer's context-usage reading unmounts
+until the newly opened (or, on exit, never-reopened) chat's own reply lands. That is the intended widened
+window, not a regression — see [Run configuration store § Scoped to the open chat since
+\#1167](run-config-store.md#scoped-to-the-open-chat-since-1167).
+
+**`clearPairingScopedState` stays out of scope, on the ticket's own rule.** An unpair leaves both stores
+held, but no footer renders until a chat is opened, and that open clears them by construction through
+`activateConversation` — a member there would guard state nothing can read. That mirrors this document's
+existing "stores deliberately left out" list above for `exitActiveConversation`'s own five clears.
+
+The Playwright drive this ticket added, `e2e/run-config-scoped-to-conversation.spec.ts`, is deliberately
+not the shape of the sibling `run-config-cross-conversation.spec.ts` that [Run configuration
+store](run-config-store.md) links: it seeds chat A's configuration *and confirms a change in it* before
+switching to chat B, because the fake
+tier pushes no snapshot unprompted — a drive that skips the seeded confirm asserts "B draws nothing"
+against a state that draws nothing anyway, and passes with the clear deleted. It mutation-checks the
+effort label locator down to a count of 0 immediately after the switch (the durable defect, caught before
+any reply), then checks it again after pushing B's own correlated reply (a second, independent detector:
+with the clear deleted, A's confirmed override would still beat B's snapshot and the label would read
+A's value instead of B's).
 
 See [Conversation timeline holder](conversation-timeline-holder.md) for `markViewed`'s own branches
 (already-tail no-churn, present-not-tail move, absent-creates-at-tail) and why creating on an absent key

@@ -166,7 +166,10 @@ export interface RunConfigSnapshot {
   usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
 }
 export interface RunConfigState { snapshot: RunConfigSnapshot | null }  // null = not yet loaded
-export type RunConfigStore = RunConfigState & { setSnapshot: (s: RunConfigSnapshot) => void }
+export type RunConfigStore = RunConfigState & {
+  setSnapshot: (s: RunConfigSnapshot) => void
+  clearSnapshot: () => void   // #1167 — back to initialRunConfigState
+}
 
 createRunConfigStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
 runConfigStore                  // app-wide singleton
@@ -175,9 +178,14 @@ selectSnapshot(s)                // the only read surface
 ```
 
 Mirrors [`sessionStore.ts`](session-store.md)'s DI-factory → singleton → hook → selectors
-structure, but with a **single setter** rather than a reducer: there is exactly one mutation
-("record the latest snapshot"), so a discriminated-union action set would be a one-member union —
-ceremony without benefit. `setSnapshot` replaces the whole `snapshot` object unconditionally (the
+structure, but with **named setters** rather than a reducer: its two mutations — "record the latest
+snapshot" and, since #1167, "drop it" — are independent whole-value writes that read no prior state,
+the [session-id store](session-id-store.md)'s set/clear shape (#259/#529) rather than a
+discriminated-union action set. A reducer earns its keep where the transitions are *correlated* — the
+adjacent [Run configuration write store](run-settings-write-store.md) is that contrast, which is why
+\#1167 lands as a reducer arm there and a second setter here.
+
+`setSnapshot` replaces the whole `snapshot` object unconditionally (the
 most recent snapshot always wins — no merge, no dedupe) and never coerces or validates the fields:
 an empty `model`, an empty `effort` (inherited default), and `yolo: false` (permissions enforced)
 are held **verbatim**. `snapshot: null` is the distinct "no snapshot received yet" state, so a
@@ -429,6 +437,41 @@ and is the property that actually matters, is that only one JSX text position re
 See [#560 codebase notes](../codebase/560.md) for the original three-state render contract and
 [#975 codebase notes](../codebase/975.md) for the rewrite.
 
+## Scoped to the open chat since #1167
+
+Until #1167 nothing reset this store when the open chat changed: `clearPairingScopedState` deliberately
+left it alone ("re-requested", its comment said), and neither `activateConversation` nor
+`exitActiveConversation` touched it. The held snapshot is app-wide and keyed by nothing, so a switch, a
+delete or an archive left the previous chat's model/effort/YOLO/permission-mode/usage figures standing —
+composed by the sibling [write store](run-settings-write-store.md) into the footer's displayed value for
+whichever chat was opened next, until that chat's own `runConfigReceived` reply eventually landed (one
+round trip, bounded by [#1166](../codebase/1166.md)'s ask-on-activation and
+[#1176](../codebase/1176.md)'s correlation gate — see § Conversation-attributed since #1176 above).
+
+`clearSnapshot` closes that gap: it returns the store to `initialRunConfigState`
+(`snapshot: null`), sourced from that exported constant rather than a fresh `{ snapshot: null }`
+literal — `clearSessionId`'s stated reason, so a second field added to `RunConfigState` later is reset
+for free rather than needing a second edit here. Unconditional, so clearing an already-clear store is a
+no-op by construction; `selectSnapshot` is the only read surface and `null → null` is not a slice
+change, so no subscriber wakes on a redundant clear. It reverts to the *distinct* not-loaded state,
+never to an all-zero snapshot — `''` / `false` / `0` are real daemon readings and must stay
+distinguishable from "nothing has arrived for this chat yet", which is what makes every footer
+control's not-known rendering reachable at all.
+
+Both conversation-lifetime helpers call it through one shared `clearRunConfig` dep member that also
+resets [Run configuration write store](run-settings-write-store.md) in the same act — see that
+document's `conversationSwitched` arm and [Paired shell — conversation exits and stamps § The
+run-configuration clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167)
+for the placement in each helper. `activateConversation` calls it *inside* its id-change gate, so a
+re-open of the chat already open leaves the snapshot standing; `exitActiveConversation` calls it
+unconditionally past its own id gate, since there is no successor chat to preserve it for.
+
+Clearing the snapshot also drops `usedTokens`/`windowTokens`, so the footer's context-usage reading
+unmounts until the newly opened chat's own reply lands — the same widened window the session-id clear
+already carries, not a regression. `clearPairingScopedState` stays out of scope on purpose: an unpair
+leaves this store held, but no footer renders until a chat is opened, and that open clears it by
+construction through `activateConversation` — a member there would guard state nothing can read.
+
 ## Edge cases and limitations
 
 - **No reset on sheet close.** The store keeps its last snapshot across a close→reopen, so
@@ -559,3 +602,8 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   `runConfigReceived`, and a gate in `subscribeRunConfig`. See § Conversation-attributed since #1176
   above. Filed [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) for the one ingress
   into `sessionIdStore` it cannot reach (`sessionIdBridge`'s unsolicited `session_transition`).
+- **[#1167](https://github.com/pyrycode/pyrycode-desktop/issues/1167)** — added `clearSnapshot`, called
+  by `activateConversation` and `exitActiveConversation` through the shared `clearRunConfig` dep member
+  that also resets [Run configuration write store](run-settings-write-store.md). See § Scoped to the
+  open chat since #1167 above and [Paired shell — conversation exits and stamps § The run-configuration
+  clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167).

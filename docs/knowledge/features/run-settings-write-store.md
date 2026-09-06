@@ -44,6 +44,7 @@ export type RunSettingsWriteEvent =
   | { type: 'settingsConfirmed'; changeId: string }   // from sessionSettingsUpdated (#261)
   | { type: 'settingsRejected'; changeId: string }    // from sessionSettingsRejected (#269)
   | { type: 'reconnected' }                           // from the connected wire edge ([#539](../codebase/539.md))
+  | { type: 'conversationSwitched' }                  // from activateConversation/exitActiveConversation (#1167)
 
 export interface RunSettingsWriteState {
   pending: ReadonlyMap<string, SettingsChange>   // changeId → requested change
@@ -62,14 +63,14 @@ always-listening** (a confirm/reject reply can arrive after the sheet closes, wh
 subscriber is sheet-scoped); (b) its state (pending changes + client-confirmed overrides + last error) is
 orthogonal to the snapshot's `{model, effort, yolo, permissionMode, usedTokens, windowTokens}` shape. Unlike
 `sessionIdStore`'s named setters, this is a **reducer** (`dispatch` over the sealed event union) because
-every one of its four transitions reads prior state: three (dispatch / confirm / reject) are
-**correlated** — a confirm or reject is a no-op without a matching pending record — and the fourth,
-`reconnected` ([#539](../codebase/539.md)), is uncorrelated (no `changeId`) but still prior-state-reading,
-since it clears only when something is pending. `sessionIdStore`'s set and clear
-([#529](../codebase/529.md)) are independent whole-value writes that read nothing. The contrast is the
-coupling, not the count.
+every one of its five transitions reads prior state: three (dispatch / confirm / reject) are
+**correlated** — a confirm or reject is a no-op without a matching pending record — and the other two,
+`reconnected` ([#539](../codebase/539.md)) and `conversationSwitched` (#1167), are uncorrelated (no
+`changeId`) but still prior-state-reading, since each clears only when something is held. `sessionIdStore`'s
+set and clear ([#529](../codebase/529.md)) — and `runConfigStore`'s, since #1167 — are independent
+whole-value writes that read nothing. The contrast is the coupling, not the count.
 
-### The reducer (four arms, each pinned by a named test)
+### The reducer (five arms, each pinned by a named test)
 
 - **`changeDispatched`** — `pending.set(changeId, change)`; clears `error` (a fresh attempt supersedes
   the last rejection). `confirmed` untouched — the optimistic value shows only through the pending
@@ -94,11 +95,31 @@ coupling, not the count.
   Map, which this reducer replaces wholesale, so the field is cleared for free. Contrast `confirmed` and
   `error`, which are per-field and would need an explicit new case if a future arm needed clearing on
   reconnect too.
+- **`conversationSwitched`** (#1167) — drops `pending`, `confirmed` **and** `error` together, dispatched
+  by `activateConversation`/`exitActiveConversation` rather than any bridge (no wire edge produces it —
+  which chat is open is not a fact this store holds, so the two helpers own that decision and this store
+  only obeys it). That is the whole of what distinguishes it from `reconnected`: a reconnect abandons
+  correlations for a session that is still the one being described, while a switch changes *which*
+  session is being described at all — so a standing rejection and a confirmed override, both still true
+  across a reconnect, are both false across a switch. Two deliberate departures from `reconnected`:
+  - **A fresh whole-state literal** (`{ pending: new Map(), confirmed: {}, error: null }`), not
+    `{ ...state, … }`. `reconnected` spreads `state` so an unknown future field is preserved by default,
+    matching its "clear only the thing that strands" posture; this arm's posture is the inverse — every
+    field of this store is conversation-scoped — so the literal form makes a future required field a
+    *compile error* here rather than a value silently preserved past the chat it described.
+  - **The same-reference early-out spans all three fields**, not just `pending`: copying `reconnected`'s
+    guard (`pending.size === 0`) verbatim would return early on exactly the state this arm exists for — a
+    confirmed override standing with nothing pending — so this arm's guard is
+    `pending.size === 0 && error === null && !hasConfirmed(confirmed)`, where `hasConfirmed` reads key
+    presence on the sparse `confirmed` object (every writer is `applyConfirmed`, which only ever sets a
+    real value, so presence *is* "held"). Load-bearing for the same reason `reconnected`'s is: #257's
+    container selects the whole raw write state, so without it a switch between two chats that never
+    wrote anything would re-render the sheet.
 
 There is no explicit "roll back" mutation: **clearing the pending marker *is* the rollback**, because the
-effective view falls through to the confirmed override or the snapshot base — `reconnected` is a fourth
-caller of that doctrine, not a new mechanism. A no-match (or already-clear) arm returns the same state
-object, so zustand skips the notify.
+effective view falls through to the confirmed override or the snapshot base — `reconnected` and
+`conversationSwitched` are two more callers of that doctrine, not a new mechanism. A no-match (or
+already-clear) arm returns the same state object, so zustand skips the notify.
 
 ### The effective-view derivation
 
@@ -218,6 +239,27 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   selects the **raw** write state (`(s) => s`) rather than `selectEffectiveSettings` as the zustand
   selector, since the latter returns a fresh object per call and would defeat `Object.is`.
 
+## Scoped to the open chat since #1167
+
+Before #1167 the durable half of this store had no lifetime at all: `set_session_settings`'s ack carries
+only `session_id`, never rewrites the snapshot, so a `confirmed` override made in one chat composed over
+*every later chat's* snapshot permanently — no reply could ever displace it, unlike the sibling
+[Run configuration store](run-config-store.md)'s snapshot, which #1166/#1176 already bound to one round
+trip. `clearPairingScopedState` left this store alone entirely (it never reached it), and neither
+`activateConversation` nor `exitActiveConversation` cleared it either — the write half was the durable
+defect the ticket names.
+
+`PairedShell`'s `clearRunConfig` dep member dispatches `{ type: 'conversationSwitched' }` on this store
+in the same call that clears `runConfigStore`'s snapshot — see [Run configuration store § Scoped to the
+open chat since \#1167](run-config-store.md#scoped-to-the-open-chat-since-1167) and [Paired shell —
+conversation exits and stamps § The run-configuration
+clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167)
+for the placement in each helper. One member fires both clears because they are one act ("this chat's run
+configuration is no longer the one to show"): they always fire together and neither is sufficient alone —
+clearing only `runConfigStore` would leave a confirmed override standing over the newly opened chat's
+snapshot, and clearing only this store would leave the previous chat's raw snapshot displayed until a
+reply arrived.
+
 ## Edge cases and limitations
 
 - **A change stranded by a reconnect no longer strands forever** ([#539](../codebase/539.md)) — the
@@ -240,9 +282,12 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
 - **`error` persists until the next `changeDispatched`.** A `settingsConfirmed` leaves `error` untouched,
   so a stale rejection error can briefly outlive a later, unrelated success — #257 does not clear it on
   its own signal either; the AC only requires a retry (which does dispatch) to clear it.
-- **No reset when a fresh snapshot arrives.** A `confirmed` override that matches the next spawn's
-  snapshot becomes redundant but harmless (`override === snapshot`); no divergence occurs in the
-  single-client model. Deferred — add clearing only if a real divergence surfaces.
+- **No reset when a fresh snapshot arrives *for the same chat*.** A `confirmed` override that matches
+  the next spawn's snapshot becomes redundant but harmless (`override === snapshot`); no divergence
+  occurs in the single-client model, so this stays deferred. The divergence that *did* surface — a
+  confirmed override composing over a *different* chat's snapshot, permanently — was #1167's, and is
+  what `conversationSwitched` retires; see § Scoped to the open chat since #1167 above. This bullet is
+  narrower than the one #1167 closed: it is about a fresh reply for the chat already open, not a switch.
 
 ## Related
 
@@ -284,3 +329,9 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   [#538 codebase notes](../codebase/538.md) ([thread timeline](conversation-timeline-store.md)'s twin
   arm), [#415](../codebase/415.md) (`modalStore`'s), and [#197](../codebase/197.md) (`queueStore`'s) —
   four stores now reconcile on the same edge.
+- **[#1167](https://github.com/pyrycode/pyrycode-desktop/issues/1167)** — added `conversationSwitched`,
+  the deliberate contrast arm to `reconnected`: it clears `confirmed` and `error` too, because a switch
+  changes which session is being described rather than merely abandoning correlations for the one still
+  open. Dispatched by `activateConversation`/`exitActiveConversation` through the same `clearRunConfig`
+  dep member that clears [Run configuration store](run-config-store.md#scoped-to-the-open-chat-since-1167)'s
+  snapshot. See § Scoped to the open chat since #1167 above.

@@ -3,16 +3,30 @@
 The renderer→main IPC surface that lets the window read the operator-typed **host label** back from
 the at-rest [host-label store](host-label-store.md) — **including while disconnected**.
 
+**Two channels since [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157), by design, not
+one channel with two request shapes** — the same cut [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+made for [the unpair channel](unpair-channel.md#the-per-server-channel-1149). `HOST_LABEL_CHANNEL`
+(below) names no machine and still carries no body. `HOST_LABEL_SERVER_CHANNEL` (§ "The per-server
+channel") names **one** machine and carries the module's first untrusted request field. They sit side
+by side: `hostLabelLoader`'s one-shot loader is still the zero-argument channel's only caller,
+invoking `window.pyry.hostLabel` as a bare function reference — a newly required parameter would break
+that caller at the type level, which is what makes a second channel forced rather than merely tidy.
+The keyed channel ships with no caller yet — the same "boundary ahead of its UI consumer" shape the
+zero-argument channel itself shipped in — and its sidebar consumer is
+[#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).
+
 Introduced in [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824). It is the **fourth**
 member of the [pairing-status signal](pairing-status-signal.md) (#79) / [unpair
 channel](unpair-channel.md) (#173) / [server-info channel](server-info-channel.md) (#339) family: same
 four-layer shape (shared contract, main handler, preload bridge, composition-root registration), same
 injected-target / stateless-handler / classify-don't-forward discipline. [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822)
 built the store, [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) wired its write path
-into pairing confirm; this ticket is the read half. Shipped with no caller;
+into pairing confirm; [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) is the
+zero-argument read half. Shipped with no caller;
 [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) gave it one — see
 [Host-label window store](host-label-window-store.md) — and the sidebar host row that renders the value
-is still open as [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
+is still open as [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834). [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)
+is the per-server read half, answering from [`MultiHostLabelStore.loadFor`](host-label-store.md).
 
 ## Why a new channel, not `ServerInfo`
 
@@ -64,6 +78,15 @@ error message, or a truncated label prefix onto them.
 | `registerHostLabelHandler(target, deps)` + `HostLabelHandleTarget` | `src/main/hostLabelHandler.ts` (new) | background handler |
 | `window.pyry.hostLabel()` | `src/preload/index.ts` (mod) | preload bridge |
 | single `handle` registration + `will-quit` teardown | `src/main/index.ts` (mod) | composition root |
+
+Since #1157, the same four layers again for the keyed sibling — see § "The per-server channel" below:
+
+| Piece | File | Layer |
+|---|---|---|
+| `HOST_LABEL_SERVER_CHANNEL` + `HostLabelServerRequest` + `isHostLabelServerRequest` | `src/shared/ipc/hostLabel.ts` (mod) | shared contract |
+| `registerHostLabelServerHandler(target, deps)` + `HostLabelServerHandleTarget` | `src/main/hostLabelHandler.ts` (mod) | background handler |
+| `window.pyry.hostLabelFor(serverId)` | `src/preload/index.ts` (mod) | preload bridge |
+| second `handle` registration + its own `will-quit` teardown | `src/main/index.ts` (mod) | composition root |
 
 ### 1. The shared contract (`src/shared/ipc/hostLabel.ts`)
 
@@ -138,28 +161,110 @@ const listener = async (): Promise<HostLabelResult> => {
 - Nothing Electron-specific is imported — `ipcMain` satisfies `HostLabelHandleTarget` structurally, so
   the unit test injects a fake `{ handle: vi.fn(), removeHandler: vi.fn() }`.
 
+### The per-server channel (#1157)
+
+```ts
+export const HOST_LABEL_SERVER_CHANNEL = 'pyry:host-label-server' as const
+export type HostLabelServerRequest = { serverId: string }
+export function isHostLabelServerRequest(value: unknown): value is HostLabelServerRequest
+
+export interface HostLabelServerHandleTarget {
+  handle(channel: string, listener: (event: unknown, request: unknown) => Promise<HostLabelResult>): void
+  removeHandler(channel: string): void
+}
+
+export function registerHostLabelServerHandler(
+  target: HostLabelServerHandleTarget,
+  deps: { store: Pick<MultiHostLabelStore, 'loadFor'> }
+): () => void
+```
+
+A **second channel**, not a second branch on `HOST_LABEL_CHANNEL`'s one listener — the same argument
+[the per-server unpair channel](unpair-channel.md#the-per-server-channel-1149) made: it turns "a
+malformed keyed request can never fall through to the un-keyed read, and vice versa" into a fact about
+the *types* of the two handlers' `deps.store` (`Pick<MultiHostLabelStore, 'loadFor'>` here carries no
+`load` at all) rather than about a branch a later edit could get wrong. `registerHostLabelHandler` and
+its tests are untouched by this.
+
+**The guard is this module's first-ever untrusted request field.** `isHostLabelServerRequest` mirrors
+`unpair.ts`'s `isUnpairServerRequest` structurally — pure, never throws, accepts extra fields, rejects
+a non-object, `null`, a missing or non-string `serverId`, and one over `MAX_SERVER_ID_LENGTH` — but is
+a separate function rather than a shared one: the two guard two channels with two different verbs, and
+naming one after the other would make a later divergence in either read as a bug in both.
+`{ serverId: undefined }` is **rejected** (the `typeof` test does it, and matters because structured
+clone preserves an own `undefined` property); the empty string is **accepted**, answered one step
+later by the store as `not-stored`, the same two rulings `isUnpairServerRequest` settled.
+`MAX_SERVER_ID_LENGTH` is **imported from `./unpair`**, not redeclared — a second number would be the
+exact drift the ticket forbids, and the aliasing argument (every persisted `server` id already arrived
+inside a pairing paste bounded by `MAX_PASTE_LENGTH`) carries over unchanged. The test pins the reuse
+by **identity** (`expect(MAX_SERVER_ID_LENGTH).toBe(MAX_PASTE_LENGTH)`), not by a copied numeric
+literal — a hardcoded `128` would pass today and drift silently the first time either bound moved.
+
+**The listener, in order:** guard → `store.loadFor(request.serverId)` inside a `try` → strict
+`=== null` check → length check → return. Identical shape to `registerHostLabelHandler`'s listener,
+one layer keyed:
+
+- A guard refusal returns `{ status: 'error' }` **before any store call** — asserted in tests as "the
+  store was never invoked," not merely "the outcome is `error`," because a `null`/`undefined` request
+  with the guard *deleted* would still redden into `error` through the `catch` (making
+  `request.serverId` throw), leaving an outcome-only assertion vacuous. This gap was the one **SHOULD
+  FIX** the architecture spec's self-review raised and the fix it verified by deletion-testing.
+- `label === null` → `not-stored`, never a truthiness test, for the same reason as the zero-argument
+  arm: `''` is a stored label, not absence.
+- `label.length > MAX_HOST_LABEL_LENGTH` → `error`, dropped whole, same constant and unit as the
+  zero-argument arm and as the write guard.
+- Every throw — `MalformedHostLabelError` or a propagated decrypt failure — collapses to the same
+  `error` without inspecting the error type; the caught object is dropped, never logged. The request
+  id is never logged either, on any branch, which is what keeps this module log-free now that it takes
+  a request at all.
+- The guarded id reaches only `loadFor`'s `===` compare against each decoded entry's own `server`
+  field — never a persistence name, a filesystem path, or an object key — so an id like `__proto__` is
+  inert (see [host-label store § Security properties](host-label-store.md)).
+
+**On a machine installed before #1156, this answers `not-stored` for every id** until the next
+pairing writes a keyed envelope — `loadFor` reads through `readEntries`, which maps a legacy bare blob
+to `[]`. A documented one-way loss, not a gap to patch here: the store has no view of the paired
+records and so cannot name the server a bare string belonged to, and adopting it for one server would
+recreate the bug [#1155](https://github.com/pyrycode/pyrycode-desktop/issues/1155) exists to fix.
+
 ### 3. Preload bridge (`src/preload/index.ts`)
 
 ```ts
 hostLabel: (): Promise<HostLabelResult> => ipcRenderer.invoke(HOST_LABEL_CHANNEL),
+
+hostLabelFor: (serverId: string): Promise<HostLabelResult> =>
+  ipcRenderer.invoke(HOST_LABEL_SERVER_CHANNEL, { serverId }),
 ```
 
-`HOST_LABEL_CHANNEL` fixed at the call site so the renderer cannot address arbitrary channels; called
-with no second argument — no data leaves the renderer. `PyryApi = typeof api` re-derives
-`window.pyry.hostLabel` automatically — no `index.d.ts` edit. No caller wired yet.
+`HOST_LABEL_CHANNEL` and `HOST_LABEL_SERVER_CHANNEL` are each fixed at their own call site so the
+renderer cannot address an arbitrary channel or reach one query by malforming the other's request;
+`ipcRenderer` never crosses the bridge either way. `hostLabel()` is called with no second argument —
+no data leaves the renderer on that arm. `hostLabelFor`'s `serverId` is the one value that leaves the
+renderer on the keyed arm, and **building the request object in the bridge is a convenience, not a
+defence** — the main side validates the shape and the length on its own merits regardless. `PyryApi =
+typeof api` re-derives both `window.pyry.hostLabel` and `window.pyry.hostLabelFor` automatically — no
+`index.d.ts` edit for either. `hostLabel` has its caller since [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833);
+`hostLabelFor` ships with no caller — [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
+migrates the sidebar onto it.
 
 ### 4. Composition-root registration (`src/main/index.ts`)
 
 ```ts
 const unregisterHostLabel = registerHostLabelHandler(ipcMain, { store: hostLabelStore })
 app.on('will-quit', () => unregisterHostLabel())
+
+const unregisterHostLabelServer = registerHostLabelServerHandler(ipcMain, { store: hostLabelStore })
+app.on('will-quit', () => unregisterHostLabelServer())
 ```
 
 Registered immediately after `registerServerInfoHandler`, reusing the **same** `hostLabelStore`
 [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) already constructs there — no second
 store built, the same discipline as the server-info/paired-server-store pairing. Needs only the store
 (no `connection`, no `did-finish-load` gate), so placement is not correctness-critical; grouped with
-its store-only siblings for readability. `will-quit` teardown, symmetric with the other three.
+its store-only siblings for readability. `will-quit` teardown, symmetric with the other three. Since
+[#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) the keyed registration sits right
+beside it, reusing the same `hostLabelStore` instance a third time (write, erase, and now the keyed
+read all share it) with its own symmetric `will-quit` remover.
 
 ## Data flow
 
@@ -170,13 +275,22 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
        string, length <= 128       →  { status: 'stored', label }              [verbatim]
        string, length > 128        →  { status: 'error' }                      [dropped whole]
        throws (any error type)     →  { status: 'error' }                      [no detail]
+
+renderer window.pyry.hostLabelFor(serverId)  →  ipcRenderer.invoke(HOST_LABEL_SERVER_CHANNEL, { serverId })
+  →  ipcMain handler listener  →  guard(request)
+       malformed                  →  { status: 'error' }                      [before any store call]
+       well-formed                →  MultiHostLabelStore.loadFor(serverId)
+                                        null                    →  { status: 'not-stored' }   [incl. legacy blob]
+                                        string, length <= 128   →  { status: 'stored', label }  [verbatim]
+                                        string, length > 128    →  { status: 'error' }          [dropped whole]
+                                        throws (any error type) →  { status: 'error' }          [no detail]
 ```
 
 ## Security posture
 
-**Verdict: PASS** (architect self-review, `security-sensitive`). Key findings:
+**Verdict: PASS** (architect self-review, `security-sensitive`). Key findings, zero-argument channel:
 
-- **No untrusted input to validate** — zero-argument invoke, same as its three siblings.
+- **No untrusted input to validate** — zero-argument invoke.
 - **Exactly one field can ever cross, statically enforced.** `label` is the sole field on the sole
   arm that carries data; the other two arms are value-free by the type, not by handler care.
 - **No new class of power.** A renderer that will be shown the label anyway (once #826 renders it)
@@ -192,6 +306,25 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
   the supervisor, or any session value — there is no code path by which a live connection could affect
   the result.
 
+**Key findings, per-server channel ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)), verdict PASS:**
+
+- **The `Pick<MultiHostLabelStore, 'loadFor'>` dep type is the security substance, not tidiness.** It
+  withholds `save`, `saveFor`, `clear`, `clearFor` **and** `load` — so this channel cannot mutate
+  at-rest state and cannot answer with the un-keyed record either. The compiler holds that, not a
+  branch a later edit could get wrong.
+- **A guarded id never becomes a persistence name, path, or object key.** `loadFor` matches it with
+  `===` against each decoded entry's own `server` field, so an id like `__proto__` is inert.
+- **Accepted, named rather than fixed: a per-id existence oracle.** A compromised renderer learns, for
+  a guessed id, whether a label is held — the same distinction AC3 requires the union to preserve, so
+  it cannot be closed without failing the ticket. It is the narrower half of what `serverInfo` already
+  answers, and discloses presence, never a token, key, or relay URL. The refusal arm is the *same*
+  value-free `error` as every other failure, so the guard leaks nothing about which guesses were
+  well-formed.
+- **No rate limit added, deliberately.** One invoke is one local decrypt plus a linear `find` over an
+  envelope whose size the pairing guards already bound. The property is identical to `pairingStatus`,
+  `serverInfo`, and the zero-argument `hostLabel` arm; adding a limit to this channel alone would close
+  nothing.
+
 ## Edge cases and limitations
 
 - **The label used to outlive an unpair; [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) closed the normal case.**
@@ -206,17 +339,21 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
 - **`error` and over-length both mean "no usable label," and the union does not distinguish them.**
   Both call for the same recovery (re-enter the label) in #826's design; if a reason to split ever
   surfaces, the union extends additively then.
-- **Single fixed store name, and still a zero-argument, body-free query — deliberately, since
-  [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156).** `HOST_LABEL_NAME` is one
-  constant; the store behind it has held a label **per server** since #1155, and the pairing/unpair
-  writers have addressed it that way since #1156, but this channel was kept out of scope on purpose —
-  its `load()` call was taught to answer from the keyed collection (the most recently stored label)
-  rather than change shape. [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) is where
-  this query is expected to gain an argument and stop being body-free, needing a request guard the way
-  `pairing.ts` has one and this channel does not yet; [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
-  owns the sidebar's move onto that keyed read.
-- **Repeated invokes are cheap** — each is an independent local `store.load()`, no amplification, no
-  state mutation, no secret returned.
+- **`HOST_LABEL_CHANNEL` stays zero-argument and body-free — permanently, not provisionally.**
+  `HOST_LABEL_NAME` is one constant; the store behind it has held a label **per server** since #1155,
+  and the pairing/unpair writers have addressed it that way since #1156. This channel was kept
+  out of scope on purpose: its `load()` call answers from the keyed collection (the most recently
+  stored label) rather than changing shape, because its one caller (`hostLabelLoader`) passes it as a
+  bare function reference and a required parameter would break that caller at the type level.
+  [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) gave the per-server question its
+  own channel instead — see § "The per-server channel" above — and
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) owns the sidebar's move onto it.
+- **Repeated invokes are cheap** on both channels — each is an independent local `store.load()` or
+  `store.loadFor()`, no amplification, no state mutation, no secret returned.
+- **On the keyed channel, a machine installed before [#1156](https://github.com/pyrycode/pyrycode-desktop/issues/1156)
+  reads as never-stored for every id** until the next pairing writes a keyed envelope — see § "The
+  per-server channel" above. The zero-argument channel is unaffected: it keeps answering with that
+  machine's bare pre-#1156 label verbatim.
 
 ## Related
 
@@ -237,7 +374,15 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
   classify-don't-forward discipline the `catch` implements, and the rule that an unreadable record must
   never be masked as never-stored.
 - [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
-  the renderer store and one-shot loader that call this channel. **Read the full hand-off there.**
+  the renderer store and one-shot loader that call `hostLabel()`, as a bare function reference — the
+  reason [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) added a channel instead of a
+  parameter. **Read the full hand-off there.**
+- [Unpair channel § the per-server channel (#1149)](unpair-channel.md#the-per-server-channel-1149) —
+  the second-channel-not-second-shape precedent `HOST_LABEL_SERVER_CHANNEL` reuses, including its two
+  settled guard rulings (`{ serverId: undefined }` rejected, `''` accepted) and its
+  `MAX_SERVER_ID_LENGTH`/`MAX_PASTE_LENGTH` aliasing, imported here rather than redeclared.
 - Downstream, not yet built: the sidebar host row that mounts the store's binding and renders the
   value, including the never-stored/error fallback and the escaped-text-only rendering rule (CLAUDE.md,
-  operator ruling 2026-08-20) — [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
+  operator ruling 2026-08-20) — [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834). Its
+  per-server successor, migrating onto `hostLabelFor`/`HOST_LABEL_SERVER_CHANNEL`, is
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).

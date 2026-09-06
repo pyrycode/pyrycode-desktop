@@ -286,7 +286,7 @@ that spec: `withIsolatedElectronApp` mkdtemps a fresh `--user-data-dir` per laun
 empty there, `effortDefaultToApply`'s rule 2 returns `null`, and the leaf sends no frame and writes nothing.
 The config is `workers: 1, fullyParallel: false`, so there is no cross-spec channel either. The connection
 is the environment alone: the rebuild that unblocked this ticket's model-list precondition (pyrycode#2124,
-#2125) is the same rebuild that carried #2143 past the attachment contract. The runbook's last green
+\#2125) is the same rebuild that carried #2143 past the attachment contract. The runbook's last green
 attachment run was 2026-09-04, against the older daemon.
 
 **Filed as [#1204](https://github.com/pyrycode/pyrycode-desktop/issues/1204)** (board #7, Inbox) rather than

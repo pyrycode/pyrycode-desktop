@@ -236,6 +236,21 @@ no interaction. Renderer specs are static server renders (`renderToStaticMarkup`
 - Does any renderer consumer outside `ServerRow.tsx` read `selectServerInfo` / `setServerInfo`? The
   grep says no (loader + the two test files only). Confirmed at implementation time by the build.
 
+## Revisions
+
+**2026-09-06, implementation.** No design change — the plan was implemented as written. Recording the
+two Open Questions' resolutions and one citation fix the plan did not anticipate:
+
+- `SettingsScreen.test.tsx` passes **unedited**. Its loading-branch assertion ("Server" + "Loading") is
+  exactly what the empty-list store now renders through `ServerRows`' placeholder branch, so no edit was
+  needed and the file stays out of the diff.
+- No renderer consumer outside `ServerRow.tsx` read `selectServerInfo` / `setServerInfo`. Confirmed by
+  the build and by grep.
+- **One file beyond the five.** `defaultWorkspaceStore.ts` cites `setServerInfo` by name in a doc
+  comment, as the precedent for its own whole-value replacement. The rename to `setServers` made that
+  citation dangle, so it was updated in place — one word, comment-only, no behaviour and no design
+  budget. Naming it here rather than letting it read as scope creep in the diff.
+
 ## Security review
 
 **Verdict:** PASS

@@ -1,44 +1,51 @@
 // The renderer data path feeding the server-info store: a ONE-SHOT invoke, not a subscription. There
 // is no daemon event behind this value (unlike sessionIdBridge, which observes an unsolicited
-// `sessionTransition` marker) — the renderer fetches the paired server's non-secret identity once, on
+// `sessionTransition` marker) — the renderer fetches every paired server's non-secret identity once, on
 // demand, via `window.pyry.serverInfo()`, exactly as App.tsx fetches the launch pairing status via
 // `window.pyry.pairingStatus()`. The pure map + the React-free loader are injected and unit-testable
 // with plain spies; `ServerInfoData` is the thin React glue over them. Nothing here touches keys,
 // sockets, ipcRenderer, or raw frames — it only invokes the preload bridge and lands two vetted
-// non-secret fields (#339 did the sourcing and credential-stripping main-side), never a secret.
+// non-secret fields PER PAIRED SERVER (#339 did the sourcing and credential-stripping main-side, and
+// #1148 widened it to the collection), never a secret.
 import { useEffect } from 'react'
 import type { ServerInfo } from '@shared/ipc/serverInfo'
 import { serverInfoStore, type ServerInfoValue } from './serverInfoStore'
 
 /**
  * The pure collapse of the bridge's discriminated `ServerInfo` union into the store shape — the
- * translateSessionTransition analog, React-free so it's unit-testable without a DOM. `available` →
- * a FRESH `{ serverId, relayUrl }` literal (reconstructed, NOT passed through, so the `status`
- * discriminant is dropped and the store never holds it, AC2); `unavailable` → `null` (AC3). It never
- * returns a partial: both fields come off the same present arm, or neither is written.
+ * translateSessionTransition analog, React-free so it's unit-testable without a DOM. `available` → one
+ * FRESH `{ serverId, relayUrl }` literal per entry, in the arm's own order (oldest-paired first, no
+ * re-sort); `unavailable` → `[]` (AC3), which an empty `servers` also maps to, so the arm's non-empty
+ * invariant is never depended upon.
+ *
+ * Each entry is REBUILT, not passed through. That is the renderer-side half of the same field-by-field
+ * defence the handler applies main-side: a structured-clone'd IPC object can carry own properties the
+ * declared type does not, so nothing that crossed the bridge is retained by reference and only the two
+ * vetted fields survive into the store. It never returns a partial entry — both fields come off the
+ * same entry, or none is written.
  */
-export function mapServerInfo(res: ServerInfo): ServerInfoValue | null {
+export function mapServerInfo(res: ServerInfo): ServerInfoValue[] {
   return res.status === 'available'
-    ? { serverId: res.serverId, relayUrl: res.relayUrl }
-    : null
+    ? res.servers.map((entry) => ({ serverId: entry.serverId, relayUrl: entry.relayUrl }))
+    : []
 }
 
 /**
  * The injected, React-free load surface AC5 exercises with a fake `invoke`. It maps the resolved union
- * through `mapServerInfo` and writes it via `setServerInfo`; a `{ status: 'unavailable' }` maps to
- * `null`, and a rejected `invoke` (handler absent — should not happen) is caught and also writes
- * `null`. The returned promise ALWAYS resolves — it never rejects into the caller (AC3, "never throws
- * into the renderer"), so a late-arriving handler failure can never surface as an unhandled rejection
- * in React. Assumes `invoke` returns a Promise and does not throw synchronously (the
- * `ipcRenderer.invoke` contract).
+ * through `mapServerInfo` and writes it via `setServers`; a `{ status: 'unavailable' }` maps to `[]`,
+ * and a rejected `invoke` (handler absent — should not happen) is caught and also writes `[]`. The
+ * returned promise ALWAYS resolves — it never rejects into the caller ("never throws into the
+ * renderer"), so a late-arriving handler failure can never surface as an unhandled rejection in React.
+ * Assumes `invoke` returns a Promise and does not throw synchronously (the `ipcRenderer.invoke`
+ * contract).
  */
 export function loadServerInfo(
   invoke: () => Promise<ServerInfo>,
-  setServerInfo: (info: ServerInfoValue | null) => void
+  setServers: (servers: ServerInfoValue[]) => void
 ): Promise<void> {
   return invoke()
-    .then((res) => setServerInfo(mapServerInfo(res)))
-    .catch(() => setServerInfo(null))
+    .then((res) => setServers(mapServerInfo(res)))
+    .catch(() => setServers([]))
 }
 
 /**
@@ -57,8 +64,8 @@ export function loadServerInfo(
 export function ServerInfoData(): null {
   useEffect(() => {
     let active = true
-    void loadServerInfo(window.pyry.serverInfo, (info) => {
-      if (active) serverInfoStore.getState().setServerInfo(info)
+    void loadServerInfo(window.pyry.serverInfo, (servers) => {
+      if (active) serverInfoStore.getState().setServers(servers)
     })
     return () => {
       active = false

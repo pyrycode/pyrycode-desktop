@@ -38,6 +38,8 @@ import { conversationListStore } from './store/conversationListStore'
 import { queueStore } from './store/queueStore'
 import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
 import { modalStore } from './store/modalStore'
+import { runConfigStore } from './store/runConfigStore'
+import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -62,6 +64,14 @@ const activateDeps: ActivateConversationDeps = {
     activeConversationStore.getState().setActiveConversation(conversation),
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  // #1167: the departing conversation's run configuration, both halves dropped as one act — the held
+  // daemon snapshot and the write machine's pending / confirmed / rejected state. Two `getState()`
+  // arrows in one body rather than two members, the `requestConversationConfig` shape below; these two
+  // singletons appear here and nowhere else in this file, and neither is subscribed to.
+  clearRunConfig: () => {
+    runConfigStore.getState().clearSnapshot()
+    runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+  },
   // #777: restore point 1 of "the open conversation's mark equals its own held item count" — the stamp
   // for the conversation being opened. It reaches its two singletons through the bridge's own production
   // wiring object rather than a fourth `getState()` arrow here, so the sampling branch lives in one
@@ -120,7 +130,13 @@ const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> =
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearTimelineFor: (id) => conversationTimelineStore.getState().clearTimelineFor(id),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  // #1167: the same one act as in `activateDeps` above, and the two bodies are deliberately identical —
+  // a delete or an archive ends the conversation this state describes exactly as a switch does.
+  clearRunConfig: () => {
+    runConfigStore.getState().clearSnapshot()
+    runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+  }
 }
 
 const clearPairingDeps: ClearPairingScopedStateDeps = {
@@ -255,7 +271,8 @@ export function PairedShellView(props: {
               // (:1787) is the sharpest case: it would follow the operator into the conversation they
               // switched to and be SENT there. That is AC4's "never a
               // stale one from a previous selection", and the store-side clear (activateConversation)
-              // cannot cover it — it clears the timeline and session id, not screen-local state.
+              // cannot cover it — it clears the timeline, the session id and the run configuration, all
+              // of them store state, and reaches no screen-local value at all.
               <ConversationScreen
                 key={props.paneKey}
                 onUnpaired={props.onUnpaired}

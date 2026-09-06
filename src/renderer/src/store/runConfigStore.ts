@@ -7,11 +7,14 @@
 // A dedicated store (a separate consumer, per #180's landed comments), NOT a session-store facet: a
 // snapshot never touches connection/messages state and vice versa, so the two stores stay orthogonal
 // and a snapshot arrival re-renders only components selecting this slice. It mirrors sessionStore's
-// DI-factory → singleton → hook → selectors structure, but with a single setter rather than a
-// reducer: there is exactly one mutation ("record the latest snapshot"), so a discriminated-union
-// action set would be a one-member union — ceremony without benefit. Unidirectional is preserved:
-// read-only selectors, one write path, and `setSnapshot` is invoked only by the subscription wiring,
-// never two-way-bound from a component.
+// DI-factory → singleton → hook → selectors structure, but with NAMED SETTERS rather than a reducer:
+// its two mutations ("record the latest snapshot", and #1167's "drop it") are independent whole-value
+// writes that read no prior state, which is sessionIdStore's set/clear shape (#259/#529) rather than
+// a discriminated-union action set. A reducer earns its keep where the transitions are CORRELATED —
+// the adjacent runSettingsWriteStore is that contrast, which is why #1167 lands as an arm there and a
+// second setter here. Unidirectional is preserved: read-only selectors, and both write paths are
+// invoked only by the subscription wiring and by the conversation-lifetime helpers, never
+// two-way-bound from a component.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
@@ -47,9 +50,12 @@ export interface RunConfigState {
   snapshot: RunConfigSnapshot | null
 }
 
-/** Store shape = state + the single mutation entry point. */
+/** Store shape = state + the two mutation entry points. They live here and NOT on `RunConfigState`,
+ *  so the selector — typed against the state-only interface — cannot see them and
+ *  `initialRunConfigState` stays assignable (the sessionIdStore arrangement). */
 export type RunConfigStore = RunConfigState & {
   setSnapshot: (snapshot: RunConfigSnapshot) => void
+  clearSnapshot: () => void
 }
 
 export const initialRunConfigState: RunConfigState = { snapshot: null }
@@ -58,11 +64,28 @@ export const initialRunConfigState: RunConfigState = { snapshot: null }
  * DI-friendly, React-free store — one isolated instance per test. `setSnapshot` replaces the whole
  * `snapshot` object unconditionally (AC4 "most recent snapshot wins" — no merge, no dedupe) and
  * never coerces or validates the fields (AC5). The stored value is the daemon's, as-is.
+ *
+ * `clearSnapshot` (#1167) returns the state to `initialRunConfigState` for when the conversation that
+ * scoped the snapshot stops being the open one — a switch, a delete or an archive. It is sourced from
+ * that exported constant rather than a fresh `{ snapshot: null }` literal, for the reason
+ * `clearSessionId` states: it keeps resetting everything if the state ever gains a second field. It is
+ * unconditional, which is what makes clearing an already-clear store a no-op by construction rather
+ * than by a guard — and it is cheap even so, because `selectSnapshot` is the whole read surface and
+ * `null → null` is not a slice change, so no subscriber wakes on a redundant clear.
+ *
+ * It reverts to the DISTINCT not-loaded state, never to an all-zero snapshot: `''` / `false` / `0` are
+ * real readings the daemon sends (an inherited default, an unresolved session, a foreground turn), and
+ * the not-known rendering every footer control draws depends on telling those apart from "nothing has
+ * arrived for this chat yet".
+ *
+ * A cleared store is not latched: the newly opened conversation's own reply lands through `setSnapshot`
+ * moments later, which is the only sequence production runs.
  */
 export function createRunConfigStore(init: RunConfigState = initialRunConfigState) {
   return createStore<RunConfigStore>((set) => ({
     ...init,
-    setSnapshot: (snapshot) => set({ snapshot })
+    setSnapshot: (snapshot) => set({ snapshot }),
+    clearSnapshot: () => set(initialRunConfigState)
   }))
 }
 
@@ -74,6 +97,7 @@ export function useRunConfigStore<T>(selector: (s: RunConfigStore) => T): T {
   return useStore(runConfigStore, selector)
 }
 
-/** The only read surface. There is no exposed setter beyond `setSnapshot`; it is the sole mutation
- *  path and is invoked only by the subscription wiring, never two-way-bound from a component. */
+/** The only read surface. The two mutation paths are `setSnapshot` and `clearSnapshot` (#1167) and
+ *  there is no third; the first is invoked only by the subscription wiring and the second only by the
+ *  conversation-lifetime helpers, never two-way-bound from a component. */
 export const selectSnapshot = (s: RunConfigState): RunConfigSnapshot | null => s.snapshot

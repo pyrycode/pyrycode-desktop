@@ -7,11 +7,12 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
 import type { ThreadEvent } from './store/threadTimeline'
 
 /**
- * The seven effects activateConversation performs, injected to keep it pure:
+ * The eight effects activateConversation performs, injected to keep it pure:
  *  - `getActiveConversation`     — reads the CURRENTLY active conversation (activeConversationStore).
  *  - `setActiveConversation`     — records the newly activated one (the same store's setter).
  *  - `dispatchTimeline`          — timelineStore's dispatch; carries #528's `reset`.
  *  - `clearSessionId`            — sessionIdStore's #529 clear.
+ *  - `clearRunConfig`            — #1167's drop of the previous chat's run configuration, both stores.
  *  - `stampLastRead`             — #777's last-read stamp for the conversation being opened.
  *  - `markViewed`                — #786's view stamp, conversationTimelineStore's eviction ranking.
  *  - `requestConversationConfig` — #1166's ask for the opened conversation's run configuration and
@@ -35,6 +36,32 @@ export interface ActivateConversationDeps {
   setActiveConversation: (conversation: ConversationCreatedPayload) => void
   dispatchTimeline: (event: ThreadEvent) => void
   clearSessionId: () => void
+  /**
+   * #1167: drop the run configuration of the conversation being LEFT — `runConfigStore`'s held
+   * snapshot and `runSettingsWriteStore`'s pending changes, confirmed overrides and standing
+   * rejection. Both stores are app-wide singletons keyed by nothing, and every value in them describes
+   * one chat's session, so without this the footer of the chat being opened reads the previous one's
+   * configuration.
+   *
+   * ONE member for two stores, not two members — `requestConversationConfig`'s precedent below,
+   * verbatim. The two are one act ("this chat's run configuration is no longer the one to show"), they
+   * always fire together, and neither is enough on its own: the snapshot half self-heals in one round
+   * trip (#1166 asks, #1176 refuses a reply naming another chat) while the write half never heals at
+   * all, because a `set_session_settings` ack carries only a session id and never rewrites a snapshot.
+   * Clearing only the store whose staleness is visible first would leave the durable half standing.
+   *
+   * REQUIRED, not optional, for `stampLastRead`'s reason: `activateDeps` is module-private,
+   * `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo runs a React effect
+   * and the wiring itself is structurally uncoverable. `tsc` is the whole safety net and it only holds
+   * if the field is required.
+   *
+   * CROSS-WIRE NOTE for a reviewer: this and `clearSessionId` are both `() => void`, so a swap of the
+   * two compiles AND every `toHaveBeenCalledTimes(1)` assertion passes for both. The defence is the one
+   * the three-identical-`(id) => void` members below already rely on: they land in DIFFERENT stores, so
+   * with the real stores wired a swap leaves the session id standing and the run configuration held,
+   * failing #529's cases and #1167's together (`activateConversation.test.ts`'s `realDeps`).
+   */
+  clearRunConfig: () => void
   /**
    * #777: record how far the operator has read in the conversation being opened — its own held timeline
    * item count, sampled at this moment (conversationLastReadBridge.ts's `stampLastReadFor`). REQUIRED,
@@ -139,6 +166,14 @@ export interface ActivateConversationDeps {
  * the previous conversation's running session. #1166 shortened that window rather than removing it: the
  * ask below now goes out in the same move as the clear, so the wait is one round trip instead of "until
  * this conversation's first turn ends".
+ *
+ * #1167 completes that argument on the READ side, which until then was the half still lying. The
+ * controls were inert but still DISPLAYED the previous chat's model, effort, permission mode and YOLO
+ * bit, so the operator read one chat's posture against another's thread. Clearing the run configuration
+ * with the session id makes them say nothing instead of something false, which is also what makes every
+ * control's not-known rendering reachable at all — before it, no chat could fall back to blank once any
+ * chat had set something. It widens the same window by one more reading: `usedTokens` / `windowTokens`
+ * go with the snapshot, so the footer's context reading unmounts until the new chat's reply lands.
  */
 export function activateConversation(
   deps: ActivateConversationDeps,
@@ -149,6 +184,15 @@ export function activateConversation(
   if (previous?.id !== conversation.id) {
     deps.dispatchTimeline({ type: 'reset' })
     deps.clearSessionId()
+    // #1167, INSIDE the gate — that placement IS AC2. The four effects below run on a re-open by
+    // design; this one must not, or a re-click of the row the operator is already reading would blank
+    // its footer and cost a round trip to refill what was already correct. It joins the clear branch
+    // rather than starting a new one because "the id actually changed" is the same question for all
+    // three: the timeline rows, the session id and the run configuration were all authored by the chat
+    // being left. Order among the three is free — they are independent whole-value writes over
+    // separate stores — but the branch as a whole must precede `requestConversationConfig` below, and
+    // being inside the gate puts it there by construction.
+    deps.clearRunConfig()
   }
 
   deps.setActiveConversation(conversation)

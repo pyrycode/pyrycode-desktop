@@ -13,6 +13,8 @@ import {
   selectLastReadFor
 } from './store/conversationLastReadStore'
 import { stampLastReadFor } from './store/conversationLastReadBridge'
+import { createRunConfigStore } from './store/runConfigStore'
+import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type { ConversationCreatedPayload, ConversationSummary } from '@shared/wire/types'
 
@@ -51,6 +53,7 @@ function spyDeps(previous: ConversationCreatedPayload | null): {
   deps: ActivateConversationDeps
   dispatchTimeline: ReturnType<typeof vi.fn>
   clearSessionId: ReturnType<typeof vi.fn>
+  clearRunConfig: ReturnType<typeof vi.fn>
   setActiveConversation: ReturnType<typeof vi.fn>
   stampLastRead: ReturnType<typeof vi.fn>
   markViewed: ReturnType<typeof vi.fn>
@@ -62,18 +65,21 @@ function spyDeps(previous: ConversationCreatedPayload | null): {
   const stampLastRead = vi.fn()
   const markViewed = vi.fn()
   const requestConversationConfig = vi.fn()
+  const clearRunConfig = vi.fn()
   return {
     deps: {
       getActiveConversation: () => previous,
       setActiveConversation,
       dispatchTimeline,
       clearSessionId,
+      clearRunConfig,
       stampLastRead,
       markViewed,
       requestConversationConfig
     },
     dispatchTimeline,
     clearSessionId,
+    clearRunConfig,
     setActiveConversation,
     stampLastRead,
     markViewed,
@@ -95,6 +101,28 @@ describe('activateConversation', () => {
     expect(clearSessionId).toHaveBeenCalledTimes(1)
     expect(setActiveConversation).toHaveBeenCalledTimes(1)
     expect(setActiveConversation).toHaveBeenCalledWith(next)
+  })
+
+  it('a different id clears the run configuration too (#1167 AC1)', () => {
+    const { deps, clearRunConfig } = spyDeps(conversation('a'))
+
+    activateConversation(deps, conversation('b'))
+
+    expect(clearRunConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-opening the same conversation clears NONE of the run configuration (#1167 AC2)', () => {
+    // INSIDE the gate, unlike the two members that follow it. `setActiveConversation`, `stampLastRead`,
+    // `markViewed` and `requestConversationConfig` all run on a re-open by design; this one must not,
+    // or a re-click of the open row would blank the footer the operator is reading.
+    const { deps, clearRunConfig, requestConversationConfig } = spyDeps(conversation('a'))
+
+    activateConversation(deps, conversation('a'))
+
+    expect(clearRunConfig).not.toHaveBeenCalled()
+    // The contrast, in the same case: the ask still goes out on a re-open. Asserting only the first
+    // half would pass on a build that moved BOTH inside the gate.
+    expect(requestConversationConfig).toHaveBeenCalledTimes(1)
   })
 
   it('no previous conversation takes the clear branch — a newly created discussion starts empty (AC2)', () => {
@@ -163,6 +191,10 @@ describe('activateConversation', () => {
       },
       dispatchTimeline: () => void order.push('reset'),
       clearSessionId: () => void order.push('clearSessionId'),
+      // #1167: inside the gate, and ahead of the request below for `clearSessionId`'s reason — it wipes
+      // the snapshot the reply refills, so a request placed ahead of it could be answered into stores
+      // the clear then blanks.
+      clearRunConfig: () => void order.push('clearRunConfig'),
       stampLastRead: () => void order.push('stamp'),
       markViewed: () => void order.push('markViewed'),
       // #1166: LAST, and the position is load-bearing. `clearSessionId` wipes the very value the reply
@@ -175,12 +207,94 @@ describe('activateConversation', () => {
     expect(order).toEqual([
       'reset',
       'clearSessionId',
+      'clearRunConfig',
       'set',
       'stamp',
       'markViewed',
       'requestConfig'
     ])
     expect(active.getState().activeConversation?.id).toBe('b')
+  })
+
+  it('real stores: a switch drops the previous chat’s snapshot AND its confirmed overrides (#1167 AC1)', () => {
+    // The state the shipped defect leaves behind, seeded on BOTH stores: a snapshot the previous chat's
+    // reply wrote, and a confirmed override an ack in that chat committed. The override is the durable
+    // half — no later reply can displace it, because a `set_session_settings` ack carries only a session
+    // id and never rewrites a snapshot — so it is the one that has to be asserted gone.
+    const timeline = createTimelineStore(initialTimelineState)
+    const sessionId = createSessionIdStore({ sessionId: 's1' })
+    const active = createActiveConversationStore({ activeConversation: conversation('a') })
+    const runConfig = createRunConfigStore({
+      snapshot: {
+        model: 'opus',
+        effort: 'deep',
+        yolo: true,
+        permissionMode: 'plan',
+        usedTokens: 140000,
+        windowTokens: 200000
+      }
+    })
+    const write = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'model', value: 'haiku' }]]),
+      confirmed: { effort: 'brisk' },
+      error: 'yolo'
+    })
+
+    activateConversation(
+      realDeps(
+        timeline,
+        sessionId,
+        active,
+        createConversationTimelineStore(),
+        createConversationLastReadStore({ read: () => new Map(), write: () => {} }),
+        runConfig,
+        write
+      ),
+      conversation('b')
+    )
+
+    expect(runConfig.getState().snapshot).toBeNull()
+    expect(write.getState().pending.size).toBe(0)
+    expect(write.getState().confirmed).toEqual({})
+    expect(write.getState().error).toBeNull()
+  })
+
+  it('real stores: re-opening the ACTIVE conversation keeps its run configuration (#1167 AC2)', () => {
+    // AC2's other half. The same-id branch is what makes a re-click of the open row cheap; a clear here
+    // would blank a footer the operator is looking at and cost a round trip to refill.
+    const snapshot = {
+      model: 'opus',
+      effort: 'deep',
+      yolo: true,
+      permissionMode: 'plan',
+      usedTokens: 140000,
+      windowTokens: 200000
+    }
+    const runConfig = createRunConfigStore({ snapshot })
+    const write = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { effort: 'brisk' },
+      error: null
+    })
+    const before = write.getState()
+
+    activateConversation(
+      realDeps(
+        createTimelineStore(initialTimelineState),
+        createSessionIdStore({ sessionId: 's1' }),
+        createActiveConversationStore({ activeConversation: conversation('a') }),
+        createConversationTimelineStore(),
+        createConversationLastReadStore({ read: () => new Map(), write: () => {} }),
+        runConfig,
+        write
+      ),
+      conversation('a')
+    )
+
+    // BY REFERENCE on both: a redundant clear would churn every subscriber selecting either slice, and
+    // #257's container selects the whole raw write state.
+    expect(runConfig.getState().snapshot).toBe(snapshot)
+    expect(write.getState()).toBe(before)
   })
 
   it('real stores: a switch empties the timeline and drops the daemon session id (AC1, AC4)', () => {
@@ -388,13 +502,24 @@ function realDeps(
   lastRead: ReturnType<typeof createConversationLastReadStore> = createConversationLastReadStore({
     read: () => new Map(),
     write: () => {}
-  })
+  }),
+  runConfig: ReturnType<typeof createRunConfigStore> = createRunConfigStore(),
+  runSettingsWrite: ReturnType<typeof createRunSettingsWriteStore> = createRunSettingsWriteStore()
 ): ActivateConversationDeps {
   return {
     getActiveConversation: () => active.getState().activeConversation,
     setActiveConversation: (c) => active.getState().setActiveConversation(c),
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
     clearSessionId: () => sessionId.getState().clearSessionId(),
+    // #1167: ONE member, TWO stores — the `requestConversationConfig` shape below. Wired to the real
+    // pair here for the reason this whole helper exists: `clearRunConfig` and `clearSessionId` are both
+    // nullary, so a swap of the two COMPILES and every `toHaveBeenCalledTimes(1)` still passes for both.
+    // What catches it is that they land in different stores, so a swap leaves the session id standing
+    // and the run configuration held, failing the #529 cases and the #1167 cases together.
+    clearRunConfig: () => {
+      runConfig.getState().clearSnapshot()
+      runSettingsWrite.getState().dispatch({ type: 'conversationSwitched' })
+    },
     stampLastRead: (conversationId) =>
       stampLastReadFor(
         {

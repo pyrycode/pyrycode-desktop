@@ -351,6 +351,61 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(named)).toBe(true)
   })
 
+  it('accepts a requestModelList naming a conversation, checking type not emptiness (#1165)', () => {
+    // The requestSessionSettings arm's shape with the verb changed. '' passes THIS layer for the
+    // sibling's reason — the guard checks type, not emptiness — but the two diverge one layer down:
+    // an unresolvable id here draws an `error` frame (`conversation.not_found`), not a zero-valued
+    // reply, because there is no zero answer to "what models does nothing offer". A structurally
+    // extra field is harmless; the builder's fresh literal is what bounds the wire.
+    expect(
+      isRendererCommand({ type: 'requestModelList', payload: { conversation_id: 'conv-1' } })
+    ).toBe(true)
+    expect(isRendererCommand({ type: 'requestModelList', payload: { conversation_id: '' } })).toBe(
+      true
+    )
+    expect(
+      isRendererCommand({
+        type: 'requestModelList',
+        payload: { conversation_id: 'conv-1', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects requestModelList with no payload, or an explicitly undefined one (#1165)', () => {
+    // The explicitly-undefined arm is rejected BY VALUE, not by `'payload' in value`: structured
+    // clone PRESERVES an explicitly-undefined property across the IPC bridge, so the `in` check alone
+    // would pass it straight through — isRequestModelListPayload is what refuses it.
+    expect(isRendererCommand({ type: 'requestModelList' })).toBe(false)
+    expect(isRendererCommand({ type: 'requestModelList', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'requestModelList', extra: 'ignored' })).toBe(false)
+  })
+
+  it('rejects a requestModelList whose payload is present but not a conversation id (#1165)', () => {
+    // A present payload must be a well-formed one — a non-string id, a missing key, and a literal
+    // null are all type lies that would otherwise reach encodeEnvelope's bare JSON.stringify.
+    expect(isRendererCommand({ type: 'requestModelList', payload: { conversation_id: 42 } })).toBe(
+      false
+    )
+    expect(isRendererCommand({ type: 'requestModelList', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'requestModelList', payload: null })).toBe(false)
+  })
+
+  it('types requestModelList as payload-REQUIRED — a bare send does not compile (#1165)', () => {
+    // Compile-time half of AC2, and the half the runtime guard above cannot prove: `src/shared/**/*`
+    // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused
+    // expect-error directive is itself a TS2578 — relax the payload to optional and this fails.
+    // (Do not open a prose line with the directive's own name: a comment whose first token is
+    // `@ts-expect-error` IS a directive, wherever it sits, and it will suppress the next line.)
+    // @ts-expect-error payload is required — a request with no conversation has nothing to ask about
+    const bare: RendererCommand = { type: 'requestModelList' }
+    const named: RendererCommand = {
+      type: 'requestModelList',
+      payload: { conversation_id: 'conv-1' }
+    }
+    expect(isRendererCommand(bare)).toBe(false)
+    expect(isRendererCommand(named)).toBe(true)
+  })
+
   it('accepts the bare requestRecentWorkspaces command (no payload — the request carries nothing) (#380)', () => {
     // The recent-workspaces request carries nothing to parameterise, so its guard case is a bare
     // `return true`. A structurally-extra field is harmless (structural minimum), like requestConversations.

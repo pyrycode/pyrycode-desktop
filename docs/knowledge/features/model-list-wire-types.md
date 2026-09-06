@@ -215,6 +215,50 @@ one, and `docs/protocol-mobile.md`'s changelog names its own stale sentences ver
 standing" / "are both stale") — grep the changelog for that language before quoting any section of
 that file as current. The architecture spec's `## Revisions` entry carries the full account.
 
+## Outbound ask (#1165)
+
+Both delivery lanes above are pushes the daemon initiates on its own schedule, and both structurally
+miss a conversation created **after** this app connected: the live lane emits once per claude child
+spawn and the daemon drops every event whose producing session is not the active conversation's, and
+the connect-time reconcile runs inside the handshake tail, so a conversation that did not exist then is
+not in it. pyrycode#2125 (merged 2026-09-05) closed that window with an on-demand third path: a
+client→daemon `request_model_list` control frame, `interactive`-gated, that draws exactly one
+`model_list` in reply — the same payload the connect-time reconcile would have sent, including for a
+conversation with **no bound session** (answered from the daemon-wide vocabulary, pyrycode#2124).
+
+```ts
+export interface RequestModelListPayload {
+  conversation_id: string
+}
+```
+
+One **required** string, no `omitempty` — the one deliberate divergence from
+[`RequestSessionSettingsPayload`](daemon-connection-methods.md#public-surface)'s optional id. That
+verb's absent id draws a zero-valued reply, a real answer; there is no zero answer to "what models does
+nothing offer," so an unnamed ask here has nothing to ask about and the whole chain (wire type, command
+payload, boundary guard, connection method, builder input) types the id as required. `''` still reaches
+the wire — the guard checks type, not emptiness — and draws `conversation.not_found` from the daemon
+rather than another conversation's list.
+
+The reply is correlated by `in_reply_to` and carries **no `event_id`**, the same deliberate omission
+the reconciled frame makes, so it stays out of the turn-event replay ring. A request the daemon cannot
+answer draws one `error` frame instead: `conversation.not_found` (not retryable) or the retryable
+`model_list.unavailable`. **Neither is retried client-side, ever** — a retry against a relay withholding
+the frame is the self-inflicted spin this store's header (see [Model-list store § Edge
+cases](model-list-store.md#edge-cases-and-limitations)) forbids, and the rule stated there holds in
+full: no consumer may block a model menu on this frame. Both codes fall through
+`narrowDaemonErrorOutcome`'s allowlist to `unclassified`; surfacing a refusal to the operator is #1036's
+job, not this ticket's.
+
+This slice adds the ask and stops — the outbound `EnvelopeType` member, the payload type above, the
+builder, the connection method and its registry delegate, and the `src/main/index.ts` dispatch case (see
+[Daemon connection — methods](daemon-connection-methods.md) for the connection-method writeup). **The
+receive path gains no branch on whether a frame answered a request** — every `model_list` still lands in
+[the model-list store](model-list-store.md) exactly as it does today, unsolicited or not, since the
+frame is (and always was) an accept-unsolicited snapshot by contract. Nothing fires this command yet;
+[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) is the renderer trigger, asking when a
+conversation is opened.
+
 ## Bounds — deliberately not modelled
 
 No entry cap and no charset check. The producer caps entries at **ten** and reports its own cut
@@ -300,6 +344,12 @@ radius.
 
 ## Related
 
+- [Daemon connection — methods](daemon-connection-methods.md) — the `requestModelList(conversationId)`
+  connection method (#1165) that sends the outbound ask above, and its `requestSessionSettings` twin
+  the required-vs-optional id divergence is stated against.
+- [Command channel](command-channel.md) — the `requestModelList` `RendererCommand` member + boundary
+  guard (#1165) this ask's frame rides in from the renderer, and the untrusted-payload check that
+  refuses a missing, `undefined`, or non-string `conversation_id`.
 - [Slash-command-list wire types](slash-command-list-wire-types.md) — the sibling frame from the same
   `initialize` reply, and the nearest local precedent this slice followed (`Wire` prefix,
   required-fields posture, nullable-not-optional `truncated_fields`, the trust-tier paragraph shape).

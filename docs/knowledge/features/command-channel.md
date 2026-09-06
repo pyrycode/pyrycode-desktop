@@ -119,6 +119,27 @@ is the window echoing back ids this process itself minted with `randomUUID()`. S
 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
 for the sender side.
 
+The union gained a `requestModelList` member in [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165):
+a **payload-carrying** command (`RequestModelListPayload{conversation_id}`, reused verbatim from the wire
+types) that asks the daemon for one conversation's model/effort vocabulary on demand — closing a gap
+neither existing `model_list` push covers, a conversation created after this app connected. Sited beside
+`requestSessionSettings` and superficially its clone, but the payload is **required from the start**, for
+a stronger reason than that neighbour's own required-since-#946 history: `requestSessionSettings` answers
+an unnamed request with a silent zero-valued reply, so a bare send there was merely useless; here an
+unnamed request has nothing to ask about at all, so `payload` is non-optional in the union member itself
+and a bare send is a compile error. `isRequestModelListPayload` is `isRequestSessionSettingsPayload` with
+the key unchanged and the name changed — one present-and-string `conversation_id` check, type not
+emptiness (`''` passes the guard and is refused by the daemon as `conversation.not_found`) — and its
+`isRendererCommand` case is the same `'payload' in value && isRequestModelListPayload(value.payload)`
+idiom: the explicitly-`undefined` case is refused **by the payload guard**, not by the `in` check, since
+structured clone preserves an own property holding `undefined` across the bridge (`hasValidServerId`'s
+documented fact, restated here for a second required-payload command). Ships with **no renderer sender**
+in the slice that declares it — [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) adds
+the trigger, on conversation open. See [Model-list wire types § Outbound
+ask](model-list-wire-types.md#outbound-ask-1165) for the frame this command asks for and the no-retry
+rule that governs it, and [Daemon connection — methods](daemon-connection-methods.md) for the connection
+method + registry delegate it drives.
+
 **Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
 guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
 not prove the *type* forbids one. `src/shared/**/*` is inside `tsconfig.node.json`'s include, so
@@ -290,5 +311,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
+- [Model-list wire types § Outbound ask](model-list-wire-types.md#outbound-ask-1165) / [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165) — the payload-carrying `requestModelList` member + `isRequestModelListPayload` guard this channel's union gained, required from the start; ships with no renderer sender, consumer is #1166.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

@@ -5803,6 +5803,32 @@ describe('createDaemonConnection — interrupt (bare interrupt control frame, fi
   })
 })
 
+describe('createDaemonConnection — requestModelList (on-demand model vocabulary, #1165)', () => {
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
+    const { connection, drivers } = build()
+    expect(() => connection.requestModelList('conv-42')).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends one request_model_list frame carrying the conversation id it was handed', async () => {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.connection.requestModelList('conv-42')
+
+    const sent = ctx.drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const requests = sent.filter((e) => e.type === 'request_model_list')
+    // Exactly one: the ask is fire-and-forget with no client-side retry, so a second frame here
+    // would be the self-inflicted spin modelListStore's header forbids.
+    expect(requests).toHaveLength(1)
+    // Asserted as an exact payload against a value distinct from every other string on the envelope,
+    // so forwarding the wrong field cannot pass.
+    expect(requests[0].payload).toEqual({ conversation_id: 'conv-42' })
+  })
+})
+
 describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
   const RUN_CONFIG = {
     session_id: 'sess-a',

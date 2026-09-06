@@ -245,7 +245,13 @@ describe('PermissionModal — the second-confirm marker is scoped to its prompt 
   })
 
   it('does not survive the empty-outstanding window across a reconnect (AC2)', () => {
-    const emptied = run([shown('mdl-a'), shown('mdl-b'), { type: 'reconnected' }])
+    // #1140: the reconnect names the conversations belonging to the server that came back, and both
+    // seeded prompts are on it — so this stays the same whole-slice empty window it was written for.
+    const emptied = run([
+      shown('mdl-a'),
+      shown('mdl-b'),
+      { type: 'reconnected', conversationIds: new Set(['conv-mdl-a', 'conv-mdl-b']) }
+    ])
     // The empty window is explicitly exercised: the container returns null here, but returning null
     // does NOT unmount it (ConversationScreen mounts it unconditionally), so the marker survives.
     expect(selectOutstanding(emptied)).toHaveLength(0)

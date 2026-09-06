@@ -12,10 +12,45 @@ import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { modalStore } from './modalStore'
 import type { ModalEvent } from './modalPrompts'
+import {
+  conversationListStore,
+  selectConversationIdsFor,
+  type ConversationListOrigin
+} from './conversationListStore'
 
 /** Compile-time exhaustiveness guard: a new DaemonEvent arm without a case is a type error. */
 function assertNever(event: never): never {
   throw new Error(`Unhandled daemon event: ${JSON.stringify(event)}`)
+}
+
+/**
+ * Read the server this event came from (#1140), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * A COPY rather than an import of the five identical siblings (`relayLinkBridge`,
+ * `conversationListBridge`, `daemonEventBridge`, `queueBridge`, `backgroundTaskRosterBridge`), for the
+ * reason each of those states: taking another's would couple two deliberately independent subscribers
+ * and drag this path's key domain onto that store's.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload. The `connected` arm carries the
+ * daemon's own `ack.server_id`, which is a DISTINCT value the daemon chose; the stamp is bound
+ * main-side at construction from a paired record this client holds, so a hostile or confused daemon
+ * cannot make its reconnect clear another server's outstanding permission prompts — nor drop another
+ * server's suppression entries, which would re-surface a prompt that server's operator already
+ * answered. Deriving it HERE rather than at the caller is what makes that unforgeable: the composition
+ * root is handed an already-derived origin and never gets to choose one.
+ */
+function originOf(event: DaemonEvent): ConversationListOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null selects the unstamped slot: no producer can
+  // emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot rather
+  // than throwing is what keeps this total inside a daemon-event listener.
+  return typeof serverId === 'string' ? serverId : undefined
 }
 
 /**
@@ -33,6 +68,11 @@ function assertNever(event: never): never {
  * `readonly ModalOption[]`), so the copy compiles clean with no cast (the codebase bans unchecked
  * `as` in prod, #121). `options` passes through by reference, matching `reduceModal`'s `shown` arm.
  *
+ * `conversationIdsFor` is INJECTED rather than read from a store here (#1140), and that is what keeps
+ * this translator drivable with a plain stub: renderer tests in this repo are static server renders
+ * (`vitest.config.ts` sets `environment: 'node'`), so a store read inside this function would be
+ * untestable. It answers which conversations belong to one server; only the `connected` arm calls it.
+ *
  * Every other arm returns `null` via explicit fall-through cases, then `assertNever` — deliberately
  * NOT a catch-all `default: return null`, which would silently swallow a future arm. The guard is
  * load-bearing: a new `DaemonEvent` arm is then a compile error in this bridge, `daemonEventBridge`,
@@ -41,7 +81,10 @@ function assertNever(event: never): never {
  * typecheck. Derive the set by grep rather than from prose: the exhaustive bridges are the ones whose
  * `DaemonEvent` switch ends in `assertNever`, not the ~20 siblings ending in `default: return null`.
  */
-export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
+export function translateModalEvent(
+  event: DaemonEvent,
+  conversationIdsFor: (origin: ConversationListOrigin) => ReadonlySet<string>
+): ModalEvent | null {
   switch (event.type) {
     case 'modalShown':
       return {
@@ -63,10 +106,21 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // → 'rejected'. Content-free by construction — only the correlation nonce crosses (AC3).
       return { type: 'rejected', modalId: event.modalId }
     case 'connected':
-      // #415: every supervisor (re)handshake re-emits `connected`. Flip it to the payload-free reset that
-      // clears the outstanding modal slice so the daemon's connect-time re-sends are the sole repopulation
-      // truth. Ignores `event.ack` (HelloAckPayload) — the reset needs no field off it.
-      return { type: 'reconnected' }
+      // #415: every supervisor (re)handshake re-emits `connected`. Flip it to the reset that clears the
+      // outstanding modal slice so the daemon's connect-time re-sends are the sole repopulation truth.
+      //
+      // #1140 SCOPES THAT RESET to the reconnecting server, and the mapping stays a translator arm
+      // rather than becoming a branch ahead of the translator: this function returns members of an
+      // ACTION union, where a member gaining a field costs no widening — unlike `queueBridge` and
+      // `backgroundTaskRosterBridge`, whose translators return a VALUE (a snapshot) and would have had
+      // to widen to `Snapshot | 'reset' | null`. `backgroundTaskRosterBridge`'s own docblock rules this
+      // bridge that way by name.
+      //
+      // Still ignores `event.ack` (HelloAckPayload) — and now that is load-bearing rather than
+      // incidental: the ack carries the DAEMON's `server_id`, so reading it would let a confused or
+      // hostile daemon name which server's prompts a reconnect clears. The origin comes from the
+      // client-bound stamp via `originOf`, and turning it into conversation ids is the caller's job.
+      return { type: 'reconnected', conversationIds: conversationIdsFor(originOf(event)) }
     case 'connecting':
     case 'disconnected':
     case 'failed':
@@ -176,15 +230,18 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
  * Subscribe via the injected `onDaemonEvent`; each owned arm translates to a `ModalEvent` and is
  * dispatched, every other arm no-ops. Returns the exact unsubscribe handle from `onDaemonEvent` (the
  * `subscribeTimeline` idiom) so the React binding can use it as its effect cleanup. Injecting
- * `onDaemonEvent` + `dispatch` keeps it React-free and unit-testable with plain spies. The listener
- * only translates + dispatches — it never throws into React.
+ * `onDaemonEvent` + `dispatch` + `conversationIdsFor` keeps it React-free, STORE-FREE and unit-testable
+ * with plain spies — the roster bridge's rule, which this one now shares: the bridge reads the
+ * discriminant and the stamp, and the composition root turns the origin into the set to drop. The
+ * listener only translates + dispatches — it never throws into React.
  */
 export function subscribeModal(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ModalEvent) => void
+  dispatch: (event: ModalEvent) => void,
+  conversationIdsFor: (origin: ConversationListOrigin) => ReadonlySet<string>
 ): () => void {
   return onDaemonEvent((event) => {
-    const modalEvent = translateModalEvent(event)
+    const modalEvent = translateModalEvent(event, conversationIdsFor)
     if (modalEvent) dispatch(modalEvent)
   })
 }
@@ -195,10 +252,24 @@ export function subscribeModal(
  * effect cleanup, so a StrictMode double-mount runs mount → cleanup → mount and nets exactly one live
  * listener — mirroring `useTimelineBridge`. `window.pyry` is dereferenced only inside the effect,
  * never during render.
+ *
+ * THE COMPOSITION ROOT for #1140's scoping, and the only place the two singletons meet: the origin the
+ * translator read off the stamp resolves to that server's conversation ids through #1138's shared
+ * resolution, and only those prompts and suppression entries are dropped. The list is read at EVENT
+ * time, inside the resolver, never at subscribe time — on a first connect the server's slot holds no
+ * list yet (the list request rides the same edge) so nothing is dropped, and on a reconnect the slot
+ * still holds the previous episode's rows, since only `clearAllConversations` at a pairing boundary
+ * empties it. Nothing can interleave between the read and the write: both stores are touched from this
+ * one synchronous dispatch, with no await between them.
  */
 export function useModalBridge(): void {
   useEffect(
-    () => subscribeModal(window.pyry.onDaemonEvent, (event) => modalStore.getState().dispatch(event)),
+    () =>
+      subscribeModal(
+        window.pyry.onDaemonEvent,
+        (event) => modalStore.getState().dispatch(event),
+        (origin) => selectConversationIdsFor(origin)(conversationListStore.getState())
+      ),
     []
   )
 }

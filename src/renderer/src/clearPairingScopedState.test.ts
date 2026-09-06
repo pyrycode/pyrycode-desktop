@@ -34,6 +34,7 @@ import {
   createBackgroundTaskRosterStore,
   selectRosterFor
 } from './store/backgroundTaskRosterStore'
+import { createModalStore, selectOutstanding, selectRejections } from './store/modalStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   BackgroundTask,
@@ -97,6 +98,7 @@ function spyDeps(): {
   clearAllConversations: ReturnType<typeof vi.fn>
   clearAllBacklogs: ReturnType<typeof vi.fn>
   clearAllRosters: ReturnType<typeof vi.fn>
+  dispatchModal: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -110,6 +112,7 @@ function spyDeps(): {
   const clearAllConversations = vi.fn()
   const clearAllBacklogs = vi.fn()
   const clearAllRosters = vi.fn()
+  const dispatchModal = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -124,6 +127,7 @@ function spyDeps(): {
       clearAllConversations,
       clearAllBacklogs,
       clearAllRosters,
+      dispatchModal,
       dispatchSession,
       clearAllLastRead
     },
@@ -137,6 +141,7 @@ function spyDeps(): {
     clearAllConversations,
     clearAllBacklogs,
     clearAllRosters,
+    dispatchModal,
     dispatchSession,
     clearAllLastRead
   }
@@ -163,7 +168,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all twelve clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all thirteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -176,6 +181,7 @@ describe('clearPairingScopedState', () => {
       clearAllConversations,
       clearAllBacklogs,
       clearAllRosters,
+      dispatchModal,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -219,6 +225,14 @@ describe('clearPairingScopedState', () => {
     // command line claude ran, so a clear taking an id would let the DEPARTING daemon choose which of
     // its own command lines outlive the pairing.
     expect(clearAllRosters).toHaveBeenCalledWith()
+    expect(dispatchModal).toHaveBeenCalledTimes(1)
+    // #1140, and the shape differs from the six whole-map clears above on purpose: `modalStore` is a
+    // reducer-backed store whose `dispatch` is the sole write path, so its pairing clear is a dispatched
+    // action — the `dispatchTimeline` / `dispatchSession` precedent — rather than a `clearAll*` setter.
+    // The nullary property is identical and is the point: a payload-free action means no daemon-supplied
+    // id can steer which of a departed daemon's permission prompts outlive the pairing, and against the
+    // most actionable content in the set — a retained prompt is a live control, not a stale label.
+    expect(dispatchModal).toHaveBeenCalledWith({ type: 'reset' })
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -228,13 +242,13 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these twelve stores', () => {
+  it('the pairing-scoped set is exactly these thirteen stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so a THIRTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
+    // names, so a FOURTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to
     // compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
-    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh and #1139 the
-    // twelfth, and each
+    // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh, #1139 the
+    // twelfth and #1140 the thirteenth, and each
     // updated this pin, which is the intended cost of adding one; loosening it is not.
     const { deps } = spyDeps()
 
@@ -249,6 +263,7 @@ describe('clearPairingScopedState', () => {
       'clearAllTimelines',
       'clearAnnouncedModel',
       'clearSessionId',
+      'dispatchModal',
       'dispatchSession',
       'dispatchTimeline'
     ])
@@ -299,6 +314,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(clearAllRosters.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the modal clear runs BEFORE the one effect that can throw (#1140)', () => {
+    // The same constraint again, and this one guards the most ACTIONABLE residue in the set rather than
+    // the most sensitive text. `clearAllLastRead` is the only effect here that reaches outside memory
+    // (`localStorage`) and so the only one that can throw; placed last, a throw from it aborts nothing.
+    // Placed BEFORE the modal clear, such a throw would abort it — leaving a permission dialog on screen
+    // attributed to a machine the operator has left, whose answer emits a `modal_answer` for a `modalId`
+    // the newly paired daemon never issued, and leaving suppression entries that silently swallow a
+    // genuine prompt on the new pairing.
+    const { deps, dispatchModal, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(dispatchModal.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -667,6 +699,87 @@ describe('clearPairingScopedState', () => {
     expect(selectRosterFor('c-listed')(rosters.getState())).toBeNull()
     expect(selectRosterFor('c-unlisted')(rosters.getState())).toBeNull()
   })
+
+  it('real stores: no prompt, suppression entry or rejection from the ended pairing is readable, and the connected edge alone would NOT evict them (#1140 AC4)', () => {
+    const modals = createModalStore()
+    const prompt = (conversationId: string, modalId: string): void =>
+      modals.getState().dispatch({
+        type: 'shown',
+        conversationId,
+        modalId,
+        class: 'permission',
+        // UNTRUSTED daemon-supplied display text, on a machine the operator is about to leave. A
+        // retained prompt is not a stale label but a live control: answering it emits a `modal_answer`
+        // for a `modalId` the newly paired daemon never issued.
+        title: 'Allow Bash on server A?',
+        prompt: 'rm -rf /srv/deploy/stale && ./deploy.sh',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        defaultOptionId: 'deny'
+      })
+
+    prompt('c-listed', 'mdl-1')
+    // Held for a conversation NO server's list carries — a prompt can be raised for one whose
+    // `list_conversations` reply has not landed, and every scoped clear leaves such a prompt alone by
+    // construction. Answered, so it leaves a suppression entry behind rather than an outstanding row.
+    prompt('c-unlisted', 'mdl-2')
+    modals.getState().dispatch({ type: 'dismissed', modalId: 'mdl-2', outcome: 'allow', source: 'local' })
+    modals.getState().dispatch({ type: 'rejected', modalId: 'mdl-3' })
+
+    // FIRST, the half that makes this store's membership necessary rather than defensive, and the
+    // reason `clearPairingScopedState`'s header no longer names `modalStore` as self-healing. Scoping
+    // the reconnect clear to the reconnecting server's own conversations (#1140) removed that
+    // self-heal: a new pairing's first `connected` finds no conversation list in its slot yet, so the
+    // clear resolves an EMPTY id set, matches nothing, and hands the state object straight back.
+    // Simulated directly rather than through the bridge, because the claim is about what the edge CANNOT do.
+    const before = modals.getState()
+    modals.getState().dispatch({ type: 'reconnected', conversationIds: new Set() })
+    expect(selectOutstanding(modals.getState())).toBe(selectOutstanding(before))
+    expect(selectOutstanding(modals.getState())).toHaveLength(1)
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        createQueueStore(),
+        createBackgroundTaskRosterStore(),
+        modals
+      )
+    )
+
+    // SECOND, the half this ticket adds. All three slices go: the outstanding prompt, the suppression
+    // entry — which would otherwise silently swallow a genuine `shown` on the new pairing, since
+    // conversation ids are daemon-side and a re-pair to the same box reuses them — and the rejection
+    // banner, which the reconnect edge deliberately never touches and so has never been collected at a
+    // pairing boundary either.
+    expect(selectOutstanding(modals.getState())).toEqual([])
+    expect(selectRejections(modals.getState())).toEqual([])
+    expect(modals.getState().resolved).toEqual([])
+    // And the entry for 'c-unlisted' is the sharper of the two, since no scoped clear can ever reach
+    // it: after this, a `shown` re-delivering that same id on the NEW pairing surfaces normally rather
+    // than being swallowed by a departed machine's bookkeeping.
+    modals.getState().dispatch({
+      type: 'shown',
+      conversationId: 'c-unlisted',
+      modalId: 'mdl-2',
+      class: 'permission',
+      title: 'Allow Bash on server B?',
+      prompt: 'ls',
+      options: [{ id: 'allow', label: 'Allow' }],
+      defaultOptionId: 'allow'
+    })
+    expect(selectOutstanding(modals.getState()).map((p) => p.modalId)).toEqual(['mdl-2'])
+  })
 })
 
 function realDeps(
@@ -685,7 +798,9 @@ function realDeps(
   // #1138's eleventh, defaulted for the same reason.
   queue: ReturnType<typeof createQueueStore> = createQueueStore(),
   // #1139's twelfth, defaulted for the same reason.
-  rosters: ReturnType<typeof createBackgroundTaskRosterStore> = createBackgroundTaskRosterStore()
+  rosters: ReturnType<typeof createBackgroundTaskRosterStore> = createBackgroundTaskRosterStore(),
+  // #1140's thirteenth, defaulted for the same reason.
+  modals: ReturnType<typeof createModalStore> = createModalStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -698,6 +813,7 @@ function realDeps(
     clearAllConversations: () => conversations.getState().clearAllConversations(),
     clearAllBacklogs: () => queue.getState().clearAllBacklogs(),
     clearAllRosters: () => rosters.getState().clearAllRosters(),
+    dispatchModal: (event) => modals.getState().dispatch(event),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

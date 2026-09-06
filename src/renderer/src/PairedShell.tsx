@@ -34,6 +34,7 @@ import { modelListStore } from './store/modelListStore'
 import { conversationListStore } from './store/conversationListStore'
 import { queueStore } from './store/queueStore'
 import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
+import { modalStore } from './store/modalStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -135,6 +136,17 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // of the process. Adding it to THIS object is what makes both pairing-change paths below drop it;
   // neither call site needed an edit.
   clearAllRosters: () => backgroundTaskRosterStore.getState().clearAllRosters(),
+  // #1140: every outstanding permission prompt, its suppression bookkeeping and its rejection banners,
+  // dropped as one — and the THIRD member whose store the `connected` edge also clears. It reaches its
+  // store through `dispatch` rather than a `clearAll*` setter because that is `modalStore`'s only write
+  // path, the `dispatchTimeline` / `dispatchSession` shape above and below; the action is payload-free,
+  // so the nullary property the six setters carry holds here too. Scoping the edge to the reconnecting
+  // server (which is what #1140 does) is what stopped a re-pairing's first `connected` from clearing the
+  // store on its way past, and the daemon's reconcile re-sends only the NEW server's prompts, so without
+  // this entry a departed pairing's answerable prompts would latch for the life of the process. Adding
+  // it to THIS object is what makes both pairing-change paths below drop it; neither call site needed an
+  // edit.
+  dispatchModal: (event) => modalStore.getState().dispatch(event),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

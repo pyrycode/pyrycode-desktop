@@ -302,6 +302,29 @@ fails as a bare `ReferenceError`. `npm run build` is the gate that catches it.
 
 Each is resolved in Phase B and recorded under `## Revisions` if the resolution changed the design.
 
+## Revisions
+
+**2026-09-06 — implementation.** The design landed as written; these are the resolutions the plan left
+open, plus one placement the security review named.
+
+1. **`removeById` keeps its same-reference-on-no-match guard** (Open question 1, resolved as leaned).
+   The `dismissed` arm now guards with a `find` ahead of it, because it needs the held prompt's
+   `conversationId`, so the helper's own no-match path is no longer what does the work. Kept rather than
+   inlined, and its docblock says so: the contract is the discipline `removeRejection` and the new
+   `dropListed` also hold, and a helper that cannot no-op is a trap for the next caller.
+2. **The pairing action is named `reset`** (Open question 2, resolved as leaned) — matching
+   `dispatchTimeline({ type: 'reset' })` and `dispatchSession({ type: 'reset' })`, the two members of the
+   dep set it stands beside.
+3. **The no-persistence obligation the security review raised is recorded on `resolved`'s own docblock in
+   `modalPrompts.ts`**, not on `modalStore.ts`. That is where the field and its element type are defined,
+   and it keeps the production surface at the four files the plan named — `modalStore.ts` needed no edit,
+   since the pairing clear reaches the store through its existing `dispatch`.
+
+One thing the plan predicted and the build confirmed: `npm test` was green on every touched file while
+`subscribeModal`'s third argument was still missing at a call site in
+`interactiveRoundtrip.test.tsx` — a `tsc`-only failure, caught by `npm run build` exactly as the testing
+strategy said it would have to be.
+
 ## Security review
 
 **Verdict:** PASS

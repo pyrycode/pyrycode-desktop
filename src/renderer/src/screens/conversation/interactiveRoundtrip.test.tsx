@@ -89,7 +89,13 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
   it('surfaces an answerable dialog from a modal_shown event', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
-    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+    // #1140: the injected per-server conversation resolution. This case emits no `connected`, so it is
+    // never consulted — an empty answer keeps the stub honest about that rather than implying a list.
+    subscribeModal(
+      bridge.onDaemonEvent,
+      (e) => store.getState().dispatch(e),
+      () => new Set()
+    )
 
     bridge.emit({
       type: 'modalShown',

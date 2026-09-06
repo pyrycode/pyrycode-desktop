@@ -21,7 +21,7 @@ import {
   launchIsolatedApp,
   type TeardownStep
 } from './desktopIsolation'
-import { pairFromUnpairedLaunch } from './pairingArrival'
+import { pairAnotherServerFromSettings, pairFromUnpairedLaunch } from './pairingArrival'
 import type {
   ConversationSummary,
   ConversationsPayload,
@@ -51,6 +51,20 @@ import type {
 // requires a non-empty token but ignores its value under v2; the Noise static-key handshake gates.
 const DUMMY_TOKEN = 'dummy-token-not-a-real-credential'
 
+// #1091: the SECOND server pastes a DISTINCT synthetic literal. Neither is a credential and the relay
+// ignores the value under v2 (the Noise static-key handshake is what gates), so this changes no
+// behaviour today. It exists so that a later per-server credential-isolation assertion — "server A's
+// token never reaches server B", #1152's natural territory — cannot pass vacuously against two servers
+// that happened to share one literal.
+const SECOND_DUMMY_TOKEN = 'second-dummy-token-not-a-real-credential'
+
+// The two pasted `server` ids. They MUST differ, and a collision fails SILENTLY rather than loudly:
+// `decodeCollection` treats a repeated `server` as a malformed collection, and a malformed collection
+// collapses to the absent outcome — so the app would read as *unpaired* instead of raising. Declared
+// side by side for exactly that reason. The first is the literal the pasted payload has always carried.
+export const FIRST_SERVER_ID = 'fake-daemon'
+export const SECOND_SERVER_ID = 'fake-daemon-2'
+
 // Electron launch spawns the app, the fake daemon compiles the shared wasm once, and the post-confirm
 // path runs a genuine Noise_IK handshake over loopback. Any spec using this fixture inherently needs
 // that budget, so the fixture owns the per-test timeout (removing the boilerplate from every
@@ -77,17 +91,43 @@ export const SEEDED_ROW: ConversationSummary = {
 }
 
 /**
+ * The SECOND server's seeded row (#1091). A distinct `id` is load-bearing, not cosmetic: `ChannelList`
+ * keys its rows by `c.id` alone and not by server, so two rows sharing `SEEDED_ROW`'s id would collide
+ * on the React key. Its own `cwd` too, so the two servers' rows land in their own workspace groups —
+ * both groups mount expanded (`defaultExpanded`), so both rows are clickable. Fixed literals only, the
+ * fakeDaemon convention; the fields are non-secret display text.
+ *
+ * The `name` shares NO SUBSTRING with `SEEDED_ROW`'s, deliberately. Playwright's `hasText` is a
+ * case-INSENSITIVE substring match, so a name like "Seeded discussion on server two" would be matched
+ * by a filter for "Seeded discussion" — one server's row filter would silently select both servers'
+ * rows, and the per-server specs riding this fixture (#1070, #1150, #1152) are exactly the ones that
+ * filter by row name. Measured here: the first draft of #1091's own spec failed on it.
+ */
+export const SECOND_SEEDED_ROW: ConversationSummary = {
+  id: 'seed-conversation-2',
+  name: 'Server two chat',
+  is_promoted: false,
+  is_archived: false,
+  cwd: '/fake/workspace-2',
+  last_message_ts: '2026-07-07T12:00:00.000Z',
+  last_used_at: '2026-07-07T12:00:00.000Z'
+}
+
+/**
  * The reusable one-row `conversations` seed. The fixture's default `buildReply`; also exported so a
  * spec that scripts its own `buildReplyFrames` reuses the SAME seed on its default arm (a scripted
  * `buildReplyFrames` overrides the fixture's default `buildReply`, so that spec owns seeding the row)
  * instead of re-declaring the row.
+ *
+ * #1091 gave it a defaulted `row` parameter so the second server's row comes off the same builder. The
+ * DEFAULT keeps every existing caller byte-identical.
  */
-export function seedConversationsFrame(): Uint8Array {
+export function seedConversationsFrame(row: ConversationSummary = SEEDED_ROW): Uint8Array {
   return encodeEnvelope({
     id: 1,
     type: 'conversations',
     ts: '2026-07-07T12:00:00.000Z',
-    payload: { conversations: [SEEDED_ROW] } satisfies ConversationsPayload
+    payload: { conversations: [row] } satisfies ConversationsPayload
   })
 }
 
@@ -118,6 +158,29 @@ export type LaunchControl = {
    *  mistake. Lives on `LaunchControl` (launch lifecycle) rather than `LaunchPairedAppOptions`, which is
    *  daemon-reply knobs only. */
   hostLabel?: string
+  /** Pair a SECOND fake daemon inside this SAME launch (#1091), so a spec can prove per-server
+   *  behaviour. ABSENT is the default and is byte-identical to what this fixture has always done —
+   *  which is what keeps the 54 spec files that import it passing with no edits. `{}` opts in with the
+   *  default daemon options; a populated object scripts the second daemon's replies exactly as the
+   *  top-level `options` argument scripts the first's.
+   *
+   *  Its second forwarder + daemon are constructed ONLY when it is present, so a default launch starts
+   *  exactly what it started before. INERT alongside `reuseUserDataDir`, which returns before any
+   *  pairing drive — the same posture `hostLabel` has, and for the same reason: no runtime guard for a
+   *  combination no caller has reason to write. */
+  secondServer?: LaunchPairedAppOptions
+}
+
+/** One fake server behind the app: the daemon to script, the forwarder whose legs it can drop or
+ *  close, and the `server` id that was pasted for it — the three things a per-server spec needs, per
+ *  server. One forwarder holds exactly one client leg and one server leg and `terminate()`s a second
+ *  dial onto a filled slot, so a second daemon needs a second forwarder on its own ephemeral port;
+ *  that is what makes `closeClientLeg` per-server by construction, with `fakeRelayForwarder.ts`
+ *  unchanged. */
+export type PairedServerHandle = {
+  serverId: string
+  daemon: FakeDaemon
+  forwarder: FakeRelayForwarder
 }
 
 /** The handle a spec receives. On the default drive: the window on the connected conversation thread.
@@ -126,13 +189,20 @@ export type LaunchControl = {
  *  `initiateRekey`, `whenSettled`, `close`) and the `--user-data-dir` in use, so a relaunch spec can
  *  hand launch 1's dir to launch 2. The forwarder is exposed for its leg controls — #464 is the first
  *  in-scope consumer (its Re-pair case fires `forwarder.closeClientLeg(4401)` to drive the supervised
- *  client to a terminal failure); on the default drive its client leg is live when this resolves. */
+ *  client to a terminal failure); on the default drive its client leg is live when this resolves.
+ *
+ *  #1091 added `servers`, the same control surface PER SERVER. `daemon` and `forwarder` are unchanged
+ *  and are the FIRST server's, so nothing that reads them needs to know a second one can exist. */
 export type PairedApp = {
   page: Page
   app: ElectronApplication
   daemon: FakeDaemon
   forwarder: FakeRelayForwarder
   userDataDir: string
+  /** Every fake server behind this launch, in pairing order (#1091): one entry by default, two when
+   *  `control.secondServer` opted a second one in. `daemon` and `forwarder` above are `servers[0]`'s
+   *  and stay exactly what they were, so nothing that reads them needs to learn this member exists. */
+  servers: readonly PairedServerHandle[]
 }
 
 type PairedAppFixtures = {
@@ -143,6 +213,28 @@ type PairedAppFixtures = {
  *  (the strict alphabet parsePairingPayload requires). There is no `pyry://` wrapper. */
 function encodePairingPayload(qr: QrPayload): string {
   return Buffer.from(JSON.stringify(qr), 'utf-8').toString('base64url')
+}
+
+/**
+ * Build one server's pasted pairing code from that server's WHOLE handle (#1091), never from loose
+ * values. The relay URL and the pinned static key are the two halves of one server's identity, and
+ * taking both off one object makes it structurally impossible to paste daemon 1's key against
+ * forwarder 2's URL — a mismatch whose only symptom would be a handshake that silently never
+ * completes. Both pairings go through here.
+ *
+ * The fake target's coordinates flow into the app through this PASTED payload — the point of driving
+ * the pairing UI — never through env. relay = the forwarder's client leg (loopback ws://, no userinfo
+ * → passes #97 + the un-relaxed relay-has-credentials check); server_static_pubkey = base64-std of
+ * that daemon's own 32-byte static, which `startFakeDaemon` generates per instance from the noise-c
+ * CSPRNG, so the two servers are independently pinnable.
+ */
+function pairingPayloadFor(server: PairedServerHandle, token: string): string {
+  return encodePairingPayload({
+    server: server.serverId,
+    relay: `${server.forwarder.url}/v1/client`,
+    token,
+    server_static_pubkey: Buffer.from(server.daemon.staticPublicKey).toString('base64')
+  })
 }
 
 // A FACTORY fixture, not a value fixture: each spec passes different reply options, which a plain
@@ -161,6 +253,10 @@ function encodePairingPayload(qr: QrPayload): string {
 // the launch argv, which embeds `--user-data-dir=<path>`, so the label is what gets recorded and the
 // error is never in scope. The drain's contract is unchanged — one failing step still does not abort the
 // rest of the LIFO drain.
+//
+// #1091: with a second server opted in, the drain order becomes app → daemon 2 → forwarder 2 → daemon 1
+// → forwarder 1 → user-data-dir. That falls straight out of the push order, because BOTH fake servers
+// are started before `launchIsolatedApp` — see `startFakeServer`'s call sites.
 export const test = base.extend<PairedAppFixtures>({
   launchPairedApp: async ({}, use, testInfo) => {
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
@@ -183,20 +279,51 @@ export const test = base.extend<PairedAppFixtures>({
         })
       }
 
-      const forwarder = await startFakeRelayForwarder()
-      teardown.push({ step: 'forwarder', run: () => forwarder.close() })
-
+      // One fake server: its own forwarder on its own ephemeral port, and a daemon dialled onto that
+      // forwarder's `/v1/server` leg. Both servers go through here, so the two are constructed
+      // identically and the drain order falls out of the CALL order — each thunk is pushed as its
+      // resource comes up, never after the drive succeeds, so a mid-drive failure leaks nothing.
+      //
       // Default `buildReply` seeds the one-row list so the list→thread path exists with the spec
       // supplying nothing. `...options` spreads AFTER, so a caller's `buildReply`/`buildReplyFrames`
       // wins; because fakeDaemon prefers `buildReplyFrames`, a spec that scripts frames owns seeding
       // its own default arm via the exported seedConversationsFrame(). The `/v1/server` leg is OPEN
       // when this resolves, so the client's msg1 (dialed only after Confirm) is never dropped.
-      const daemon = await startFakeDaemon({
-        url: forwarder.url,
-        buildReply: () => seedConversationsFrame(),
-        ...options
+      const startFakeServer = async (
+        serverId: string,
+        serverOptions: LaunchPairedAppOptions,
+        steps: { forwarder: TeardownStep; daemon: TeardownStep }
+      ): Promise<PairedServerHandle> => {
+        const forwarder = await startFakeRelayForwarder()
+        teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
+        const daemon = await startFakeDaemon({
+          url: forwarder.url,
+          buildReply: () => seedConversationsFrame(),
+          ...serverOptions
+        })
+        teardown.push({ step: steps.daemon, run: () => daemon.close() })
+        return { serverId, daemon, forwarder }
+      }
+
+      const first = await startFakeServer(FIRST_SERVER_ID, options, {
+        forwarder: 'forwarder',
+        daemon: 'daemon'
       })
-      teardown.push({ step: 'daemon', run: () => daemon.close() })
+      // #1091: the second server starts HERE, before the launch, even though its coordinates are only
+      // pasted much further down. Nothing forces it to start late, and starting it early buys two
+      // things. The drain order stays app-first (app → daemon 2 → forwarder 2 → daemon 1 → forwarder 1
+      // → user-data-dir), so the supervisor cannot churn-reconnect or emit a spurious `failed` when a
+      // fake target's socket drops. And its `/v1/server` leg is open long before its client leg dials,
+      // so its msg1 is never dropped — the same reason the first daemon starts before the launch.
+      const second =
+        control.secondServer === undefined
+          ? null
+          : await startFakeServer(SECOND_SERVER_ID, control.secondServer, {
+              forwarder: 'forwarder-2',
+              daemon: 'daemon-2'
+            })
+      const servers = second === null ? [first] : [first, second]
+      const { daemon, forwarder } = first
 
       // Mirror electronApp.ts's hardening: `args: ['.']` launches the built app (package.json `main`),
       // stripping ELECTRON_RENDERER_URL keeps createWindow on the built-renderer path. Plus the two
@@ -227,10 +354,13 @@ export const test = base.extend<PairedAppFixtures>({
       // appears — and return at the list. NO row click and NO Send-enabled wait: the persisted launch-1
       // relay URL can't reconnect through this launch's fresh forwarder, so `connected` may never fire;
       // waiting for Send would hang. The forwarder + daemon are still started above (kept unconditional
-      // so `PairedApp.daemon` stays a non-optional `FakeDaemon`), but are vestigial on this launch.
+      // so `PairedApp.daemon` stays a non-optional `FakeDaemon`), but are vestigial on this launch —
+      // and so is a `control.secondServer` combined with this flag, which returns before any pairing
+      // drive. No runtime guard: the two options have no reason to be combined, and a throw would be a
+      // new failure mode for no observed mistake (the `hostLabel` posture).
       if (reuseUserDataDir !== undefined) {
         await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
-        return { page, app, daemon, forwarder, userDataDir }
+        return { page, app, daemon, forwarder, userDataDir, servers }
       }
 
       // --- Drive the real pairing UI → the connected conversation thread. The pairing drive itself is
@@ -238,20 +368,9 @@ export const test = base.extend<PairedAppFixtures>({
       // entry point moved behind the welcome screen; the navigation selectors below live here, per-flow
       // assertion selectors stay in the specs. ---
       //
-      // The fake target's coordinates flow into the app through the PASTED payload (the point of
-      // driving the pairing UI), not through env. relay = the forwarder's client leg (loopback ws://,
-      // no userinfo → passes #97 + the un-relaxed relay-has-credentials check); server_static_pubkey =
-      // base64-std of the fake daemon's 32-byte static.
-      const payload = encodePairingPayload({
-        server: 'fake-daemon',
-        relay: `${forwarder.url}/v1/client`,
-        token: DUMMY_TOKEN,
-        server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64')
-      })
-
       // `control.hostLabel` is undefined for every caller but #834's spec, and the arrival step's third
       // parameter is optional — so the default drive is byte-identical to what it was.
-      await pairFromUnpairedLaunch(page, payload, control.hostLabel)
+      await pairFromUnpairedLaunch(page, pairingPayloadFor(first, DUMMY_TOKEN), control.hostLabel)
 
       // #140: the paired route enters at the ChannelList — drive the one real list→thread step by
       // clicking the seeded row. This is a REAL product-UI navigation (`.channel-list__row-open`,
@@ -259,6 +378,10 @@ export const test = base.extend<PairedAppFixtures>({
       // store mutation. The seeded row renders only after the handshake completes (requestConversations
       // fires on the connected edge → the one-row `conversations` reply arrives), so this click's
       // auto-wait IS the connected gate.
+      //
+      // #1091: this locator is UNFILTERED and runs in Playwright strict mode, which is why the second
+      // pairing below happens strictly after it — a second row existing at this moment would break the
+      // click outright. (#1070's AC5 protects the same locator.)
       await page.locator('.channel-list__row-open').click()
 
       // Send enables ONLY on the `connected` daemon event — after the real Noise_IK handshake
@@ -269,7 +392,53 @@ export const test = base.extend<PairedAppFixtures>({
         timeout: HANDSHAKE_TIMEOUT_MS
       })
 
-      return { page, app, daemon, forwarder, userDataDir }
+      // --- #1091: the SECOND pairing, inside this same launch. `src/main/index.ts` wires
+      // `onPaired: () => registry.reconcile()`, and reconcile re-reads the store and dials the
+      // connection it builds for the new record — so no relaunch is needed between the two pairings.
+      // Driven through the real product UI (gear → "Pair another server" → paste → Pair → Confirm),
+      // never a test hook, a forced route dispatch or a store mutation. ---
+      if (second !== null) {
+        await pairAnotherServerFromSettings(page, pairingPayloadFor(second, SECOND_DUMMY_TOKEN))
+
+        // Post-Confirm the shell routes to the NEW server's list (onPairServerPaired →
+        // navigateToNewServerList). #1141 established that pairing another server clears nothing the
+        // first pairing's session put in place, so the first server's row is still standing here.
+        await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
+
+        // Land the second server's row — and, in doing so, gate on its handshake.
+        //
+        // The app asks the second daemon NOTHING. `ConversationListData` sends the bare
+        // `{ type: 'requestConversations' }` with no `serverId`, and `createServerRouter`'s absent-id
+        // branch resolves only through `soleConnection()`, which is null once the registry holds more
+        // than one entry — so with two servers paired that command refuses `ambiguous-server` and puts
+        // no frame on any wire. Every other renderer command is bare in the same way today; the window's
+        // senders acquire a per-server surface to name in #1070/#1085, one at a time. So the second
+        // server's rows arrive as a server-initiated PUSH rather than as a reply, which is faithful
+        // rather than a shortcut: `daemonConnection`'s inbound `conversations` arm dispatches on the
+        // inner frame's `type` with no correlation-id match, so an unsolicited `conversations` envelope
+        // lands exactly like a solicited one, stamped with the server it came from.
+        //
+        // The push doubles as the connected gate, the way the row click above is the first server's.
+        // `pushFrame` is a documented no-op outside the daemon's `transport` state and `whenSettled()`
+        // resolves only on a first REPLY (which this daemon will never receive), so neither the daemon
+        // nor the app exposes a "server 2 connected" signal today — the sidebar's two dots read app-wide
+        // singleton selectors, and per-server dots are #1070's AC4. Hence the poll: before the handshake
+        // splits the push is inert and the count stays at one; the first push after it lands the row.
+        // Re-pushing is harmless — `setConversations` replaces that server's whole slot — so this
+        // converges rather than accumulating. The polled value is a small integer, so a timeout reports
+        // a count and never a payload, a key or a URL.
+        await expect
+          .poll(
+            async () => {
+              second.daemon.pushFrame(seedConversationsFrame(SECOND_SEEDED_ROW))
+              return page.locator('.channel-list__row-open').count()
+            },
+            { timeout: HANDSHAKE_TIMEOUT_MS }
+          )
+          .toBe(2)
+      }
+
+      return { page, app, daemon, forwarder, userDataDir, servers }
     })
 
     for (const { step, run } of teardown.reverse()) {

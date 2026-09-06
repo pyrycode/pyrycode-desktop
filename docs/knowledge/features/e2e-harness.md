@@ -48,6 +48,31 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 
 `e2e/fixtures/realDaemon.ts` and `e2e/fixtures/pairingArrival.ts` are deliberately untouched — the `real-*` tier is operator-supervised by nature, and this ticket is provable without a live daemon.
 
+### Two-server launches
+
+[#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091) gave `launchPairedApp` an opt-in
+second fake daemon, so a spec can prove per-server behaviour — the tier the sidebar grouping (#1070),
+the unpair-scoped renderer clear (#1150) and the per-server unpair (#1152) all need. Passing
+`{ secondServer: {} }` as the fixture's second (`LaunchControl`) argument starts a second forwarder +
+daemon *before* the launch (so the LIFO drain stays app-first: `app → daemon 2 → forwarder 2 →
+daemon 1 → forwarder 1 → user-data-dir`) and, after the existing row-click and Send-enabled wait,
+drives a second pairing through the real UI — Settings → "Pair another server", the new
+`pairAnotherServerFromSettings` export in `pairingArrival.ts` — inside the same launch, relying on
+`onPaired: () => registry.reconcile()` to dial the new record with no relaunch. `PairedApp` gained
+`servers: readonly PairedServerHandle[]` (one entry by default, two when opted in); the pre-existing
+top-level `daemon`/`forwarder` are unchanged and alias `servers[0]`'s, so all 54 pre-existing importers
+pass with no edits.
+
+With two servers paired, the app asks the second daemon *nothing*: every renderer command, including
+`requestConversations`, is bare (no `serverId`), and `createServerRouter`'s absent-id branch resolves
+only through `soleConnection()` — `null` once more than one connection is registered — so the command
+refuses `ambiguous-server`. Per-server addressing is #1070/#1085/#1086's work, not this one's. So the
+second daemon's seeded row arrives as a server-initiated push rather than a reply, and that push
+doubles as the second handshake's connected gate, since neither the daemon nor the app exposes one
+otherwise. See [E2E test harness — scenario history](e2e-harness-scenarios.md) for the full design
+reasoning, the departures from the first draft, and what this fixture deliberately still can't prove
+(two sidebar host rows, per-server connection dots — both #1070's own AC1/AC4).
+
 ### Launch-fate diagnostics on a failing test
 
 [#1127](https://github.com/pyrycode/pyrycode-desktop/issues/1127) closes a related gap: the tier reddens intermittently, a different spec each run, and no failure reproduces on demand — the harness knew the failing launch's exit code, signal, and liveness, and threw all three away. `launchIsolatedApp` now takes a required `fate: LaunchFateLog` (`createLaunchFateLog()`) and registers each launch itself — required, not optional, the `electronApp.ts` (#546) lesson applied early. `closeWatched(app)` replaces `app.close()` at both drain sites: liveness read before the close, exit code settled after, off a `ChildProcess` handle captured at `watch()` time (`ElectronApplication.process()` throws once `close()` tears its channel down). Each drain thunk carries a fixed-literal `TeardownStep` label; the catch stays bindingless — a close error can carry the launch argv, embedding `--user-data-dir=<path>` — so only the step name is recorded. Only a failing test (`failed`/`timedOut`/`interrupted`) gets one `text/plain` attachment (`'launch-fate'`), printed inline by Playwright's list reporter (`text/*`, truncated at 300 chars). `closeWatched` is the supported close path *for a teardown drain*, not the only way to ever close a watched app: `push-toggle-persist-relaunch.spec.ts` still closes launch 1 directly mid-test for its `SingletonLock` barrier, and the later drain's `closeWatched` on that app still reports honestly. As with #1067, no fails-on-main test for the flake itself — see `e2e/launch-fate.spec.ts`.
@@ -57,6 +82,7 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 - **Run the suite:** `npm run e2e` = `npm run build && playwright test`. The build is chained so e2e never runs against a stale `out/` — a silently-stale build is a worse failure than a slower run.
 - **Precondition when bypassing the script:** running `npx playwright test` directly against a clean tree fails fast with Electron's "Unable to find application" (there is no `out/`). The sanctioned entrypoint is `npm run e2e`.
 - **Add a scenario:** create `e2e/<name>.spec.ts`. A scenario that needs **per-run env or state isolation** (extra `env`, an isolated `--user-data-dir` — true of every scenario today, since the unisolated `electronApp.ts` primitive was retired by #546) either drives a real fake-daemon pairing flow — in which case it imports the shared **`launchPairedApp`** fixture (`e2e/fixtures/launchPairedApp.ts`, [#433](../codebase/433.md)) rather than forking its own harness — or drives a real `pyry` through the shared **`realDaemon.ts`** fixture ([#420](../codebase/420.md)) — or, if neither fits, declares its **own** local `test.extend` in-file re-implementing only the hardening moves it needs (`args: ['.']`, strip `ELECTRON_RENDERER_URL`, isolate `--user-data-dir`) — see [smoke.spec.ts](../codebase/105.md) (#105), which forked the same shape stripped to the minimum smoke needs (no fake relay/daemon, no pairing env flags). Whichever launch path, teardown must reap the app and its dir on every raised exit path, not only after `use()` returns — see [Deterministic teardown](#deterministic-teardown) and [#517](../codebase/517.md).
+- **Need two paired servers?** Pass `{ secondServer: {} }` (or a populated `LaunchPairedAppOptions` to script its replies) as `launchPairedApp`'s second argument instead of forking a second harness — see [Two-server launches](#two-server-launches) above and `e2e/multi-server-launch.spec.ts` for a worked example.
 - **Dependency:** `@playwright/test` (dev-only). `@playwright/test` re-exports the core `_electron` API, so no separate `playwright` import is needed.
 - **Artifacts:** `test-results/` and `playwright-report/` are git-ignored (Playwright creates `test-results/` even on a passing run).
 
@@ -64,260 +90,13 @@ Both launch sites — `launchPairedApp.ts` and `smoke.spec.ts` — now go throug
 
 - **Not type-checked.** `npm run typecheck` is scoped to `src/` (via `tsconfig.node.json` / `tsconfig.web.json`); `e2e/` and `playwright.config.ts` are transpiled by Playwright at run time, not by `tsc`. Acceptable for scaffolding; a follow-up could add an `e2e/tsconfig.json` if type errors there start biting.
 - **No CI today.** Electron e2e on headless Linux will need `xvfb-run`. macOS (current dev env) no longer runs plain headful: since [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) every default-tier launch's window is never shown and its renderer is exempted from occlusion/backgrounding throttling — see [Desktop isolation](#desktop-isolation-default-tier-launches) above — which is what keeps a `workers: 1` run from being disturbed by the operator using the machine mid-run. The `forbidOnly`/`retries` knobs are CI-gated and harmless until then.
-- **Two UI scenarios have landed.** [#93](../codebase/93.md) (`e2e/pair-to-conversation.spec.ts`) drives the real pairing UI against the in-process [fake relay forwarder](fake-relay-forwarder.md) + [fake daemon](fake-daemon.md); [#94](../codebase/94.md) (`e2e/send-and-stream.spec.ts`) picks up from the same connected thread, sends a message, and asserts the streamed daemon reply renders — together closing the automated side of the Phase-1 milestone. Two harness lessons from the first real scenario: (1) an e2e run is what catches main-process-runtime-only bugs (BoringSSL, `isPackaged`, native modules) that pass every vitest unit test — it surfaced [#101](../codebase/101.md); (2) `npm run e2e` runs **all** of `e2e/`, so a non-hermetic sibling spec fails the whole run — this is exactly what exposed the `.conversation`-at-boot `smoke.spec.ts` assertion as non-hermetic (it predated the [#80 router](app-shell.md); it only passed on the shared, pre-seeded userData), fixed in [#105](../codebase/105.md) by forking the same isolated-launch shape and retargeting the assertion to `.pairing`. New scenarios must launch with an isolated `--user-data-dir` for a hermetic start.
-  - **Both scenarios were later found red on `main`** ([#140](../codebase/140.md)'s `PairedShell` nav-shell changed the paired route's entry point to the ChannelList (`route='list'`), not straight into `ConversationScreen` — so the post-Confirm `.conversation`/Send assertions both timed out, invisibly, since `npm run e2e` is not CI-gated). [#435](../codebase/435.md) repaired both: the fake daemon seeds a one-row `conversations` reply (via `buildReply`/`buildReplyFrames`) so ChannelList has a clickable `.channel-list__row-open` row, and each spec drives that real row click before asserting `.conversation`/Send — the row's Playwright auto-wait doubles as a connected gate, since the seed only arrives on the connected rising edge. #94 additionally had drifted a *second*, independent way (post-#140 renames in [#179](../codebase/179.md)/[#245](../codebase/245.md)/[#203](../codebase/203.md) moved message rendering from `data-message-role` to the timeline's `data-thread-role`, and retired the coarse `message` reply in favor of `[assistant_delta, turn_end]`) — both fixed in the same ticket. The lesson: a long-red e2e can accumulate more than one layer of staleness past its first failing assertion.
-  - **Both scenarios' file-local `test.extend` forks were then extracted into one shared factory fixture**, `e2e/fixtures/launchPairedApp.ts` ([#433](../codebase/433.md)) — the #435 repaired drive (paste → Pair → Confirm → seed-row-click → Send-enabled) plus the launch/env/user-data-dir plumbing, all fixture-owned now. `pair-to-conversation.spec.ts` went thin; `send-and-stream.spec.ts` keeps its own reply-frame builders but scripts them through the fixture's `LaunchPairedAppOptions` (an `Omit<FakeDaemonOptions,'url'>` passthrough) and reuses the fixture's exported `seedConversationsFrame()` for its own default arm. This is the harness a future fake-daemon UI scenario (the #422–#429/#434/#420 batch) should import — not `electronApp.ts`, and not a fresh local fork.
 - **No `e2e:fast` variant.** Re-building on every run is accepted; a build-skipping variant is deferred until iteration pain is actually observed.
-- **A fourth scenario, gated out of the default run.** [#252](../codebase/252.md)'s
-  [real-claude liveness e2e](real-claude-liveness-e2e.md) (`e2e/real-claude.spec.ts`) drives a real
-  `pyry` + real `claude` instead of the fake relay/daemon pair. It is excluded from `npm run e2e` via
-  a `testIgnore` in `playwright.config.ts` and runs only under its own
-  `playwright.real-claude.config.ts` via `npm run e2e:real-claude` — the first scenario to need a
-  second config rather than fitting inside the shared one.
-  - **Its spawn recipe was later extracted into its own shared fixture**, `e2e/fixtures/realDaemon.ts`
-    ([#420](../codebase/420.md)) — the real-stack counterpart of `launchPairedApp.ts` (#433): the
-    `relay → daemon → page` chain (binary resolution, skip-gating, `seedRegistry`, spawn args,
-    `waitForDaemonReady`, process-group reap) moved verbatim so the coming tier-2/tier-3 real-* specs
-    (real-daemon-actions, interrupt/queue, permission modal) reuse it. Both configs' `real-*`
-    partition widened together — `playwright.real-claude.config.ts`'s `testMatch` and
-    `playwright.config.ts`'s `testIgnore` both went from `/real-claude\.spec\.ts$/` to
-    `/real-.*\.spec\.ts$/` — so a future `real-*` spec can't leak into the daemon-less default
-    `npm run e2e`. Unlike `launchPairedApp`, the pairing/drive body stayed in the spec; only the spawn
-    recipe (AC1's scope) moved.
-  - **The fixture then grew a second, credential-light spawn mode.** [#439](../codebase/439.md) added two
-    additive Playwright option fixtures (`spawnClaude`, `seedPromoted`) to `realDaemon.ts`, so a spec can
-    opt into a real `pyry` daemon with **no** `claude` and **no** Anthropic credential — see
-    [real-daemon credential-light e2e](real-daemon-credential-light-e2e.md). `real-claude.spec.ts` sets
-    neither option and keeps its exact prior behavior.
-  - **A stateful sibling to `launchPairedApp` landed for the fake-daemon side.** [#434](../codebase/434.md)
-    added `e2e/fixtures/conversationStateFake.ts` — a `conversationStateFake(options)` factory that returns
-    a `buildReplyFrames` closure **holding** a seeded `ConversationSummary[]` and mutating it across a real
-    UI drive, instead of the stateless per-call `buildReplyFrames` dispatch `send-and-stream.spec.ts` uses.
-    It answers `list_conversations` from current state and applies all seven list-mutation verbs
-    (create/rename/archive/unarchive/promote/change_workspace/delete), matching the app's two real reflect
-    paths — a `conversation_updated` broadcast that triggers `shouldRefreshList` re-listing, and a
-    correlated `conversation_deleted { id }` echoing `in_reply_to`. Consumed through `launchPairedApp`
-    exactly like any other `buildReplyFrames` option. Its demonstrating spec,
-    `e2e/conversation-state-fake.spec.ts`, clones `real-daemon-rename.spec.ts`'s drive against the fake
-    (rename, not archive — `partitionByPromotion` does not filter `is_archived`, so an archived row never
-    leaves the active list; see [#440](../codebase/440.md)). This is the fixture the #422–#429 per-flow
-    family (blocked-by #434) rides for list-mutation state instead of re-transcribing the wire per spec.
-- **The first `conversationStateFake`-riding per-flow scenario landed.**
-  [#451](../codebase/451.md) added `e2e/conversation-create-rename.spec.ts` (split from #422; its sibling
-  #452 covers archive → restore → delete): a single `launchPairedApp` launch drives FAB create-nav, the
-  Channel-info **sheet** rename entry point (distinct from the list-row pencil #434's demonstrator owns),
-  and the resulting two-row Channel List. Confirms the then-current Gap A pattern (`shouldRefreshList` false
-  for `conversationCreated`, so a scenario must assert navigation, not list membership, right after a
-  create) — **fixed by [#515](../codebase/515.md)**, which added the missing arm; the spec's assertions
-  didn't change (route is still `thread` at the create step, so there is nothing to assert against on the
-  list even though the row now lands in the store) but the *reason* is different — see #515 for the
-  corrected rationale — and surfaces a harness-adjacent UI lesson: the Channel-info sheet is a full-surface
-  `.status-sheet-overlay` scrim that blocks `.conversation__back` until the sheet's own
-  `.status-sheet__close` is clicked first — relevant to any future scenario that opens the sheet. **Expired
-  since [#670](../codebase/670.md):** `.status-sheet-overlay` is absolute *inside* `.conversation`, so once
-  the sidebar sat permanently beside the thread the scrim never covered it — nothing on the sidebar was
-  ever hit-blocked. [#1064](conversation-shell-chrome.md#back-control-140-deleted-by-1064) deleted
-  `.conversation__back` outright and confirmed the point moot; the `.status-sheet__close` click this spec
-  still makes survives on different footing — the Channel-info rename does not self-close (unlike
-  `onArchive`/`onDeleteConfirm` just below), so skipping it would leave later assertions running behind an
-  open modal.
-- **#451's independent sibling, the destructive-lifecycle scenario, landed too.**
-  [#452](../codebase/452.md) added `e2e/conversation-archive-lifecycle.spec.ts` — the fake-stack twin of
-  the real-daemon lifecycle spec [#440](../codebase/440.md), driving one FAB-created conversation through
-  archive → restore → delete on the same single `launchPairedApp` launch. It hits the same Gaps A/B as
-  #440 and lands on the same ruling: assert the Archive view's `role=tab` count deltas (`Discussions
-  0→1→0` for archive/restore) rather than active-Channel-List departure/return, since Gap B means an
-  archived row never actually leaves the active list. (Gap A itself is later fixed by
-  [#515](../codebase/515.md); Gap B is untouched and still governs this ruling.) Delete is asserted as gone
-  from **both** surfaces —
-  it splices the row from the fake's held state rather than tagging it, so that's the one step where
-  "gone" holds everywhere. Also nuances the #451 sheet-scrim lesson: whether `.status-sheet__close` is
-  needed before `.conversation__back` depends on the specific action's callback wiring, not the sheet shell
-  itself — here `onArchive` and `onDeleteConfirm` both call `onClose()` themselves, so the sheet is already
-  unmounted and clicking `.status-sheet__close` would fail (the button no longer exists).
-- **[#456](../codebase/456.md) covers the Workspace Picker sheet's (#383) two wire round-trips.**
-  `e2e/workspace-picker.spec.ts` adds a `recent_workspaces` answer to `conversationStateFake` (shared,
-  since split sibling #457 reuses it) and, spec-locally, a `create_workspace_folder` answer (single
-  consumer, the #423 precedent), in two isolated `test()` blocks (also the #423 shape): recent-pick
-  (`change_workspace` carrying the chosen path) and create-folder (`create_workspace_folder` chaining
-  `change_workspace` with the daemon-**returned** path, verbatim — never a client preview, the #288
-  proof). Both blocks assert the "Change workspace" button is enabled before driving the picker, pinning
-  the [#448](https://github.com/pyrycode/pyrycode-desktop/pull/450) precondition that a
-  `launchPairedApp` row-open now sets the active conversation (so the `WorkspaceChip` gate is
-  satisfiable straight from the landed thread, given an `is_promoted: false` seed and no message sent).
-  Since the changed `cwd` has no DOM reflection (`change_workspace`'s reply is a no-op for
-  `activeConversationStore` — the same #440 unrealizable-active-list trap), both flows assert the
-  **outbound wire frame** the fake captured, `expect.poll`ed for async loopback arrival, rather than a
-  rendered reflection.
-- **[#425](../codebase/425.md) covers the run-config sheet's (#257) `set_session_settings` write family** —
-  model / effort / YOLO, plus one rejection — in a single `test()` block on a single launch (unlike #423's
-  two: nothing here is one-way, and the session persists across all three controls). Its spec-local
-  `capturingRunConfigFake` confirms the parent premise was stale: `conversationStateFake` (#434) only
-  answers the seven conversation-list verbs, so `set_session_settings` / `request_snapshot` /
-  `session_transition` all fall to its `default` (no reply) — this scenario needed its own factory, not an
-  extension of the shared one. It also surfaces two preconditions `launchPairedApp` doesn't provide that any
-  future run-config or session-id scenario will need again: a session id (fed only by an *unsolicited*
-  `session_transition` marker via the App-level `sessionIdBridge`, required before the controls' `onChange`
-  is built at all — absent it, #188's inert markup renders and clicks no-op) and a seeded `screen_snapshot`
-  baseline (answering `RunConfigData`'s one `request_snapshot` on sheet open). Because the view renders no
-  pending/disabled state (`selectEffectiveSettings` composes `pending` and `confirmed` to the same displayed
-  value), a landed confirm is DOM-indistinguishable from a still-pending optimistic overlay — so the send
-  half of each change is proven from the **captured outbound** `set_session_settings` frame
-  (`isDeepStrictEqual` + `expect.poll(...).toBe(1)`, proving send-once and only-the-changed-field together),
-  while the one scripted rejection (a correlated `error`) is the visually distinct outcome asserted in the
-  DOM (control reverts + `.run-config__error[role="alert"]`).
-- **[#457](../codebase/457.md), split from #424 (#456's twin), covers the Settings "Default workspace"
-  preference reaching `create_conversation`.** `e2e/default-workspace.spec.ts` drives
-  `DefaultWorkspaceRow` (#404) → `WorkspacePickerSheet` (#383) → `defaultWorkspaceStore` (#403) → the
-  channel-list FAB (#242) in **one** `test()` block on one launch — the choose writes the store with
-  **no wire traffic** (unlike #456's thread picker, which dispatches `change_workspace`), so the only
-  load-bearing wire assertion is the FAB's own `create_conversation { is_promoted:false, name:null,
-  cwd:CHOSEN }`, `expect.poll`ed on the spec-captured inbound frames (the same #440/#456 unrealizable-
-  active-list trap: the chosen `cwd` has no DOM reflection). Its capturing wrapper reuses #456's shared
-  `recentWorkspaces` fake answer with **zero spec-local verb handling** — strictly simpler than #456's
-  own wrapper, since every verb this drive sends is already answered by the shared fake. Corrects #456's
-  seed-promotion constraint as irrelevant to this flow (the Settings picker has no active-conversation
-  gate, unlike the thread `WorkspaceChip`), and establishes a reusable pattern: a negative wire guard
-  (asserting `change_workspace` was never sent) is race-free when placed *after* a positive poll on the
-  same in-order Noise channel, since any earlier frame is already captured by the time the later one
-  arrives.
-- **[#426](../codebase/426.md) covers the permission/trust modal's (`PermissionModal`) five answer
-  paths** — default one-tap, non-default → confirm sub-step (Back vs Confirm), cancel, a rejected
-  answer's dismissible banner, and a remote `modal_dismissed` clear. `e2e/permission-modal-answer-paths.spec.ts`
-  surfaces each prompt via `daemon.pushFrame(modal_shown)` after launch (the #425 push-after-launch
-  technique) since `PermissionModal` renders straight off `modalStore.outstanding[0]`, with no
-  interactive-timeline gate to un-inert first. Two `test()` blocks, split by a load-bearing subtlety
-  rather than convenience: the modal reject correlates by **FIFO send order, not `in_reply_to`** — a bare
-  daemon `error` dequeues the *oldest* `outstandingAnswers` entry — so block 1 (answer/confirm/cancel/
-  dismiss, one launch) never triggers a reject and its un-drained answer residue stays inert, while block
-  2 (reject, a fresh launch) starts from an empty queue so its one answer is unambiguously what the reject
-  dequeues. `answer_token` is main-minted (`crypto.randomUUID`), so the captured `modal_answer` is matched
-  on `modal_id` + `option_id` with the token asserted present-but-opaque, not deep-equalled like #425's
-  `set_session_settings` payload. AC3's "exactly one `modal_answer`" after Back → re-select → Confirm is
-  the negative guard proving Back sends nothing; AC6's zero-frame check proves a remote dismiss sends
-  neither `modal_answer` nor `modal_cancel`.
-- **[#428](../codebase/428.md) covers the three reliability affordances an operator reaches for when a
-  session misbehaves** — the stall indicator, the "Show daemon screen" screen snapshot, and the
-  debug-bundle download — each exercising a distinct daemon-interaction shape (server push, request→reply,
-  chunked reply stream) in one `test()` block on one launch, the #425/#427 precedent. Confirms the stall
-  event is a `daemon.pushFrame`, never a bundled reply (the same stale-premise correction as #426/#427);
-  defuses a most-recent-wins overwrite trap where the Run-config sheet's own `request_snapshot` on mount
-  would clobber the scripted snapshot text if the fake answered it differently, by answering every
-  `request_snapshot` identically and asserting the `<pre>` before that sheet opens; and proves
-  `debugBundleProgress` climbs to its final chunk count from streamed `debug_bundle_chunk` frames alone,
-  deliberately never sending `debug_bundle_done` since the completed save writes a real archive to
-  `app.getPath('downloads')` with no dialog to stub and no downloads-directory isolation in the fixture.
-- **[#465](../codebase/465.md) covers the paired region's inner navigation** — every `nextPairedRoute`
-  transition in `PairedShell` beyond the launcher's own `list → thread` click: the pair-another-server
-  round-trip (#152) and the back-navigation chain (`thread → list → settings → list → archive → list`), in
-  one `test()` block on one launch (the #425/#427/#428 precedent extended from server-push flows to five
-  pure client-nav transitions). Establishes that teardown-vs-in-shell-pair-another is provable **only** via
-  the Cancel→Settings round-trip, not an on-pairing-surface assertion — the `pairServer` route and the
-  app-root pairing route both render the identical `PairingScreen`, so the DOM is byte-identical whether the
-  session survived (the #440-realizability discipline applied to a same-component-two-routes case); the
-  Cancel destination (Settings re-renders) is the one observable that separates them. Also notes the three
-  back buttons (thread/settings/archive) share the identical accessible name `'Back'`, selected by
-  screen-scoped class rather than role-name.
-- **[#466](../codebase/466.md) is the first #422-family scenario that needs two launches**, since its
-  target — the push-notification preference (#408) surviving a relaunch — is only observable across a
-  process boundary. Added `LaunchControl` to `launchPairedApp`: an optional second parameter carrying one
-  `reuseUserDataDir?: string` flag, plus an additive `PairedApp.userDataDir` return field. Dir-reuse and
-  pairing-drive-skip are deliberately one flag, not two — a reused *paired* dir must skip the drive, or the
-  paste→Pair→Confirm steps hang waiting for a pairing screen that never appears on an already-paired boot.
-  On a reuse launch the forwarder + daemon still start (unconditionally, so `PairedApp.daemon` stays
-  non-optional and no possibly-undefined check ripples through the `daemon.pushFrame` consumer family) but
-  are vestigial — the app dials the *persisted* launch-1 relay URL, not the fresh forwarder port — and the
-  fixture returns at the **list**, skipping both the row-click and the Send-enabled wait that would hang on
-  a connection that will never establish (`routeForStatus` reads the persisted pairing record at mount,
-  independent of the Noise handshake). No second `rm` teardown is registered on a reuse launch; the minting
-  launch's `rm` (pushed first, drained last by Playwright's LIFO teardown) removes the dir exactly once,
-  after every launch on it has closed. The spec itself: launch 1 flips the toggle from its default-ENABLED
-  state to DISABLED, `app.close()` (barrier — releases the `SingletonLock` *and* flushes renderer
-  `localStorage` on graceful exit, both required before a same-dir relaunch) + `daemon.close()` (kills
-  daemon 1 so launch 2 provably cannot reconnect through the stale persisted relay URL), then launch 2
-  reuses the dir and asserts the switch is still unchecked — the only assertion in the spec, and the whole
-  point of it.
-- **[#464](../codebase/464.md), split from #429 (sibling of #465/#466), covers the session-EXIT path** —
-  the flip from a paired, connected thread back to the app-root `PairingScreen`, previously uncovered.
-  `e2e/unpair-repair.spec.ts` originally had two blocks: block A (one launch, since Cancel kept the
-  session) drove the two-phase `UnpairControl` — `Cancel` kept the thread mounted with `Send` enabled and
-  the app-root pairing field (`[aria-label="Pairing code"]` — element-agnostic since
-  [#664](../codebase/664.md)) at count 0, then re-opening and `Confirm` (same launch) flipped to the
-  app-root pairing screen. **[#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted
-  block A along with `UnpairControl` itself** (an operator ruling, not a test-only change — see
-  [Unpair control](conversation-shell-chrome.md#unpair-control-166-deleted-by-1061)), so the spec is down
-  to one block. That surviving block (its own launch, since a fatal close is terminal) surfaces the
-  `Re-pair` affordance (#167) via a new [fake relay forwarder](fake-relay-forwarder.md) hook,
-  `closeClientLeg(4401)`, and confirms it too returns to the app-root pairing screen. The field's
-  visibility is the return-to-pairing proof and its count-0 absence was the session-intact proof for the
-  deleted block — a clean case (no round-trip needed, unlike #465's Cancel→Settings) because both #464
-  exits flip the *top-level* `App` route and unmount `PairedShell` entirely, so the app-root pairing route
-  is simply not mounted while on the thread. The Re-pair trigger's reachability was traced end-to-end
-  through merged code (forwarder → `relayConnection` → `relaySupervisor`'s `DEFAULT_FATAL_CLOSE_CODES` →
-  `daemonConnection.emitFailed` → `shouldOfferRepair`) before the infra was written, confirming it as the
-  #464-first case where the fatal hook is feasible rather than falling back to the ticket's own "route
-  back instead of asserting the unrealizable" escape hatch (the #440 discipline).
-- **[#546](../codebase/546.md) deleted the retired `electronApp.ts` fixture.** Dead code with zero importers across all 26 specs — every scenario by then launched through `launchPairedApp`, `realDaemon.ts`, or its own local fixture. *(Not separately documented at the time; recorded here retroactively by [#517](../codebase/517.md)'s documentation pass.)*
-- **[#517](../codebase/517.md) closed a teardown leak in the three fixtures that predated the harness's later shared fixtures.** `realDaemon.ts`'s `page` and `relay`, and `smoke.spec.ts`'s local `page`, all registered cleanup only *after* `await use(...)` — a setup-time throw (e.g. `firstWindow()` rejecting once the process was already up) made that cleanup unreachable, leaking the Electron process and its `--user-data-dir` for the rest of the `workers: 1` run. The credential angle: that dir is where `PYRY_TEST_SECRET_BACKEND` persists the pairing record, and at the `page`/`realDaemon.ts` site the leaked record pairs against a live spawned `pyry`. Fixed with nested `try`/`finally` (see [Deterministic teardown](#deterministic-teardown)); `launchPairedApp.ts` was already immune (every resource it creates lives inside the `use()` callback, so a mid-drive failure surfaces as a test failure with `use()` still returning) and was intentionally left untouched. The `page` fixture body in `realDaemon.ts` is now also reachable directly as `withIsolatedElectronApp(run)`, letting `e2e/fixture-teardown-leak.spec.ts` drive the real converted setup path — not a re-transcription of it — to prove the fix.
-- **[#515](../codebase/515.md) closes Gap A.** `conversationListBridge.shouldRefreshList` gained a third
-  arm for `conversationCreated`, so a FAB-created conversation now re-requests the list and lands in the
-  store instead of waiting for an unrelated rename/archive/promote/delete. No e2e assertion changed — the
-  three specs that document Gap A (#440, #451, #452) still assert navigation, not list membership, at the
-  create step, because the route is `thread` and `ChannelList` is unmounted there regardless of whether the
-  row is in the store. Only the *reason* in their comments changed, from "the row isn't in the store yet"
-  to "the list isn't mounted to show it". Gap B (archived rows never leave the active list,
-  `partitionByPromotion`, #469) is untouched.
-- **[#661](../codebase/661.md) funnels every unpaired-launch pairing drive through one shared step.**
-  Ten sites — `launchPairedApp.ts` and nine `real-*` specs — each ran the identical six lines after an
-  unpaired launch (locate the pairing field → wait → fill → click `Pair` → wait for the fingerprint
-  card → click `Confirm`). All ten now call the new **`e2e/fixtures/pairingArrival.ts`**'s
-  `pairFromUnpairedLaunch(page, payload)` instead. Behaviour-preserving (zero production LOC, the six
-  lines moved verbatim), and the seam is drawn *after* `Confirm` — post-confirm readiness gates
-  (list→thread + Send-enabled for the fixture, a per-flow gate for each `real-*` spec) stay in each
-  caller. `pairingArrival.ts` imports only `@playwright/test`, never `launchPairedApp.ts` or
-  `realDaemon.ts` — both call `base.extend` at module scope, so importing either would drag a second
-  fixture extension into specs that must keep using the other one. `e2e/unpair-repair.spec.ts` is
-  deliberately not a caller and stays byte-unchanged: its two pairing-field locators follow a
-  mid-session unpair flip and serve as a teardown proof, not a drive, and #662 relies on this file
-  staying untouched as its negative control. This is now the harness's single edit point for changing
-  what an unpaired launch lands on.
-- **[#664](../codebase/664.md) re-points every non-owning site at the pairing field's accessible name
-  alone.** Six sites the ticket named plus five prose-only sites its own selector-grep couldn't see (11
-  total, across the same five files `#661`/`#662` had already touched) dropped `textarea[aria-label=
-  "Pairing code"]` and the `Paste pairing code` card-heading marker for the bare
-  `[aria-label="Pairing code"]` idiom — element-agnostic and heading-agnostic, so #665's restyle (an M3
-  filled `<input>`, no heading) can land without a silent-green cascade across `e2e/`, which is outside
-  both tsconfigs, or the two `renderToStaticMarkup` unit markers. Retired the half of `pairingArrival.ts`
-  INVARIANT 4 that told the reader not to finish this sweep (its named negative-control purpose had
-  already been served); kept the still-true half, that `unpair-repair.spec.ts` is not a
-  `pairFromUnpairedLaunch` caller. Zero production code.
-- **[#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) filled the message bubble's meta-row timestamp slot
-  ([Conversation shell — message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row))
-  and broke thirteen fake-tier `toHaveText` assertions across five files that read a whole `.bubble`'s
-  text — a selector grep alone missed four of them.** `.bubble__meta` is the bubble's last child on both
-  branches, and Playwright's `toHaveText(string)` asserts an element's *entire* normalized text, so every
-  site asserting a bubble's exact message text broke the moment the slot filled. The fix keeps each site
-  an exact bound rather than loosening it to `toContainText` (which would have deleted what several of
-  them prove — one spec's own comment says its assertion is the guard against the default-echo trap): a
-  new `e2e/fixtures/bubbleText.ts` exports `bubbleTextExactly(text)`, which regex-escapes the expected
-  message text and anchors an optional digit-shape timestamp pattern after it
-  (`^<escaped text>\s*<DD.MM.YYYY - HH:MM shape>$`), and every broken site swaps its string literal (or,
-  for `toHaveText`'s array-of-strings form, each array element) for this call — no locator, timeout,
-  `.nth()`, or `.last()` moved. **The sweep that finds these sites is by assertion name across all of
-  `e2e/`, not by the selector.** `conversation-switch-keeps-both-threads.spec.ts` binds its locator to a
-  const eleven lines above its four assertions, so neither `.bubble` nor the selector string appears on
-  the assertion lines a selector grep finds — `rg 'toHaveText|toContainText' e2e/` (no path or `bubble`
-  filter) followed by resolving every const-bound locator is what catches those. The QA gate is what
-  caught the first three of the four here (a first failed `expect` aborts a Playwright test, hiding its
-  siblings from the same failure log — all four bounced in one pass once found). See [Real-claude
-  liveness e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the
-  second half of this sweep — the real-claude tier's raw `textContent`/`evaluateAll` reads, which no
-  `expect`-based grep finds at all.
-
-- **[#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) traced a one-spec-per-run, different-spec-each-run flake at `pairingArrival.ts`'s fingerprint-card wait to the operator's own desktop, not a slow step.** The originally-filed hypothesis — that the wait spans the Noise handshake — was wrong: pairing's fingerprint is a synchronous BLAKE2s hash with no socket in it, so a 5000ms miss meant the renderer was stopped, and every launch showing and focusing a window 49 times per run is what a `workers: 1` operator machine can stop it with. See [Desktop isolation](#desktop-isolation-default-tier-launches) above for the fix. There is deliberately no fails-on-main test for the flake itself — it reproduced about once per 77 tests, non-deterministically, and only under operator interference — so the acceptance criteria (isolation applied at one shared place, read back from inside the app, the whole tier green under it) are the proof this ticket shipped, not a repro.
+- **Every UI scenario, in order, lives in its own document.** [E2E test harness — scenario history](e2e-harness-scenarios.md) is the chronological log of every scenario and fixture extension built on this harness — #93/#94's first pairing+send drive through [#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091)'s two-fake-daemon launch — split out because this document sits at `check:docs`'s 50000-byte cap and that log was most of its bulk.
 
 ## Related
 
+- [E2E test harness — scenario history](e2e-harness-scenarios.md) — the full chronological log this document was split from; every entry above from #93 onward has its detail there.
+- Spec: `docs/specs/architecture/1091-launch-against-two-fake-daemons.md` — the two-fake-daemon launch design: the `soleConnection()`/`ambiguous-server` finding that forces the second server's seeded row to arrive as a push rather than a reply, and the three departures (no-shared-substring row names, distinct per-server tokens, whole-handle payload building) the first draft surfaced.
 - Spec: `docs/specs/architecture/1127-launch-fate-diagnostic.md` — the launch-fate diagnostic design and its `ChildProcess`-capture-at-`watch()`-time revision.
 - [Window-presentation dev affordance](window-presentation-affordance.md) / [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) — the third `isPackaged`-false-first dev-only gate, letting a non-packaged build keep its window unshown; consumed by `desktopIsolation.ts` above.
 - [App shell (router)](app-shell.md) / [#80](../codebase/80.md) — `routeForStatus`, whose unpaired outcome the smoke test now asserts (`.pairing`).

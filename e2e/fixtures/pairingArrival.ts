@@ -62,9 +62,57 @@ export async function pairFromUnpairedLaunch(
   // the CTA copy churns.
   await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
 
+  await drivePairingForm(page, payload, label)
+}
+
+/**
+ * Drive a PAIRED session's second pairing — Settings, then "Pair another server", then the same form —
+ * to a confirmed pairing (#1091).
+ *
+ * The second entry point this module gained. The first pairing enters at the welcome CTA; a session
+ * that is ALREADY paired reaches the very same `PairingScreen` through the shell's `pairServer` route,
+ * behind the gear button and then the Settings row — the navigation `paired-shell-navigation.spec.ts`
+ * already drives. Only the form tail below is common, which is exactly why it is now factored out
+ * rather than transcribed a second time: invariant 2 is the reason. A copied tail would be a SECOND
+ * place for a payload-bearing assertion to creep in, and there is no gate in this repo that would
+ * catch it — `e2e/` is type-checked by nothing and a `real-*` spec is `testIgnore`d out of the default
+ * tier.
+ *
+ * The caller owns the readiness gate below (invariant 3 unchanged): post-Confirm the shell routes to
+ * the NEW server's list via `navigateToNewServerList`, but waiting for that is the caller's business,
+ * not this module's.
+ *
+ * `label` carries the same meaning and the same hygiene it carries above.
+ */
+export async function pairAnotherServerFromSettings(
+  page: Page,
+  payload: string,
+  label?: string
+): Promise<void> {
+  // `aria-label="Settings"` is unique in the whole renderer, so the gear is reachable from the list or
+  // the thread alike — the two-pane shell keeps the sidebar carrying it mounted either way. `exact` on
+  // both, this file's idiom.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Pair another server', exact: true }).click()
+
+  await drivePairingForm(page, payload, label)
+}
+
+/**
+ * The form itself — paste, optional host name, Pair, fingerprint, Confirm. Module-PRIVATE: it is the
+ * shared tail of the two exported entry points above and never an entry point of its own, because a
+ * caller reaching it directly would be one that skipped the navigation proving it landed on the right
+ * screen.
+ *
+ * Every assertion inside reads DOM visibility only, so Playwright's own timeout message names the
+ * selector and the timeout and never the filled value — the one place invariants 2's payload hygiene
+ * is now enforced for both flows.
+ */
+async function drivePairingForm(page: Page, payload: string, label?: string): Promise<void> {
   const pasteBox = page.locator('[aria-label="Pairing code"]')
-  // Not redundant after the hop above: this now proves the CTA actually LANDED on the pairing screen,
-  // which is the only executable proof of #662's welcome→pairing navigation across all ten drives.
+  // Not redundant after the caller's navigation: this proves that navigation actually LANDED on the
+  // pairing screen — the only executable proof of #662's welcome→pairing hop across all ten unpaired
+  // drives, and now equally the proof of #1091's Settings→"Pair another server" hop.
   // `exact` on Pair avoids the busy `Pairing…` label and the `Cancel` button.
   await expect(pasteBox).toBeVisible()
   await pasteBox.fill(payload)

@@ -318,8 +318,8 @@ Real claude's words are non-deterministic, so the scenario asserts liveness only
   whole tier out of every gate that runs by default, nothing would have caught the regression without an
   operator run of `npm run e2e:real-claude` — the next text-bearing child added to `.bubble` needs the
   same two-grep sweep (`toHaveText|toContainText` **and** `textContent|allTextContents|allInnerTexts|
-  innerText`, across all of `e2e/` with no tier filter) documented in [E2E test
-  harness](e2e-harness.md#edge-cases-and-limitations).
+  innerText`, across all of `e2e/` with no tier filter) documented in [E2E test harness — scenario
+  history](e2e-harness-scenarios.md).
 - **Turn 1** sends a message, polls `nonEmptyAssistantCount() ≥ 1`, then waits `.bubble__cursor` to
   reach count 0 — the `turn_end` quiesce signal — before turn 2 reads its baseline. This removes the
   race where turn 2's poll could observe turn 1's still-streaming reply.

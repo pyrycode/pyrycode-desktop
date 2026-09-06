@@ -88,13 +88,29 @@ export function PairedShellView(props: {
           </div>
         </div>
       )
-    case 'settings':   return <SettingsScreen onBack={props.onBack} onPairAnother={props.onOpenPairServer} />
+    case 'settings':
+      return (
+        <SettingsScreen
+          onBack={props.onBack}
+          onPairAnother={props.onOpenPairServer}
+          onUnpaired={props.onUnpaired}   // #1162 — the SAME callback the thread case hands ConversationScreen
+        />
+      )
     case 'pairServer': return <PairingScreen onPaired={props.onPairServerPaired} onCancel={props.onPairServerCancelled} />
     case 'archive':    return <ArchiveScreen onBack={props.onBack} />
     default:           return assertNever(props.route)
   }
 }
 ```
+
+[#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) gave the `settings` case a third prop,
+reusing `onUnpaired` rather than a callback of its own: the Settings screen's per-server Unpair action
+([Settings screen § the per-row Unpair action](settings-screen-how-it-works.md#the-per-row-unpair-action-1162))
+reaches it only when its own erase leaves no paired record behind, at which point the app's pairing has
+genuinely ended and the existing `applyPairingChange(pairingChangeDeps, 'unpaired')` clear-then-navigate
+below applies exactly as it does from `thread`. Forgetting one of several servers never reaches this
+prop — it stays inside the shell, and `applyPairingChange`'s `unpaired` arm needed no behavioural
+change, only a docblock update naming the second, conditional caller.
 
 Every route renders a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
 always has *something* to show. The `settings` and `archive` cases both reuse the shared `onBack`
@@ -326,6 +342,12 @@ AppView (route='conversation')
     activateDeps.markViewed(conversation.id)             ← #786, unconditional, OUTSIDE the gate, LAST
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
+                                                ServerRowControl per-row Unpair (#1162) → runUnpairServer → window.pyry.unpairServer(serverId)
+                                                  ok + servers remain   → serverInfoStore re-read/written, shell stays on 'settings'
+                                                  ok + servers empty    → onUnpaired() → applyPairingChange(deps,'unpaired')
+                                                                           → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as thread's unpair
+                                                                             App sets route='pairing'
+                                                  error/rejected        → row returns to idle, nothing cleared, nothing navigated
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
                                                 onCancel → dispatch{pairServerCancelled} → 'settings'
                                                 onPaired → clearPairingScopedState(clearPairingDeps)  ← #531

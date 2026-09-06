@@ -205,7 +205,9 @@ reads "Pyrycode Offline" / "Relay Unknown". No fifth category is invented.
   and accessible names are unchanged (AC5).
 
 **Playwright, fake tier — `e2e/host-row-per-server.spec.ts` (new).** AC4's detector, unreachable from the
-unit tier: `launchPairedApp({ hostLabel }, { secondServer: {} })`, click server A's row to reach the thread
+unit tier: `launchPairedApp({}, { hostLabel, secondServer: {} })` — both options are `LaunchControl`, the
+SECOND argument; the first is daemon-reply knobs only and silently drops an unknown extra — click server
+A's row to reach the thread
 (so the composer's app-wide-status surface is on screen beside the sidebar), read the host row's two
 `aria-label`s as a **live** baseline, then `servers[1].forwarder.closeClientLeg(4401)`.
 
@@ -308,29 +310,50 @@ Each resolution lands in a `## Revisions` entry if it changes the design.
 
 ## Revisions
 
-### 2026-09-06 — the two-server label assertion is blocked on a pre-existing main-side bug (#1200)
+### 2026-09-06 — open questions resolved; the e2e spec ships both halves green
 
-**What changed.** The e2e spec ships AC4 (the per-server dots) green and carries AC3's two-server label
-assertion as a `test.skip` linked to #1200. No production code changed as a result; the design above
-stands unaltered.
+**What changed.** Nothing in the design above. The e2e spec proves AC4 (the per-server dots) and AC3's
+two-server label half, both unskipped. No production code changed as a result of any open question.
 
-**What drove it.** Open question 1 asked whether the keyed main-side read answers for a fixture pairing.
-It does — for ONE server. With a second server paired it does not, and neither does the unkeyed read:
-after a `launchPairedApp({ hostLabel }, { secondServer: {} })`, `window.pyry.hostLabelFor(id)` answers
-`not-stored` for both ids and `window.pyry.hostLabel()` answers `not-stored` too, while `serverInfo`
-still reports both servers. Pairing a second server erases the first server's stored label.
+**Open question 1, resolved: yes.** The keyed main-side read answers for a fixture pairing, including
+with a second server paired — `launchPairedApp({}, { hostLabel, secondServer: {} })` names machine 1,
+leaves machine 2 unnamed, and the row naming machine 1 shows machine 1's name.
+`e2e/host-label-sidebar.spec.ts` also stays green through the extra round trip.
 
-That is main-side and predates this ticket: the unkeyed query is answered entirely in the background
-process and was the row's only label source before #1199, so it reproduces against the pre-#1199
-renderer. Fixing it would mean editing production code outside this ticket's scope, so it is filed as
-#1200 and the assertion that surfaced it is skipped with that link rather than debugged here.
+**Open question 2, resolved: keep the prop.** `serverId` is read by the dot subtree on every render, so
+it is not an unused pass-through, and it is the shape #1070's loop needs.
 
-**What still covers AC3.** The store's per-server independence is proven at the unit tier, and the
-single-server end-to-end path — the row showing the label stored for the server it names — is proven by
-`e2e/host-label-sidebar.spec.ts`, which now runs through this ticket's keyed read and passes.
+**Open question 3, resolved: yes, the per-server relay slot fills.** The spec now pins the relay dot's
+live category (`Relay Connected`) alongside the daemon dot's rather than leaving it to the baseline
+capture, so both legs of the "did not move" comparison start from an asserted state rather than from
+whatever the render happened to hold.
 
-**Open questions 2 and 3, resolved.** The `serverId` prop stayed: it is read by the dot subtree on every
-render, so it is not an unused pass-through. The relay slot does fill in the fake tier — the spec's
-baseline is read from the live render either way, and the daemon dot is asserted connected explicitly,
-which is what makes the drop a detector. Verified by mutation: reverting `HostConnectionDotsControl` to
-the app-wide reads and rebuilding reddens the spec at the AC4 assertion.
+**Verified by mutation.** Reverting `HostConnectionDotsControl` to the app-wide reads and rebuilding
+reddens the spec at the AC4 assertion.
+
+### 2026-09-06 — the #1200 deferral is withdrawn: it was a fixture-argument bug in this ticket's own spec
+
+**What changed.** The AC3 two-server assertion is un-skipped and passes. Bug #1200 is closed as not
+reproducible. The Revisions entry that stood here — reporting that pairing a second server erases the
+first server's stored host label — was wrong and has been removed rather than amended, because every
+observation in it was an artefact.
+
+**What drove it.** The spec passed `hostLabel` in `launchPairedApp`'s FIRST argument. It lives on
+`LaunchControl`, the second. The first argument is `LaunchPairedAppOptions` — daemon-reply knobs — so
+the property was an unknown extra, dropped silently; `control.hostLabel` was `undefined`, and
+`drivePairingForm`'s `if (label !== undefined)` guard never filled the host-name field. **No machine was
+ever named.** Every downstream reading followed: `hostLabelFor(id)` answering `not-stored` for both ids
+and `hostLabel()` answering `not-stored` too are exactly what a store holding no label returns. There
+was no main-side defect. Moving the option to the second argument is the only change, and both the
+keyed read and the unkeyed one then answer with the stored label.
+
+**Why nothing caught it.** No tsconfig includes `e2e/` and Playwright strips types with esbuild, so the
+excess-property error (TS2353) surfaced in no gate — the spec ran green with a dead option, and every
+assertion that did not read the label still passed. An ad-hoc `tsc --noEmit` over the spec is the only
+detector, and it is now part of this ticket's verification.
+
+**The lesson worth carrying.** A skipped test and a filed bug are load-bearing claims about production
+code, so the bar for filing one is that the setup the repro rests on is proven to have happened — not
+that the assertion failed. Here the failing assertion was the *only* evidence of the setup, and it was
+also the thing the broken setup made fail, so it could never have discriminated. The check that would
+have caught it costs one command: typecheck the spec.

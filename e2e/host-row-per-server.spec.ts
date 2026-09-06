@@ -49,10 +49,11 @@ const FATAL_CLOSE_CODE = 4401
 test('the host row reports the server it names, and the other machine dropping does not move it', async ({
   launchPairedApp
 }) => {
-  const { page, servers } = await launchPairedApp(
-    { hostLabel: HOST_LABEL },
-    { secondServer: {} }
-  )
+  // `hostLabel` and `secondServer` are BOTH `LaunchControl` — the second argument. The fixture's options
+  // object is daemon-reply knobs only, and an extra property there is dropped silently with no gate red:
+  // nothing typechecks `e2e/`, so a misplaced `hostLabel` leaves the pairing form's host-name field empty
+  // while every assertion that does not read the label still passes.
+  const { page, servers } = await launchPairedApp({}, { hostLabel: HOST_LABEL, secondServer: {} })
   const [, serverB] = servers
 
   // With a second server opted in the fixture finishes on the LIST, so the list→thread step is this
@@ -78,6 +79,12 @@ test('the host row reports the server it names, and the other machine dropping d
   const dots = hostRow.locator('.channel-list__host-dot')
   await expect(dots).toHaveCount(2)
   await expect(dots.first()).toHaveAttribute('aria-label', 'Pyrycode Connected')
+  // BOTH legs pinned, not just the daemon one. The relay dot's keyed slot fills only because
+  // `connectionRegistry.build` binds the whole per-connection sink through `bindServerOrigin`, so
+  // `relayLinkChanged` carries the origin stamp; pinning the live category here is what proves the
+  // per-server relay read resolved rather than sitting at its "Relay Unknown" launch value — otherwise
+  // the relay half of the comparison below would be two silent servers agreeing on nothing.
+  await expect(dots.nth(1)).toHaveAttribute('aria-label', 'Relay Connected')
   const baseline = await dots.evaluateAll((nodes) =>
     nodes.map((node) => node.getAttribute('aria-label'))
   )
@@ -102,21 +109,19 @@ test('the host row reports the server it names, and the other machine dropping d
   ).toEqual(baseline)
 })
 
-// AC3's two-server half, BLOCKED ON #1200 — pairing a second server erases the FIRST server's stored
-// host label, so there is no name for this row to show and it correctly falls back to the generic word.
+// AC3's two-server half: server 1 was named at pairing and server 2 was not, so the row naming server 1
+// has to show server 1's name rather than the app-wide "most recently stored" answer — which, with an
+// unnamed machine paired second, is nothing at all.
 //
-// The bug is main-side and predates #1199: the UNKEYED `window.pyry.hostLabel()` read — the row's only
-// label source before this ticket, answered entirely in the background process — also comes back
-// `not-stored` after the second pairing, so this reproduces against the pre-#1199 renderer too. The
-// single-server path is unaffected and stays covered end to end by `host-label-sidebar.spec.ts`, which
-// runs through this ticket's keyed read.
-//
-// Left as a skip rather than deleted: it is the ready-made regression test for #1200. Re-enable it when
-// that lands — nothing else here needs to change.
-test.skip('the host row shows the label stored for the machine it names (blocked on #1200)', async ({
+// This test is its own detector, and history is the mutation check: it was written with `hostLabel`
+// passed in the FIRST argument, where the fixture drops it silently, and it failed — the row fell back
+// to the six-character generic word because no name had been typed into any pairing form. Moving the
+// option to `LaunchControl` is the only change, and it passes. The length comparison is what separates
+// the two outcomes without printing either.
+test('the host row shows the label stored for the machine it names', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ hostLabel: HOST_LABEL }, { secondServer: {} })
+  const { page } = await launchPairedApp({}, { hostLabel: HOST_LABEL, secondServer: {} })
 
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST_ROW_NAME }).click()
   await expect(page.locator('.conversation')).toBeVisible()

@@ -11,8 +11,11 @@ import {
 } from '../../store/defaultWorkspaceStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 // #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
-// untouched and keep their other consumers (the composer status row, the connection banner, the repair
-// control); the host row is simply no longer one of them. Each store's INITIAL cell is imported too —
+// untouched in name, signature and value; the host row is simply no longer a reader of either.
+// `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
+// control, `composerSend`); `selectRelayLinkStatus` keeps NONE — this row was its last production
+// reader, and retiring it is deliberately out of scope here (its own header records that). Each
+// store's INITIAL cell is imported too —
 // it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
 // same constant it has always rendered rather than to a literal restated here.
 import { useSessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
@@ -475,7 +478,7 @@ export function HostRow({
 
 // The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
 // single shipped slice, pass it through the pure collapse, render the pure view. Nothing else. The row
-// READS and never writes; `setHostLabel` keeps exactly one caller, the loader mounted in `ChannelList`.
+// READS and never writes; `setHostLabelFor` keeps exactly one caller, the loader mounted in `ChannelList`.
 // Module-private like its neighbour: production renders it from `renderBody` alone, and the unit tier
 // reaches everything it can prove through `hostRowLabel` and `HostRow` instead.
 // #1199 resolves WHICH server this row is about, once, and hands it down. The first paired server —

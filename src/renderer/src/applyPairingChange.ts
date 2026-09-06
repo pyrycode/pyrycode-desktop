@@ -23,6 +23,15 @@
  *
  *  - `unpaired`                   — the operator forgot this pairing. `runUnpair` reports ok, App
  *                                   flips its route to `pairing` and this shell unmounts.
+ *                                   #1162 gave it a SECOND caller, and the distinction matters: the
+ *                                   Settings row's per-server Unpair forgets one named server and
+ *                                   reaches this member only when the refreshed collection comes back
+ *                                   EMPTY. Forgetting one of several servers ends no pairing the app
+ *                                   still has, so it stays inside the shell and never arrives here —
+ *                                   the condition lives in `runUnpairServer`, which is the only
+ *                                   caller that can know the remaining count. This member's contract
+ *                                   is therefore unchanged: reaching it still means the app is no
+ *                                   longer paired to anything, so the clear is still owed in full.
  *  - `pairedAnotherServer`        — the operator ADDED a server. `pairServer` → `list` inside this
  *                                   shell; nothing has ended and nothing is left.
  *  - `cancelledPairAnotherServer` — the operator backed out of the pairing dialog. `pairServer` →

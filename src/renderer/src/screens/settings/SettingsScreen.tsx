@@ -39,13 +39,23 @@ const VERSION_LINE = `Version ${__APP_VERSION__}`
  * `onPairAnother` (#152) is the also-required Connection-section entry that re-opens the pairing flow to
  * switch daemons. PairedShellView binds it to the `openPairServer` dispatch; the pairing screen's own
  * confirm/cancel drive the two exits, so this screen only fires the forward-nav intent.
+ *
+ * `onUnpaired` (#1162) is the third, and it fires on strictly fewer occasions than its name suggests:
+ * the per-server Unpair action forgets one server on its own, and only when the erase leaves NO record
+ * behind does it reach this callback — the app's pairing has then genuinely ended, so PairedShellView
+ * hands down the same `onUnpaired` the conversation screen gets, already bound to the shell's
+ * `applyPairingChange(deps, 'unpaired')` clear-then-navigate. Required for the same reason
+ * `onPairAnother` is: a Settings screen that cannot forget a server is the regression the prop exists
+ * to prevent.
  */
 export function SettingsScreen({
   onBack,
-  onPairAnother
+  onPairAnother,
+  onUnpaired
 }: {
   onBack: () => void
   onPairAnother: () => void
+  onUnpaired: () => void
 }): JSX.Element {
   return (
     <section className="settings" aria-label="Settings screen">
@@ -62,7 +72,7 @@ export function SettingsScreen({
               immaterial — the loader renders null. */}
           <div className="settings__section-body">
             <ServerInfoData />
-            <ServerRowControl />
+            <ServerRowControl onLastServerUnpaired={onUnpaired} />
             {/* #152: the "Pair another server" nav row (Figma 17:18) — directly below the Server row.
                 Re-opens the pairing flow to switch daemons; the trailing chevron marks it as a real
                 forward-nav affordance (unlike the static Server/Storage rows, whose chevrons #334/#351

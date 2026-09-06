@@ -29,6 +29,7 @@ import type {
   CreateWorkspaceFolderPayload,
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
+  RequestModelListPayload,
   DequeueMessagePayload,
   QuestionAnswerPayload,
   QuestionRefusedPayload
@@ -154,6 +155,13 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * with a zero-valued reply rather than an error, so a client still sending nothing degraded in silence
  * for two weeks (#941). The payload is REQUIRED since #946 — every sender resolves an id, and a bare
  * send is a compile error here rather than a request that quietly addresses nothing.
+ * And `requestModelList` (#1165), which reuses the wire RequestModelListPayload (a single REQUIRED
+ * `conversation_id` string — a routing id, not a secret) to ask for one conversation's model and effort
+ * vocabulary, covering the conversations both pushed `model_list` lanes structurally miss (one created
+ * after this app connected). Payload-REQUIRED from the start, and for a STRONGER reason than its
+ * neighbour above: that verb answers an unnamed request with a zero-valued reply, so a bare send there
+ * was silently useless rather than impossible; here an unnamed request has nothing to ask about at all.
+ * It has NO renderer sender in the slice that declares it — #1166 adds the trigger.
  * No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
@@ -185,6 +193,7 @@ export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle'; serverId?: string }
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
+  | { type: 'requestModelList'; payload: RequestModelListPayload }
   | { type: 'requestConversations'; serverId?: string }
   | { type: 'requestRecentWorkspaces'; serverId?: string }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
@@ -314,6 +323,12 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // clone PRESERVES an explicitly-undefined property across the IPC bridge, so `'payload' in
       // value` alone would pass one straight through to the wire.
       return 'payload' in value && isRequestSessionSettingsPayload(value.payload)
+    case 'requestModelList':
+      // Payload-required (#1165), so this is the neighbour's idiom verbatim. The explicitly-`undefined`
+      // case is refused BY isRequestModelListPayload rather than by the `in` check, for the reason the
+      // arm above records: structured clone PRESERVES an explicitly-undefined property across the IPC
+      // bridge, so `'payload' in value` alone would pass one straight through to the wire.
+      return 'payload' in value && isRequestModelListPayload(value.payload)
     case 'requestConversations':
       // Bare member (#139): no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)
@@ -701,6 +716,24 @@ function isSetSessionSettingsPayload(value: unknown): value is SetSessionSetting
  *  or cache key. Structural minimum: an extra field is not rejected here, and cannot reach the wire
  *  because that rebuild bounds the frame to the one id. Pure; never throws. */
 function isRequestSessionSettingsPayload(value: unknown): value is RequestSessionSettingsPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the requestModelList payload (#1165). The guard
+ *  above with the name changed: one present-and-string `conversation_id` check, so a missing key, a
+ *  literal `null`, and a non-string are all rejected. Checks TYPE, not emptiness — `''` passes here,
+ *  and the two verbs diverge one layer down rather than in their guards: the daemon answers an
+ *  unresolvable id on THIS frame with one `error` (`conversation.not_found`), not with the zero-valued
+ *  reply the neighbour gets, because there is no zero answer to "what models does nothing offer".
+ *  Neither that code nor the retryable `model_list.unavailable` is retried anywhere client-side. The
+ *  value is client-owned (this app's own conversation state, not network input) and reaches exactly
+ *  two sinks past here: `conversationRouter.route`, a read-only `Map` lookup against an index built
+ *  from the daemon's own conversation lists, and `buildRequestModelList`, which rebuilds a fresh
+ *  literal — never a log line, path, attribute, or cache key. Structural minimum: an extra field is
+ *  not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one id.
+ *  Pure; never throws. */
+function isRequestModelListPayload(value: unknown): value is RequestModelListPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

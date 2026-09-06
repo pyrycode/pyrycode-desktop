@@ -125,6 +125,27 @@ export type EnvelopeType =
   // TypeQuestionRefused; declared by pyrycode#1983, resolved by #1990/#1991, gated by #1986.
   | 'question_answer'
   | 'question_refused'
+  // The ASK for the frame below (#1165) — v2-only client→daemon control frame, gated on the negotiated
+  // `interactive` capability, INERT on a conn that did not negotiate it (no reply, no error). It exists
+  // because both of that frame's delivery lanes structurally miss a conversation created AFTER this app
+  // connected: the live lane emits once per claude child spawn and drops every event whose producing
+  // session is not the active conversation's, and the connect-time reconcile runs inside the handshake
+  // tail, so a conversation that did not exist then is not in it.
+  //
+  // Carries RequestModelListPayload: a single REQUIRED `conversation_id`. Answered by ONE `model_list`
+  // correlated by `in_reply_to` and carrying NO `event_id` — the same deliberate omission the
+  // reconciled frame makes, which keeps it out of the daemon's turn-event replay ring — whose payload
+  // is what the connect-time reconcile would have sent, INCLUDING for a conversation with no bound
+  // session, answered from the daemon-wide vocabulary (pyrycode#2124). A request the daemon cannot
+  // answer draws one `error` frame instead: `conversation.not_found` (not retryable) or
+  // `model_list.unavailable` (retryable).
+  //
+  // NEITHER IS RETRIED CLIENT-SIDE, and the retryable one is the trap. A retry against a relay that is
+  // withholding the frame is the self-inflicted spin `modelListStore`'s header forbids, and the rule
+  // below still binds in full: never block a model menu on this frame. Both codes fall through
+  // `narrowDaemonErrorOutcome`'s allowlist to `unclassified`, which is correct and complete — surfacing
+  // a refusal to the operator is #1036's job. SSOT pyrycode#2125 / internal/protocol/interactive.go.
+  | 'request_model_list'
   // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
   // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
   // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
@@ -1634,6 +1655,30 @@ export interface ModelListPayload {
   conversation_id: string
   models: WireModelOption[]
   dropped_models: number
+}
+
+/**
+ * Outbound `request_model_list` payload (client → daemon, #1165). Mirrors the daemon's
+ * internal/protocol/interactive.go RequestModelListPayload field-for-field: one `conversation_id`,
+ * no `omitempty`, so the key is always on the wire. The frame it asks for is `ModelListPayload`
+ * above; the delivery-window rationale is on the `'request_model_list'` `EnvelopeType` member.
+ *
+ * `conversation_id` is REQUIRED, and that is the one divergence from `RequestSessionSettingsPayload`
+ * worth stating: THAT verb's id is optional end to end because an unnamed request draws a
+ * zero-valued reply, which is a real answer. There is no zero answer to "what models does nothing
+ * offer" — an unnamed request here has nothing to ask about, so `''` is not a meaningful request and
+ * the whole chain (command member, boundary guard, connection method, builder input) types the id as
+ * required. `''` still PASSES the boundary guard, which checks type rather than emptiness; the daemon
+ * polices ids, and it answers an unresolvable one with `conversation.not_found` rather than another
+ * conversation's list.
+ *
+ * The id is a routing id, NEVER a secret (the `SetSessionSettingsPayload.session_id` /
+ * `conversation_id` convention), and it is CLIENT-OWNED — read from this app's own conversation
+ * state, never off the network. It is an object value in a payload the main process rebuilds from
+ * scratch: never a key, a path, a log field, or an attribute.
+ */
+export interface RequestModelListPayload {
+  conversation_id: string
 }
 
 /**

@@ -103,6 +103,7 @@ function createFactoryFake() {
       },
       send: noop,
       requestSessionSettings: noop,
+      requestModelList: noop,
       requestConversations: noop,
       requestRecentWorkspaces: noop,
       createConversation: noop,

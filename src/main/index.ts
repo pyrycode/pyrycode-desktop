@@ -632,6 +632,18 @@ app.whenReady().then(() => {
         router.route(conversationId)?.requestSessionSettings(conversationId)
         return
       }
+      case 'requestModelList': {
+        // ROUTED BY CONVERSATION, mirroring the case above — a model menu belongs to one conversation,
+        // so the frame goes to the server that hosts it or to no wire at all (#1165). ONE local, read
+        // twice, so the id routed by and the id sent can never be two different expressions. No `?.` on
+        // `payload`: it is required, and `isRequestModelListPayload` has already proven it at the
+        // boundary. Direct to the connection method — an on-demand menu ask has no orchestrator and no
+        // consumer, and no retry: the reply is one `model_list` the existing inbound path already lands
+        // in the model-list store, unchanged and unbranched.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestModelList(conversationId)
+        return
+      }
       case 'requestConversations':
         // ROUTED BY SERVER (#1120). `servers.route` answers the connection for the server the window
         // NAMED — resolved against the registry's held entries, never trusted as a hint — or, when the

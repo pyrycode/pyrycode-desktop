@@ -326,3 +326,14 @@ reject branches.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+**2026-09-06 — two stale member counts in `connectionRegistry.ts`, corrected in the same commit as the
+delegate line.** Not a design change; the plan's § 4 did not anticipate it. `viewOf`'s docblock asserted
+that its callers get "the 22 members and NOT the three lifecycle ones", a count the new delegate makes
+23. `ActiveConnection`'s docblock restated the same number as "the composition root's 22 remaining call
+sites"; that one is dropped rather than incremented, because it counts call sites in `src/main/index.ts`
+by proxy and the proxy is what went stale — the sentence says what it needs to without a number. Both
+are claims this slice falsified, so leaving them would have shipped a comment that lies about the code
+beside it; neither is adjacent refactoring.

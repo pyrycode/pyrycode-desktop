@@ -31,6 +31,7 @@ import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
+import { buildRequestModelList } from './transport/requestModelListEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
@@ -251,6 +252,15 @@ export interface DaemonConnection {
    * to supply. Inert no-op when not connected, like send.
    */
   requestSessionSettings(conversationId?: string): void
+  /**
+   * Ask the daemon for one conversation's model and effort vocabulary (#1165). The id is forwarded
+   * onto the frame as `conversation_id` and is REQUIRED — unlike the method above, whose unnamed
+   * request draws a zero-valued reply, an unnamed request here has nothing to ask about. Answered by
+   * one `model_list` correlated on `in_reply_to`, which the existing inbound path lands in the
+   * model-list store exactly as it lands an unsolicited one; a request the daemon cannot answer draws
+   * one `error` frame, which nothing here retries. Inert no-op when not connected, like send.
+   */
+  requestModelList(conversationId: string): void
   /**
    * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
    * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
@@ -1873,6 +1883,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestModelList(conversationId: string): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A menu request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply, and nothing may block a model menu on it anyway.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestSessionSettings — no second
+      // counter — so ids stay unique across interleaved calls (the daemon correlates the model_list
+      // reply by in_reply_to).
+      // The id is forwarded verbatim to the builder, which rebuilds a fresh literal, so no
+      // renderer-supplied key reaches the wire. Never logged: the catch below drops its caught
+      // object and adds no line.
+      const bytes = buildRequestModelList({ id: nextEnvelopeId, ts: now(), conversationId })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
+      // NO RETRY HERE OR ANYWHERE ABOVE — a retry against a relay withholding the frame is the
+      // self-inflicted spin modelListStore's header forbids.
+    }
+  }
+
   function requestRecentWorkspaces(): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
@@ -2557,6 +2590,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     },
     send,
     requestSessionSettings,
+    requestModelList,
     requestConversations,
     requestRecentWorkspaces,
     createConversation,

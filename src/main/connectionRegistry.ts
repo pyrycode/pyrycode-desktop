@@ -26,7 +26,7 @@ import type {
 
 /**
  * Every `DaemonConnection` member EXCEPT the three lifecycle ones, which the registry owns. This is
- * what the composition root's 22 remaining call sites reach, so they keep their current shape while
+ * what the composition root's remaining call sites reach, so they keep their current shape while
  * the object underneath them starts answering for one server among several.
  *
  * `Omit` rather than the whole interface is the load-bearing half: it makes it structurally
@@ -235,7 +235,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
    *
    * THE MEMBER LIST IS WRITTEN EXACTLY ONCE, here, and that is the point of the helper rather than a
    * tidiness preference. `active` and `connectionFor` both hand a caller an object that must carry the
-   * 22 members and NOT the three lifecycle ones; a second hand-copied literal could drift, and
+   * 23 members and NOT the three lifecycle ones; a second hand-copied literal could drift, and
    * returning a bare `DaemonConnection` typed as `ActiveConnection` would satisfy the type while
    * leaving `start` / `stop` / `reconnect` reachable at runtime by a cast. A fresh object with only
    * these members makes the `Omit` true of the value, not just of its type.
@@ -243,6 +243,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
   const viewOf = (resolve: () => DaemonConnection): ActiveConnection => ({
     send: (payload) => resolve().send(payload),
     requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
+    requestModelList: (conversationId) => resolve().requestModelList(conversationId),
     requestConversations: () => resolve().requestConversations(),
     requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),
     createConversation: (payload) => resolve().createConversation(payload),

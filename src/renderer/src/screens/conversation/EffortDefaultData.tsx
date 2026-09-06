@@ -207,10 +207,15 @@ export function EffortDefaultData({
       selectSnapshot(runConfigStore.getState()),
       runSettingsWriteStore.getState()
     )
+    // Read ONCE and reused by the send below. Nothing between the two reads could change it — the effect
+    // body is fully synchronous — so this is not a fix for an observed defect; it makes "the frame
+    // addresses the session the decision was taken against" true by construction rather than by
+    // inspecting the lines in between, which is what a later edit inserting anything here would break.
+    const addressedSessionId = selectSessionId(sessionIdStore.getState())
     const level = effortDefaultToApply({
       conversationId,
       appliedFor: appliedFor.current,
-      sessionId: selectSessionId(sessionIdStore.getState()),
+      sessionId: addressedSessionId,
       effort: effective.effort,
       model: effective.model,
       models,
@@ -225,7 +230,7 @@ export function EffortDefaultData({
     // `renderToStaticMarkup` there is no window.pyry and the container smoke test would throw.
     changeSetting(
       {
-        sessionId: selectSessionId(sessionIdStore.getState()),
+        sessionId: addressedSessionId,
         sendCommand: window.pyry.sendCommand,
         dispatch: runSettingsWriteStore.getState().dispatch
       },

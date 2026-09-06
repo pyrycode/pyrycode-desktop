@@ -121,7 +121,8 @@ const QUEUED_HOSTILE_INDEX = 2
  * conversation, and list-open records the clicked seeded row as active, so a snapshot under any other id
  * lands in the store and is selected by nothing — zero rows, silently. (Fact 1 of
  * queued-backlog-interrupt.spec.ts's header; fact 2 — push only AFTER launch resolves, since every
- * `connected` resets all backlogs — is observed in the drive below.)
+ * `connected` resets the reconnecting server's backlogs, which with one server is all of them (#1138)
+ * — is observed in the drive below.)
  */
 function queueStateFrame(items: readonly QueuedItem[]): Uint8Array {
   return encodeEnvelope({

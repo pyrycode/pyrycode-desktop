@@ -106,40 +106,133 @@ describe('queueStore', () => {
     expect(store.getState().setBacklog).toBe(before)
   })
 
-  // #197 — reset-on-reconnect. The reset clears EVERY held backlog wholesale (the map is keyed, unlike
-  // the modal reconcile's flat list); after it, absent keys read empty via EMPTY_BACKLOG (AC3), and the
-  // daemon's connect-time re-sends repopulate through setBacklog unchanged.
-  it('resetBacklogs clears every held backlog — all read empty afterward (AC1)', () => {
+  // #197's reset-on-reconnect, scoped to the reconnecting server by #1138. The caller resolves "which
+  // conversations belong to this server" from the server-keyed conversation list (#1086) and hands the
+  // ids across; this setter drops exactly those keys and leaves every other server's held backlog
+  // alone. After it, dropped keys read empty via EMPTY_BACKLOG (AC3) and that server's connect-time
+  // re-sends repopulate through setBacklog unchanged.
+  it('drops exactly the listed conversations and leaves the rest held (AC1)', () => {
     const store = createQueueStore()
-    store.getState().setBacklog({ conversationId: 'c1', queued: [a, b] })
-    store.getState().setBacklog({ conversationId: 'c2', queued: [b] })
-    store.getState().resetBacklogs()
-    expect(store.getState().backlogs.size).toBe(0)
-    // Absent == empty: both cleared keys read the stable EMPTY_BACKLOG reference (AC3).
-    expect(selectBacklogFor('c1')(store.getState())).toBe(EMPTY_BACKLOG)
-    expect(selectBacklogFor('c2')(store.getState())).toBe(EMPTY_BACKLOG)
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a, b] })
+    store.getState().setBacklog({ conversationId: 'b1', queued: [b] })
+    store.getState().resetBacklogsFor(new Set(['b1']))
+    // Absent == empty: the dropped key reads the stable EMPTY_BACKLOG reference (AC3).
+    expect(selectBacklogFor('b1')(store.getState())).toBe(EMPTY_BACKLOG)
+    expect(selectBacklogFor('a1')(store.getState())).toEqual([a, b])
   })
 
-  it('resetBacklogs on an already-empty map is a same-reference no-op (first-connect / all-drained)', () => {
+  it('keeps a surviving backlog BY REFERENCE, so a component watching it does not re-render', () => {
     const store = createQueueStore()
+    const held: readonly QueuedItem[] = [a, b]
+    store.getState().setBacklog({ conversationId: 'a1', queued: held })
+    store.getState().setBacklog({ conversationId: 'b1', queued: [b] })
+    store.getState().resetBacklogsFor(new Set(['b1']))
+    expect(selectBacklogFor('a1')(store.getState())).toBe(held)
+  })
+
+  it('is a same-reference no-op when no held key is listed (the size === 0 property, generalised)', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
     const before = store.getState()
-    store.getState().resetBacklogs()
-    // Returning the identical state lets zustand's Object.is short-circuit — no churn, no re-render.
+    // A reconnecting server whose conversations hold nothing here. Returning the identical state lets
+    // zustand's Object.is short-circuit — no churn, no re-render.
+    store.getState().resetBacklogsFor(new Set(['b1', 'b2']))
     expect(store.getState()).toBe(before)
   })
 
-  it('reset then setBacklog repopulates one conversation — replacement truth unchanged (AC2)', () => {
+  it('is a same-reference no-op for an empty id set and for an empty store', () => {
+    const store = createQueueStore()
+    const empty = store.getState()
+    // First connect: nothing held, and the reconnecting server's list has not loaded either.
+    store.getState().resetBacklogsFor(new Set())
+    expect(store.getState()).toBe(empty)
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    const held = store.getState()
+    store.getState().resetBacklogsFor(new Set())
+    expect(store.getState()).toBe(held)
+  })
+
+  it('does not mutate the map it was handed out — copy-on-write like setBacklog', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    store.getState().setBacklog({ conversationId: 'b1', queued: [b] })
+    const beforeMap = store.getState().backlogs
+    store.getState().resetBacklogsFor(new Set(['b1']))
+    expect(beforeMap.size).toBe(2)
+    expect(beforeMap.get('b1')).toEqual([b])
+  })
+
+  it('drop then setBacklog repopulates one conversation — replacement truth unchanged (AC2)', () => {
     const store = createQueueStore()
     store.getState().setBacklog({ conversationId: 'c1', queued: [a, b] })
-    store.getState().resetBacklogs()
+    store.getState().resetBacklogsFor(new Set(['c1']))
     store.getState().setBacklog({ conversationId: 'c1', queued: [a] })
     expect(selectBacklogFor('c1')(store.getState())).toEqual([a])
   })
 
-  it('keeps the resetBacklogs reference stable across updates', () => {
+  it('keeps the resetBacklogsFor reference stable across updates', () => {
     const store = createQueueStore()
-    const before = store.getState().resetBacklogs
+    const before = store.getState().resetBacklogsFor
     store.getState().setBacklog({ conversationId: 'c1', queued: [a] })
-    expect(store.getState().resetBacklogs).toBe(before)
+    expect(store.getState().resetBacklogsFor).toBe(before)
+  })
+})
+
+// clearAllBacklogs (#1138) — the pairing-boundary drop that replaces the self-heal scoping the
+// reconnect reset removed. Nullary by design: no daemon-supplied id may steer which backlogs survive.
+describe('clearAllBacklogs', () => {
+  it('drops EVERY server’s backlogs, whatever the conversation list says (AC3’s complement)', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    store.getState().setBacklog({ conversationId: 'b1', queued: [b] })
+    // Deliberately including the case resetBacklogsFor is DEFINED to leave alone: a backlog whose
+    // conversation appears in no server's list. The scoped reset must not reach it (AC3); the pairing
+    // boundary must, because nothing on the next pairing re-asserts it.
+    store.getState().setBacklog({ conversationId: 'orphan', queued: [a, b] })
+    store.getState().clearAllBacklogs()
+    expect(store.getState().backlogs.size).toBe(0)
+    expect(selectBacklogFor('a1')(store.getState())).toBe(EMPTY_BACKLOG)
+    expect(selectBacklogFor('b1')(store.getState())).toBe(EMPTY_BACKLOG)
+    expect(selectBacklogFor('orphan')(store.getState())).toBe(EMPTY_BACKLOG)
+  })
+
+  it('returns initialQueueState BY REFERENCE and is a same-reference no-op when already clear', () => {
+    // THE SUBSCRIBER SHORT-CIRCUIT, the `clearAllModelLists` shape: handing the state OBJECT straight
+    // back on an already-clear store makes zustand's Object.is fire, so a redundant clear — a second
+    // pairing change with nothing queued — wakes NO listener rather than only sparing the selectors.
+    const store = createQueueStore()
+    const empty = store.getState()
+    store.getState().clearAllBacklogs()
+    expect(store.getState()).toBe(empty)
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    store.getState().clearAllBacklogs()
+    expect(store.getState().backlogs).toBe(initialQueueState.backlogs)
+    const cleared = store.getState()
+    store.getState().clearAllBacklogs()
+    expect(store.getState()).toBe(cleared)
+  })
+
+  it('does not mutate the map it was handed out — copy-on-write like the two setters', () => {
+    const store = createQueueStore()
+    store.getState().setBacklog({ conversationId: 'a1', queued: [a] })
+    const beforeMap = store.getState().backlogs
+    store.getState().clearAllBacklogs()
+    expect(beforeMap.size).toBe(1)
+    expect(beforeMap.get('a1')).toEqual([a])
+  })
+
+  it('takes no arguments, so no daemon-supplied id can steer which backlogs survive', () => {
+    // The call-side half of the nullary property (`tsc` enforces the other half). A queued item's
+    // `text` is untrusted daemon-relayed content, so an id-taking clear would let the DEPARTING daemon
+    // choose which of its own messages outlive the pairing.
+    const store = createQueueStore()
+    expect(store.getState().clearAllBacklogs).toHaveLength(0)
+  })
+
+  it('keeps the clearAllBacklogs reference stable across updates', () => {
+    const store = createQueueStore()
+    const before = store.getState().clearAllBacklogs
+    store.getState().setBacklog({ conversationId: 'c1', queued: [a] })
+    expect(store.getState().clearAllBacklogs).toBe(before)
   })
 })

@@ -51,6 +51,8 @@ conversationListStore                  // app-wide singleton
 useConversationListStore(selector)     // narrow-slice React binding: useStore(conversationListStore, selector)
 selectConversations(state)             // the flat union — unchanged name and `| null`
 selectConversationsFor(origin)(state)  // one server's slot (#1086), defaulting a missing one to `null`
+selectConversationIdsFor(origin)(state) // one server's conversation ids as a Set (#1138), see below
+EMPTY_CONVERSATION_IDS: ReadonlySet<string>  // stable empty-Set reference `selectConversationIdsFor` returns
 ```
 
 Mirrors [`runConfigStore`](run-config-store.md)'s DI-factory → singleton → hook → selector structure
@@ -133,6 +135,46 @@ synchronously against current state, closing the only check-then-act shape on th
 slots come back **by reference** (copy-on-write: `new Map(held)` then `set`, never a mutation of the
 map already handed out), so a component watching only one server does not re-render when a different
 one's slot changes.
+
+### The shared "which conversations belong to this server" resolution, since #1138
+
+[#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) added `selectConversationIdsFor`
+beside `selectConversationsFor` — the renderer's one answer to "which conversations belong to this
+server", landed here once rather than restated in each of the (up to) three bridges that need to
+scope a reconnect reset by it: #1138 itself (queued backlogs), #1139 (background-task rosters, not
+yet shipped) and #1140 (outstanding modal prompts, not yet shipped). It is a thin projection over
+`selectConversationsFor`, not a second read of `byServer`, so that selector's "call it with a
+client-held id, never a daemon-supplied one" rule is carried forward by construction rather than
+restated:
+
+```ts
+export const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set()
+
+export const selectConversationIdsFor =
+  (origin: ConversationListOrigin) =>
+  (s: ConversationListState): ReadonlySet<string> => {
+    const rows = selectConversationsFor(origin)(s)
+    if (rows === null || rows.length === 0) return EMPTY_CONVERSATION_IDS
+    return new Set(rows.map((row) => row.id))
+  }
+```
+
+`selectConversationsFor` answers `null` for a slot holding no list yet and `[]` for a server that
+reported zero conversations; every known consumer of this resolution treats both as "drop nothing",
+so both collapse to the one `EMPTY_CONVERSATION_IDS` reference rather than exposing a three-state API
+with no reader. A `Set`, never a bare object keyed by id, for the same reason `byServer` is a `Map`:
+`ServerOrigin`'s docblock rules it for any consumer indexing by a daemon-adjacent id (these
+`ConversationSummary.id` values are the daemon's), and a consumer's inner loop is a membership test
+per key it already holds.
+
+**Not a `useConversationListStore` read surface.** A non-empty result is a fresh `Set` built on every
+call, so it has no referential stability and would churn re-renders if subscribed to; every consumer
+calls it once, inside a daemon-event handler, against `getState()` — see [queue store § The data
+path](queue-store.md) for the shape.
+
+`EMPTY_CONVERSATION_IDS` is a shared singleton, the `EMPTY_BACKLOG` idiom applied here: `Object.freeze`
+does not stop `Set.prototype.add`, so the type is the only guard against a caller mutating it, and no
+consumer has cause to.
 
 ### The data path (`src/renderer/src/store/conversationListBridge.ts`)
 
@@ -282,6 +324,11 @@ new-discussion FAB's own subscription on the same event, #242)
   not-loaded sentinel, since a loaded-empty server is `[]` rather than `null`). Call it only with an
   id from this client's own paired-server list, never a daemon-supplied field — the read-side twin of
   the write-side stamp rule above. Expected first consumer: #1070's per-server grouping.
+- **`selectConversationIdsFor` import surface, since #1138**: `import { selectConversationIdsFor } from
+  '@renderer/store/conversationListStore'`, called from `queueBridge.ts`'s `QueueData` composition
+  root against `conversationListStore.getState()` at reconnect-reset time — see [queue
+  store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets). Not yet called from #1139's or
+  #1140's bridges (both not yet shipped).
 - `clearAllConversations` is invoked only by `clearPairingScopedState` (via `PairedShell.tsx`'s
   `clearPairingDeps`), never two-way-bound from a component — see § AC5 below.
 
@@ -403,3 +450,9 @@ new-discussion FAB's own subscription on the same event, #242)
 - `docs/specs/architecture/1086-conversation-list-keyed-by-server.md` — the full architecture spec:
   the key-domain and ordering rulings, the AC5 pairing-boundary analysis, and the security review
   (PASS, one SHOULD FIX — the stamp's spread-then-stamp order, folded in above).
+- [Queue store](queue-store.md) / [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)
+  — first consumer of `selectConversationIdsFor` (§ The shared "which conversations belong to this
+  server" resolution, above): scopes the queue-backlog reconnect reset to the reconnecting server's
+  own conversations. Also the first store to repeat this store's own AC5 sequence — scoping a
+  reconnect reset retired the self-healing argument that kept `queueStore` out of
+  `clearPairingScopedState`, the same way keying this store's `conversations` field did.

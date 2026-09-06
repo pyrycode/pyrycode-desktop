@@ -7,7 +7,7 @@ import type { ThreadEvent } from './store/threadTimeline'
 import type { SessionAction } from './store/sessionStore'
 
 /**
- * The ten effects clearPairingScopedState performs, injected to keep it pure:
+ * The eleven effects clearPairingScopedState performs, injected to keep it pure:
  *  - `dispatchTimeline`        — timelineStore's dispatch; carries #528's `reset` (a full wipe).
  *  - `clearAllTimelines`       — conversationTimelineStore's #757 whole-map clear; takes NO id.
  *  - `clearActiveConversation` — activeConversationStore's #529 clear.
@@ -16,6 +16,7 @@ import type { SessionAction } from './store/sessionStore'
  *  - `clearAllSlashCommandLists` — slashCommandListStore's #955 whole-map clear; takes NO id.
  *  - `clearAllModelLists`      — modelListStore's #977 whole-map clear; takes NO id.
  *  - `clearAllConversations`   — conversationListStore's #1086 whole-map clear; takes NO id.
+ *  - `clearAllBacklogs`        — queueStore's #1138 whole-map clear; takes NO id.
  *  - `dispatchSession`         — sessionStore's dispatch; carries #166's `reset`.
  *  - `clearAllLastRead`        — conversationLastReadStore's #779 whole-map clear; takes NO id, and is
  *                                the only effect here that reaches DISK (see the ordering note below).
@@ -31,8 +32,8 @@ import type { SessionAction } from './store/sessionStore'
  * `slashCommandListStore` (#954 dormant, #955 cleared) repeated that sequence verb for verb, and
  * `modelListStore` (#974 dormant, #977 cleared) a third time. A store that
  * DOES re-assert itself does not belong here at all: as of #531 `recentWorkspacesStore` (re-fetched by
- * remounting the picker), `serverInfoStore` (a one-shot mount invoke), `queueStore` and `modalStore`
- * (both cleared by the `connected` edge, then repopulated) and `runConfigStore` (re-requested on the
+ * remounting the picker), `serverInfoStore` (a one-shot mount invoke), `modalStore`
+ * (cleared by the `connected` edge, then repopulated) and `runConfigStore` (re-requested on the
  * `connected` edge itself, and on each turn-end edge, by `RunConfigLiveData`'s refresh trigger, #810)
  * all self-heal, and adding them would be dead code. Nor does a store the `connected`
  * edge clears for its own reasons — `backgroundTaskRosterStore`, whose bridge branch is the sole
@@ -52,6 +53,25 @@ import type { SessionAction } from './store/sessionStore'
  * reconnect to the SAME daemon needs no clear (its own slot is simply rewritten), so this is the
  * mechanism, not the `connected` edge — and blanking it there would blank a healthy second server's
  * rows every time the first one reconnected.
+ *
+ * `queueStore` (#1138) is the SECOND name to move off that self-healing list, and it moved for the same
+ * structural reason as the first: a later ticket removed the self-heal. #531's argument was sound while
+ * #197's reconnect reset cleared the WHOLE backlog map — a re-pairing's first `connected` blanked every
+ * latched backlog on its way past, so a clear here would have been dead code. Scoping that reset to the
+ * reconnecting server's own conversations retires the argument. The new pairing's first `connected`
+ * resolves an empty conversation list (its slot is not filled until the `list_conversations` reply
+ * lands), matches no held key, and hands the state object straight back; and nothing else evicts a
+ * backlog, because the daemon re-sends `queue_state` only for NON-EMPTY conversations. A conversation
+ * that DRAINED while unpaired therefore gets no re-send and shows its stale pre-drop backlog
+ * indefinitely — the exact bug #197 shipped to fix, reintroduced at the pairing boundary. Unlike the
+ * conversation rows this is not a cross-attribution leak in general (a backlog renders only under its
+ * own conversation id, and #1086's clear means no row points at it), but conversation ids are
+ * daemon-side and a re-pair to the SAME box reuses them, so the phantom is reachable and untrusted
+ * daemon-supplied text outlives the pairing that produced it. Re-run against the discriminator, the
+ * answer here is BOTH mechanisms rather than a flip: the `connected` edge covers a reconnect's listed
+ * conversations, which this clear must not usurp (blanking at the edge would blank a healthy second
+ * server's backlogs, #1138's whole point), and this covers the pairing change, which the edge no longer
+ * reaches. That is why it is the only member of this set whose store ALSO clears on the edge.
  */
 export interface ClearPairingScopedStateDeps {
   dispatchTimeline: (event: ThreadEvent) => void
@@ -62,6 +82,7 @@ export interface ClearPairingScopedStateDeps {
   clearAllSlashCommandLists: () => void
   clearAllModelLists: () => void
   clearAllConversations: () => void
+  clearAllBacklogs: () => void
   dispatchSession: (action: SessionAction) => void
   clearAllLastRead: () => void
 }
@@ -70,13 +91,14 @@ export interface ClearPairingScopedStateDeps {
  * Drop every piece of renderer state scoped to the pairing that just ended — the thread rows, EVERY
  * conversation's retained per-conversation thread, the active conversation, the daemon session id,
  * claude's announced running model, EVERY conversation's published slash-command menu, EVERY
- * conversation's published model menu, EVERY server's conversation rows, the session
- * store's status + coarse message list, and how far the operator had read into each conversation.
+ * conversation's published model menu, EVERY server's conversation rows, EVERY conversation's queued
+ * backlog, the session store's status + coarse message list, and how far the operator had read into
+ * each conversation.
  *
  * Called from BOTH paths that end a pairing, which is the whole design. Unpair flips the App route to
  * `pairing` and unmounts PairedShell; pair-another-server transitions `pairServer` → `list` INSIDE the
  * shell (pairedRoute.ts:62-65), so the shell never unmounts and nothing a remount would have cleared
- * gets cleared. Nine of these ten stores latch across either switch because nothing on a new pairing
+ * gets cleared. Ten of these eleven stores latch across either switch because nothing on a new pairing
  * re-asserts them: neither timeline has any history backfill (their only production writers are the
  * live stream, timelineBridge.ts:347, and the composer's optimistic echo, composerSend.ts:82) — and
  * the keyed one is worse than the flat one, because it holds EVERY conversation's thread rather than
@@ -103,6 +125,15 @@ export interface ClearPairingScopedStateDeps {
  * slot instead and leaves the departed server's untouched, while the app-wide read unions across both
  * — so the rows latch not for want of a re-assertion but because the re-assertion no longer reaches
  * them.
+ * The queued backlogs (#1138) latch for the CLOSEST reason to those rows and by the same mechanism
+ * turned one notch further: their re-assertion exists, is push-only like the two menus, and arrives on
+ * the `connected` edge — but the daemon re-sends `queue_state` only for a NON-EMPTY conversation, so a
+ * conversation that drained while unpaired is re-asserted by nothing at all. Until #1138 the edge's own
+ * whole-map reset covered that gap incidentally; scoping the reset to the reconnecting server's
+ * conversations means the new pairing's first `connected` resolves an empty list and drops nothing. The
+ * residue is a queue rail showing messages the operator's new server never queued and has no way to
+ * retract — and because conversation ids are daemon-side, re-pairing to the same box reuses the id the
+ * phantom is filed under.
  * The last-read marks (#779) latch HARDER than the other seven,
  * because #776 persists them to `localStorage`: they survive not only either switch but the restart
  * after it, so clearing the in-memory slice alone would leave the previous pairing's marks on disk to be
@@ -116,7 +147,8 @@ export interface ClearPairingScopedStateDeps {
  * Unconditional, unlike activateConversation's id gate. That helper guards because clearing a thread
  * the user is still reading would destroy rows that never come back; here the pairing itself is over,
  * so there is no state in which the rows, the conversation id, the session id, the announced model or
- * the read marks or either kind of published menu legitimately survive. All ten clears are idempotent by
+ * the read marks, either kind of published menu, or a queued backlog legitimately survive. All eleven
+ * clears are idempotent by
  * construction — both `reset` arms return their shared `initialTimelineState` / `initialSessionState` BY
  * REFERENCE and the `clear*` setters return their exported `initial*State` — so clearing an already-clear
  * store is a no-op reference that churns no subscriber (notably no `selectItems` re-render, which a fresh
@@ -124,8 +156,8 @@ export interface ClearPairingScopedStateDeps {
  * `Object.is` short-circuits structurally). Where a clear DOES carry a `size === 0` guard, the guard is
  * doing one of two DIFFERENT jobs, and they must not be conflated:
  *
- *   - THE SUBSCRIBER SHORT-CIRCUIT, which `clearAllTimelines`, `clearAllSlashCommandLists` and
- *     `clearAllModelLists` carry.
+ *   - THE SUBSCRIBER SHORT-CIRCUIT, which `clearAllTimelines`, `clearAllSlashCommandLists`,
+ *     `clearAllModelLists`, `clearAllConversations` and `clearAllBacklogs` carry.
  *     Handing the state OBJECT straight back on an empty map makes zustand's `Object.is(next, state)`
  *     fire, so a redundant clear wakes NO listener at all rather than only sparing the selectors. That
  *     is what those guards exist for, rather than to save a `Map` allocation.
@@ -150,7 +182,7 @@ export interface ClearPairingScopedStateDeps {
  *     reset targets `timelineStore`, which that bridge does not subscribe to
  *     (conversationLastReadBridge.ts:207), and none of the remaining effects touches
  *     `conversationTimelineStore`.
- *   - THE THROW. Nine of the ten are pure in-memory store writes that cannot throw. `clearAllLastRead`
+ *   - THE THROW. Ten of the eleven are pure in-memory store writes that cannot throw. `clearAllLastRead`
  *     is the only one with an external side effect, so it is the only one that can. Mid-body, a throw
  *     from it would abort every clear after it — including `clearSessionId`, whose clear is the security
  *     payload below, leaving server A's session id live and addressable while the operator is on server
@@ -167,9 +199,9 @@ export interface ClearPairingScopedStateDeps {
  * after it, was considered and rejected: it buys no additional correctness and reorders pre-existing
  * lines this ticket was not asked to touch.
  *
- * The other nine have no ordering constraint among themselves: they are independent whole-value writes
+ * The other ten have no ordering constraint among themselves: they are independent whole-value writes
  * and none reads another's state. Fully synchronous, so on the renderer's single thread no observer can
- * see a half-cleared set, and React batches all ten into the commit that carries the route change.
+ * see a half-cleared set, and React batches all eleven into the commit that carries the route change.
  * Total — no gate, no return value, no throw path of this function's own.
  *
  * Nothing is logged, deliberately: a diagnostic here would want the conversation `id` / `name` / `cwd`
@@ -207,22 +239,32 @@ export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void
   // Beside the announced model, the other clear of untrusted daemon-relayed text, and the only one that
   // reaches WORKSPACE-authored strings. Nullary like the two whole-map clears around it, so no
   // daemon-supplied conversation id can steer which workspace's verbs survive the boundary. Position is
-  // free among the eight in-memory clears; what is NOT free is that it must precede `clearAllLastRead`.
+  // free among the ten in-memory clears; what is NOT free is that it must precede `clearAllLastRead`.
   deps.clearAllSlashCommandLists()
   // Beside its structural twin, because the two are one fact against two stores: both drop a menu the
   // daemon published unsolicited from the same `initialize` reply. Nullary for the same reason and a
   // sharper one — these rows are CLAUDE-authored, so an id-taking clear would let a daemon-supplied
   // conversation id steer which machine's model identities survive the boundary. Position is free
-  // among the nine in-memory clears; what is NOT free is that it must precede `clearAllLastRead`.
+  // among the ten in-memory clears; what is NOT free is that it must precede `clearAllLastRead`.
   deps.clearAllModelLists()
   // #1086: every server's conversation rows, dropped as one. Nullary like the three whole-map clears
   // above, and for the same argument applied to a sharper input — the ids it declines to take are
   // conversation ids from a list the DEPARTING daemon itself supplied. Unlike its neighbours this one
   // is not here because a dormant slice woke up: keying the list by server removed the self-heal that
   // kept it out (see the header), so this call is the fix for the one regression that keying
-  // introduces. Position is free among the nine in-memory clears — it reaches nothing outside memory
+  // introduces. Position is free among the ten in-memory clears — it reaches nothing outside memory
   // and so cannot throw — but it must precede `clearAllLastRead` like the rest.
   deps.clearAllConversations()
+  // #1138: every conversation's queued backlog, dropped as one. Beside `clearAllConversations` because
+  // the two are one fact against two stores — scoping the `connected` reset to the conversations the
+  // list holds for the reconnecting server is what removed this store's self-heal, so the same ticket
+  // that keys the reset by that list must clear this at the boundary the list is cleared at. Nullary
+  // like the four whole-map clears above, and against the sharpest input yet: the ids it declines to
+  // take are conversation ids, and a queued item's `text` is untrusted daemon-relayed content, so an
+  // id-taking clear would let the departing daemon choose which of its own messages outlive it.
+  // Position is free among the ten in-memory clears — it reaches nothing outside memory and so cannot
+  // throw — but it must precede `clearAllLastRead` like the rest.
+  deps.clearAllBacklogs()
   deps.dispatchSession({ type: 'reset' })
   // LAST, and both halves of that are load-bearing — see the ordering constraint above. After
   // `clearAllTimelines()`, so the #777 listener's synchronous re-mint of the open conversation's mark is

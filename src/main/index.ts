@@ -23,7 +23,7 @@ import { selectRelayPolicy } from './relayPolicy'
 import { selectWindowPresentation, type WindowPresentation } from './windowPresentation'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
-import { registerUnpairHandler } from './unpairHandler'
+import { registerUnpairHandler, registerUnpairServerHandler } from './unpairHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
 import { registerHostLabelHandler } from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
@@ -442,8 +442,8 @@ app.whenReady().then(() => {
   // every record gone it stops and drops every connection and installs the not-paired stand-in, whose
   // dial settles at failed(not-paired) exactly as the single connection's `reconnect()` did. It never
   // sets the registry's permanent stopped flag, so a later re-pair still connects. `clear()` still
-  // erases the WHOLE collection here — the per-server erase is #1090's UI over `clearServer`, and the
-  // registry already answers it by dropping that one connection alone.
+  // erases the WHOLE collection here — that is now the NARROWER of two registrations: #1149 added
+  // the per-server arm below, and #1152 migrates this one's last caller and deletes this block.
   // Registering this late is safe for the same reason the pairing handler is (above): the
   // whole whenReady callback runs to completion in one tick, and no caller races it — the visible
   // unpair UI is #166/#167, many ticks later, after first paint. `will-quit` removes the handler,
@@ -460,6 +460,30 @@ app.whenReady().then(() => {
     hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterUnpair())
+
+  // The per-server unpair request (#1149): forget ONE named machine, leaving every other record on
+  // disk and every other connection live. Reuse the SAME pairedServerStore and hostLabelStore — do
+  // not construct second ones — and the SAME `reconcile()` callback, which is exactly why this can
+  // share a wiring shape with the whole-collection arm above: reconcile reads the store and makes
+  // the connection set match it, so with one record gone it stops and drops that one connection and
+  // leaves the rest un-handshaken (connectionRegistry already proves this; nothing there changes).
+  //
+  // A SEPARATE registration on a separate channel, not a second request shape on the one above. The
+  // handler is typed against `clearServer` alone — no whole-collection `clear`, no read of any kind
+  // — so a malformed or unknown-id request structurally cannot reach the wipe this ticket exists to
+  // prevent, and no bearer token can be materialised in that module. `pairedServerStore` satisfies
+  // the narrow handle structurally; the narrowing lives in the handler, not here.
+  //
+  // Registering this late is safe for the same reason the two above are: the whole whenReady
+  // callback runs to completion in one tick and no caller races it — the visible per-server unpair
+  // control is #1090's UI, many ticks later. `will-quit` removes the handler, symmetric with the
+  // other two.
+  const unregisterUnpairServer = registerUnpairServerHandler(ipcMain, {
+    store: pairedServerStore,
+    onUnpaired: () => registry.reconcile(),
+    hostLabel: hostLabelStore
+  })
+  app.on('will-quit', () => unregisterUnpairServer())
 
   // Every window this app opens goes through here (#519): the first one below, and each dock-reopened
   // replacement from the `activate` handler at the bottom. The two halves of #519 meet in this one

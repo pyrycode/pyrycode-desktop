@@ -405,11 +405,52 @@ describe('createPairedServerStore — more than one paired server', () => {
     await paired.save(RECORD)
     const writesAfterSave = writes.length
 
-    await expect(paired.clearServer('never-paired')).resolves.toBeUndefined()
+    // The outcome reports the no-match — this is the ONLY way a caller can tell "erased" from
+    // "there was nothing under that id", since neither writes and both resolve (#1149).
+    await expect(paired.clearServer('never-paired')).resolves.toEqual({
+      matched: false,
+      remaining: 1
+    })
 
     expect(writes).toHaveLength(writesAfterSave)
     expect(await paired.list()).toEqual([RECORD])
     expect(store.has(PAIRED_SERVER_NAME)).toBe(true)
+  })
+
+  // --- the erase outcome (#1149) ---------------------------------------------------------------
+  // Both fields are computed inside the mutate queue from the same read() the filter used, so a
+  // caller needs no follow-up read to learn whether anything matched or whether anything remains —
+  // which is what lets unpairHandler's per-server arm hold NO read capability at all.
+  it('clearServer reports the match and what remains, without a second read (#1149)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const paired = createPairedServerStore({ secureStore })
+
+    await paired.save(RECORD)
+    await paired.save(SECOND)
+    await paired.save(THIRD)
+
+    expect(await paired.clearServer(SECOND.server)).toEqual({ matched: true, remaining: 2 })
+  })
+
+  it('clearServer reports remaining 0 when the final entry goes (#1149)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const paired = createPairedServerStore({ secureStore })
+
+    await paired.save(RECORD)
+
+    // The host-label rule keys off exactly this: the label is erased only when nothing is left to
+    // describe. A `remaining` that over-reported here would wipe a still-paired server's name.
+    expect(await paired.clearServer(RECORD.server)).toEqual({ matched: true, remaining: 0 })
+  })
+
+  it('clearServer on an empty store reports no match and nothing remaining (#1149)', async () => {
+    const { secureStore, writes } = fakeSecureStore()
+    const paired = createPairedServerStore({ secureStore })
+
+    // matched:false even though remaining is 0 — "nothing was erased" and "nothing is left" are
+    // separate answers, and the handler refuses on the first without consulting the second.
+    expect(await paired.clearServer('never-paired')).toEqual({ matched: false, remaining: 0 })
+    expect(writes).toHaveLength(0)
   })
 
   it('clear() still empties the whole collection, so no token survives an unpair (AC4)', async () => {

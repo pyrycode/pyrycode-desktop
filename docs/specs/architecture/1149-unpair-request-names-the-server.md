@@ -316,6 +316,18 @@ so their non-use is asserted, while the production dep type structurally exclude
 2. Does `ipcMain` still satisfy a two-argument `handle` target? Expected yes — `registerPairingHandler`
    does exactly this today. Confirmed by `npm run build` in Phase B; a revision entry lands here if not.
 
+## Revisions
+
+**2026-09-06 — both Open Questions resolved, design unchanged.**
+
+1. Unknown id vs failed erase: implemented as planned — both map to `error`, the `UnpairResult` union
+   gained no member.
+2. `ipcMain` and a two-argument `handle` target: confirmed. `npm run build` typechecks both process
+   sides with `registerUnpairServerHandler(ipcMain, …)` at the composition root, exactly as
+   `registerPairingHandler` already does.
+
+No departure from the committed design; no contract, ordering or dep type differs from § Design.
+
 ## Security review
 
 **Verdict:** PASS

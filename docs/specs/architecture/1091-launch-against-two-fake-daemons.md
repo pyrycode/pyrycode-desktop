@@ -261,6 +261,40 @@ No store, no React and no production async work is added; this is Playwright tes
 
 Each is resolved in Phase B and recorded under `## Revisions` if it changed the design.
 
+## Revisions
+
+### 2026-09-06 — Phase B
+
+**Open question 1 resolved — the first server's row survives the second pairing.** Observed: after the
+second pairing lands and the second row appears, the first server's row is still present and still
+carries its own name, and the AC3 push through the second daemon alone moves only the second row. So
+whatever the app-wide session status does when the second connection arrives, it neither clears the
+list nor re-attributes a row. #1141's "pairing another server clears nothing" holds end to end. No
+design change.
+
+**Open question 2 resolved — the poll converges immediately, and stays.** The whole spec runs in well
+under a second on this machine, so the second daemon's handshake has already split by the time the
+post-Confirm `Conversations` gate resolves and the first push lands the row. The retry is therefore
+insurance for a cold runner rather than a loop that routinely spins — which is the right shape either
+way, because there is still no exposed readiness signal to wait on instead. No design change.
+
+**Departure 1 — `SECOND_SEEDED_ROW.name` was renamed to share no substring with `SEEDED_ROW.name`.**
+The plan did not constrain the second row's name beyond "its own name". The first implementation used
+`'Seeded discussion on server two'` and the spec failed: Playwright's `hasText` is a case-INSENSITIVE
+SUBSTRING match, so a filter for the first row's `'Seeded discussion'` selected BOTH rows. The fix is
+at the constant, not in the spec — the per-server tickets riding this fixture (#1070, #1150, #1152)
+are precisely the ones that will filter rows by name, and a prefix relationship would make one
+server's row filter silently select the other's. The name is now `'Server two chat'`, and the
+constant's docblock records why.
+
+**Departure 2 — two new `TeardownStep` labels.** The plan said each drain step keeps its fixed-literal
+label but did not say where the second server's two labels come from. `TeardownStep` in
+`e2e/fixtures/desktopIsolation.ts` is a closed union precisely so no free-form string can reach the
+report, and its own note says adding a resource to a drain adds its label there. So that file gains
+`'daemon-2'` and `'forwarder-2'` — a third `e2e/` file touched, still no production file. Reusing
+`'daemon'` / `'forwarder'` for both servers was rejected: it would leave a drain failure unable to say
+which of the two failed, which is the exact legibility #1127 added the labels for.
+
 ## Security review
 
 **Verdict:** PASS

@@ -162,7 +162,13 @@ const EXIT_SETTLE_TIMEOUT_MS = 2_000
 
 /** The teardown steps a drain can fail at, as fixed literals. Adding a resource to a site's drain adds
  *  its label here — which is the point: no free-form string can reach the report. */
-export type TeardownStep = 'app' | 'daemon' | 'forwarder' | 'user-data-dir'
+export type TeardownStep =
+  | 'app'
+  | 'daemon'
+  | 'forwarder'
+  | 'daemon-2'
+  | 'forwarder-2'
+  | 'user-data-dir'
 
 /** What the harness knows about one launched Electron process once the test is over. */
 export type LaunchFate = {

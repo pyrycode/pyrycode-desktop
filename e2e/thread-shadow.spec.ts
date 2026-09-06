@@ -105,13 +105,17 @@ const toolUseFrame = (): Uint8Array =>
   })
 
 /** A `/clear` boundary -> a `sessionBoundary` item, rendered as `.session-delimiter`. `workspace_cwd` is
- *  literal null for `clear`, per the wire contract; there is no conversation_id on this payload. */
+ *  literal null for `clear`, per the wire contract. `conversation_id` names the chat whose session rotated
+ *  and is REQUIRED since #1192 — a frame without it fails the decode and draws no delimiter at all. It
+ *  names the seeded row here because that is the chat this drive has open; the delimiter's own placement
+ *  does not read it (`conversationIdOf` still files this arm into the conversation on screen). */
 const sessionTransitionFrame = (): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'session_transition',
     ts: FIXED_TS,
     payload: {
+      conversation_id: SEEDED_ROW.id,
       previous_session_id: 'session-shadow-a',
       new_session_id: 'session-shadow-b',
       reason: 'clear',

@@ -59,6 +59,7 @@ describe('translateQueueState', () => {
       { type: 'conversationsReceived', conversations: [] },
       {
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 's1',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',

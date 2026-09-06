@@ -40,10 +40,13 @@ function assertNever(route: never): never {
  * It also keeps an empty-string id an ordinary key instead of collapsing it into "nothing open" the way
  * a truthiness test would.
  *
- * This is NOT the `?? activeConversation` fallback `events.ts:115-117` bans. That ban is about an arm
- * that HAS a routing key being made optional so a consumer can paper over a missing one. These two arms
- * carry no key on the wire and never will, and `timelineWriteTarget` enumerates them by name — an
- * attributed arm never reaches this read at all.
+ * This is NOT the `?? activeConversation` fallback the `unrecognizedMessage` arm in `events.ts` bans.
+ * That ban is about an arm that HAS a routing key being made optional so a consumer can paper over a
+ * missing one. Neither of these two arms is attributed by `conversationIdOf`, and `timelineWriteTarget`
+ * enumerates them BY NAME — an attributed arm never reaches this read at all. The enumeration is what
+ * makes that safe, and #1192 is why it has to be: `sessionTransition` now carries a routing key on the
+ * wire, this bridge still does not read it, and a name-by-name list says so deliberately where a
+ * "carries no key" rationale would just have gone quietly false.
  *
  * Injected as a parameter rather than imported by the bridge, which keeps that module's grep-checkable
  * import ban (`timelineBridge.ts`, on `timelineTargetFor`) literally true.
@@ -104,9 +107,11 @@ function App(): JSX.Element {
   // one daemon-event channel (#202), folding the v2 structured stream into timelineStore. App-lifetime
   // and unconditional, matching the coarse bridge; both deref window.pyry only inside their effect, so
   // the <App/> server-render test stays ''. Inert until #179 flips `interactive` (no stream arrives).
-  // #785 injects the open-conversation read, so the two timeline arms carrying no conversation id —
-  // the session boundary and the reconnect chrome reconcile — file into the thread on screen instead of
-  // being dropped from the keyed store. The module-level constant above is what keeps this one
+  // #785 injects the open-conversation read, so the two timeline arms this bridge does not attribute
+  // from the event — the session boundary and the reconnect chrome reconcile — file into the thread on
+  // screen instead of being dropped from the keyed store. Since #1192 the boundary's wire payload does
+  // carry a conversation id; routing the delimiter by it is a separate deliverable, so this read still
+  // covers both. The module-level constant above is what keeps this one
   // subscribe for the app's lifetime; passing an inline arrow here would resubscribe every render.
   useTimelineBridge(openConversationId)
   // #224: the modal bridge is the third independent subscriber on the one daemon-event channel (#202),

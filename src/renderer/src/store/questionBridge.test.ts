@@ -247,6 +247,7 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
       { type: 'workspaceFolderRejected' },
       {
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',

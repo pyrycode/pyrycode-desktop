@@ -512,8 +512,9 @@ describe('session-transition wire vocabulary (#254)', () => {
     expect(reasons).toEqual(['clear', 'idle_evict', 'workspace_change'])
   })
 
-  it('shapes SessionTransitionPayload as its five fields with workspace_cwd nullable, no conversation_id', () => {
+  it('shapes SessionTransitionPayload as its six fields, conversation_id first and workspace_cwd nullable', () => {
     const payload: SessionTransitionPayload = {
+      conversation_id: 'conv-1',
       previous_session_id: 'sess-1',
       new_session_id: 'sess-2',
       reason: 'clear',
@@ -521,14 +522,19 @@ describe('session-transition wire vocabulary (#254)', () => {
       workspace_cwd: null
     }
     expect(payload).toEqual({
+      conversation_id: 'conv-1',
       previous_session_id: 'sess-1',
       new_session_id: 'sess-2',
       reason: 'clear',
       occurred_at: '2026-07-10T00:00:00.000000000Z',
       workspace_cwd: null
     })
-    // No conversation_id — a session boundary is attributed by the connection it arrives on (SSOT #656).
-    expect(payload).not.toHaveProperty('conversation_id')
+    // `conversation_id` IS on the wire and always present (#1192): the daemon resolves the owning
+    // conversation from NewSessionID once per transition and drops the event rather than emitting one
+    // it cannot bind (upstream #740/#741). This port asserted the opposite until #1192, which was a
+    // fact about the port and never about the daemon — and it is why the marker, pushed unsolicited,
+    // has an attribution at all.
+    expect(payload).toHaveProperty('conversation_id')
     // workspace_cwd is a valid non-null path only for workspace_change.
     const moved: SessionTransitionPayload = {
       ...payload,

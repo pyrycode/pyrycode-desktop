@@ -421,8 +421,9 @@ export const test = base.extend<PairedAppFixtures>({
         // The push doubles as the connected gate, the way the row click above is the first server's.
         // `pushFrame` is a documented no-op outside the daemon's `transport` state and `whenSettled()`
         // resolves only on a first REPLY (which this daemon will never receive), so neither the daemon
-        // nor the app exposes a "server 2 connected" signal today — the sidebar's two dots read app-wide
-        // singleton selectors, and per-server dots are #1070's AC4. Hence the poll: before the handshake
+        // nor the app exposes a "server 2 connected" signal today. (The sidebar's two dots became a
+        // per-server read in #1199, but they report the FIRST paired server, so they still say nothing
+        // about server 2's handshake — which is what this poll is waiting on.) Hence the poll: before the handshake
         // splits the push is inert and the count stays at one; the first push after it lands the row.
         // Re-pushing is harmless — `setConversations` replaces that server's whole slot — so this
         // converges rather than accumulating. The polled value is a small integer, so a timeout reports

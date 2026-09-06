@@ -305,3 +305,32 @@ Each resolution lands in a `## Revisions` entry if it changes the design.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-06
+
+## Revisions
+
+### 2026-09-06 — the two-server label assertion is blocked on a pre-existing main-side bug (#1200)
+
+**What changed.** The e2e spec ships AC4 (the per-server dots) green and carries AC3's two-server label
+assertion as a `test.skip` linked to #1200. No production code changed as a result; the design above
+stands unaltered.
+
+**What drove it.** Open question 1 asked whether the keyed main-side read answers for a fixture pairing.
+It does — for ONE server. With a second server paired it does not, and neither does the unkeyed read:
+after a `launchPairedApp({ hostLabel }, { secondServer: {} })`, `window.pyry.hostLabelFor(id)` answers
+`not-stored` for both ids and `window.pyry.hostLabel()` answers `not-stored` too, while `serverInfo`
+still reports both servers. Pairing a second server erases the first server's stored label.
+
+That is main-side and predates this ticket: the unkeyed query is answered entirely in the background
+process and was the row's only label source before #1199, so it reproduces against the pre-#1199
+renderer. Fixing it would mean editing production code outside this ticket's scope, so it is filed as
+#1200 and the assertion that surfaced it is skipped with that link rather than debugged here.
+
+**What still covers AC3.** The store's per-server independence is proven at the unit tier, and the
+single-server end-to-end path — the row showing the label stored for the server it names — is proven by
+`e2e/host-label-sidebar.spec.ts`, which now runs through this ticket's keyed read and passes.
+
+**Open questions 2 and 3, resolved.** The `serverId` prop stayed: it is read by the dot subtree on every
+render, so it is not an unused pass-through. The relay slot does fill in the fake tier — the spec's
+baseline is read from the live render either way, and the daemon dot is asserted connected explicitly,
+which is what makes the drop a detector. Verified by mutation: reverting `HostConnectionDotsControl` to
+the app-wide reads and rebuilding reddens the spec at the AC4 assertion.

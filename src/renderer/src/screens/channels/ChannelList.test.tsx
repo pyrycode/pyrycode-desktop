@@ -505,7 +505,15 @@ describe('ChannelListView', () => {
       // comment): React's server renderer resolves `useSyncExternalStore` through `getServerSnapshot()`
       // and zustand wires that to the state captured at store CREATION, so a seeded container can only
       // ever render the initial `loading` cell.
-      const renderHostRow = (label: string): string => renderToStaticMarkup(<HostRow label={label} />)
+      //
+      // `serverId={null}` (#1199) is the row's LAUNCH FRAME — the paired-server one-shot has not
+      // resolved, so the row names nobody. It is the only value this tier can meaningfully render: the
+      // dot subtree reads two singletons through the same `getServerSnapshot()` seam, so a non-null id
+      // would address slots the server renderer always sees empty and produce the identical markup. AC5
+      // is exactly the claim that this frame is unchanged, so pinning it here is the point rather than a
+      // limitation. The named-server matrix is the e2e tier's (`host-row-per-server.spec.ts`).
+      const renderHostRow = (label: string): string =>
+        renderToStaticMarkup(<HostRow label={label} serverId={null} />)
 
       // Read the SHIPPED fallback back out of the collapse rather than restating 'Server', the same
       // discipline `hostLabelsIn` applies to the render — a copy change that collides with a section

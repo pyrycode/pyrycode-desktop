@@ -302,8 +302,12 @@ that a later scenario needed.
     other's forwarder URL — a mismatch whose only symptom would be a handshake that silently never
     completes.
 
-  **Deliberately not provable through this fixture:** two sidebar *host* rows and per-server connection
-  *dots*. `ChannelList` still renders one `.channel-list__host` row off a single-valued `hostLabelStore`,
-  and its two dots read app-wide singleton selectors — both are #1070's own AC1/AC4, and its spec rides
-  this fixture rather than this one asserting them. The proof lives in `e2e/multi-server-launch.spec.ts`;
-  design notes in `docs/specs/architecture/1091-launch-against-two-fake-daemons.md`.
+  **Deliberately not provable through this fixture:** two sidebar *host* rows. `ChannelList` still
+  renders one `.channel-list__host` row per tree, naming the first paired server — a second row per
+  tree is #1070's own AC1, and its spec rides this fixture rather than this one asserting it. The
+  **per-server connection dots** half of this gap closed in
+  [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199): the row's two dots now read
+  `selectStatusFor`/`selectRelayLinkStatusFor` keyed by the named server's own id, proved by
+  `e2e/host-row-per-server.spec.ts` riding this same two-daemon launch. See [Channel List — the host row
+  and its connection dots](channel-list-host-row.md). Design notes in
+  `docs/specs/architecture/1091-launch-against-two-fake-daemons.md`.

@@ -269,7 +269,7 @@ draws nothing in that region (see [above](#structure)). What survives in this fi
 exported pure mapping functions below: `relayLeg`/`daemonLeg`/`ConnectionLeg` are still imported by
 `channels/ChannelList.tsx`, whose `HostConnectionDots` (#718) has rendered the same two legs on the
 sidebar's host row since before this ticket and is now the app's **only** two-dot connection surface.
-See the [Channel List home screen](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
+See the [Channel List home screen](channel-list-host-row.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
 doc for the current UI, and [below](#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
 for what replaced the row that hosted this indicator.
 
@@ -343,7 +343,7 @@ four categories and carries no success/failure valence. `.conn-leg__label` (`.st
 per-leg text, retired with it) was `body-small` on `--color-on-surface-variant`, `white-space: nowrap`
 — `.conn-dot`, the shared 8px-circle base both this indicator and the sidebar dot once could have worn,
 had no consumer once this indicator went and was deleted with it; **[#962 confirmed that before
-deleting it](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)** — the
+deleting it](channel-list-host-row.md#the-host-rows-connection-dots-channellisttsx-added-by-718)** — the
 sidebar dots wear the four category modifiers flat, with no base class, and always have.
 
 Not security-sensitive: pure presentation over already-classified, content-free store state (#328's
@@ -362,7 +362,7 @@ mapping above — stayed in this file and are imported into `channels/ChannelLis
 `HostConnectionDots` (#718) has rendered the same two legs as a label-less dot pair on the sidebar's
 host row (host leg first, the reverse of this section's retired `ConnectionStatusIndicator(relay,
 daemon)` order) since before this ticket, and is now the app's only two-dot connection surface. See the
-[Channel List home screen](channel-list.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
+[Channel List home screen](channel-list-host-row.md#the-host-rows-connection-dots-channellisttsx-added-by-718)
 doc and [#718 codebase notes](../codebase/718.md) for the sidebar's own design, and
 [below](#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
 for what happened to the row and trigger that used to sit either side of this indicator.

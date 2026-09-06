@@ -95,6 +95,12 @@ paired-server collection (at rest) → registerServerInfoHandler (#339/#1148) �
   mounts `<ServerInfoData />` directly inside `SettingsScreen`'s section-body, not app-level) — so a
   same-session pair is reflected on next Settings-open rather than requiring a relaunch (an app-level
   launch-time fetch would race pairing and permanently cache `unavailable`).
+- **A second mount site since [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199):**
+  `ChannelList` (`src/renderer/src/screens/channels/ChannelList.tsx`) also mounts `<ServerInfoData />`,
+  beside `<HostLabelData />` — the same idiom applied to the screen that draws the sidebar host row,
+  which needs the list to know *which* server(s) to name and to read a label for. Two independent
+  mounts, not a duplicate: the store holds one list and each mount re-reads it on its own lifetime. See
+  [Channel List — the host row and its connection dots](channel-list-host-row.md).
 
 ## Edge cases and limitations
 
@@ -127,6 +133,9 @@ paired-server collection (at rest) → registerServerInfoHandler (#339/#1148) �
 - [#340 codebase notes](../codebase/340.md) — implementation summary and patterns established.
 - [Settings screen](settings-screen.md) / [#334 codebase notes](../codebase/334.md) — mounts
   `<ServerInfoData />` and renders the Server row that reads this store.
+- [Channel List — the host row and its connection dots](channel-list-host-row.md) /
+  [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) — the second mount site; reads
+  `servers[0]` to decide which server the sidebar host row names.
 - [Settings screen](settings-screen.md) —
   [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) widened this store from one value to
   a list and renders one Server row per entry via the new `ServerRows` view · Spec:

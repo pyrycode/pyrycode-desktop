@@ -3,7 +3,7 @@
 The presentational leaf of a sidebar row: `ConversationStatusDot({ status })` takes one already-resolved
 [`ConversationStatus`](conversation-status.md) and draws it as a single dot. It reads no store, resolves
 nothing — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires it into
-[`ChannelList`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874)'s rows, its only
+[`ChannelList`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874)'s rows, its only
 consumer.
 
 Introduced in [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800), split from #676.
@@ -99,7 +99,7 @@ design-notes status table (2026-08-21) rather than from a node — see
 - File: `src/renderer/src/screens/channels/ConversationStatusDot.tsx`. One export:
   `ConversationStatusDot({ status: ConversationStatus })`.
 - Styles: appended block in `src/renderer/src/screens/channels/channels.css`.
-- One consumer: [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)
+- One consumer: [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801)
   (#801), which resolves a row's status via [`resolveConversationStatus`](conversation-status.md) and
   passes the result straight in as the row's leading child.
 
@@ -121,7 +121,7 @@ design-notes status table (2026-08-21) rather than from a node — see
   a 24px frame centred at y=12), and #801 found that offset doesn't port onto the shipped row at all (which
   isn't the design's 24px frame — different padding, a larger title scale, a trailing time the design node
   lacks). #801 centres the dot on the row instead of reproducing that offset; see [Channel
-  List](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801) for the measurement.
+  List](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801) for the measurement.
 - **`.conversation-status-dot`'s `flex: 0 0 auto` (`channels.css:848`) is now inert.** It dates from before
   this component had a consumer, written for a flow-laid-out dot; #801's sole call site takes the dot out
   of flow with `position: absolute` instead, so the flex property never applies. Flagged by #801's code
@@ -140,7 +140,7 @@ design-notes status table (2026-08-21) rather than from a node — see
 - [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
   — the `ConversationStatus` type and `resolveConversationStatus` this component's prop is typed against;
   this ticket is that module's first consumer.
-- [Channel List home screen](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874) — the
+- [Channel List home screen](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874) — the
   screen this dot leads each row of, since #801; also the source of the `HostConnectionDots`
   labelled-dot shape this component's markup follows.
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)

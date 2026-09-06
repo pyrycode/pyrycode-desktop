@@ -10,16 +10,34 @@ import {
   selectDefaultWorkspace
 } from '../../store/defaultWorkspaceStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
-import { useSessionStore, selectStatus } from '../../store/sessionStore'
-import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
-// #834's read path, shipped dormant by #833 and mounted here. `HostLabelData` is the headless one-shot
-// invoke; the store binding + selector feed the row. Nothing else in this file touches either.
+// #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
+// untouched in name, signature and value; the host row is simply no longer a reader of either.
+// `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
+// control, `composerSend`); `selectRelayLinkStatus` keeps NONE — this row was its last production
+// reader, and retiring it is deliberately out of scope here (its own header records that). Each
+// store's INITIAL cell is imported too —
+// it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
+// same constant it has always rendered rather than to a literal restated here.
+import { useSessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
+import {
+  useRelayLinkStore,
+  selectRelayLinkStatusFor,
+  initialRelayLinkState
+} from '../../store/relayLinkStore'
+// #834's read path, shipped dormant by #833 and mounted here, re-keyed by server id in #1199.
+// `HostLabelData` is the headless one-shot invoke; the store binding + keyed selector feed the row.
+// Nothing else in this file touches either.
 import {
   useHostLabelStore,
-  selectHostLabel,
+  selectHostLabelFor,
   type HostLabelValue
 } from '../../store/hostLabelStore'
 import { HostLabelData } from '../../store/hostLabelLoader'
+// #1199: the paired-server list is what tells the row WHICH machine it names, and it is the list #1070
+// then iterates to draw one row per server. `ServerInfoData` is the shipped one-shot that fills it,
+// mounted here beside `HostLabelData` — the Settings idiom applied to the screen that draws the row.
+import { useServerInfoStore } from '../../store/serverInfoStore'
+import { ServerInfoData } from '../../store/serverInfoLoader'
 // #801's three per-row reads, #874's fourth, and the two pure modules that reduce them. All six are
 // consumed EXACTLY as shipped: none takes a `conversationId` except the four selector FACTORIES, which is
 // what keeps the untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-33,
@@ -150,6 +168,15 @@ export function ChannelList({
           what keeps `hostLabelStore` out of `clearPairingScopedState`: it re-asserts itself on remount,
           which is that file's stated exclusion (the `serverInfoStore` worked example). */}
       <HostLabelData />
+      {/* #1199: the paired-server one-shot, mounted beside the label one-shot for the same reasons and
+          with the same lifetime. It renders null, so DOM order is immaterial, and it dereferences
+          `window.pyry` only inside its effect. `HostLabelData` reads the list this fills, so the launch
+          sequence is: this resolves → `serverInfoStore` fills → one keyed label read per paired server.
+          Every frame before that renders the fallback word and the two stores' initial dot pair, which
+          is exactly what the row shows at launch today (AC5). Settings and ConversationScreen each mount
+          their own instance; a second one here is the established posture, not a duplicate — the store
+          holds one list and each mount re-reads it. */}
+      <ServerInfoData />
       <ChannelListView
         conversations={conversations}
         openConversationId={openConversationId}
@@ -413,7 +440,24 @@ export function hostRowLabel(value: HostLabelValue): string {
 // The glyph is a sixth inline Material path in this file's existing idiom — the `dns` server-rack, sized
 // 12px per the Figma node rather than the 24px the interactive buttons use, so it reads as a level marker
 // rather than a control.
-export function HostRow({ label }: { label: string }): JSX.Element {
+// #1199 gave the row a `serverId`: WHICH machine it is about. The label arrives already resolved to text
+// (the container ran `hostRowLabel`), so the id is here for the dot subtree alone — pure pass-through,
+// rendered nowhere. It is a prop rather than a second store read inside the dots so the row's identity
+// is single-sourced, and because it is the shape #1070's loop needs when this becomes one row per server.
+//
+// `null` means "the paired-server list has not resolved yet", which is every launch's first frame.
+//
+// THE ID GETS THE LABEL'S FOUR-SINK TREATMENT, plus the one a keyed store invites: the KEY is the server
+// id and the VALUE is the label, never the reverse. Neither becomes an attribute, a class name, a React
+// key, a title, a URL, a lookup path or a log line. The id's only use in this subtree is as an argument
+// to the three per-server selector factories.
+export function HostRow({
+  label,
+  serverId
+}: {
+  label: string
+  serverId: string | null
+}): JSX.Element {
   return (
     <div className="channel-list__host">
       <svg
@@ -427,19 +471,35 @@ export function HostRow({ label }: { label: string }): JSX.Element {
         <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
       </svg>
       <span className="channel-list__host-label">{label}</span>
-      <HostConnectionDotsControl />
+      <HostConnectionDotsControl serverId={serverId} />
     </div>
   )
 }
 
 // The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
 // single shipped slice, pass it through the pure collapse, render the pure view. Nothing else. The row
-// READS and never writes; `setHostLabel` keeps exactly one caller, the loader mounted in `ChannelList`.
+// READS and never writes; `setHostLabelFor` keeps exactly one caller, the loader mounted in `ChannelList`.
 // Module-private like its neighbour: production renders it from `renderBody` alone, and the unit tier
 // reaches everything it can prove through `hostRowLabel` and `HostRow` instead.
+// #1199 resolves WHICH server this row is about, once, and hands it down. The first paired server —
+// `serverInfoStore` holds them in `pairedServerStore.list()` order, oldest-paired first, so "the first"
+// is a stable, user-determined choice rather than whichever connection last spoke. The row stays SINGLE
+// here; #1070 turns this read into the loop that draws one row per paired server.
+//
+// TAKEN FROM THE CLIENT'S OWN LIST, NEVER FROM THE WIRE. `serverInfoStore` is filled from
+// `window.pyry.serverInfo()`, which main answers out of its paired records — the same rule
+// `conversationListStore`'s `selectConversationsFor` header states for its own read. A daemon-supplied
+// lookup key would let a confused or hostile server put one machine's name and connection onto another
+// machine's row, which is precisely the failure this ticket exists to remove.
+//
+// An inline arrow returning a PRIMITIVE, the `openConversationId` idiom twenty lines up: value-stable
+// under `useSyncExternalStore`, so the fresh closure per render costs one allocation and one `Object.is`
+// and never a re-subscription. `?? null` rather than a truthiness test, so an empty-string id would stay
+// an ordinary key instead of collapsing into "no server named".
 function HostRowControl(): JSX.Element {
-  const hostLabel = useHostLabelStore(selectHostLabel)
-  return <HostRow label={hostRowLabel(hostLabel)} />
+  const serverId = useServerInfoStore((s) => s.servers[0]?.serverId ?? null)
+  const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
+  return <HostRow label={hostRowLabel(hostLabel)} serverId={serverId} />
 }
 
 /**
@@ -514,10 +574,41 @@ export function HostConnectionDots({
 // rather than the design's "Host" or the visible row's "Server" — deliberately, since any other word would
 // re-derive the label half of #330's contract, and this dot reports the pyry DAEMON SESSION, not the
 // machine: a machine can be up while the daemon is not, and this dot goes red in that case.
-function HostConnectionDotsControl(): JSX.Element {
-  const daemonStatus = useSessionStore(selectStatus)
-  const relayStatus = useRelayLinkStore(selectRelayLinkStatus)
-  return <HostConnectionDots host={daemonLeg(daemonStatus)} relay={relayLeg(relayStatus)} />
+//
+// #1199 BOUND BOTH READS TO ONE SERVER. `selectStatus` / `selectRelayLinkStatus` are "the most recently
+// written status across every connection", so with two machines paired this row reported whichever
+// connection last moved — the other machine's flap steering this machine's dots. Both per-server
+// selectors (#1133, #1134) shipped for exactly this consumer and are read here with a CLIENT-HELD id,
+// never a wire-supplied one, which is the rule `relayLinkStore`'s own header states.
+//
+// THE SILENT-SERVER COLLAPSE, and why it is written as two constants rather than two literals. Both
+// per-server selectors answer `undefined` for a server that has reported nothing yet — deliberately
+// undefaulted, so "not heard from" stays distinct from a reported state — while `daemonLeg` takes a
+// non-optional `ConnectionStatus` and `relayLeg` takes `RelayLinkStatus | null`. So this row has to
+// decide what a silent server's dots look like, and it lands them on each store's OWN INITIAL CELL:
+// `initialSessionState.status` (→ down, "Pyrycode Offline") and `initialRelayLinkState.status` (→
+// `null`, hence unknown, "Relay Unknown"). That is not a fifth category and not a guess — it is
+// literally the pair this row has rendered on every launch frame since #718, back when both reads were
+// app-wide and both stores were untouched. Reading the constants rather than restating `{ type:
+// 'disconnected' }` and `null` is what keeps that true if either store ever changes its initial cell.
+//
+// A `null` serverId — the frames before the paired-server one-shot resolves — never reaches a keyed
+// selector. `StatusOrigin` and `RelayLinkOrigin` both admit `null` as a REAL slot key (unstamped writes
+// land there), so passing it through would read someone else's cell rather than answering "not known";
+// the branch is what makes the no-server-named frame fall on the same collapse as a silent server.
+function HostConnectionDotsControl({ serverId }: { serverId: string | null }): JSX.Element {
+  const daemonStatus = useSessionStore((s) =>
+    serverId === null ? undefined : selectStatusFor(serverId)(s)
+  )
+  const relayStatus = useRelayLinkStore((s) =>
+    serverId === null ? undefined : selectRelayLinkStatusFor(serverId)(s)
+  )
+  return (
+    <HostConnectionDots
+      host={daemonLeg(daemonStatus ?? initialSessionState.status)}
+      relay={relayLeg(relayStatus ?? initialRelayLinkState.status)}
+    />
+  )
 }
 
 // The workspace row heading each group under a host row (#703, Figma 106:3098) — which workspace the

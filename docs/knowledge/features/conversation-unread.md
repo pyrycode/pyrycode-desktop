@@ -14,7 +14,7 @@ still-undecided question of where the two-store composition below lives.
 predicate's *output* rather than its inputs: it takes the resulting `boolean` as a parameter and joins it
 with the activity store's four facts. It does not call `isConversationUnread` itself and never touches
 this file's two source stores — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) landed
-that composition, in [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801),
+that composition, in [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801),
 per row, keyed by the row's own conversation id.
 
 ## What it does
@@ -82,7 +82,7 @@ ticket adds one new file that reads both selectors' outputs and nothing else.
 - One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) (the #676 split's final
   ticket) composes `useConversationTimelineStore(selectTimelineFor(id))` and
   `useConversationLastReadStore(selectLastReadFor(id))` at its own render site
-  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
+  ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
   calls this predicate — a `useConversationUnread(id)` hook was considered and declined, since this repo's
   vitest runtime has no DOM and a hook would ship an untestable surface.
 

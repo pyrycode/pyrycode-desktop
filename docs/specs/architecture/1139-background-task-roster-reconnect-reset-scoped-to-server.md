@@ -291,12 +291,15 @@ spy; real store instances are constructed per test through the DI factories.
 
 ## Open questions
 
-1. **Does `clearAllRosters` return `initialBackgroundTaskRosterState` by reference, or a fresh
-   `new Map()` as today's `resetRosters` does?** Leaning: by reference, matching `clearAllBacklogs`
-   and the other three whole-map clears in the set. Resolve during implementation and record here if
-   the store's existing tests (`initialBackgroundTaskRosterState is an empty map`) force otherwise.
-2. **Does `PairedShell.test.tsx` need an edit?** It does not appear to pin the dep object, but the
-   file is run as part of touched scope and the answer is recorded in § Revisions if it does.
+1. ~~**Does `clearAllRosters` return `initialBackgroundTaskRosterState` by reference, or a fresh
+   `new Map()` as today's `resetRosters` does?**~~ **Resolved as the leaning: by reference**, matching
+   `clearAllBacklogs` and the other four whole-map clears in the set. Nothing forced otherwise — the
+   existing `initialBackgroundTaskRosterState is an empty map` test asserts by value and is unaffected,
+   and the reference is safe to hand out because `rosters` is a `ReadonlyMap` every setter replaces
+   rather than mutates. A new test pins the identity so a later `new Map()` regression reddens.
+2. ~~**Does `PairedShell.test.tsx` need an edit?**~~ **Resolved: no.** It does not pin the dep object,
+   and it passes unchanged. The dep-set tripwire lives in `clearPairingScopedState.test.ts`'s
+   `Object.keys(deps).sort()` pin, which was updated to twelve names.
 3. ~~**Is `resetRosters` referenced anywhere outside the bridge, the store and their two test files?**~~
    **Resolved before the plan commit.** A repo-wide sweep (`src/` and `e2e/`, no path filter) finds
    `resetRosters` in exactly those four files. `BackgroundTaskPanel` — the store's only real reader —

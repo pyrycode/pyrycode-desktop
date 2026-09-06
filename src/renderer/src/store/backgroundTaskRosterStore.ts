@@ -50,9 +50,18 @@
 // neither renders nor interprets either — #568 must render both as INERT PLAIN TEXT (never an HTML
 // sink, an attribute, or a URL) and must never execute or re-shell them. `tasks` is a DISPLAY set; its
 // collection shape is not an invitation to iterate it as a work list something acts on. Nothing here
-// iterates it. Nothing here is persisted either, and it must not be: `resetRosters` on the `connected`
-// edge is what keeps a previous PAIRING's command lines and patches from ever appearing, and web
-// storage would survive that boundary.
+// iterates it. Nothing here is persisted either, and it must not be: what keeps a previous PAIRING's
+// command lines and patches from ever appearing is `clearAllRosters` at the pairing boundary (#1139),
+// and web storage would survive that boundary. Until #1139 the sole guard was `resetRosters` on the
+// `connected` edge; scoping that edge to the reconnecting server moved the pairing half of the
+// guarantee onto the new clear, and the no-persistence obligation is unchanged by the move — it is
+// re-attributed here, not weakened.
+//
+// This store answers to BOTH pairing-lifecycle mechanisms, the `queueStore` posture (#1138): the
+// `connected` edge drops the reconnecting server's rosters (`resetRostersFor`, #573 scoped by #1139)
+// and the pairing-scoped clear (`clearAllRosters`, #1139) lands in `clearPairingScopedState`'s
+// injected dep set. See `createBackgroundTaskRosterStore`'s docblock for why scoping the first one
+// required the second.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { BackgroundTask } from '@shared/wire/types'
@@ -212,13 +221,17 @@ export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
 }
 
-/** Store shape = state + the four mutation entry points: record one conversation's roster, record one
- *  started task, record one task's latest patch, and clear everything on the `connected` edge (AC5). */
+/** Store shape = state + the five mutation entry points: record one conversation's roster, record one
+ *  started task, record one task's latest patch, drop the reconnecting server's rosters on the
+ *  `connected` edge (#573's AC5, scoped by #1139), and drop EVERY conversation's at a pairing boundary
+ *  (#1139). Still named setters, not a discriminated-union action set — that would be ceremony for
+ *  five operations. */
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
   setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
-  resetRosters: () => void
+  resetRostersFor: (conversationIds: ReadonlySet<string>) => void
+  clearAllRosters: () => void
 }
 
 export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { rosters: new Map() }
@@ -289,17 +302,57 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * until a roster contradicts it — already true of every task in this family, because the wire reports
  * no finish.
  *
- * `resetRosters` (AC5) is the `connected` edge: the relay re-emits `connected` on every (re)handshake
- * and a new pairing always re-handshakes, so clearing the WHOLE map here is what keeps a previous
- * connection's — or a previous PAIRING's — tasks from ever appearing, started-sourced ones included.
- * Clearing the map IS returning every conversation to "nothing observed", so no per-key eviction loop is
- * needed. Nothing repopulates it: these frames are not in the daemon's reconcile-on-connect set (that
- * set is outstanding `modal_shown` per pyrycode#877 and `queue_state` per non-empty backlog per
- * pyrycode#878) and this app advertises no `last_event_id`, so the set reads `null` until claude next
- * emits one. That is the correct, honest behaviour — retaining the pre-disconnect set would present a
- * stale list as live (#569 owns closing that gap, and it needs a daemon-side change). Copy-on-write like
- * the setters; returning the SAME state reference when the map is already empty makes zustand's
- * `Object.is` short-circuit fire — no listener churn on a first connect or a reconnect that held nothing.
+ * `resetRostersFor` (#573's AC5) is the `connected` edge: the relay re-emits `connected` on every
+ * (re)handshake, so the reconnecting server's held rosters are dropped and every task it reported
+ * before the drop — started-sourced ones included — stops being readable. Nothing repopulates them:
+ * these frames are not in the daemon's reconcile-on-connect set (that set is outstanding `modal_shown`
+ * per pyrycode#877 and `queue_state` per non-empty backlog per pyrycode#878) and this app advertises no
+ * `last_event_id`, so a dropped conversation reads `null` until claude next emits a frame for it. That
+ * is the correct, honest behaviour — retaining the pre-disconnect set would present a stale list as
+ * live (#569 owns closing that gap, and it needs a daemon-side change).
+ *
+ * SCOPED, not wholesale (#1139). #573 shipped this as a nullary clear of the WHOLE map, which was right
+ * while the app had one connection; since #1117 it holds one per paired server and `connected` means
+ * "THIS server's connection came back", so a whole-map clear discarded the other server's rosters — and
+ * unlike the `queueStore` case that argument was first made for, NOTHING ever put them back, since no
+ * frame in this family is re-sent on connect. The caller resolves which conversations belong to the
+ * reconnecting server from the server-keyed conversation list (#1086's `selectConversationIdsFor`) and
+ * hands the ids across; the ids are therefore CLIENT-HELD, never a daemon-supplied field naming a
+ * server. A conversation this store holds a roster for that appears in no server's list is left alone —
+ * the accepted consequence of scoping by the list, and a real case here rather than a corner one,
+ * because a background task can start for a conversation whose list has not arrived.
+ *
+ * Iterates the HELD keys, not the id set, so the work is bounded by what this store holds rather than
+ * by the server's conversation count, and membership is a `Set.has` over a `Map`'s own keys — never a
+ * bare object keyed by id, per `ServerOrigin`'s docblock, so a `__proto__` conversation id cannot write
+ * through `Object.prototype`. Deleting the map key drops a conversation WHOLE, so the reset can never
+ * half-drop an entry: a started frame's `toolCallId` and an update frame's `latestUpdate` go with the
+ * roster rows they joined. Copy-on-write like the setters, and every surviving entry comes back BY
+ * REFERENCE, so a component watching another conversation sees `Object.is` true and does not re-render.
+ * #573's `size === 0` short-circuit generalises: when NO held key is listed the state object is handed
+ * straight back, so a first connect, a reconnect of a server holding nothing here, and a map holding
+ * only unlisted conversations all wake no listener at all.
+ *
+ * `clearAllRosters` (#1139) is the PAIRING-boundary drop, and it exists because scoping the reconnect
+ * reset above removed the self-heal that kept this store out of `clearPairingScopedState`'s dep set —
+ * the `conversationListStore` (#531 excluded it, #1086 scoped it and had to add it) and `queueStore`
+ * (#1138) sequence, repeated a third time. While the reconnect reset cleared the WHOLE map, a
+ * re-pairing's first `connected` blanked every latched roster on its way past; scoped, that same edge
+ * resolves the new pairing's empty conversation list, matches no held key, and hands the state object
+ * straight back. Nothing else evicts a roster — this family has no re-assertion path of ANY kind, which
+ * makes it strictly worse than the queue's case, where at least a non-empty conversation is re-sent. A
+ * departed pairing's `local_bash` command lines and patch text would otherwise latch for the life of
+ * the process. Run against `clearPairingScopedState`'s discriminator — "does a reconnect to the SAME
+ * daemon need to clear it?" — the answer is now BOTH mechanisms, each covering what the other cannot:
+ * the edge covers the reconnecting server's listed conversations, this covers everything at a pairing
+ * change, including a roster held under a conversation no server's list ever carried.
+ *
+ * NULLARY BY DESIGN, the `clearAllBacklogs` / `clearAllConversations` shape: it takes no conversation id
+ * and no server origin, so no daemon-supplied field can steer which command lines and patches survive a
+ * boundary the operator crossed deliberately. It returns `initialBackgroundTaskRosterState` BY REFERENCE
+ * and carries the `size === 0` subscriber short-circuit for the same reason its siblings do — a
+ * redundant clear hands the state object straight back, so zustand's `Object.is` fires and no listener
+ * wakes.
  */
 export function createBackgroundTaskRosterStore(
   init: BackgroundTaskRosterState = initialBackgroundTaskRosterState
@@ -379,7 +432,16 @@ export function createBackgroundTaskRosterStore(
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
         return { rosters: next }
       }),
-    resetRosters: () => set((s) => (s.rosters.size === 0 ? s : { rosters: new Map() }))
+    resetRostersFor: (conversationIds) =>
+      set((s) => {
+        const doomed = [...s.rosters.keys()].filter((id) => conversationIds.has(id))
+        if (doomed.length === 0) return s
+        const next = new Map(s.rosters)
+        for (const id of doomed) next.delete(id)
+        return { rosters: next }
+      }),
+    clearAllRosters: () =>
+      set((s) => (s.rosters.size === 0 ? s : initialBackgroundTaskRosterState))
   }))
 }
 
@@ -409,8 +471,11 @@ export function useBackgroundTaskRosterStore<T>(selector: (s: BackgroundTaskRost
  * needs no `EMPTY_*` constant at all. It returns the HELD ENTRY ITSELF, never a freshly built object or
  * array: the task map is assembled at write time precisely so this stays true. The nullable return type
  * also forces #568 to branch, so the distinction cannot be ignored accidentally. And it is what makes
- * AC5 verifiable: after `resetRosters` every key is absent, so every conversation reads `null` —
- * genuinely back to "nothing observed" rather than indistinguishable from observed-empty.
+ * AC5 verifiable: after either drop every key it reached is absent, so those conversations read `null` —
+ * genuinely back to "nothing observed" rather than indistinguishable from observed-empty. Which keys a
+ * drop reaches differs by mechanism since #1139 — `resetRostersFor` reaches the reconnecting server's
+ * listed conversations, `clearAllRosters` reaches every one — so this is no longer a whole-store claim
+ * on the `connected` edge; it holds per dropped key.
  *
  * Narrow-slice-correct: a write for a DIFFERENT conversation produces a new map, but
  * `newMap.get(openId)` returns the SAME entry object → `Object.is` true → no re-render of a component

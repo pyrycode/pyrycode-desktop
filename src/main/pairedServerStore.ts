@@ -81,7 +81,30 @@ export interface MultiPairedServerStore extends ClearablePairedServerStore {
   /** Every paired entry, oldest-saved first; empty when nothing is paired. */
   list(): Promise<PairedServerRecord[]>
   /** Erase exactly the entry under `serverId`, leaving every other entry paired. Idempotent. */
-  clearServer(serverId: string): Promise<void>
+  clearServer(serverId: string): Promise<ClearServerOutcome>
+}
+
+/**
+ * What one `clearServer` call did (#1149). Two derived facts and nothing else: NO record, no id, no
+ * field value — so a caller holding this outcome holds no credential, and it is safe for a handler
+ * that must not be able to materialise one.
+ *
+ * It exists so the by-id erase can answer, in the SAME call, the two questions its only consumer
+ * (unpairHandler's per-server arm) would otherwise have to ask with reads:
+ *   - `matched` — "did an entry actually hold this id?", which the erase alone cannot report: an
+ *     unheld id resolves silently, indistinguishably from a successful one.
+ *   - `remaining` — "is anything still paired?", which decides whether the single-slot host label
+ *     still describes something.
+ * Answering both from inside the mutate queue, off the same read the filter used, is what removes
+ * the check-then-act gap a separate `loadById`/`list` pair would have opened — and what lets that
+ * handler be typed against `clearServer` alone, with no read member and no whole-collection erase
+ * anywhere in its dep type.
+ */
+export interface ClearServerOutcome {
+  /** True when an entry held the id and was erased. False ⇒ nothing matched and nothing was written. */
+  matched: boolean
+  /** How many entries are still paired after this call. Counts only — never the entries themselves. */
+  remaining: number
 }
 
 /**
@@ -304,21 +327,29 @@ export function createPairedServerStore(deps: {
       await mutate(() => secureStore.delete(name))
     },
     async clearServer(serverId) {
-      await mutate(async () => {
+      // The outcome is computed INSIDE the queue, from the same `entries` the filter used, so
+      // "did anything match" and "what remains" cannot disagree with the erase that just happened
+      // and no concurrent save can land between them (#1149). `serverId` is matched with === against
+      // each decoded entry's own `server` field — it never becomes this store's `name`, a
+      // persistence path, or an object key, so an untrusted id like `__proto__` is inert.
+      return mutate(async () => {
         const entries = await read()
         const next = entries.filter((entry) => entry.server !== serverId)
         // No entry matched: resolve without writing. Idempotent, no needless keychain round-trip,
-        // and no EncryptionUnavailableError raised by an erase that had nothing to erase.
-        if (next.length === entries.length) return
+        // and no EncryptionUnavailableError raised by an erase that had nothing to erase. The
+        // caller learns this from `matched`, not from a follow-up read.
+        if (next.length === entries.length) return { matched: false, remaining: entries.length }
         // The last entry left: delete the blob rather than writing `[]`, so "no blob" stays the one
         // at-rest form of not-paired and this ends exactly where clear() does.
         if (next.length === 0) {
           await secureStore.delete(name)
-          return
+          return { matched: true, remaining: 0 }
         }
         // One write, never delete-then-write: a failure here leaves the prior blob whole and throws,
-        // so the caller is never told a token left disk when it did not.
+        // so the caller is never told a token left disk when it did not — and never receives an
+        // outcome claiming a match that a failed write did not make.
         await secureStore.set(name, encodeCollection(next))
+        return { matched: true, remaining: next.length }
       })
     }
   }

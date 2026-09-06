@@ -81,10 +81,12 @@ One flat interface — no `Clearable…` split. `pairedServerStore` splits `Pair
 `ClearablePairedServerStore` because three shipped consumers type against the base and would
 otherwise need a `clear` stub in their fakes; this module shipped with **no consumers at all**, and
 [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) needed `clear` too, so there was
-nothing a second interface would have bought. Confirmed out: three consumers now exist
-(`pairingHandler` on `save`, `hostLabelHandler` on `load`, `unpairHandler` on `clear`), each typed
-against a disjoint `Pick<HostLabelStore, …>` of this one flat interface rather than a narrower base
-type.
+nothing a second interface would have bought. Confirmed out: four consumers now exist
+(`pairingHandler` on `save`, `hostLabelHandler` on `load`, and — since
+[#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) — **two** `unpairHandler` arms on
+`clear`, the whole-collection one from #827 and the per-server one from #1149), each typed against a
+disjoint (or, for the two `unpair` arms, identical) `Pick<HostLabelStore, …>` of this one flat
+interface rather than a narrower base type.
 
 ### Encoding — bare UTF-8 bytes, not a JSON envelope
 
@@ -152,10 +154,15 @@ guard → `pairingHandler`'s confirm arm → this store). `load` is reached from
 preload `hostLabel()` → [`hostLabelHandler`](host-label-channel.md), which re-applies
 `MAX_HOST_LABEL_LENGTH` at the read boundary). `clear` is reached as of
 [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) — not from IPC at all, but from
-`unpairHandler.ts`'s listener, once `pairedServerStore.clear()` has itself resolved. See [Pairing IPC
-channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
+`unpairHandler.ts`'s **whole-collection** listener, once `pairedServerStore.clear()` has itself
+resolved. Since [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), `unpairHandler.ts`'s
+**per-server** listener reaches it too, on a narrower condition: only once `clearServer`'s
+`remaining` count reaches `0` — the whole-collection caller always erases the label because it always
+empties the collection, but the per-server caller must not, since a still-paired server's name would
+be wiped otherwise. See [Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823),
 [Host-label channel](host-label-channel.md), and [Unpair channel § the label erase
-(#827)](unpair-channel.md) for the full hand-off on each side.
+(#827)](unpair-channel.md#the-label-erase-827) and [§ the per-server channel
+(#1149)](unpair-channel.md#the-per-server-channel-1149) for the full hand-off on each side.
 
 ## Concurrency & lifecycle
 
@@ -208,6 +215,12 @@ secure-store consumers — not a secret — so its review reads differently from
   wired the **write** half (composition root + `pairingHandler`'s confirm arm) and [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) wired
   the **read** half ([host-label channel](host-label-channel.md), `Pick<HostLabelStore, 'load'>` —
   structurally erase-proof); the renderer still cannot reach this module directly on either path.
+- **A second `clear`-only handle, [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149).**
+  The per-server unpair arm gets the same `Pick<HostLabelStore, 'clear'>` shape #827 gave the
+  whole-collection arm, over the same instance — no second store, no widened surface. The two callers
+  differ only in *when* they call it: the whole-collection arm always does (the collection it just
+  erased is always now empty), the per-server arm does so only when `clearServer`'s `remaining` count
+  is `0` — so unpairing one of two paired servers leaves the label naming the survivor untouched.
 - **Log-free by construction** — no `console.*` anywhere; the label is an opaque local, never a named
   field of a logged struct. `MalformedHostLabelError`'s message is static and interpolates nothing —
   no bytes, no partial decode.
@@ -240,8 +253,10 @@ secure-store consumers — not a secret — so its review reads differently from
   `src/main/index.ts` and gives `pairingHandler` a `save`-only handle; [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) gives the
   [host-label handler](host-label-channel.md) a `load`-only handle over the same instance;
   [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) gives the [unpair
-  handler](unpair-channel.md) a `clear`-only handle over that same instance again — three seams, three
-  disjoint `Pick`s, none able to do another's job.
+  handler](unpair-channel.md)'s whole-collection arm a `clear`-only handle over that same instance
+  again, and [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) gives its per-server
+  arm an identical `clear`-only handle over the same instance a fourth time — four seams, three
+  disjoint `Pick` shapes (two of the four share the `clear`-only shape), none able to do another's job.
 - **Single pyrybox** — one label under `HOST_LABEL_NAME`. Per-server-id keying
   (`pyrycode.host_label.<server-id>`) is a deferred one-line change via the injectable `name`; the
   sidebar's host-grouping design will decide whether the key becomes `<name>.<server-id>` or the
@@ -279,5 +294,7 @@ secure-store consumers — not a secret — so its review reads differently from
 - [Unpair channel](unpair-channel.md) / [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) —
   the erase path: a `clear`-only handle, called only after the paired-server record's own erase has
   resolved, closing the gap [#173](../codebase/173.md)'s unpair used to leave (flagged in #823's spec,
-  Open question 1) where the label outlived the record it described.
+  Open question 1) where the label outlived the record it described. [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+  adds a second `clear`-only handle over the same instance, from that channel's per-server arm, called
+  only when no record remains — see [§ the per-server channel (#1149)](unpair-channel.md#the-per-server-channel-1149).
 - Downstream, not yet built: the sidebar host row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).

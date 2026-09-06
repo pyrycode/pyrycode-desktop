@@ -1,8 +1,18 @@
 # Unpair channel
 
-The renderer→main IPC surface that lets the window ask the background process to **erase the stored
+The renderer→main IPC surface that lets the window ask the background process to **erase a stored
 pairing** and return the app to a clean, not-paired state — the recovery mechanism for a stale,
 wrong, or never-connecting pairing.
+
+**Two channels since [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), by design, not
+one channel with two request shapes.** `UNPAIR_CHANNEL` (below) erases the **whole** collection and
+still carries no body. `UNPAIR_SERVER_CHANNEL` (§ "The per-server channel") erases exactly **one**
+named record and carries the module's first untrusted request field. They sit side by side, Strangler
+Fig style: the composer's Re-pair control ([#166](../codebase/166.md)) is still the whole-collection
+channel's only caller, unchanged, until [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)
+migrates it and deletes that half. The per-server channel ships with no caller yet — same "boundary
+ahead of its UI consumer" shape as the original channel's own introduction — the visible per-server
+unpair control is [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090)'s UI.
 
 Introduced in [#173](../codebase/173.md), on top of [#172](../codebase/172.md)'s
 `ClearablePairedServerStore.clear()`. It is the **byte-for-byte twin** of the [pairing-status
@@ -59,10 +69,16 @@ one even by mistake.
 | `registerUnpairHandler(target, deps)` + `UnpairHandleTarget` | `src/main/unpairHandler.ts` (new) | background handler |
 | `window.pyry.unpair()` | `src/preload/index.ts` (mod, +11) | preload bridge |
 | single `handle` registration + `will-quit` teardown | `src/main/index.ts` (mod, +11) | composition root |
+| `UNPAIR_SERVER_CHANNEL`, `UnpairServerRequest`, `isUnpairServerRequest` ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)) | `src/shared/ipc/unpair.ts` (mod) | shared contract |
+| `registerUnpairServerHandler(target, deps)` + `UnpairServerHandleTarget` ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)) | `src/main/unpairHandler.ts` (mod) | background handler |
+| `window.pyry.unpairServer(serverId)` ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)) | `src/preload/index.ts` (mod) | preload bridge |
+| second `handle` registration + its own `will-quit` teardown ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)) | `src/main/index.ts` (mod) | composition root |
 
 [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) added a fourth dep, `hostLabel?:
 Pick<HostLabelStore, 'clear'>`, and one `await`ed erase call inside the listener — no new file, no
-new shared type. See "The label erase (#827)" below.
+new shared type. See "The label erase (#827)" below. [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+is additive throughout: `UNPAIR_CHANNEL`, `UnpairResult`, `registerUnpairHandler` and its 15 tests are
+untouched. See "The per-server channel (#1149)" below.
 
 ### 1. The shared contract (`src/shared/ipc/unpair.ts`)
 
@@ -160,33 +176,122 @@ Ordering — record → label → `onUnpaired` — is deliberate, not incidental
 The composition root wires the **same** `hostLabelStore` instance already threaded into the pairing
 and host-label handlers — no second store is constructed.
 
+### The per-server channel (#1149)
+
+```ts
+export const UNPAIR_SERVER_CHANNEL = 'pyry:unpair-server' as const
+export const MAX_SERVER_ID_LENGTH = MAX_PASTE_LENGTH   // aliased, not independently chosen — see below
+export type UnpairServerRequest = { serverId: string }
+export function isUnpairServerRequest(value: unknown): value is UnpairServerRequest
+
+export interface UnpairServerHandleTarget {
+  handle(channel: string, listener: (event: unknown, request: unknown) => Promise<UnpairResult>): void
+  removeHandler(channel: string): void
+}
+
+export function registerUnpairServerHandler(
+  target: UnpairServerHandleTarget,
+  deps: {
+    store: Pick<MultiPairedServerStore, 'clearServer'>
+    onUnpaired?: () => void
+    hostLabel?: Pick<HostLabelStore, 'clear'>
+  }
+): () => void
+```
+
+A **second channel**, not a second branch on `UNPAIR_CHANNEL`'s one listener — `ipcMain.handle`
+allows one handler per channel either way, and the deciding argument for a second channel over a
+shared discriminated listener is that it turns "a malformed or unknown-id per-server request can
+never fall through to the whole-collection erase" into a fact about the *type* of `deps.store`
+(`Pick<MultiPairedServerStore, 'clearServer'>` carries no `clear` at all) rather than about a branch
+a later edit could get wrong. `registerUnpairHandler`, its `ClearablePairedServerStore` dep and its
+15 tests are untouched by this.
+
+**The guard is this module's first-ever untrusted request field.** `isUnpairServerRequest` mirrors
+`pairing.ts`'s `isPairingRequest`: pure, never throws, structural (extra fields tolerated), rejects a
+non-object, `null`, a missing or non-string `serverId`, and one over `MAX_SERVER_ID_LENGTH`. The empty
+string is **accepted** by the guard — emptiness is refused one step later as "names no held record,"
+the same as any other unheld id, so the guard stays purely structural. `MAX_SERVER_ID_LENGTH` is
+aliased to `pairing.ts`'s `MAX_PASTE_LENGTH` (not an independent number): every persisted `server` id
+arrived inside a pairing paste already bounded by that constant, so this check can never make a held
+record *unforgettable* while still refusing an absurd input before it reaches a comparison.
+
+**The listener, in order:** guard → `store.clearServer(serverId)` → `matched?` → label (only when
+`remaining === 0`) → teardown → `{ result: 'ok' }`.
+
+- A guard refusal returns `{ result: 'error' }` **before any store call** — a malformed request never
+  reaches the store, let alone an erase.
+- `clearServer` throwing, and `matched === false` (an id nothing holds), both return
+  `{ result: 'error' }` too, indistinguishable from a guard refusal or from each other by design (see
+  § Security posture) — nothing is erased on any of the three.
+- On a match, [`ClearServerOutcome`](paired-server-store.md)'s `remaining` count — computed inside
+  `clearServer`'s own mutate queue, from the same read the erase used — decides the label, exactly the
+  same rule the whole-collection arm applies when the *entire* collection empties: clear the
+  single-slot host label only when nothing remains paired, never on every per-server erase (that would
+  wipe the name a still-paired server is displayed under). `onUnpaired` then fires unconditionally on
+  the success path, wired at the composition root to `registry.reconcile()` — the same trigger the
+  whole-collection arm uses, which already drops exactly the one connection whose record just went and
+  leaves every other one live (see [Daemon connection — per-server routing](daemon-connection-routing.md)).
+- Every caught object is dropped on this arm exactly as on the sibling — never logged, interpolated,
+  or returned; the `serverId` itself never reaches a log line, keeping the module log-free by
+  construction now that it takes a request at all.
+
+**No read anywhere in this arm.** `deps.store`'s `Pick<MultiPairedServerStore, 'clearServer'>` carries
+no `load`, `loadById`, `list` or `save`, so a `PairedServerRecord` — and therefore a bearer token or
+server static key — cannot be materialised in this module at all. This is *stricter* than the
+whole-collection arm, whose `ClearablePairedServerStore` dep inherits `load` and relies on a test to
+pin its non-use. What removed the read this design would otherwise have needed: `clearServer` itself
+now reports `{ matched, remaining }` (see [paired-server store](paired-server-store.md)), computed
+atomically inside its own mutate queue, so there is no separate existence check to race the erase and
+no follow-up read that could throw *after* a successful erase and downgrade it to `error`.
+
 ### 3. Preload bridge (`src/preload/index.ts`)
 
 ```ts
 unpair: (): Promise<UnpairResult> => ipcRenderer.invoke(UNPAIR_CHANNEL),
+
+unpairServer: (serverId: string): Promise<UnpairResult> =>   // #1149
+  ipcRenderer.invoke(UNPAIR_SERVER_CHANNEL, { serverId }),
 ```
 
-`UNPAIR_CHANNEL` is fixed here so the renderer cannot address arbitrary IPC channels; only this typed
-function crosses the bridge, never `ipcRenderer` itself. Called with no second argument — no data
-leaves the renderer. `PyryApi = typeof api` re-derives `window.pyry.unpair` automatically, so
-`src/preload/index.d.ts` needed no edit.
+`UNPAIR_CHANNEL`/`UNPAIR_SERVER_CHANNEL` are fixed here so the renderer cannot address arbitrary IPC
+channels; only these typed functions cross the bridge, never `ipcRenderer` itself. `unpair()` is
+called with no second argument — no data leaves the renderer on that path. `unpairServer(serverId)`
+builds the request object in the bridge as a convenience, not a defence: the renderer is untrusted
+regardless, so the main side validates shape and length on its own merits via `isUnpairServerRequest`.
+`PyryApi = typeof api` re-derives both methods automatically, so `src/preload/index.d.ts` needed no
+edit for either.
 
 ### 4. Composition-root registration (`src/main/index.ts`)
 
 ```ts
 const unregisterUnpair = registerUnpairHandler(ipcMain, {
   store: pairedServerStore,
-  onUnpaired: () => connection.reconnect(),
+  onUnpaired: () => registry.reconcile(),   // post-#1117; was connection.reconnect() before it
   hostLabel: hostLabelStore   // #827 — the same instance, not a second store
 })
 app.on('will-quit', () => unregisterUnpair())
+
+// #1149 — a sibling registration, same store/label instances, its own teardown
+const unregisterUnpairServer = registerUnpairServerHandler(ipcMain, {
+  store: pairedServerStore,
+  onUnpaired: () => registry.reconcile(),
+  hostLabel: hostLabelStore
+})
+app.on('will-quit', () => unregisterUnpairServer())
 ```
 
 **Moved in [#504](../codebase/504.md)** from the pairing-status sibling slot to sit beside the pairing
 handler, below `createDaemonConnection` — it now needs to close over `connection`, which does not exist
 at the old registration site. Still the same `pairedServerStore` built once at the composition root; no
-second store constructed. See [daemon connection](daemon-connection.md) § Teardown-on-unpair for what
-`onUnpaired` triggers.
+second store constructed. **[#1117](daemon-connection-routing.md#the-connection-registry-1117)
+retargeted `onUnpaired` from `connection.reconnect()` to `registry.reconcile()`** — reconcile re-reads
+the store and makes the live connection set match it, so on the whole-collection erase every connection
+drops, and on the [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) per-server erase
+exactly the one connection whose record went drops, leaving every other one live and un-handshaken. See
+[Daemon connection — per-server routing](daemon-connection-routing.md) for the full mechanism. The
+`#1149` registration reuses the same `pairedServerStore` and `hostLabelStore` instances and the same
+`registry.reconcile()` trigger — no second store, no second reconcile path.
 
 ## Data flow
 
@@ -199,19 +304,57 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   →  resolves { result: 'ok' }   [value-free]
 ```
 
+The per-server flow ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)):
+
+```
+renderer window.pyry.unpairServer(serverId)  →  ipcRenderer.invoke(UNPAIR_SERVER_CHANNEL, { serverId })
+  →  ipcMain handler listener  →  isUnpairServerRequest(request)  — false ⇒ { result: 'error' }, no store call
+  →  store.clearServer(serverId)  →  MultiPairedServerStore's mutate queue: read → filter → delete-or-set
+  →  throw ⇒ { result: 'error' }, dropped, stop here
+  →  { matched: false, remaining } ⇒ { result: 'error' }, nothing erased, stop here
+  →  { matched: true, remaining: 0 } ⇒ hostLabel?.clear()  — throw ⇒ dropped, continue
+  →  { matched: true, remaining: n>0 } ⇒ label left untouched (still names the surviving server)
+  →  onUnpaired?.()  — registry.reconcile(), drops the one connection whose record went — throw ⇒ dropped
+  →  resolves { result: 'ok' }   [value-free]
+```
+
 ## Security posture
 
-**Verdict: PASS** (architect security-review in the spec, `security-sensitive`). This ticket
-*introduces* the renderer→main IPC boundary that #172 deliberately deferred.
+**Verdict: PASS** (architect security-review in the spec, `security-sensitive`, both on introduction
+and again on [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)). #173 *introduced* the
+renderer→main IPC boundary that #172 deliberately deferred; #1149 introduced this module's first
+*untrusted request field* on top of it.
 
-- **No untrusted input to validate.** Zero-argument invoke — the value-free contract makes a request
-  guard unnecessary by construction, same as `pairingStatus`.
-- **The renderer can trigger, never parameterize.** `clear()` is keyed by the fixed
-  `PAIRED_SERVER_NAME` constant inside the store, not a caller-supplied name — no channel, name, or
-  record field is caller-controlled.
-- **Value-free reply by construction.** No response field beyond the discriminant, so the handler
-  cannot serialize a token/key/relay/path back even under a bug — pinned by a test asserting the `ok`
-  response stringifies to exactly `{"result":"ok"}`.
+- **`UNPAIR_CHANNEL` alone: no untrusted input to validate.** Zero-argument invoke — the value-free
+  contract makes a request guard unnecessary by construction, same as `pairingStatus`. This property
+  no longer describes the module as a whole (see next bullet) — it is scoped to this one channel.
+- **`UNPAIR_SERVER_CHANNEL` ends "the renderer can trigger, never parameterize" as a module-wide
+  claim, by design ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)).** The
+  renderer now supplies one field, `serverId`, and can therefore parameterize *which* record is
+  erased — a capability this module never had before. The boundary is `isUnpairServerRequest`, the
+  listener's first statement, applied before any store call; downstream of it only the narrowed
+  `UnpairServerRequest` is read. The capability granted is still narrower than what the renderer could
+  already trigger on `UNPAIR_CHANNEL` — "erase one named record" versus "erase every record" — so this
+  is a reduction in blast radius, not a new class of power. `serverId` is matched with `===` against
+  each decoded entry's own `server` field inside `clearServer`, never becomes a persistence name, path,
+  or object key, and is never logged — an id like `__proto__` is inert.
+- **Value-free reply by construction, on both channels.** No response member beyond the discriminant,
+  so neither handler can serialize a token/key/relay/keychain-path back even under a bug — pinned by a
+  test asserting the `ok` response stringifies to exactly `{"result":"ok"}`. On the per-server channel
+  a guard refusal, an unknown id, and a failed erase are all `{ result: 'error' }`, deliberately
+  indistinguishable: a fourth-member response would tell a compromised renderer whether a guessed id is
+  paired, and it can already learn that from `serverInfo`, so the smaller, value-free union stands.
+- **No credential can be materialised in the per-server handler at all** — stricter than the
+  whole-collection sibling. `registerUnpairServerHandler`'s `store` dep is
+  `Pick<MultiPairedServerStore, 'clearServer'>`: no `load`, `loadById`, `list`, or `save`, so a
+  `PairedServerRecord` (bearer `token`, `server_static_pubkey`) cannot exist in this module's memory on
+  any code path. The sibling's `ClearablePairedServerStore` dep inherits `load` and relies on a test to
+  pin its non-use; this dep type structurally cannot.
+- **A malformed or unknown-id per-server request cannot reach the whole-collection erase — a property
+  of the type, not of a branch.** `registerUnpairServerHandler`'s dep type carries no `clear` member at
+  all, so there is no name in that module through which the whole-collection wipe could be reached from
+  a refused or unmatched per-server request, regardless of how the guard or the `matched` check are
+  later edited.
 - **Symmetric with the existing capability, not a new class of power.** A renderer that can already
   `submitPairingPaste`/`confirmPairing` (establish or overwrite pairing) being able to erase it
   introduces no new attack surface — worst case is an availability annoyance (the user re-pairs), not
@@ -239,12 +382,15 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   channel's contract (erase the stored pairing, report `ok`/`error`) is unaffected either way.
 - **Live-session teardown, closed by [#504](../codebase/504.md).** A successful `clear()` now also
   fires an optional `onUnpaired?: () => void` dep — value-free, mirroring the pairing handler's
-  `onPaired` — wired at the composition root to `connection.reconnect()`. This used to be deferred (see
-  the [daemon connection](daemon-connection.md) § Teardown-on-unpair doc for the full mechanism: the
-  same `reconnect()` fences the superseded driver's in-flight events and closes its socket, so an
-  authenticated session can no longer outlive the record that authorised it). The callback sits outside
-  the fail-closed `catch` and swallows its own throw, so a teardown failure can never downgrade an
-  already-completed erase to `{ result: 'error' }` — see `unpairHandler.ts`'s inline rationale.
+  `onPaired` — wired at the composition root, originally to `connection.reconnect()` and, since
+  [#1117](daemon-connection-routing.md#the-connection-registry-1117), to `registry.reconcile()`. This
+  used to be deferred (see the [daemon connection](daemon-connection.md) § Teardown-on-unpair doc for
+  the full mechanism: the same `reconnect()`/`reconcile()` path fences the superseded driver's
+  in-flight events and closes its socket, so an authenticated session can no longer outlive the record
+  that authorised it). The callback sits outside the fail-closed `catch` and swallows its own throw, so
+  a teardown failure can never downgrade an already-completed erase to `{ result: 'error' }` — see
+  `unpairHandler.ts`'s inline rationale. [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)'s
+  per-server arm wires the identical `onUnpaired: () => registry.reconcile()` at its own registration.
 - **No error sub-reason.** The `error` arm deliberately carries no detail beyond the discriminant.
   #166's caller synthesizes its own generic `ConnectionError` (`code: 'unpair'`) on that arm rather
   than threading a sub-reason through. A future recovery flow that needs to distinguish error
@@ -253,6 +399,20 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   retry-at-next-launch. The module stays log-free by construction, no such failure has been observed,
   and the recovery path already exists (the next pairing that carries a label overwrites the stale
   one; the next unpair retries the erase).
+- **The per-server erase reports `error` over a corrupt collection, where the whole-collection erase
+  does not ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)).** `clear()` never
+  reads, so it succeeds even over a blob `pairedServerStore` cannot parse; `clearServer` must read to
+  filter and to compute `remaining`, so a `MalformedPairedServerRecordError` makes a per-server unpair
+  report `error` with nothing erased. Both existing recovery paths stay available: re-pairing
+  (`save` overwrites a malformed collection) or the whole-collection unpair (`clear()` never reads, so
+  it still succeeds). No code change addresses this — noted as an inherent property of a per-record
+  erase over a collection whose only other reader is strict.
+- **The per-server channel has no caller yet.** [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+  ships the contract and the handler only; [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090)
+  wires the visible per-server unpair control to `window.pyry.unpairServer(serverId)`, and
+  [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152) migrates the composer's Re-pair
+  control off `unpair()` onto it and deletes `UNPAIR_CHANNEL`/`registerUnpairHandler` outright — at
+  which point this document's "whole-collection channel" sections describe a deleted path.
 - **The two erases are not atomic** — they are two independent `SecureStore` names, not a
   transaction. A crash between them leaves *no record + orphan label*, the argued-benign,
   self-healing interleaving (see "The label erase (#827)" above). No journal, no two-phase commit.
@@ -268,8 +428,13 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - [#504 codebase notes](../codebase/504.md) — the `onUnpaired` teardown trigger, the registration move
   below `connection`, and why the callback deliberately deviates from `onPaired`'s inside-the-try
   placement.
+- [Daemon connection — per-server routing](daemon-connection-routing.md#the-connection-registry-1117) /
+  #1117 — retargeted both handlers' `onUnpaired` from `connection.reconnect()` to `registry.reconcile()`,
+  which is what lets [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)'s per-server
+  arm drop exactly one connection instead of every connection.
 - [Paired-server store](paired-server-store.md) / [#172 codebase notes](../codebase/172.md) — the
-  `clear()` capability this channel calls.
+  `clear()` capability this channel calls; [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
+  adds `clearServer`'s `ClearServerOutcome` as the second capability, called from the per-server arm.
 - [Host-label store](host-label-store.md) / [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822) —
   the second `clear()` this channel calls, as of [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827),
   via a `clear`-only handle over the same instance the pairing and host-label handlers already share.
@@ -295,3 +460,9 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   runs it at all (pairing another server used to share it and no longer does).
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this
   channel's value-free contract enforces (token/keys never reach the renderer).
+- [Host label store](host-label-store.md) / [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) —
+  the per-server arm's second `clear`-only consumer of that store, and the "clear only when nothing
+  remains" rule both unpair arms now share.
+- Downstream, not yet built: [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090) (the
+  visible per-server unpair control) and [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)
+  (migrates the composer's Re-pair control onto `unpairServer` and retires `UNPAIR_CHANNEL`).

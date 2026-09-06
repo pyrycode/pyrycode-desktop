@@ -8,7 +8,11 @@ import {
   type PairingConfirmResponse
 } from '../shared/ipc/pairing'
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
-import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
+import {
+  UNPAIR_CHANNEL,
+  UNPAIR_SERVER_CHANNEL,
+  type UnpairResult
+} from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabel'
 import {
@@ -121,6 +125,24 @@ const api = {
    * action is #166/#167.
    */
   unpair: (): Promise<UnpairResult> => ipcRenderer.invoke(UNPAIR_CHANNEL),
+
+  /**
+   * Ask the background process to erase the record for ONE named server, leaving every other paired
+   * machine — its bearer token and server static key — untouched (#1149). The narrow counterpart to
+   * `unpair` above, which forgets every machine; both stay wired until #1152 migrates the last
+   * no-arg caller. Request/response (ipcRenderer.invoke) on its own fixed channel, so the renderer
+   * can address neither an arbitrary channel nor the whole-collection erase by malforming this
+   * request; ipcRenderer never crosses the bridge.
+   *
+   * The `serverId` is the ONE value that leaves the renderer here, and building the request object
+   * in the bridge is a convenience, NOT a defence: the renderer is untrusted and can invoke the
+   * channel with anything, so the main side validates the shape and the length on its own merits
+   * regardless. Only the value-free ok/error enum comes back — never the token, server key, relay,
+   * keychain path, or even whether the id named a held record. No caller is wired yet; the visible
+   * per-server unpair control is #1090's UI.
+   */
+  unpairServer: (serverId: string): Promise<UnpairResult> =>
+    ipcRenderer.invoke(UNPAIR_SERVER_CHANNEL, { serverId }),
 
   /**
    * Ask the background process for the paired server's NON-SECRET identity — its server id and relay

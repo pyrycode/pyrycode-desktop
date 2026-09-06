@@ -14,8 +14,13 @@ re-split along the #235/#236 seam into [#299](../codebase/299.md) (wire + builde
 [#300](../codebase/300.md) (the `daemonConnection` method + IPC command, shipped — see [dequeue
 message envelope](dequeue-message-envelope.md)); #295 itself is closed. #296 (the render
 affordance that actually calls the command) shipped, and [#197](../codebase/197.md) (reconnect
-reconcile) shipped last — the queue family (#292/#293/#294/#299/#300/#296/#197) is now complete
-end to end.
+reconcile) shipped next — the queue family (#292/#293/#294/#299/#300/#296/#197) was then complete
+end to end, for a single app-wide connection. Two more tickets have since narrowed that reset:
+[#1117](daemon-connection-routing.md) gave the app one connection per paired server, which turned
+\#197's whole-map reset into a cross-server bug, and
+[#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) fixed it by scoping the reset to
+the reconnecting server and giving the store a second, independent boundary clear for when a
+pairing itself ends.
 
 ## What it does
 
@@ -28,13 +33,20 @@ store](session-store.md) or [timeline store](conversation-timeline-store.md) fac
 is daemon *state* (SSOT pyrycode #720), not part of claude's turn stream, so it never folds into
 `reduceTimeline` and gets its own store instead.
 
-On every relay (re)handshake the store also resets wholesale: the daemon has no session resume, so
-a reconnect brings the client to current truth by re-sending one `queue_state` snapshot per
+On every relay (re)handshake the store also resets: the daemon has no session resume, so a
+reconnect brings the client to current truth by re-sending one `queue_state` snapshot per
 **non-empty** conversation (pyrycode/pyrycode#878/#879) — a conversation that fully drained while
-the client was away gets no re-send at all. [#197](../codebase/197.md) (shipped) closes that gap by
+the client was away gets no re-send at all. [#197](../codebase/197.md) (shipped) closed that gap by
 clearing the whole `backlogs` map on the `connected` daemon edge and letting the re-sends repopulate
 it through the unchanged `setBacklog` path — the queue twin of [#415](../codebase/415.md)'s modal
-`outstanding` reconnect reset.
+`outstanding` reconnect reset. Since [#1117](daemon-connection-routing.md) the app holds one
+connection per paired server, so a whole-map reset on that edge discarded every *other* connected
+server's backlogs too, with nothing to put them back — only the reconnecting server re-sends.
+[#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) scoped the reset to the
+reconnecting server's own conversations, sourced from the [server-keyed conversation
+list](conversation-list-store.md#one-slot-per-server-since-1086), and — because that scoping
+retired the argument that kept this store out of the pairing-boundary clear (see § Edge cases) —
+added a second, nullary, whole-map clear for when a pairing itself ends.
 
 ## How it works
 
@@ -50,7 +62,8 @@ export interface QueueState {
 }
 export type QueueStore = QueueState & {
   setBacklog: (snapshot: QueueSnapshot) => void
-  resetBacklogs: () => void            // clears the whole map on reconnect (#197)
+  resetBacklogsFor: (conversationIds: ReadonlySet<string>) => void   // reconnect edge, scoped (#197, scoped by #1138)
+  clearAllBacklogs: () => void                                      // pairing-boundary drop, nullary (#1138)
 }
 
 createQueueStore(init?)                  // vanilla createStore — one isolated instance per test (DI seam)
@@ -70,23 +83,58 @@ store keys by it; (2) daemon #878/#879 (reconcile-on-connect) unicasts one `queu
 non-empty conversation on (re)connect, so several snapshots for *different* conversations can
 arrive back-to-back — a flat "hold the last snapshot" slot would let one clobber another.
 
-**Two named setters** (`setBacklog`, `resetBacklogs`), not a reducer — #293 shipped the one and
-[#197](../codebase/197.md) added the second; two operations don't justify a discriminated-union
-action set. Mirrors [`sessionIdStore`](session-id-store.md)'s DI-factory → singleton → hook →
-selector structure and [`runSettingsWriteStore`](session-settings-send.md)'s `ReadonlyMap`
-copy-on-write idiom: `setBacklog` clones the map, sets the key, and replaces (`const next = new
-Map(s.backlogs); next.set(conversationId, queued); set({ backlogs: next })`). `queued` is held
-**verbatim by reference** — wire snake_case, no camelCase remap, no coercion, no validation (the
+**Three named setters** (`setBacklog`, `resetBacklogsFor`, `clearAllBacklogs`), not a reducer — #293
+shipped the first, [#197](../codebase/197.md) added a second (`resetBacklogs`, nullary at the time),
+and #1138 both scoped that second setter to a `ReadonlySet<string>` input and added the third; three
+operations still don't justify a discriminated-union action set. Mirrors
+[`sessionIdStore`](session-id-store.md)'s DI-factory → singleton → hook → selector structure and
+[`runSettingsWriteStore`](session-settings-send.md)'s `ReadonlyMap` copy-on-write idiom: `setBacklog`
+clones the map, sets the key, and replaces (`const next = new Map(s.backlogs);
+next.set(conversationId, queued); set({ backlogs: next })`). `queued` is held **verbatim by
+reference** — wire snake_case, no camelCase remap, no coercion, no validation (the
 [conversation-list store](conversation-list-store.md) posture; #292 owns the fail-closed decode).
 The write is unconditional: an empty `queued: []` sets that key to `[]` (a real replacement — "this
 conversation's backlog is now empty") rather than deleting the key.
 
-`resetBacklogs` ([#197](../codebase/197.md)) clears the **whole** map wholesale — `set({ backlogs:
-new Map() })` — rather than evicting keys one at a time. Because an absent key already reads
-`EMPTY_BACKLOG` (below), clearing the whole map *is* "every held backlog is now empty"; no per-key
-loop, no read of `selectBacklogs`. Returns the same state reference when the map is already empty
-(`s.backlogs.size === 0 ? s : ...`) so zustand's `Object.is` short-circuits and a first connect or an
-all-drained reconnect churns no listeners — the [#415](../codebase/415.md) empty-slice no-op twin.
+`resetBacklogsFor` (#197, scoped by [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138))
+is the reconnect-edge reset. #197 shipped it nullary, clearing the **whole** map — `set({ backlogs:
+new Map() })` — on the argument that the app had exactly one connection, so `connected` meant "the
+app's connection came back". [#1117](daemon-connection-routing.md) gave the app one connection per
+paired server, which turned that argument false: `connected` now means "*this* server's connection
+came back", and clearing the whole map on it discarded every other connected server's backlogs with
+nothing to restore them. #1138 re-typed the setter to take the reconnecting server's own
+conversation ids (`ReadonlySet<string>`, resolved by the caller — see § The data path) and changed
+its body to iterate the **held** keys, not the id set, deleting only the ones that are members:
+
+```ts
+resetBacklogsFor: (conversationIds) =>
+  set((s) => {
+    const doomed = [...s.backlogs.keys()].filter((id) => conversationIds.has(id))
+    if (doomed.length === 0) return s
+    const next = new Map(s.backlogs)
+    for (const id of doomed) next.delete(id)
+    return { backlogs: next }
+  })
+```
+
+Work is bounded by what this store holds, not by the server's conversation count. Copy-on-write
+like `setBacklog`, and every surviving slot comes back **by reference**, so a component watching a
+conversation the reset didn't touch sees `Object.is` true and does not re-render. The `size === 0`
+short-circuit generalises to "no held key is listed": the state object is handed straight back, so
+zustand's `Object.is` fires and a first connect, an all-drained reconnect, and a reconnect of a
+server holding nothing here all wake no listener — the [#415](../codebase/415.md) empty-slice
+no-op twin. A backlog whose conversation is in **no** server's list — including an orphan left by a
+conversation that no longer exists anywhere — survives every scoped reset; this is the accepted
+consequence of scoping by the list, pinned by a test rather than left to drift wider later.
+
+`clearAllBacklogs` ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)) is the
+**pairing-boundary** drop — unrelated to any `connected` edge, called only from
+[`clearPairingScopedState`](paired-shell.md#related). It is nullary, the `clearAllModelLists` /
+`clearAllConversations` shape: no daemon-supplied conversation id or server origin can steer which
+backlogs survive a boundary the operator crossed deliberately, which matters here because a queued
+item's `text` is untrusted daemon-relayed content. It returns `initialQueueState` by reference and
+carries the same subscriber short-circuit on `size === 0`. See § Edge cases for why scoping
+`resetBacklogsFor` made this setter necessary rather than optional.
 
 `selectBacklogFor` is a selector *factory* bound to one `conversationId`, returning
 `s.backlogs.get(id) ?? EMPTY_BACKLOG`. This keeps reads narrow-slice-correct: a `setBacklog` for a
@@ -99,15 +147,19 @@ reference as before, so `Object.is` holds and a component watching `openId` does
 translateQueueState(event: DaemonEvent): QueueSnapshot | null
 // switch (event.type) { case 'queueState': return { conversationId: event.conversationId, queued: event.queued }; default: return null }
 
-subscribeQueue(onDaemonEvent, setBacklog, resetBacklogs): () => void
+originOf(event: DaemonEvent): ConversationListOrigin   // since #1138 — reads #1068's stamp, never event.ack
+
+subscribeQueue(onDaemonEvent, setBacklog, resetBacklogsForServer): () => void
 // onDaemonEvent(event => {
-//   if (event.type === 'connected') { resetBacklogs(); return }
+//   if (event.type === 'connected') { resetBacklogsForServer(originOf(event)); return }
 //   const s = translateQueueState(event); if (s !== null) setBacklog(s)
 // })
 // returns the off-handle (the sessionIdBridge idiom)
 
 QueueData(): null
 // headless component, one subscribe effect (deps []), mounted app-level in App.tsx
+// the composition root: resolves origin -> conversation ids via conversationListStore, THEN calls
+// queueStore.getState().resetBacklogsFor(ids) — see below
 ```
 
 Reactive-only for the snapshot write — like [`sessionIdBridge`](session-id-store.md) and unlike
@@ -121,12 +173,44 @@ no command sent to trigger it. `translateQueueState` rebuilds a fresh named-fiel
 
 The listener's other branch, the `connected`-edge reset ([#197](../codebase/197.md)), is
 deliberately **not** folded into `translateQueueState` — it lives as a leading check in
-`subscribeQueue` itself, reading only `event.type`. This keeps the translator a pure
-`queueState`→snapshot filter (pinned by a test asserting `connected` maps to `null` through it) and
-is the one structural difference from #415's modal-bridge twin, which routes `connected` through its
-translator as a new `ModalEvent` union member instead — the modal bridge already had a
-reducer-style event union to extend; the queue bridge doesn't, so the reset takes the cheaper
-listener-branch shape rather than inventing one.
+`subscribeQueue` itself, reading only `event.type` and, since #1138, the stamp. This keeps the
+translator a pure `queueState`→snapshot filter (pinned by a test asserting `connected` maps to
+`null` through it) and is the one structural difference from #415's modal-bridge twin, which routes
+`connected` through its translator as a new `ModalEvent` union member instead — the modal bridge
+already had a reducer-style event union to extend; the queue bridge doesn't, so the reset takes the
+cheaper listener-branch shape rather than inventing one.
+
+**`originOf` ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138))** is a module-private
+copy of the idiom `relayLinkBridge.ts`, `conversationListBridge.ts` and `daemonEventBridge.ts` each
+already carry — an `in`-guarded, `typeof`-checked read of #1068's stamp, never a cast and never
+`event.ack`. A copy, not an import: importing one of the three would couple two deliberately
+independent single-arm subscribers. Reads the origin **only** from the stamp: the `connected` arm
+also carries the daemon's own `ack.server_id`, a distinct value the daemon chose, and the stamp is
+bound main-side at construction from a paired record this client holds, so a hostile or confused
+daemon cannot make its own reconnect clear another server's backlogs.
+
+The bridge itself never touches `conversationListStore` — it hands the raw `ConversationListOrigin`
+across, so `queueBridge.test.ts` keeps driving `resetBacklogsFor`'s call site with a plain spy.
+Turning an origin into the conversation ids to drop is `QueueData`'s job, the one place the two
+store singletons meet:
+
+```ts
+(origin) =>
+  queueStore
+    .getState()
+    .resetBacklogsFor(selectConversationIdsFor(origin)(conversationListStore.getState()))
+```
+
+using [`selectConversationIdsFor`](conversation-list-store.md#one-slot-per-server-since-1086), #1086's
+shared per-server id resolution — landed once in `conversationListStore` rather than restated in each
+of the three bridges that need it (this one; #1139's background-task rosters; #1140's outstanding
+modal prompts, both not yet shipped). The list is read at **reset time**, inside the same effect, not
+cached at subscribe time: on a first connect the server's slot holds no list yet (the
+`list_conversations` request rides the same `connected` edge), so the resolution is empty and nothing
+is dropped; on a reconnect the slot still holds the previous episode's rows, since only
+`clearAllConversations` at a pairing boundary empties it, so the reconnecting server's conversations
+are already known before its re-sends arrive. Nothing can interleave between the read and the write —
+both stores are written from the same synchronous daemon-event dispatch, with no `await` between them.
 
 `QueueData` derefs `window.pyry` only inside its effect, never during render, so it server-renders
 to `''` without a bridge mock — the `SessionIdData` invariant.
@@ -145,8 +229,13 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
 
 relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before any re-send [#197]
   → DAEMON_EVENT_CHANNEL (in-order) → subscribeQueue listener
-    → resetBacklogs()   [whole map cleared, or same-ref no-op if already empty]
+    → originOf(event) → ConversationListOrigin (#1068's stamp, never event.ack)   [#1138]
+    → selectConversationIdsFor(origin)(conversationListStore.getState())   [#1086, this server's ids]
+    → queueStore.resetBacklogsFor(ids)   [only the listed keys dropped, or same-ref no-op if none match]
   → (then, per non-empty conversation) daemon re-sends queue_state → the flow above repopulates it
+
+pairing ends (unpair, or pair-another-server) → clearPairingScopedState()   [#1138]
+  → queueStore.clearAllBacklogs()   [every server's backlogs dropped, or same-ref no-op if already empty]
 ```
 
 ## Configuration and usage
@@ -172,11 +261,15 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
   them. See [Conversation shell § Thread scroll
   pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600).
 - [#197](../codebase/197.md) (shipped, reconcile-on-connect) does **not** use `selectBacklogs` as
-  #293 anticipated — it clears the whole map wholesale via `resetBacklogs` instead of iterating it,
-  so `selectBacklogs` shipped with no production caller (see Edge cases, below).
+  #293 anticipated — it clears via `resetBacklogsFor` instead of iterating it, so `selectBacklogs`
+  still shipped with no production caller (see Edge cases, below).
 - [#296](../codebase/296.md) (shipped) reads this store only indirectly — its drop affordance never
   touches `useQueueStore`/`selectBacklogFor` itself; it fires `dequeueMessageCommand` and lets the
   existing #294 subscription remove the row once the daemon's next `queue_state` snapshot arrives.
+- `clearAllBacklogs` ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)) is invoked
+  only from `clearPairingScopedState` (`src/renderer/src/clearPairingScopedState.ts`, wired in
+  `PairedShell.tsx`'s `clearPairingDeps` beside `clearAllConversations`), never from a bridge arm or
+  directly from a component. See [Paired shell § Related](paired-shell.md#related).
 
 ## Edge cases and limitations
 
@@ -189,8 +282,30 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
   plain text only, via auto-escaped React children — never `innerHTML` / `dangerouslySetInnerHTML`.
 - **A conversation that *became* empty gets no fresh `queue_state` on reconnect** — the daemon only
   unicasts non-empty backlogs per #878/#879. Resolved by [#197](../codebase/197.md): the store
-  clears its whole `backlogs` map on the `connected` edge, so a conversation with no re-send simply
-  reads `EMPTY_BACKLOG` after the reconnect rather than surfacing a stale pre-drop entry.
+  clears the reconnecting server's `backlogs` entries on the `connected` edge (originally the whole
+  map; scoped by [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), see § How it
+  works), so a conversation with no re-send simply reads `EMPTY_BACKLOG` after the reconnect rather
+  than surfacing a stale pre-drop entry.
+- **A backlog whose conversation appears in no server's held list is left alone by every scoped
+  reset** ([#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138)) — the accepted
+  consequence of scoping the reconnect edge by the conversation list rather than by anything wider,
+  pinned by a dedicated test so a later widening of the scope is a deliberate change.
+- **Scoping the reconnect reset retired the argument that kept this store out of
+  `clearPairingScopedState`.** #197's whole-map reset meant a re-pairing's first `connected` blanked
+  every latched backlog on its way past, so a dedicated pairing-boundary clear would have been dead
+  code — the same self-healing argument `clearPairingScopedState.ts`'s header still made for this
+  store through #1086. Once #1138 scoped that reset to the reconnecting server's own conversations,
+  the new pairing's first `connected` instead resolves an *empty* conversation list and drops
+  nothing — and because the daemon re-sends `queue_state` only for a non-empty conversation, a
+  conversation that drained while unpaired is never re-asserted. Its stale pre-drop backlog would
+  otherwise render indefinitely, reachable again on a re-pair to the same box since conversation ids
+  are daemon-side — exactly the bug #197 shipped to fix, reintroduced at the pairing boundary. #1138
+  closed it with `clearAllBacklogs` (see § How it works), the same sequence
+  [`conversationListStore`'s AC5](conversation-list-store.md#edge-cases-and-limitations) ran through
+  one ticket earlier: a store's exclusion from `clearPairingScopedState` is a claim about a
+  *different* mechanism keeping it fresh, and that claim can go stale without anyone touching the
+  store itself — re-run the discriminator whenever a store already named there changes how its own
+  reconnect reset works.
 - **`selectBacklogs` (the whole-map read) has no production consumer.** #293 added it "explicitly
   for #197", anticipating a per-key eviction loop; the as-shipped #197 design clears the map
   wholesale instead and never calls it. Left in place (still exported, still tested) per CLAUDE.md's
@@ -224,13 +339,31 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
 - [#296 codebase notes](../codebase/296.md) — the drop affordance (shipped) that dispatches a removal
   against an entry this store holds; the row leaves only when this store's existing subscription
   processes the daemon's next `queue_state` snapshot, never via a direct store mutation.
-- [#197 codebase notes](../codebase/197.md) — the reconcile-on-connect reset (`resetBacklogs` +
-  the `connected`-edge branch in `subscribeQueue`), shipped; completes the queue family end to end.
-- [#415 codebase notes](../codebase/415.md) — the modal-store twin of #197's reset; same reset
-  contract (bare trigger, one slice cleared, same-reference no-op when already empty), applied
+- [#197 codebase notes](../codebase/197.md) — the reconcile-on-connect reset (originally
+  `resetBacklogs`, a nullary whole-map clear + the `connected`-edge branch in `subscribeQueue`),
+  shipped; completed the queue family end to end for a single app-wide connection, before
+  [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) scoped it.
+- [#415 codebase notes](../codebase/415.md) — the modal-store twin of #197's original reset; same
+  reset contract (bare trigger, one slice cleared, same-reference no-op when already empty), applied
   through a translator arm there vs. a listener branch here, since the modal bridge already had an
-  event union to extend and the queue bridge doesn't.
+  event union to extend and the queue bridge doesn't. `modalBridge` has the same per-server-scoping
+  defect #1138 fixed here — out of scope for #1138 and untracked; see the note on #1089.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#446 codebase notes](../codebase/446.md) —
   the real-stack (real daemon + real claude) liveness net over this store's inbound `queue_state` path
   and the [dequeue message envelope](dequeue-message-envelope.md) drop path, proving both against a
   genuinely running turn rather than a scripted `daemon.pushFrame`.
+- [Daemon connection routing](daemon-connection-routing.md) — the #1117 registry change (one
+  connection per paired server) that turned #197's whole-map reconnect reset from a simplification
+  into a live cross-server bug, fixed by #1138.
+- [Conversation list store](conversation-list-store.md#one-slot-per-server-since-1086) /
+  `docs/specs/architecture/1086-conversation-list-keyed-by-server.md` — the server-keyed conversation
+  list and `selectConversationIdsFor`, #1138's source of "which conversations belong to the
+  reconnecting server". The same resolution is meant for #1139's background-task rosters and #1140's
+  outstanding modal prompts (both not yet shipped), which is why it lives there rather than being
+  restated in this bridge.
+- [Paired shell § Related](paired-shell.md#related) — `clearAllBacklogs`, the eleventh member of
+  `clearPairingScopedState`'s dep set (#1138).
+- `docs/specs/architecture/1138-queue-backlog-reconnect-reset-scoped-to-server.md` — the full
+  architecture spec: the key-domain ruling on `ConversationListOrigin`'s three cases, and a
+  `## Revisions` entry recording the mid-flight design change to `clearAllBacklogs` after a first
+  security-review pass missed the pairing boundary and a second, revised pass caught it.

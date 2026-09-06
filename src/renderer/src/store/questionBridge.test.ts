@@ -309,6 +309,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
       },
       {
         type: 'runConfigReceived',
+        // The conversation the reply describes (#1176); inert on this path, which reads other fields.
+        conversationId: 'conv-1',
         sessionId: 'sess-2',
         model: 'claude-opus-5',
         effort: 'high',

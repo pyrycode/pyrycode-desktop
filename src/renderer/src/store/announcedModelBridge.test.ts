@@ -79,6 +79,8 @@ describe('translateModelAnnounced', () => {
       { type: 'messageReceived', message },
       {
         type: 'runConfigReceived',
+        // The conversation the reply describes (#1176); inert on this path, which reads other fields.
+        conversationId: 'conv-1',
         sessionId: 's',
         model: 'some-override',
         effort: '',
@@ -239,6 +241,8 @@ describe('subscribeAnnouncedModel', () => {
 
     bridge.emit({
       type: 'runConfigReceived',
+      // The conversation the reply describes (#1176); inert on this path, which reads other fields.
+      conversationId: 'conv-1',
       sessionId: 's',
       model: 'some-override',
       effort: '',

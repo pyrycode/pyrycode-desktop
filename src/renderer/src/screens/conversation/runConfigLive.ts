@@ -159,11 +159,26 @@ export function RunConfigLiveData(): null {
     // Subscribe first (declared before the refresh effect, so it runs first on mount): the listener is
     // live before any request goes out. `subscribeRunConfig` is reused verbatim — each runConfigReceived
     // writes into BOTH app-singleton stores, since the values and the session id they describe arrive on
-    // one frame and are only meaningful together (#491).
+    // one frame and are only meaningful together (#491) — and since #1176 only when it describes the
+    // conversation the operator is actually looking at.
+    //
+    // The open conversation is read non-reactively, at call time, through the injected getter (the
+    // conversationLastReadBridge shape), so this leaf still subscribes to nothing and the store is
+    // touched only when a reply arrives, never during render. Spelled the way the refresh effect below
+    // spells it rather than lastReadBridge's explicit-`null` form, so this module's two effects read
+    // identically; the two differ only for an id of `''`, which no daemon-supplied conversation id can
+    // be, and `?? null` is the more fail-closed of the two there since `''` then matches no reply.
+    //
+    // THIRD CONSUMER, recorded and not acted on: conversationLastReadBridge.ts's
+    // `conversationLastReadDeps` notes that two consumers duplicate this getter and that a third is the
+    // signal for a `selectOpenConversationId` selector on activeConversationStore — "a separate
+    // three-line ticket". This is that third. Extracting it here would be adjacent refactoring
+    // (CLAUDE.md), so the signal is left where its author put it, now genuinely due.
     return subscribeRunConfig(
       window.pyry.onDaemonEvent,
       (snapshot) => runConfigStore.getState().setSnapshot(snapshot),
-      (sessionId) => sessionIdStore.getState().setSessionId(sessionId)
+      (sessionId) => sessionIdStore.getState().setSessionId(sessionId),
+      () => activeConversationStore.getState().activeConversation?.id ?? null
     )
   }, [])
 

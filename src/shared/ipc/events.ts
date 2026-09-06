@@ -111,8 +111,31 @@ export type DaemonEvent =
   // PLAIN TEXT ONLY — never HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute or
   // a URL, and never a filename, a cache key or a lookup path. It reaches no log sink: the decode arm
   // logs byte length and a one-way hash only, and emitDaemonEvent is log-free by construction.
+  //
+  // `conversationId` (#1176) is the conversation this reply DESCRIBES, and it is the one
+  // `conversationId` on this whole union that the daemon did not assert. The wire reply carries no
+  // conversation id at all — `SessionSettingsPayload` has no field for one, and giving it one would be
+  // a wire change (ADR 0002) — so it is resolved in the background process instead: the envelope id of
+  // each `request_session_settings` is recorded against the conversation that request named, and the
+  // reply is matched back by `Envelope.in_reply_to`. What crosses here is therefore CLIENT-OWNED — the
+  // id this app put in its own outbound frame, held in main-process memory and handed back — never a
+  // string parsed out of an inbound payload.
+  //
+  // That provenance is stated because it is the ONE thing a later editor must not generalise from the
+  // daemon-asserted ids on assistantDelta / modelAnnounced / toolUse: their warnings are theirs, and
+  // relaxing them by pointing at this arm would be wrong. What this arm DOES share with them is the
+  // required-ness and the reason for it — an optional routing key invites `?? activeConversation`
+  // fallbacks, which is the exact misattribution #1176 exists to remove, so it is REQUIRED and a
+  // consumer that cannot resolve it must drop the event rather than guess. It is still a routing key
+  // and not rendered text: never markup, an attribute, a URL, a filename, a cache key or a lookup
+  // path, and it reaches no log sink (emitDaemonEvent is log-free by construction, and the decode-side
+  // session_settings log is pinned content-free independently). The numeric `in_reply_to` it was
+  // resolved from is deliberately NOT carried: the renderer receives the id it supplied, never the
+  // wire routing id. Consumed by `subscribeRunConfig`, which drops a reply naming any conversation but
+  // the open one.
   | {
       type: 'runConfigReceived'
+      conversationId: string
       sessionId: string
       model: string
       effort: string

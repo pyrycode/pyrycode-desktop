@@ -117,13 +117,49 @@ export function toSnapshotSessionId(event: DaemonEvent): string | null {
  * after an eviction (it mirrors the PREVIOUS id, so the next read here is the only correct value);
  * preferring this route would be wrong after a /clear (the marker carries the genuinely newer id
  * while this sheet sits open with a stale one).
+ *
+ * ATTRIBUTION-GATED SINCE #1176. Both stores are app-singleton, so before the gate a reply still in
+ * flight when the operator switched chats landed in whichever conversation was open when it arrived:
+ * B's footer showed A's model, effort, permission mode and context reading, and — the sharp half —
+ * `changeSetting` then addressed A's session id, writing a pick into the session the operator had just
+ * navigated away from. That is the hazard `activateConversation`'s docblock names as its reason for
+ * clearing the session id on a switch. The reply now carries the conversation it describes, resolved
+ * in the background process from the request it answers, and one that describes anything but the open
+ * conversation returns before either setter.
+ *
+ * ONE gate covering BOTH writes, not one per setter: the values and the id arrive on the same frame
+ * and are only meaningful together, so gating one and not the other would produce exactly the mixed
+ * state — the sheet showing one session's values while addressing another — that the single listener
+ * above exists to prevent.
+ *
+ * `getOpenConversationId` is called PER EVENT, inside the listener, never resolved once at
+ * subscription. That is the whole of the correctness argument: this listener is app-lifetime (it lives
+ * in `RunConfigLiveData`, mounted in App.tsx), so an id captured in a closure would freeze at whatever
+ * was open when the leaf mounted and reinstate the defect in a new shape. It would also compile and
+ * pass every single-event test, which is why there is a test that emits twice across a moving getter.
+ *
+ * `null` — nothing open — matches no reply, since the resolved id is always a string. A reply arriving
+ * with no conversation open therefore lands NOWHERE rather than latching until one opens.
+ *
+ * Four parameters, three of them functions, and NO named-deps object, deliberately — the treatment
+ * `runConfigLive.ts` names for exactly this risk is not owed here because the only adjacent swap fails
+ * to typecheck: `setSessionId` is `(sessionId: string) => void`, which is not assignable to
+ * `() => string | null` (`void` is not `string | null`), so exchanging the last two arguments is a
+ * compile error as a pair. Re-run that argument before adding a fifth parameter rather than inheriting
+ * the conclusion.
+ *
+ * `toRunConfigSnapshot` and `toSnapshotSessionId` are untouched by the gate: they stay pure
+ * `DaemonEvent → value | null` mappers, and widening either to take the open id would give one
+ * decision two implementations.
  */
 export function subscribeRunConfig(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   setSnapshot: (snapshot: RunConfigSnapshot) => void,
-  setSessionId: (sessionId: string) => void
+  setSessionId: (sessionId: string) => void,
+  getOpenConversationId: () => string | null
 ): () => void {
   return onDaemonEvent((event) => {
+    if (event.type === 'runConfigReceived' && event.conversationId !== getOpenConversationId()) return
     const snapshot = toRunConfigSnapshot(event)
     if (snapshot) setSnapshot(snapshot)
     const sessionId = toSnapshotSessionId(event)

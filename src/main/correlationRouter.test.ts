@@ -58,6 +58,10 @@ function questionDismissed(serverId: string | null, questionBatchId: string): St
 function runConfigReceived(serverId: string | null, sessionId: string): StampedDaemonEvent {
   return {
     type: 'runConfigReceived',
+    // The conversation the reply describes (#1176). This index keys on the SESSION id, not this one,
+    // so it is inert here — carried because the arm requires it, and held constant so a change in
+    // routing behaviour cannot be mistaken for it having started to matter.
+    conversationId: 'conv-1',
     sessionId,
     model: 'opus',
     effort: 'high',

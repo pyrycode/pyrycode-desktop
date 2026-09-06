@@ -22,7 +22,12 @@ Two more consumers followed: the input footer's model and effort menus
 grey out — the `auto` entry on a model that refuses it, the operator having ruled against a disabled
 row (the shared options panel has no such state).
 [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) landed the store's pairing-scoped
-clear — see § The pairing-scoped clear below.
+clear — see § The pairing-scoped clear below. **[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166)
+gave this path a request half** — `requestModelList`, fired once per conversation activation alongside
+[Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot` — because a chat created
+after the app connected crosses neither of the two push-only delivery edges below and would otherwise
+hold no list at all. See § The request half (#1166) below; every "no request half" statement elsewhere in
+this document predates that ticket.
 
 ## What it does
 
@@ -113,9 +118,12 @@ needs no hoisted `EMPTY_*` constant unlike `queueStore`. There is deliberately n
 surface: nothing iterates every conversation's list, so shipping one would ship an unread path.
 
 **The pairing-scoped clear (#977), and why it is not a `connected` reset.** A reconnect to the same daemon does
-not invalidate a published list, and there is no request half to re-fetch one with, so this store
-answers no on both halves of `clearPairingScopedState`'s discriminator the same way
-`slashCommandListStore` does — no `connected` reset, and never will be one. The other half,
+not invalidate a published list, so this store answers no on the `connected` half of
+`clearPairingScopedState`'s discriminator the same way `slashCommandListStore` does — no `connected`
+reset, and never will be one. Since #1166's request half this has a *sharper* reason, not merely the
+original one: the ask is per-conversation, fired on activation, so a daemon-wide `connected` edge would
+have nothing with which to re-assert every *background* conversation's list — it could only correctly
+refresh whichever conversation happens to be active. The other half,
 "does the pairing ending need to clear it", answers yes: `clearAllModelLists`, a nullary, whole-map
 method on `ModelListStore`, reached only through `clearPairingScopedState`'s injected dep set (never
 from a call site or a bridge arm — see [Paired shell](paired-shell.md)), following the #588 → #593
@@ -177,11 +185,40 @@ claude-authored row text into an error message, since those guards `JSON.stringi
 event. This is the [announced-model-store](announced-model-store.md) /
 [slash-command-list-store](slash-command-list-store.md) shape.
 
-**One arm in, one setter out — deliberately no `connected` branch and no branch of any other
-kind.** A reconnect to the same daemon does not invalidate a published list, so clearing on
-`connected` would blank a correct value that nothing on this path can re-fetch. Keeping the clear
-out of this file is also what keeps it daemon-unreachable: no event arriving on this subscription
-can invoke it, so nothing the daemon says can steer which lists survive a pairing change.
+**One arm in, one setter out on the receive half — deliberately no `connected` branch and no branch
+of any other kind.** A reconnect to the same daemon does not invalidate a published list, so clearing on
+`connected` would blank a correct value — and since #1166's request half exists, that reasoning sharpens
+rather than softens: the ask is per-conversation, so a `connected`-wide clear would have nothing with
+which to re-assert a *background* conversation's list. Keeping the clear out of this file is also what
+keeps it daemon-unreachable: no event arriving on this subscription can invoke it, so nothing the daemon
+says can steer which lists survive a pairing change.
+
+### The request half (`requestModelList`, #1166)
+
+```ts
+requestModelList(sendCommand: (command: RendererCommand) => void, conversationId: string | null): void
+// a falsy id (null or '') sends nothing; an addressable id sends exactly
+// { type: 'requestModelList', payload: { conversation_id: conversationId } } — a fresh one-field
+// literal, never a spread of a caller's object.
+```
+
+A faithful twin of [Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot`, down to
+the falsy guard, because the two fire together on every conversation activation and a reader meeting one
+should find the other identical. Fired from `PairedShell`'s `activateDeps.requestConversationConfig`
+arrow (`ActivateConversationDeps`'s seventh member, called outside `activateConversation`'s id-change gate
+so a re-open of the already-active conversation re-asks too) — never from `ModelListData`, which stays a
+pure receiver so the conversation to name is always resolved at the activation seam, the one place it is
+actually known. See [Paired shell — conversation exits and stamps § The run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+
+**One shot per activation, never a retry.** `RequestModelListPayload.conversation_id` is required end to
+end (#1165), so unlike the run-config request there is no unnamed variant to fall back on — not sending
+is the whole of the no-conversation branch. Nothing here re-asks because a frame failed to arrive: a
+client-side retry against a relay withholding the frame would be a self-inflicted spin driven by an
+on-path relay, so delivery stays best-effort and a conversation that never receives a list is still the
+normal, permanent `null` state below — never a spinner, and no consumer may block a model menu on this
+frame. The unanswered request simply falls through every fake-tier `default: return []` in tests, which
+is exactly the inert posture this section describes.
 
 `ModelListData(): null` is the thin React glue — a headless component (not a hook), so the
 subscription sits in its own leaf and never cascades a re-render into `App`. `window.pyry` is
@@ -207,7 +244,10 @@ consumers is mounted. A screen-scoped listener would miss exactly the case the s
 ### Data flow
 
 ```
-daemon → model_list frame → #972 parseModelListPayload (fail-closed) →
+conversation activated → PairedShell's activateDeps.requestConversationConfig(id)  [#1166]
+  → requestModelList(sendCommand, id) → { type: 'requestModelList', payload: { conversation_id: id } }
+
+daemon → model_list frame (unsolicited, OR in reply to the #1166 ask above) → #972 parseModelListPayload (fail-closed) →
   #973 modelList DaemonEvent (fresh literal, IPC carry)
   → window.pyry.onDaemonEvent ─┬─ daemonEventBridge / timelineBridge / modalBridge / questionBridge  (no-op, permanent)
                                 └─ ModelListData (NEW, #974)
@@ -234,10 +274,11 @@ selectModelListFor(openId) / useModelListStore
 - **Delivery is best-effort, and a conversation with no list is a normal, permanent state.** The
   daemon pushes the list unsolicited from a conversation's `initialize` reply on two lanes — see
   [Model-list wire types § Delivery window](model-list-wire-types.md#delivery-window-two-lanes) —
-  and there is no request half on this path and there must never be one: a client-side retry
-  against a relay that withholds the frame would be a self-inflicted spin. The answer to "no frame
-  arrived" is `null` and nothing else: no retry, no poll, no spinner. No consumer may block a model
-  menu on this frame.
+  and, since #1166, `requestModelList` asks once per conversation activation for the chats that cross
+  neither lane (see § The request half above). Neither path may ever retry: a client-side retry against
+  a relay that withholds the frame would be a self-inflicted spin. The answer to "no frame arrived" is
+  `null` and nothing else: no retry, no poll, no spinner. No consumer may block a model menu on this
+  frame.
 - **Every string field, plus every entry in `effort_levels`, is claude-authored** — a *higher*
   trust tier than `slashCommandListStore`'s workspace-authored strings, reachable by prompt
   injection in a way workspace text is not. Held verbatim: never normalised, lowercased, trimmed or
@@ -278,7 +319,11 @@ selectModelListFor(openId) / useModelListStore
 
 - [Paired shell](paired-shell.md) — `clearAllModelLists`'s one production wiring, as the ninth
   member of `clearPairingDeps`, and `clearPairingScopedState`'s ordering constraint (must run before
-  `clearAllLastRead`) this clear has to respect.
+  `clearAllLastRead`) this clear has to respect. Since #1166, also the home of `requestModelList`'s one
+  production call site — see [Paired shell — conversation exits and stamps § The run-configuration and
+  model-list ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
+- [Run configuration store](run-config-store.md) — `requestModelList`'s faithful twin,
+  `requestRunConfigSnapshot`; the two fire together from the same activation seam since #1166.
 - [Model-list wire types](model-list-wire-types.md) — the wire contract this store holds verbatim:
   `WireModelOption`'s trust tier, the three-positions-on-empty rule, and the `droppedModels` sum.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) — #973's

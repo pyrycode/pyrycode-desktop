@@ -62,6 +62,12 @@ daemon that owns it, never to whichever server was paired most recently.
 [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
 gated on the id like #530's, but comparing against a *deleted* conversation's id rather than a
 *newly-opened* one's.
+[#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) shortened the window `#530`'s clear
+opens: `activateConversation` now asks for a fresh `session_settings` reply (which also fills this store,
+see § The data path below) in the same move that clears it, rather than leaving the id at `null` until
+the new conversation's first turn ends. See [Paired shell — conversation exits and stamps § The
+run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166).
 
 ### The data path (`src/renderer/src/store/sessionIdBridge.ts`)
 

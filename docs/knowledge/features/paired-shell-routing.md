@@ -339,7 +339,10 @@ AppView (route='conversation')
       activateDeps.clearSessionId()                    ← #529, clears sessionIdStore
     activateDeps.setActiveConversation(conversation)    ← unconditional, both branches
     activateDeps.stampLastRead(conversation.id)          ← #777, unconditional, OUTSIDE the gate too
-    activateDeps.markViewed(conversation.id)             ← #786, unconditional, OUTSIDE the gate, LAST
+    activateDeps.markViewed(conversation.id)             ← #786, unconditional, OUTSIDE the gate
+    activateDeps.requestConversationConfig(conversation.id)  ← #1166, unconditional, OUTSIDE the gate, LAST
+                                                                  → requestRunConfigSnapshot + requestModelList,
+                                                                    re-asking for what clearSessionId just wiped
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                                                 ServerRowControl per-row Unpair (#1162) → runUnpairServer → window.pyry.unpairServer(serverId)
@@ -376,6 +379,11 @@ A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` indepe
 click — see [the new-discussion FAB](new-discussion-fab.md) for the bridge that fires it. A clicked
 push notification reaches the same `dispatch({ type: 'open' })` the same way, independently of both —
 see [Push notifications](push-notifications.md#clicking-the-notification-393) for that bridge.
+
+See [Paired shell — conversation exits and stamps § The run-configuration and model-list
+ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
+for why `requestConversationConfig` is one member firing two requests, why it runs last, and the
+known late-reply gap (#1176) it narrows but does not close.
 
 `sessionStore` (module-singleton, app-lifetime) holds the messages, independent of this nav state.
 Navigating list→thread→list→thread still unmounts/remounts `ConversationScreen` (the pane goes through

@@ -79,443 +79,15 @@ review PASS) — not security-sensitive except for #152's navigation-only reach 
 - Back returns to the channel-home `list` view via the paired router's existing `back` transition — no
   new nav event, no stack-aware back.
 
-## How it works
-
-Additive throughout — no existing route, nav arm, or view is rewritten:
-
-```
-src/renderer/src/
-├── pairedRoute.ts                        # + 'settings' route, + 'openSettings' nav arm; + 'pairServer' route, + 3 nav arms (#152)
-├── PairedShell.tsx                       # + case 'settings', + onOpenSettings threading; + case 'pairServer' (#152)
-└── screens/
-    ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
-    ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
-    └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Notifications section (#409) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
-        ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
-        ├── DefaultWorkspaceRow.tsx       # pure DefaultWorkspaceRowView + store-bound DefaultWorkspaceRowControl + in-file DefaultWorkspacePickerSheet (#404, new)
-        ├── PushNotificationRow.tsx       # pure PushNotificationRowView + store-bound PushNotificationRowControl (#409, new)
-        ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
-        └── settings.css                 # token-only, scaffold + Server row + Default-workspace row + Notifications row/switch + Storage row + About row + Pair-another-server row styles (#333 + #334 + #404 + #409 + #351 + #350 + #152)
-
-src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
-src/renderer/src/store/defaultWorkspaceStore.ts  # #403; read/write seam #404 consumes (documented separately)
-src/renderer/src/store/pushNotificationPrefStore.ts  # #408; read/write seam #409 consumes (documented separately)
-src/renderer/src/store/recentWorkspacesStore.ts + recentWorkspacesBridge.ts  # #382; picker data path #404 mounts while open
-
-src/renderer/src/version.d.ts             # ambient `declare const __APP_VERSION__: string` (#350, new)
-electron.vite.config.ts                   # + __APP_VERSION__ define, renderer block (#350)
-vitest.config.ts                          # + __APP_VERSION__ define, mirrored so tests see it (#350)
-```
-
-### The route + nav arm (`pairedRoute.ts`)
-
-```ts
-export type PairedRoute = 'list' | 'thread' | 'settings'
-export type PairedNav = { type: 'open' } | { type: 'openSettings' } | { type: 'back' }
-
-export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRoute {
-  switch (nav.type) {
-    case 'open':         return 'thread'
-    case 'openSettings': return 'settings'
-    case 'back':          return 'list'
-    default:              return assertNever(nav)
-  }
-}
-```
-
-`openSettings` is absolute like `open`/`back` — no `current` inspection. Settings → home back reuses
-the **existing** `back` arm unchanged: `nextPairedRoute('settings', { type: 'back' })` already resolved
-to `'list'` before this ticket, since `back`'s arm never inspected `current`. This is the ticket's
-central economy — one new route, one new nav arm, zero new back-transition logic.
-
-[#152](../codebase/152.md) later added a fourth route, `'pairServer'`, plus three nav arms:
-`openPairServer` (the Settings row → `pairServer`), `pairServerCancelled` (`pairServer` → `settings`,
-AC4 non-destructive), and `pairServerPaired` (`pairServer` → `list`, AC3, the new server's home). The
-two exits deliberately do **not** reuse the absolute `back` arm even though `back` also currently
-resolves to `list`: cancel's destination (`settings`, "return to where I launched pairing from") and a
-completed pair's destination (`list`, "go home to the new server") are two different intents that only
-coincide with `back` by accident today, and would diverge the moment `back` becomes stack-aware.
-
-### The second guard (`PairedShell.tsx`)
-
-`PairedShellView` gains a `case 'settings'`, reusing the shared `onBack`:
-
-```ts
-case 'settings':
-  return <SettingsScreen onBack={props.onBack} />
-```
-
-`PairedShell` (the `useReducer` container) adds `onOpenSettings={() => dispatch({ type: 'openSettings' })}`
-beside the existing `onOpen`/`onBack` — no new state, still the one `useReducer(nextPairedRoute, 'list')`
-from [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md).
-
-### The entry affordance (`ChannelList.tsx`)
-
-`ChannelList`/`ChannelListView` both gain a required `onOpenSettings: () => void` prop, threaded
-straight through (the `onOpen` precedent). `SettingsButton` is an in-file, unexported sibling of
-`NewConversationFab`, cloning its shape exactly: a native `<button type="button" aria-label="Settings">`
-holding an `aria-hidden` inline 24px Material `settings` (gear) glyph SVG. No `window.pyry`, no store —
-`onOpenSettings` is a pure injected nav effect. Placement is a **desktop-invented** affordance (like the
-FAB before it): ChannelList has no top app bar yet, and no Figma node on the list scope (15-8) pins a
-settings entry, so it's rendered as the section's first child and pinned top-right via CSS
-(`position: sticky; top; align-self: flex-end`) so it stays reachable while a long list scrolls under
-it.
-
-### The scaffold view (`SettingsScreen.tsx`)
-
-A single pure, exported, server-renderable view — no store read, no effects, no `window.pyry`:
-
-```ts
-export function SettingsScreen({
-  onBack,
-  onPairAnother
-}: {
-  onBack: () => void
-  onPairAnother: () => void
-}): JSX.Element
-```
-
-`onBack` is **required** (unlike `ConversationScreen`'s optional-gated `BackControl` — a Settings
-screen always has a back affordance). Structure: root `<section className="settings"
-aria-label="Settings screen">` → top-bar (`BackControl` + `<h1>Settings</h1>`) → body → one
-`<section className="settings__section">` with `<h2>Connection</h2>` and a
-`<div className="settings__section-body">` that mounts `<ServerInfoData /><ServerRowControl />`
-([#334](../codebase/334.md)) followed by `<PairAnotherServerRow onActivate={onPairAnother} />`
-([#152](../codebase/152.md), below). Copy strings live in a client-owned `SETTINGS_COPY` module
-constant (the `EMPTY_THREAD_COPY` idiom) — never a daemon string. `SettingsScreen` itself stays a pure,
-store-free composition point: it reads no store and fires no effect directly — the store read and the
-one-shot fetch both live inside the mounted children; `onPairAnother` is a pure injected callback with
-no store or effect of its own.
-
-### The Pair-another-server row (`SettingsScreen.tsx`, #152)
-
-An in-file, non-exported control mirroring `BackControl`'s inline-component + inline-SVG posture (not a
-dedicated module like `ServerRow.tsx` — it has no populated/null matrix, just a click):
-
-```ts
-function PairAnotherServerRow({ onActivate }: { onActivate: () => void }): JSX.Element
-// <button type="button" className="settings__pair-another-row" onClick={onActivate}>
-//   <span className="settings__pair-another-label">Pair another server</span>
-//   <svg aria-hidden="true" …chevron_right…/>
-// </button>
-```
-
-The row is a native `<button>`, so its visible text is the accessible name (no `aria-label`); the
-chevron `<svg>` is `aria-hidden`. Unlike the Server row (#334) and Storage row (#351), which both
-**omit** their trailing chevron because they have no detail screen to lead to, this row **keeps** its
-chevron — it is a genuine forward-nav affordance, matching Figma `17:21`. Activating it fires
-`onPairAnother`, wired by `PairedShellView` to `dispatch({ type: 'openPairServer' })` — see
-[Paired shell](paired-shell-pair-server-route.md#the-pairserver-route-152) for what renders next.
-
-### The Server row(s) (`ServerRow.tsx`, #334, widened to a list by #1148)
-
-Follows the #330 `ConnectionStatusIndicator`/`Control` view/container split, as a dedicated module (its
-own test seam) rather than in-file. Three exports, of which the first is untouched since #334:
-
-```ts
-export function ServerRow({ serverInfo }: { serverInfo: ServerInfoValue | null }): JSX.Element
-export function ServerRows({ servers }: { servers: ServerInfoValue[] }): JSX.Element   // #1148, new
-export function ServerRowControl(): JSX.Element   // useServerInfoStore(selectServers) → <ServerRows>
-```
-
-`ServerRow` is the pure single-row view, unchanged: always renders the `Server` label; when `serverInfo`
-is present, renders `serverId` (primary line) and `relayUrl` (secondary line) as auto-escaped React
-children; when `null`, renders a single `Loading…` placeholder in its place (never a blank `<p>`). In
-both states it renders an **empty** `.settings__server-status-slot` — a class-labelled mount point for
-\#330's future two-dot indicator, deliberately carrying no `aria-label="Connection status"` (that
-marker belongs to #330's `thread`-view indicator; duplicating it here was flagged as a collision risk
-during #333).
-
-`ServerRows` (#1148) is the new pure exported list view: a non-empty list renders one `<ServerRow>` per
-entry, keyed by `serverId` and in the given order; an empty list renders exactly one
-`<ServerRow serverInfo={null} />` — the same placeholder byte-for-byte, so nothing paired, nothing
-fetched yet, and an unreadable collection all render identically, with no new "no servers" copy string.
-Returns a fragment, so each row is a direct child of `.settings__section-body`, already a plain flex
-column with per-row padding — N rows stack correctly with `settings.css` untouched. `serverId` is safe
-as a React key because `pairedServerStore`'s decode raises `MalformedPairedServerRecordError` on a
-repeated `server` id, collapsing the whole collection to the absent arm before it reaches the renderer.
-
-The one-row-per-entry loop lives on this **exported view**, not inside `ServerRowControl`, because the
-container's populated branch is unreachable under `renderToStaticMarkup` (zustand v5 reads
-`getInitialState()`) and neither e2e tier covers this row — so on the container the only detector left
-would be a `vi.mock` of the store module, ceremony `ServerRow.test.tsx` already declined once in favour
-of injected props. On `ServerRows`, a two-entry injection is an ordinary server render.
-
-`ServerRowControl` stays the store-bound container: a narrow `useServerInfoStore(selectServers)` read
-handed straight to `ServerRows`, no effects, no `window.pyry` — the one-shot fetch that populates the
-store is owned entirely by `ServerInfoData` (mounted alongside it, not inside it).
-
-Mounting `<ServerInfoData />` inside `SettingsScreen`'s section-body is what makes the row(s) work: #340
-shipped that loader dormant (zero consumers), so before #334 the store sat empty forever. Because
-`SettingsScreen` mounts only under the paired shell's `settings` route (post-pairing, [PairedShell](paired-shell.md)),
-a fresh fetch fires every time Settings opens rather than once at app launch.
-
-### The Defaults section (`DefaultWorkspaceRow.tsx`, #404)
-
-Inserted as a `settings__section` **between** Connection and Storage — mirroring how #351 placed Storage
-between Connection and About, to preserve the mobile design's relative vertical order (Defaults y=322
-above Storage y=910). Unlike every other row in this screen, the row is *interactive*: activating it
-opens a picker, so it follows the `PairAnotherServerRow` (#152) idiom — a native `<button>` with a
-trailing chevron — rather than the static `ServerRow`/`ArchivedCountRow` idiom:
-
-```ts
-export function DefaultWorkspaceRowView({
-  defaultWorkspace,
-  onActivate
-}: { defaultWorkspace: string | null; onActivate: () => void }): JSX.Element
-
-export function DefaultWorkspaceRowControl(): JSX.Element
-// useDefaultWorkspaceStore(selectDefaultWorkspace) + useState(open) → <DefaultWorkspaceRowView> + picker
-```
-
-`DefaultWorkspaceRowView` renders the primary label "Default workspace" over a secondary line showing
-`defaultWorkspace` verbatim, or the client-owned `'scratch'` placeholder constant when `null` (Figma
-17:59 — a copy string standing for the daemon's server-side scratch default, not a daemon-sourced
-string). No `aria-label`: the button's text content is its accessible name; the trailing chevron SVG is
-`aria-hidden`. `defaultWorkspace` is rendered whole and opaque as auto-escaped React children — never
-split, basenamed, or filesystem-resolved (the same posture `WorkspacePickerSheet`'s `row.path` uses).
-
-`DefaultWorkspaceRowControl` reads the store and owns the picker's open-state in local `useState` (ADR
-0006 — transient UI state, not the store). While open it mounts an in-file, non-exported
-`DefaultWorkspacePickerSheet` — the direct analog of [#383](../codebase/383.md)'s own
-`WorkspacePickerSheet` container, minus its conversation coupling:
-
-```ts
-function DefaultWorkspacePickerSheet({
-  activeCwd,
-  onClose
-}: { activeCwd: string | null; onClose: () => void }): JSX.Element
-```
-
-It mounts `<RecentWorkspacesData />` ([#382](../codebase/382.md)) as a sibling of
-`<WorkspacePickerSheetView>` ([#383](../codebase/383.md)'s pure view, reused as-is), so each open fires a
-fresh `requestRecentWorkspaces` and each close tears the subscription down — "fresh fetch per open" falls
-out of React mount/unmount rather than an explicit refetch call. The Escape-to-close `useEffect` is #383's
-verbatim. `activeCwd` is passed the current default so the matching picker row carries the built-in
-"default" pill. `onChoose` is the sole write path:
-
-```ts
-onChoose={(path) => {
-  defaultWorkspaceStore.getState().setDefaultWorkspace(path)
-  onClose()
-}}
-```
-
-— dereferencing the store setter only inside the callback, never at render, and firing **no** daemon
-command (unlike #383's own container, whose `onChoose` dispatches `change_workspace` against a live
-conversation — wrong here, since Settings writes a client preference, not a live conversation's
-workspace). `onCreateFolder` is deliberately not supplied: [#398](../codebase/398.md)'s create-folder
-dialog is conversation-scoped, so the picker's "Other → Create new folder" entry renders disabled rather
-than being wired to a non-conversation folder-creation path (out of scope).
-
-### The Notifications section (`PushNotificationRow.tsx`, #409)
-
-Inserted as a `settings__section` **between** Defaults and Storage — Figma's Notifications section
-(header 17:62 at y=610) sits between Defaults (y=322) and Storage (y=910), so this insertion point
-preserves that relative order, the same placement discipline #404/#351 used. Unlike the interactive
-Default-workspace row, this row has no picker to open — it's a direct on/off control, so it follows
-the static `ServerRow`/`ArchivedCountRow` two-part idiom (pure view + store-bound Control) rather than
-the `DefaultWorkspaceRow`/`PairAnotherServerRow` button-with-chevron idiom, plus one callback prop
-neither of those needs:
-
-```ts
-export function PushNotificationRowView({
-  enabled,
-  onToggle
-}: { enabled: boolean; onToggle: (next: boolean) => void }): JSX.Element
-
-export function PushNotificationRowControl(): JSX.Element
-// usePushNotificationPrefStore(selectPushNotificationsEnabled) → <PushNotificationRowView>
-```
-
-`PushNotificationRowView` renders a text column holding the Figma-verbatim label "Push notifications
-when claude responds" (17:66 — a module-level `PUSH_TOGGLE_LABEL` constant, the `SERVER_ROW_LABEL`
-idiom, never a daemon string) beside a trailing native `<button type="button" role="switch">` (Figma
-17:67 track / 17:68 knob) carrying `aria-checked={enabled}` and a decorative `aria-hidden` knob
-child. `onClick={() => onToggle(!enabled)}` is the switch's only interaction wiring — no
-`onKeyDown` needed, because a native `<button>` already fires `onClick` on both Space and Enter.
-This is the genuine delta from the pre-existing `run-config__switch` in
-`RunConfigSections.tsx` — that switch is a `<span role="switch">` wired only to `onClick`, so it is
-focusable-but-not-keyboard-operable; this ticket's keyboard AC required real Space/Enter activation,
-which a `<span>` cannot give without an `onKeyDown` handler, so the architect spec called for a
-native `<button>` here instead of cloning the span verbatim.
-
-Because the switch button is a *sibling* of the label `<p>` (not its parent) and `role="switch"`
-computes its accessible name from the author rather than from sibling content, the button also
-carries an explicit `aria-label={PUSH_TOGGLE_LABEL}` — the same constant the visible label renders,
-so the accessible name can never drift from the visible copy.
-
-`PushNotificationRowControl` reads `usePushNotificationPrefStore(selectPushNotificationsEnabled)`
-and hands the boolean straight to the view, wiring `onToggle` to
-`pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)` — dereferenced inside the
-callback only, never at render (the `DefaultWorkspaceRow` `onChoose` discipline). No `useState`, no
-effect, no `window.pyry` — a pure read plus one interaction-time write, and no daemon command: the
-preference is entirely client-owned (see [Push-notification preference
-store](push-notification-preference-store.md)).
-
-### The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
-
-Inserted as a `settings__section` **between** Connection and About — Figma's Storage section sits above
-About in the mobile layout (y=910 vs y=1056), and this insertion point preserves that relative order now
-that desktop builds both neighbors:
-
-```ts
-export const selectArchivedCount = (s: ConversationListState): number | null =>
-  s.conversations === null ? null : s.conversations.filter((c) => c.is_archived).length
-
-export function ArchivedCountRow({ archivedCount }: { archivedCount: number | null }): JSX.Element
-export function ArchivedCountRowControl(): JSX.Element   // useConversationListStore(selectArchivedCount) → <ArchivedCountRow>
-```
-
-The same `ServerRow`/`ServerRowControl` pure-view/store-bound-container split (#334), reading the
-[conversation list store](conversation-list-store.md) through a new selector rather than a new store. `ArchivedCountRow` always renders the "Archived conversations" label; the secondary line is
-the em-dash placeholder when `archivedCount` is `null` (list not yet loaded — never rendered as "0
-archived", since `0` is a real loaded value), else `` `${archivedCount} archived` `` uniformly for every
-count including 0 and 1 ("archived" is a past-participle state, not a countable noun, so there is no
-singular/plural branch). No trailing chevron, mirroring the Server row's own omission.
-
-Unlike the Server row, **no loader to mount**: the conversation list is already kept live app-level by
-`ConversationListData` ([conversation-list store](conversation-list-store.md)), requested on
-connect and re-requested on every `conversationUpdated` broadcast (including archive/restore). So
-`ArchivedCountRowControl` is a pure store read with nothing to fetch — the count reflects the latest
-state on every render, and an archive/restore round trip flows through the existing re-list path into a
-fresh count with no new data path added.
-
-### The About section (`SettingsScreen.tsx`, #350)
-
-Appended inline as a second `settings__section`, after Connection — no new component file, since the
-version readout has no store and no populated/null matrix (a container/pure-view split would be
-over-engineering for a static string):
-
-```ts
-const VERSION_LINE = `Version ${__APP_VERSION__}`
-```
-
-`__APP_VERSION__` is a compile-time constant substituted by a Vite `define`, fed from `package.json`'s
-`version`, present in **both** `electron.vite.config.ts` (drives `npm run dev`/`npm run build`) and
-`vitest.config.ts` (drives `npm test` — a separate Vite config, invisible to the electron-vite one, so
-without its own copy of the `define` the test throws `ReferenceError: __APP_VERSION__ is not defined` at
-transform time rather than a clean assertion miss). Both configs read the version the same way —
-`JSON.parse(readFileSync(resolve('package.json'), 'utf-8')).version` — never a JSON import, since
-`electron.vite.config.ts` is typechecked by `tsconfig.node.json`, which sets no `resolveJsonModule`
-anywhere in the repo. A new ambient `src/renderer/src/version.d.ts` (`declare const __APP_VERSION__:
-string`, no import/export) types the global for every renderer module, picked up by `tsconfig.web.json`'s
-existing `src/renderer/src/**/*` glob.
-
-This is the deliberate opposite of the Server row above: `serverInfo` is daemon-sourced, async, and
-nullable, so it crosses main→renderer over IPC (#339/#340). The version is static, non-secret, and known
-at build time, so a compile-time `define` avoids the IPC round-trip and the transport/render split
-entirely — no `src/main`, `src/preload`, or `src/shared/ipc` edit.
-
-The Figma's build-hash sub-line (`build a8f3c2d`, node 17-109) is out of scope — desktop has no wired
-build-metadata source yet; a follow-up could add it with a second `define` using this same mechanism.
-
-### CSS (`settings.css`)
-
-Token-only, mirroring `channels.css`'s screen-root posture (`height: 100%; overflow-y: auto`, the
-direct-child-of-`#root` idiom). The one deliberate deviation from `channels.css`'s section-header
-tone: `.settings__section-header` uses `--color-primary` (#9dcbfc), not the muted
-`--color-on-surface-variant` `.channel-list__section-header` uses — the M3 settings-section-header
-color per Figma. `.settings__back` states its own ~15-line treatment directly (48px square,
-`--radius-full`, transparent→`--color-surface-container-high` hover, `--color-outline` focus-visible
-outline) rather than sharing a class — an explicit out-of-scope call in the original spec, not an
-oversight. It duplicated `.conversation__back` verbatim until
-[#1064](conversation-shell-chrome.md#back-control-140-deleted-by-1064) deleted that rule; `.settings__back`
-is now the sole statement of the treatment, and three stylesheets' comments were re-pointed at it in the
-same ticket. `.settings__storage-row` / `-text` / `-label` / `-count` (#351) and `.settings__about-row` (`--space-3`/
-`--space-4` padding) / `.settings__about-version` (`--color-on-surface` + the four `--text-body-large-*`
-declarations) mirror the Server row's padding and label type treatment (#350/#351) — each a dedicated
-class rather than reusing `.settings__server-row*`, introducing no new token or literal.
-`.settings__storage-row-count` additionally sets `overflow-wrap: anywhere` (the Server-row-id-line guard)
-since the derived count string has no fixed length. `.settings__pair-another-row` (#152) mirrors
-`.settings__back`'s button reset + hover/focus treatment (`--space-3`/`--space-4` padding, transparent→
-`--color-surface-container-high` hover, `--color-outline` focus-visible outline);
-`.settings__pair-another-label` mirrors the Server-row label's `--text-body-large-*` treatment; the
-chevron slot is `flex:0 0 auto`, 20×20, `--color-on-surface-variant` (a muted trailing affordance) — no
-new token introduced. `.settings__default-workspace-row` (#404) fuses the two prior idioms: the
-`.settings__pair-another-row` button-reset/hover/focus shell (it is also interactive) with the
-`.settings__server-row-text`-style two-line column (`-text`/`-label`/`-value`, `-value` carrying the same
-`overflow-wrap: anywhere` long-value guard as `-storage-row-count`); its `-chevron` mirrors
-`.settings__pair-another-chevron` — again no new token. `.settings__notifications-row` / `-text` /
-`-label` (#409) mirror `.settings__storage-row`'s geometry and label typography as their own
-dedicated classes (the `.settings__storage-row` / `.settings__about-row` precedent of never sharing
-row classes across sections). `.settings__switch` / `--on` / `-knob` (#409) are cloned — not
-reused — from `conversation.css`'s `.run-config__switch` family (the client-owned-copy idiom, avoiding
-a `settings.css` → conversation-screen selector coupling), adapted from a `<span>` to a `<button>`
-with an added button reset; the switch here is always operable (no read-only variant), so
-`cursor: pointer` and the `:focus-visible` ring are unconditional, unlike the run-config switch's
-`:not([aria-readonly])`-guarded original. Token choices carry over verbatim: off — 52×32 track,
-`--color-surface-container-highest` fill, 2px `--color-outline` border, 16px `--color-outline` knob at
-`left: 8px`; on — `--color-primary` track+border, knob grown to 24px at `right: 4px`, filled
-`--color-surface` (the dark knob substitute, since no `--color-on-primary` token exists in this
-codebase's tokens.css). No new token or literal introduced.
-
-### Data flow
-
-```
-ChannelList SettingsButton.onClick
-  → PairedShell onOpenSettings  = dispatch({ type: 'openSettings' })
-  → nextPairedRoute('list', openSettings) = 'settings'
-  → PairedShellView route='settings' → <SettingsScreen onBack={dispatch back} />
-    → mounts <ServerInfoData />  → window.pyry.serverInfo() [once]
-        → mapServerInfo → setServers → serverInfoStore
-    → mounts <ServerRowControl /> → useServerInfoStore(selectServers) → <ServerRows servers=… /> → one <ServerRow> per entry
-    → mounts <DefaultWorkspaceRowControl /> → useDefaultWorkspaceStore(selectDefaultWorkspace)
-        → <DefaultWorkspaceRowView defaultWorkspace=… onActivate={() => setOpen(true)} />
-    → mounts <PushNotificationRowControl /> → usePushNotificationPrefStore(selectPushNotificationsEnabled)
-        → <PushNotificationRowView enabled=… onToggle={(next) => setPushNotificationsEnabled(next)} />
-    → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
-    → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
-    → renders <PairAnotherServerRow onActivate={onPairAnother} />
-
-conversationUpdated (archive/restore) → ConversationListData re-list → setConversations
-  → selectArchivedCount recomputes → ArchivedCountRowControl re-renders iff the count itself changed
-
-DefaultWorkspaceRowView.onActivate (#404)
-  → DefaultWorkspaceRowControl setOpen(true) → mounts <DefaultWorkspacePickerSheet activeCwd=… onClose=… />
-    → mounts <RecentWorkspacesData />  → window.pyry.sendCommand({type:'requestRecentWorkspaces'}) [once per open]
-        → recentWorkspacesReceived → setRecentWorkspaces → recentWorkspacesStore
-    → renders <WorkspacePickerSheetView workspaces=… activeCwd=… onChoose=… onClose=… />
-      row click → onChoose(path)
-        → defaultWorkspaceStore.getState().setDefaultWorkspace(path)  [no daemon command]
-        → onClose() → setOpen(false) → picker sheet unmounts (RecentWorkspacesData subscription torn down)
-      Escape / onClose → setOpen(false) → picker sheet unmounts
-    → DefaultWorkspaceRowControl re-renders with the new store value on the next tick
-
-PushNotificationRowView switch button.onClick (#409)
-  → onToggle(!enabled)
-    → pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)  [no daemon command]
-      → storage.write(next) [localStorage, #408] then set({ pushNotificationsEnabled: next })
-    → PushNotificationRowControl re-renders with the new store value on the next tick
-
-SettingsScreen BackControl.onClick
-  → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
-
-PairAnotherServerRow.onClick (#152)
-  → dispatch({ type: 'openPairServer' }) → nextPairedRoute('settings', openPairServer) = 'pairServer'
-  → PairedShellView renders <PairingScreen> fresh (editing phase, no bridge — window.pyry default)
-    confirm → MAIN: persists the overwriting record → pairingHandler.onPaired → connection.reconnect()
-            → RENDERER: onPaired → dispatch({ type: 'pairServerPaired' }) → route 'list' (AC3)
-    cancel  → pairing reducer resets (no persist, no reconnect)
-            → onCancel → dispatch({ type: 'pairServerCancelled' }) → route 'settings' (AC4)
-```
-
-The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
-part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
-[server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
-\#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
-(#403) and reuses the pre-existing [recent-workspaces store](recent-workspaces-store.md)/bridge (#382)
-and [`WorkspacePickerSheetView`](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) (#383) for its picker —
-no new store, wire type, or daemon command; the sole wire traffic is the pre-existing
-`requestRecentWorkspaces` fetch, re-fired fresh on every picker open. #409's Notifications section adds
-no new data path either: it reads and writes the pre-existing [push-notification preference
-store](push-notification-preference-store.md) (#408) directly, with no daemon command and no wire
-traffic at all — the entire round trip stays inside the renderer. #351's Storage section adds no new
-data path either: it reads the pre-existing [conversation list store](conversation-list-store.md) through
-a new selector, and that store is already kept live by the app-level `ConversationListData` bridge. #350's
-About section adds no runtime data flow at all — the value is fixed at build time, so there is nothing to
-fetch or subscribe to.
+## Where the detail lives
+
+Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the
+link points at the right file.
+
+- [How it works](settings-screen-how-it-works.md) — the route + nav arm, the second guard, the entry
+  affordance, the scaffold view, and every section's own row implementation (Pair-another-server,
+  Server row(s) + the per-row Unpair action, Defaults, Notifications, Storage, About), the CSS, and
+  the full data flow.
 
 ## Edge cases and limitations
 
@@ -565,12 +137,29 @@ fetch or subscribe to.
   stack-aware `back` from `pairServer` would need to land on `settings`, which is a different resolution
   than the two intents this ticket actually needs. `current` stays in `nextPairedRoute`'s signature for
   exactly this reason — see [paired shell](paired-shell.md).
-- **Settings now names every paired server, but adds no way to remove one.** Since #1148 the Connection
+- **Every row now carries its own Unpair action ([#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)), closing the gap #1148 opened.** Since #1148 the Connection
   section renders one row per entry in [`pairedServerStore`](paired-server-store.md)'s collection
   (`list()`, oldest-paired first); confirming a new pairing from the Pair-another-server row adds or
-  replaces an entry **by server id** (#1069's keyed `save`), it does not overwrite a single stored
-  record. Per-server removal is [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152),
-  natively blocked on this ticket — #1148 adds no Unpair action and no mutation surface at all.
+  replaces an entry **by server id** (#1069's keyed `save`). #1162 added the removal half: a two-phase
+  confirm per row, a re-read of the collection so the departed row leaves without a relaunch, and a
+  route flip to the pairing screen conditional on no records remaining — see [How it
+  works](settings-screen-how-it-works.md#the-server-rows-serverrowtsx-334-widened-to-a-list-by-1148-given-an-unpair-action-by-1162)
+  for the mechanism. What #1162 deliberately does **not** do: scope the app-wide state clear to the
+  departed server ([#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) owns that) or
+  migrate the composer's Re-pair control off the whole-collection channel
+  ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)).
+- **A failed per-server unpair has no visible affordance — the row just returns to idle.** No banner,
+  no row-local error copy, no session-store degradation (the deliberate reason for the last point).
+  Retrying is the affordance: the Unpair button is right there, un-armed. Reddening a richer surface
+  needs a main-side throw the fake e2e tier cannot currently drive, so nothing was built for a failure
+  that has not been observed — revisit if one is.
+- **Whether the surviving server's channel list repopulates after the first of two unpairs is
+  deliberately unasserted.** `clearPairingScopedState` does not run on the "records remain" path (see
+  [Paired shell § data flow](paired-shell-routing.md)), and whether the surviving connection's rows are
+  re-listed depends on a session-status re-assertion this ticket neither owns nor drives. AC3 for #1162
+  is worded against the Settings rows and the shell route, both owned outright, rather than against the
+  channel list — [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) is what would make
+  the channel-list question answerable.
 - **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
   already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
   and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
@@ -632,7 +221,15 @@ fetch or subscribe to.
 - [#1148](https://github.com/pyrycode/pyrycode-desktop/issues/1148) · Spec:
   `docs/specs/architecture/1148-settings-lists-every-paired-server.md` — widens the Connection section to
   one `ServerRow` per paired server via the new `ServerRows` view; the first of #1090's four slices,
-  and what [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)'s per-server Unpair hangs on.
+  and what [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)'s per-server Unpair hangs on.
+- [Unpair channel](unpair-channel.md) / [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149) —
+  the per-server erase channel this screen's Unpair action calls; #1149 shipped it with no caller, #1162
+  is the first one.
+- [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) · Spec:
+  `docs/specs/architecture/1162-per-server-unpair-from-settings.md` — the interim per-server Unpair home
+  (#1090's decision), wiring the row action, the confirm, the list refresh and the conditional route
+  flip; see [How it works](settings-screen-how-it-works.md) for the mechanism. Split from #1152, which
+  is otherwise exhausted as a parent (split depth capped at #1090 → #1152 → #1162).
 - [#403 codebase notes](../codebase/403.md) · Spec: `docs/specs/architecture/403-default-workspace-persist-apply.md`
   — the data half of the Defaults section: the persisted store and its read/write seam, no UI.
 - [#404 codebase notes](../codebase/404.md) · Spec: `docs/specs/architecture/404-default-workspace-row.md`

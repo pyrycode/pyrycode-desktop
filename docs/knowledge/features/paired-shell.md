@@ -52,7 +52,7 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
   `settings`'s single `back` exit, `pairServer` has **two** distinct exits with their own nav arms:
   cancelling returns to `settings` (the current server stays paired and connected); completing a new
   pairing goes to `list` (the freshly-paired server's channel home). See [Settings
-  screen](settings-screen.md#the-pair-another-server-row-settingsscreentsx-152) for the entry row.
+  screen](settings-screen-how-it-works.md#the-pair-another-server-row-settingsscreentsx-152) for the entry row.
 - [#347](../codebase/347.md) added a fifth view, `archive` — reached from a second entry button on the
   list, sharing the same top-right cluster as the Settings entry — that shows a back header plus a
   two-tab segmented header (Channels/Discussions) with both tab bodies still empty. Its back affordance
@@ -218,7 +218,8 @@ src/renderer/src/
   strictly before `clearAllLastRead` runs, last overall);
   see [§ The pairServer route](paired-shell-pair-server-route.md#the-pairserver-route-152) and [§ The last-read
   stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) above
-- [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
+- [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file; [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) gave `onUnpaired` a second caller — the Settings screen's per-server Unpair action, reaching this same callback only once no paired record remains
+- [Settings screen](settings-screen.md) / [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) — the `settings` case's third prop, `onUnpaired`, reused rather than given its own callback; see [Routing and layout § the pure view + container](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) above
 - [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
 - [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
 - [Conversation delete (transport)](conversation-delete.md) / [#652](../codebase/652.md) — the

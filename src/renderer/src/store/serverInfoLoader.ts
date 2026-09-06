@@ -38,14 +38,31 @@ export function mapServerInfo(res: ServerInfo): ServerInfoValue[] {
  * renderer"), so a late-arriving handler failure can never surface as an unhandled rejection in React.
  * Assumes `invoke` returns a Promise and does not throw synchronously (the `ipcRenderer.invoke`
  * contract).
+ *
+ * It RESOLVES TO the list it just wrote (#1162). Purely additive — `ServerInfoData` below still
+ * `void`s the call and is unaffected — and it is what lets this be the ONE refresh function rather
+ * than a near-duplicate of it: the per-server unpair re-reads the collection to drop the departed row
+ * AND to decide whether any record remains, and taking both from one write means the rendered rows
+ * and the route decision cannot disagree about how many servers are left. The value stays as coarse
+ * as the store's: `[]` covers nothing-paired, an unreadable collection and a rejected invoke alike,
+ * which is exactly the collapse `serverInfoStore` already chose when it declined
+ * `ServerInfoValue[] | null` — `runUnpairServer`'s docblock argues why that is the right resolution
+ * for its own read.
  */
 export function loadServerInfo(
   invoke: () => Promise<ServerInfo>,
   setServers: (servers: ServerInfoValue[]) => void
-): Promise<void> {
+): Promise<ServerInfoValue[]> {
   return invoke()
-    .then((res) => setServers(mapServerInfo(res)))
-    .catch(() => setServers([]))
+    .then((res) => {
+      const servers = mapServerInfo(res)
+      setServers(servers)
+      return servers
+    })
+    .catch(() => {
+      setServers([])
+      return [] as ServerInfoValue[]
+    })
 }
 
 /**

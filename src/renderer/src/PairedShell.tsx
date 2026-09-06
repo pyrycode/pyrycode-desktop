@@ -251,7 +251,18 @@ export function PairedShellView(props: {
         </div>
       )
     case 'settings':
-      return <SettingsScreen onBack={props.onBack} onPairAnother={props.onOpenPairServer} />
+      // #1162: the SAME `onUnpaired` the thread case hands ConversationScreen, reused rather than
+      // given a callback of its own. Both mean exactly "the app's pairing has ended — clear and
+      // leave", and the container has already bound it to applyPairingChange's `unpaired` arm. The
+      // per-server action reaches it only when the erase leaves no record behind; unpairing one of
+      // several servers stays inside this shell and never calls it.
+      return (
+        <SettingsScreen
+          onBack={props.onBack}
+          onPairAnother={props.onOpenPairServer}
+          onUnpaired={props.onUnpaired}
+        />
+      )
     case 'archive':
       return <ArchiveScreen onBack={props.onBack} />
     case 'pairServer':

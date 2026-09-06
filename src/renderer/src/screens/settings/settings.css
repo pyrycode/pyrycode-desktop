@@ -433,3 +433,64 @@
   height: 24px;
   background: var(--color-surface);
 }
+
+/* #1162: the Server row's trailing unpair action. A SIBLING of .settings__server-row-text inside the
+   row, so the row's own flex geometry places it — the text column is flex:1 1 auto, so this lands at
+   the trailing edge with no new layout rule and no change to the row itself. There is no Figma node:
+   #1090 records the Settings home as an INTERIM decision pending #1070, so the treatment follows the
+   screen's existing tokens and #166's deleted UnpairControl shape rather than a drawn design.
+   flex-shrink:0 keeps the buttons intact when a long server id or relay URL fills the text column. */
+.settings__server-row-unpair {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-2);
+}
+
+/* The action's buttons — the .settings__pair-another-row text-button treatment (transparent, no
+   border, inherited font family) at label-large, which is the app's button-text step. */
+.settings__server-unpair {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.settings__server-unpair:hover:not(:disabled) {
+  background: var(--color-surface-container-high);
+}
+
+.settings__server-unpair:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The `unpairing` phase disables BOTH buttons, so a double-click cannot launch a second erase. The
+   dimming is what makes that state legible rather than looking like an unresponsive control. */
+.settings__server-unpair:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The destructive answer carries the error role, so Confirm never reads as the same weight of action
+   as Cancel beside it. Text-only — the row is a settings line, not a dialog, so a filled button would
+   out-shout every other control on the screen. */
+.settings__server-unpair--confirm {
+  color: var(--color-error);
+}
+
+/* The confirm question. body-small on-surface-variant — the Server row's own secondary-line treatment,
+   so the question reads as part of the row it belongs to. */
+.settings__server-unpair-prompt {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}

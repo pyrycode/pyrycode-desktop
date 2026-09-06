@@ -8,7 +8,12 @@ import { SettingsScreen } from './SettingsScreen'
 const noop = (): void => {}
 
 const render = (): string =>
-  renderToStaticMarkup(<SettingsScreen onBack={noop} onPairAnother={noop} />)
+  // #1162's `onUnpaired` is REQUIRED, so dropping it from the shell's settings case is a compile
+  // error rather than a Settings screen with no way to forget a server. There is no markup pin for
+  // the pass-through: ServerRowControl server-renders the EMPTY store (zustand v5 reads
+  // getInitialState()), so no row — and therefore no action — exists to observe here. Its detector is
+  // the e2e tier, where settings-per-server-unpair.spec.ts drives the whole chain to the route flip.
+  renderToStaticMarkup(<SettingsScreen onBack={noop} onPairAnother={noop} onUnpaired={noop} />)
 
 describe('SettingsScreen', () => {
   it('renders the "Settings" title (AC2)', () => {

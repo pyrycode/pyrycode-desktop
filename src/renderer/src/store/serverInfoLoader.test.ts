@@ -53,11 +53,18 @@ describe('loadServerInfo', () => {
     const invoke = vi.fn(async () => twoServers)
     const setServers = vi.fn()
 
-    await loadServerInfo(invoke, setServers)
+    const written = await loadServerInfo(invoke, setServers)
 
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(setServers).toHaveBeenCalledTimes(1)
     expect(setServers).toHaveBeenCalledWith([
+      { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
+      { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
+    ])
+    // #1162: the loader RESOLVES TO the list it just wrote, so a caller that needs to act on the
+    // fresh count — the per-server unpair's "do any records remain?" — reads the same value the rows
+    // render, rather than re-invoking or reaching back into the store.
+    expect(written).toEqual([
       { serverId: 'srv-alpha', relayUrl: 'wss://relay.example/v1' },
       { serverId: 'srv-bravo', relayUrl: 'wss://second-relay.example/v1' }
     ])
@@ -67,10 +74,11 @@ describe('loadServerInfo', () => {
     const invoke = vi.fn(async () => unavailable)
     const setServers = vi.fn()
 
-    await loadServerInfo(invoke, setServers)
+    const written = await loadServerInfo(invoke, setServers)
 
     expect(setServers).toHaveBeenCalledTimes(1)
     expect(setServers).toHaveBeenCalledWith([])
+    expect(written).toEqual([])
   })
 
   it('writes an empty list once on a rejected invoke and never rejects into the caller (AC5)', async () => {
@@ -79,8 +87,10 @@ describe('loadServerInfo', () => {
     })
     const setServers = vi.fn()
 
-    // The returned promise resolves — the loader swallows the rejection.
-    await expect(loadServerInfo(invoke, setServers)).resolves.toBeUndefined()
+    // The returned promise resolves — the loader swallows the rejection — and #1162 makes it resolve
+    // to the same empty list it wrote, so the swallow stays observable to a caller that reads the
+    // value rather than silently indistinguishable from an unavailable response.
+    await expect(loadServerInfo(invoke, setServers)).resolves.toEqual([])
 
     expect(setServers).toHaveBeenCalledTimes(1)
     expect(setServers).toHaveBeenCalledWith([])

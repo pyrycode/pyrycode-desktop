@@ -9,10 +9,11 @@ one channel with two request shapes.** `UNPAIR_CHANNEL` (below) erases the **who
 still carries no body. `UNPAIR_SERVER_CHANNEL` (§ "The per-server channel") erases exactly **one**
 named record and carries the module's first untrusted request field. They sit side by side, Strangler
 Fig style: the composer's Re-pair control ([#166](../codebase/166.md)) is still the whole-collection
-channel's only caller, unchanged, until [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)
-migrates it and deletes that half. The per-server channel ships with no caller yet — same "boundary
-ahead of its UI consumer" shape as the original channel's own introduction — the visible per-server
-unpair control is [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090)'s UI.
+channel's only caller, unchanged, until [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
+migrates it and deletes that half. The per-server channel shipped with no caller in #1149 — same
+"boundary ahead of its UI consumer" shape as the original channel's own introduction — and got its
+first one in [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162), the Settings screen's
+per-row Unpair action; see [§ The per-server channel](#the-per-server-channel-1149) below.
 
 Introduced in [#173](../codebase/173.md), on top of [#172](../codebase/172.md)'s
 `ClearablePairedServerStore.clear()`. It is the **byte-for-byte twin** of the [pairing-status
@@ -418,12 +419,14 @@ renderer→main IPC boundary that #172 deliberately deferred; #1149 introduced t
   (`save` overwrites a malformed collection) or the whole-collection unpair (`clear()` never reads, so
   it still succeeds). No code change addresses this — noted as an inherent property of a per-record
   erase over a collection whose only other reader is strict.
-- **The per-server channel has no caller yet.** [#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149)
-  ships the contract and the handler only; [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090)
-  wires the visible per-server unpair control to `window.pyry.unpairServer(serverId)`, and
-  [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152) migrates the composer's Re-pair
-  control off `unpair()` onto it and deletes `UNPAIR_CHANNEL`/`registerUnpairHandler` outright — at
-  which point this document's "whole-collection channel" sections describe a deleted path.
+- **The per-server channel's first caller is the Settings screen's per-row Unpair action
+  ([#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)), through the pure
+  `runUnpairServer` helper** — see [Settings screen § `runUnpairServer`](settings-screen-how-it-works.md#rununpairserver-unpairserveractionts-1162).
+  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) still migrates the composer's
+  Re-pair control off `unpair()` onto it and deletes `UNPAIR_CHANNEL`/`registerUnpairHandler`
+  outright — at which point this document's "whole-collection channel" sections describe a deleted
+  path — but that migration is no longer this channel's only forward dependency, since #1162 already
+  gave the per-server arm a live production caller.
 - **The two erases are not atomic** — they are two independent `SecureStore` names, not a
   transaction. A crash between them leaves *no record + orphan label*, the argued-benign,
   self-healing interleaving (see "The label erase (#827)" above). No journal, no two-phase commit.
@@ -477,6 +480,11 @@ renderer→main IPC boundary that #172 deliberately deferred; #1149 introduced t
   `clearFor` and deleted the gate, so the two unpair arms no longer share that rule — the
   whole-collection arm still always erases (the collection it just emptied), the per-server arm now
   erases the one entry it just named, unconditionally.
-- Downstream, not yet built: [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090) (the
-  visible per-server unpair control) and [#1152](https://github.com/pyrycode/pyrycode-desktop/issues/1152)
-  (migrates the composer's Re-pair control onto `unpairServer` and retires `UNPAIR_CHANNEL`).
+- [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) — the visible per-server unpair
+  control [#1090](https://github.com/pyrycode/pyrycode-desktop/issues/1090) called for, wired to this
+  channel's per-server arm; see [Settings screen § the per-row Unpair
+  action](settings-screen-how-it-works.md#the-per-row-unpair-action-1162).
+- Downstream, not yet built: [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
+  (migrates the composer's Re-pair control onto `unpairServer` and retires `UNPAIR_CHANNEL`); [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150)
+  (scopes `clearPairingScopedState` to the departed server rather than the whole app, for #1162's
+  "records remain" path).

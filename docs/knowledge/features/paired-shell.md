@@ -271,3 +271,14 @@ src/renderer/src/
   — merges the `list`/`thread` arms into the two-pane desktop shell, adds `pairedShell.css` and
   `minWidth: 800` on the `BrowserWindow`, and (in a rework after a round-1 code-review FAIL) adds the
   `paneKey` prop that re-keys `ConversationScreen` on a sidebar-driven conversation switch.
+- [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) · Spec:
+  `docs/specs/architecture/1139-background-task-roster-reconnect-reset-scoped-to-server.md` — widens
+  `clearPairingScopedState` to a twelfth store,
+  [`backgroundTaskRosterStore`](background-task-roster-store.md)'s `clearAllRosters`. This store used to
+  be the header's own named counter-example (a store the `connected` edge already cleared for its own
+  reasons); [#1117](daemon-connection-routing.md) scoping that edge per server, then #1139 scoping this
+  store's own reset to match, retired the self-heal that had kept it out — the same `queueStore` sequence
+  [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) ran one week earlier, one notch
+  harsher: this family has no re-assertion path of any kind, so every held roster (not merely a drained
+  one) would otherwise latch across a pairing change. Nullary, whole-map, and sequenced strictly before
+  `clearAllLastRead` for the same reason as its siblings.

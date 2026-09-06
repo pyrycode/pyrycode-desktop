@@ -319,7 +319,7 @@ export function translateTimelineEvent(
  *     stays a pure function OF THE EVENT — the open conversation is not a property of an event, and
  *     making it one is the misattribution the whole #675 family exists to remove;
  *   - only for the two `ThreadEvent` arms ENUMERATED there — `sessionBoundary` and `reconnected`, the
- *     two whose wire payload carries no conversation id and never will (one reason each below);
+ *     two this bridge does not attribute from the event itself (one reason each below);
  *   - and only AFTER the event's own attribution has been found absent, so an attributed arm never
  *     consults it at all.
  *
@@ -367,11 +367,14 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
       return event.conversationId
     case 'sessionTransition':
     case 'connected':
-      // The other two owned arms carry no routing key of their own and neither ever will:
-      // `sessionTransition` carries `newSessionId` (the #259 holder's addressing key) and its wire
-      // payload has no conversation id to widen (types.ts:664 — a session boundary is attributed by the
-      // connection it arrives on); and a connection edge has no conversation by nature. So `null` here
-      // is the honest answer, and returning it is what keeps the resolution OUT of this pure function.
+      // The other two owned arms are not attributed from the event here. A connection edge has no
+      // conversation by nature and never will. `sessionTransition` is the changed one: since #1192 it
+      // DOES carry a `conversationId` — the routing key the daemon has always stamped, which this
+      // repo's port was simply missing — and `subscribeSessionId` reads it to scope the session-id
+      // write. THIS function deliberately does not. Routing the delimiter by it is a second
+      // deliverable with its own detector (the marker would then draw in a chat that is not on
+      // screen), so the behaviour is unchanged and only the reason for it is: `null` here is a choice
+      // now, not an absence. Returning it is still what keeps the resolution OUT of this pure function.
       //
       // They are NOT dormant. Each still reaches the flat store, which is what AC4 keeps true, and since
       // #785 the fan-out (`timelineWriteTarget`) files each into the conversation ON SCREEN — the
@@ -404,7 +407,8 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
  * `timelineTargetFor` — that arm would land silently on the wrong thread. With the enumeration it falls
  * to `default` instead and is dropped from the keyed path, reaching the flat store only, which is the
  * same safe failure direction `timelineTargetFor`'s own `default` has. The two named arms are the two
- * whose wire payload carries no conversation id and never will (see that function's second group).
+ * this bridge does not attribute from the event itself (see that function's second group — since #1192
+ * one of them CAN be, and deliberately still is not).
  *
  * `getOpenConversationId` is a GETTER, not a value, for two reasons. It must be read at DISPATCH time:
  * one app-lifetime listener outlives any number of chat switches, so a value captured at subscribe time

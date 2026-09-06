@@ -233,6 +233,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   it('sessionTransition → a sessionBoundary ThreadEvent carrying the render fields, dropping newSessionId', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
+      conversationId: 'conv-transition',
       newSessionId: 'sess-2',
       reason: 'workspace_change',
       occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -359,6 +360,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
+      conversationId: 'conv-transition',
       newSessionId: 'sess-3',
       reason: 'clear',
       occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -591,6 +593,7 @@ describe('timelineTargetFor', () => {
   it('returns null for sessionTransition — it carries newSessionId, not a conversation id', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
+      conversationId: 'conv-transition',
       newSessionId: 'sess-2',
       reason: 'workspace_change',
       occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -639,9 +642,12 @@ describe('timelineWriteTarget (#785)', () => {
     expect(timelineWriteTarget({ type: 'reconnected' }, null, () => null)).toBeNull()
   })
 
-  // Unreachable in production today — `sessionTransition`'s wire payload has no conversation id. It is
-  // pinned because it is what makes a future wire widening safe with no edit here: the event's own
-  // attribution wins, so the switch can never silently override a real id.
+  // Still unreachable in production, but for a different reason since #1192. The wire widening this
+  // pin was written against has HAPPENED — `sessionTransition` carries a `conversationId` now — and
+  // `conversationIdOf` deliberately goes on returning `null` for that arm, because routing the
+  // delimiter by it is its own deliverable. So the pin's value is unchanged and its premise is
+  // narrower: the event's own attribution wins, so the switch can never silently override a real id
+  // on the day that arm starts reporting one.
   it('the precedence pin: an id on an id-less arm still wins over the open conversation', () => {
     const getOpen = vi.fn((): string | null => 'conv-open')
     const event: ThreadEvent = {
@@ -696,6 +702,7 @@ describe('translateTimelineEvent — the injected clock (#1013)', () => {
     const translated = translateTimelineEvent(
       {
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         reason: 'clear',
         workspaceCwd: '/w',
         occurredAt: '2026-01-15T12:00:00.000Z',
@@ -1402,6 +1409,7 @@ describe('subscribeTimeline', () => {
       const idLess: DaemonEvent[] = [
         {
           type: 'sessionTransition',
+          conversationId: 'conv-transition',
           newSessionId: 'sess-2',
           reason: 'workspace_change',
           occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -1441,6 +1449,7 @@ describe('subscribeTimeline', () => {
       setOpen('conv-b')
       bridge.emit({
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 'sess-2',
         reason: 'workspace_change',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -1465,6 +1474,7 @@ describe('subscribeTimeline', () => {
       })
       bridge.emit({
         type: 'sessionTransition',
+        conversationId: 'conv-transition',
         newSessionId: 'sess-2',
         reason: 'workspace_change',
         occurredAt: '2026-07-10T00:00:00.000000000Z',

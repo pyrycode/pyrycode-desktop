@@ -77,12 +77,20 @@ whole path unit-tests with plain spies:
 ```ts
 translateSessionTransition(event: DaemonEvent): string | null
 // sessionTransition → event.newSessionId verbatim; every other event → null (plain `default`, not
-// assertNever — this filter permanently consumes only sessionTransition).
+// assertNever — this filter permanently consumes only sessionTransition). Deliberately blind to
+// event.conversationId (#1192) — attribution is one decision and it lives in the gate below, not here.
 
-subscribeSessionId(onDaemonEvent, setSessionId): () => void
-// onDaemonEvent(event => { const id = translateSessionTransition(event); if (id !== null) setSessionId(id) })
+subscribeSessionId(onDaemonEvent, setSessionId, getOpenConversationId): () => void
+// onDaemonEvent(event => {
+//   if (event.type === 'sessionTransition' && event.conversationId !== getOpenConversationId()) return
+//   const id = translateSessionTransition(event); if (id !== null) setSessionId(id)
+// })
 // — returns the off handle (the daemonEventBridge cleanup idiom). The guard is `!== null`, not
-// truthiness: `if (id)` would silently drop an empty-string session_id.
+// truthiness: `if (id)` would silently drop an empty-string session_id. The gate ([#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192),
+// `subscribeRunConfig`'s shape copied verbatim) is checked first: a marker naming a conversation other
+// than the open one returns before the translator ever runs. `getOpenConversationId` is called PER
+// EVENT, inside the listener, never captured once at subscribe time — this listener is app-lifetime,
+// so a captured id would freeze at whatever was open on mount.
 ```
 
 ### The React binding — `SessionIdData` (same file)
@@ -90,18 +98,23 @@ subscribeSessionId(onDaemonEvent, setSessionId): () => void
 A headless leaf (`SessionIdData(): null`) mounted **unconditionally at App level**
 (`src/renderer/src/App.tsx`), alongside `<ConversationListData />` — **not** sheet-scoped like
 `RunConfigData`. A `sessionTransition` marker can arrive at any time, including before the Run
-config sheet is ever opened, so the subscriber must already be listening. One
-`useEffect(() => subscribeSessionId(window.pyry.onDaemonEvent, id => sessionIdStore.getState().setSessionId(id)), [])`;
-`window.pyry` is dereferenced only inside the effect, so it server-renders to empty markup without a
-bridge mock (the `ConversationListData` invariant). No request effect, no `useState`/`useRef`/
-`useSessionStore` — reactive-only.
+config sheet is ever opened, so the subscriber must already be listening. Since
+[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) the listener being always-on no
+longer means the id is retained regardless of which screen is shown — each marker is kept only if it
+names the open chat; the two are independent. One
+`useEffect(() => subscribeSessionId(window.pyry.onDaemonEvent, id => sessionIdStore.getState().setSessionId(id), () => activeConversationStore.getState().activeConversation?.id ?? null), [])` —
+the third argument is `RunConfigLiveData`'s open-conversation wiring verbatim, down to the `?? null`
+spelling. `window.pyry` is dereferenced only inside the effect, so it server-renders to empty markup
+without a bridge mock (the `ConversationListData` invariant). No request effect, no `useState`/
+`useRef`/`useSessionStore` — reactive-only.
 
 ### Data flow
 
 ```
-daemon → transport (#254) → sessionTransition{newSessionId}
+daemon → transport (#254) → sessionTransition{newSessionId, conversationId (#1192)}
   → window.pyry.onDaemonEvent ─┬─ daemonEventBridge / timelineBridge / modalBridge   (no-op, #254)
                                 └─ SessionIdData (NEW, #259)
+                                     → conversationId !== getOpenConversationId()? → drop (#1192)
                                      → translateSessionTransition → setSessionId
                                      → sessionIdStore                                  [last marker wins]
 
@@ -113,9 +126,11 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 - **Import surface**, consumed by `RunConfigSections` (#257):
   `import { useSessionIdStore, selectSessionId } from '@renderer/store/sessionIdStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, `<SessionIdData />` next to `<ConversationListData />`.
-- **Single current id, not a per-conversation map** — the marker carries no `conversation_id`
-  (pyrycode/pyrycode#656) and desktop targets a single active conversation
-  (`MILESTONE_CONVERSATION_ID`).
+- **Single current id, not a per-conversation map** — desktop targets a single active conversation
+  (`MILESTONE_CONVERSATION_ID`), so there is nothing to key a map by. The marker itself carries a
+  `conversationId` since [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192) (this
+  repo's port was simply stale relative to the daemon, which has stamped one since upstream
+  #740/#741) — but that field is consumed only to gate the write, never to shard the store.
 
 ## Edge cases and limitations
 
@@ -129,17 +144,21 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   added `clearSessionId` as the manual path back to `initialSessionIdState`; [#530](../codebase/530.md)
   wired its first caller (a conversation switch), and [#531](../codebase/531.md) wired its second
   (unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), unconditional).
-- **A late `sessionTransition` for the previous conversation can re-stale the id after a switch**
-  ([#530](../codebase/530.md)). The marker carries no `conversation_id` (this store is single-conversation
-  by design, see above), so if the previous conversation is still streaming when the switch happens, a
-  marker meant for it that arrives after `clearSessionId()` runs is indistinguishable from the new
-  conversation's first marker and gets written — reopening the misdirected-write window
-  [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) narrows. Not fixable
-  at this store's layer; needs a daemon-side conversation-id tag or main-process suppression. Named as an
-  open PO follow-up by the architect's security review on #530, not yet its own ticket. The general
-  form is unchanged by [#531](../codebase/531.md): unpair tears the transport down first, so no late
-  marker follows, and on the pair-another path the exposure window is a microtask gap that shrinks to
-  nothing in practice — see #531's spec § Open questions.
+- **Fixed: a late `sessionTransition` for the previous conversation could re-stale the id after a
+  switch** ([#530](../codebase/530.md); closed by
+  [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)). If the previous conversation was
+  still streaming when the switch happened, a marker meant for it that arrived after `clearSessionId()`
+  ran was indistinguishable from the new conversation's first marker and got written — reopening the
+  misdirected-write window `activateConversation` narrows. Named as an open PO follow-up by the
+  architect's security review on #530; #1192 closed it by bringing the ported wire payload into line
+  with the daemon (`conversation_id` has been on `SessionTransitionPayload` since upstream #740/#741;
+  this repo's copy asserted the field did not exist) and gating `subscribeSessionId`'s write on it —
+  see § The data path above. `sessionIdBridge`'s reply-only sibling ingress,
+  `runConfigSnapshot`, got the same gate one ticket earlier, in [#1176](https://github.com/pyrycode/pyrycode-desktop/issues/1176)
+  (see [Run configuration store](run-config-store.md) § Conversation-attributed since #1176). The
+  general form was already narrow for [#531](../codebase/531.md): unpair tears the transport down
+  first, so no late marker follows, and on the pair-another path the exposure window is a microtask gap
+  that shrinks to nothing in practice — see #531's spec § Open questions.
 
 ## Related
 
@@ -153,7 +172,14 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   DI-factory → singleton → hook → selector shape and its App-level always-listening headless leaf both
   mirror.
 - [Run configuration store](run-config-store.md) — the sibling store this ticket deliberately did
-  **not** fold `session_id` into (lifecycle mismatch: sheet-scoped vs. App-level always-listening).
+  **not** fold `session_id` into (lifecycle mismatch: sheet-scoped vs. App-level always-listening); its
+  § Conversation-attributed since #1176 documents the reply-only ingress's twin gate.
+- **[#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192)** — closed this store's other
+  misattribution window: `subscribeSessionId` gained a fourth parameter,
+  `getOpenConversationId`, and a one-line early return copied from `subscribeRunConfig` (#1176), so a
+  `sessionTransition` naming a conversation other than the open one no longer writes. Required
+  bringing `SessionTransitionPayload` (`src/shared/wire/types.ts`) into line with the daemon, which has
+  carried `conversation_id` since upstream #740/#741 — this repo's port had simply gone stale.
 - [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 wired this
   store's selector into.
 - [#254 codebase notes](../codebase/254.md) — the transport decode arm this store consumes.

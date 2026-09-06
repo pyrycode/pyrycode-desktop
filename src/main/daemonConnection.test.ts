@@ -2651,6 +2651,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
 
 describe('createDaemonConnection — session_transition stream (#254)', () => {
   const SESSION_TRANSITION = {
+    conversation_id: 'conv-1',
     previous_session_id: 'sess-1',
     new_session_id: 'sess-2',
     reason: 'clear',
@@ -2667,7 +2668,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     return ctx
   }
 
-  it('decodes an inbound session_transition, carrying newSessionId / reason / occurredAt / workspaceCwd', async () => {
+  it('decodes an inbound session_transition, carrying conversationId / newSessionId / reason / occurredAt / workspaceCwd', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -2677,12 +2678,63 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'sessionTransition',
+        conversationId: 'conv-1',
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
         workspaceCwd: null
       }
     ])
+  })
+
+  it('#1192: forwards a marker naming ANY conversation — main routes, the window decides what to hold', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // No gate here, deliberately. The correlation index learns `newSessionId → serverId` off this same
+    // event, so dropping an unattributed-to-the-open-chat marker in the background process would blind
+    // it and reintroduce the refuses-with-no-frame bug that index was written for. The attribution gate
+    // is the renderer's (`subscribeSessionId`), and it is the only one.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionTransitionPlaintext({
+        ...SESSION_TRANSITION,
+        conversation_id: 'chat-elsewhere'
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'sessionTransition',
+        conversationId: 'chat-elsewhere',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      }
+    ])
+  })
+
+  it('#1192: a marker with no conversation_id emits nothing, throws nothing, and leaves the connection up', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    const { conversation_id: _dropped, ...unattributed } = SESSION_TRANSITION
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: sessionTransitionPlaintext(unattributed) })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+
+    // The connection survives the drop — one bad frame costs its own marker and nothing else. Proven
+    // the way this suite proves liveness elsewhere: no teardown event went out, and a well-formed
+    // frame arriving BEHIND the bad one still crosses.
+    const after = emitted(sink).slice(before)
+    expect(after.some((e) => e.type === 'disconnected')).toBe(false)
+    drivers[0].emit({ type: 'message', plaintext: sessionTransitionPlaintext(SESSION_TRANSITION) })
+    expect(emitted(sink).at(-1)).toMatchObject({
+      type: 'sessionTransition',
+      conversationId: 'conv-1'
+    })
   })
 
   it('carries reason / occurredAt / workspaceCwd; drops only previous_session_id at the emit (content-drop narrowed to the one field with no consumer)', async () => {
@@ -2693,6 +2745,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     drivers[0].emit({
       type: 'message',
       plaintext: sessionTransitionPlaintext({
+        conversation_id: 'conv-1',
         previous_session_id: 'sess-old',
         new_session_id: 'sess-new',
         reason: 'workspace_change',
@@ -2706,6 +2759,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     expect(events).toEqual([
       {
         type: 'sessionTransition',
+        conversationId: 'conv-1',
         newSessionId: 'sess-new',
         reason: 'workspace_change',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
@@ -2713,6 +2767,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
       }
     ])
     expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
       'newSessionId',
       'occurredAt',
       'reason',

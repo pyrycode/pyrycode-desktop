@@ -143,14 +143,16 @@ const toolUseFrame = (): Uint8Array =>
   })
 
 /** A `/clear` boundary -> a `sessionBoundary` item, rendered as `.session-delimiter` (no data-thread-role
- *  at all). `workspace_cwd` is literal null for `clear`, per the wire contract. NOTE there is no
- *  conversation_id on this payload — a session boundary is attributed by the connection it arrives on. */
+ *  at all). `workspace_cwd` is literal null for `clear`, per the wire contract. `conversation_id` is the
+ *  marker's routing key and is REQUIRED since #1192 — a frame missing it fails the decode, emits nothing,
+ *  and this drive's delimiter never appears. It names the seeded row, the chat this drive has open. */
 const sessionTransitionFrame = (): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'session_transition',
     ts: FIXED_TS,
     payload: {
+      conversation_id: SEEDED_ROW.id,
       previous_session_id: 'session-601-a',
       new_session_id: 'session-601-b',
       reason: 'clear',

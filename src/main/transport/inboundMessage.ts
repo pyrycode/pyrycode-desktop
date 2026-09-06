@@ -1244,7 +1244,8 @@ function parseModelAnnouncedPayload(payload: unknown): ModelAnnouncedPayload {
 
 /**
  * Narrow an opaque payload into a SessionTransitionPayload (#254). Fail-closed like parseTurnStatePayload,
- * scaled to five fields: three required strings (`previous_session_id` / `new_session_id` / `occurred_at`),
+ * scaled to six fields: four required strings (`conversation_id` / `previous_session_id` /
+ * `new_session_id` / `occurred_at`),
  * a required nullable `workspace_cwd` via requireStringOrNull (the `ConversationSummary.name` #139 idiom — a
  * literal `null` is a valid value for `clear` / `idle_evict`, but absent/`undefined` or a non-string-non-null
  * throws), and a `reason` closed-enum check cloned from parseTurnStatePayload's `state` check (covers
@@ -1253,14 +1254,28 @@ function parseModelAnnouncedPayload(payload: unknown): ModelAnnouncedPayload {
  * check stays exhaustive over the full closed set INCLUDING `workspace_change`, even though the producer
  * (#657) emits only `clear` / `idle_evict` today. The decoder does NOT cross-validate the
  * `workspace_cwd`-non-null-⟺-`workspace_change` invariant (daemon-guaranteed on the wire; enforcing it here
- * would defend an unobserved failure). Returns exactly the five known fields; unknown keys (e.g. a spurious
- * `conversation_id`) are tolerated but not copied. Its messages name the failure CATEGORY only — never
- * interpolating a `workspace_cwd` path or a session-correlating id.
+ * would defend an unobserved failure).
+ *
+ * `conversation_id` is REQUIRED (#1192), narrowed by the same bare `requireString` every sibling
+ * `conversation_id` in this decoder uses (parseUnrecognizedMessagePayload directly above is the closest
+ * model). It is the marker's only attribution — the daemon pushes this frame unsolicited, so there is no
+ * request to correlate it against — and the renderer's session-id write is gated on it. A missing or
+ * non-string one therefore throws, which drops the whole frame at daemonConnection's decode boundary
+ * without emitting and without disturbing the connection. Required rather than optional on purpose: an
+ * optional routing key invites the `?? activeConversation` fallback the #675 family exists to remove, and
+ * here that fallback IS the defect. No length check, no charset check, no allow-list — the frame-level
+ * MAX_PLAINTEXT_BYTES guard is the bound, and a second one here would defend a failure that cannot reach
+ * this line.
+ *
+ * Returns exactly the six known fields; unknown server-added keys are tolerated (forward-compat) but not
+ * copied. Its messages name the failure CATEGORY only — never interpolating a `workspace_cwd` path, a
+ * session-correlating id, or the conversation-correlating one.
  */
 function parseSessionTransitionPayload(payload: unknown): SessionTransitionPayload {
   if (!isRecord(payload)) {
     throw new WireDecodeError('malformed session_transition payload')
   }
+  const conversation_id = requireString(payload, 'conversation_id')
   const previous_session_id = requireString(payload, 'previous_session_id')
   const new_session_id = requireString(payload, 'new_session_id')
   const occurred_at = requireString(payload, 'occurred_at')
@@ -1269,7 +1284,14 @@ function parseSessionTransitionPayload(payload: unknown): SessionTransitionPaylo
   if (reason !== 'clear' && reason !== 'idle_evict' && reason !== 'workspace_change') {
     throw new WireDecodeError('missing required field: reason')
   }
-  return { previous_session_id, new_session_id, reason, occurred_at, workspace_cwd }
+  return {
+    conversation_id,
+    previous_session_id,
+    new_session_id,
+    reason,
+    occurred_at,
+    workspace_cwd
+  }
 }
 
 /**

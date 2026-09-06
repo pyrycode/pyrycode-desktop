@@ -500,8 +500,24 @@ export type DaemonEvent =
   // Consumed by the renderer holder (#259) and the delimiter slice (#286, not yet built), so all three
   // exhaustive bridges no-op it for now — matching how stallDetected was a no-op in daemonEventBridge
   // until #317.
+  //
+  // `conversationId` (#1192) is the marker's routing key: the conversation whose session rotated. Unlike
+  // `runConfigReceived`'s above, this one IS daemon-asserted — the wire payload has carried it since
+  // upstream #740/#741, and the daemon drops a transition it cannot bind rather than guessing — so it is
+  // copied BY NAME at the emit from an already-validated payload, never by spreading the decoded payload.
+  // REQUIRED, never optional, for the reason unrecognizedMessage states: an optional routing key invites
+  // the `?? activeConversation` fallback #675 exists to remove, and here that fallback IS the defect this
+  // arm's consumer was fixed for. The marker is pushed UNSOLICITED, so no envelope-id correlation of the
+  // #1176 kind is available to substitute for it; this key is the only attribution there is.
+  //
+  // It is a ROUTING KEY, not rendered text — the untrusted-text warning above attaches to `workspaceCwd`
+  // and not to this. It is never markup, an attribute, a URL, a filename, a cache key or a lookup path,
+  // and it reaches no log sink (the decoder's messages name the failure CATEGORY only, and
+  // emitDaemonEvent is log-free by construction). Its one renderer consumer (`subscribeSessionId`)
+  // COMPARES it against the open conversation and discards it — it is never stored or rendered.
   | {
       type: 'sessionTransition'
+      conversationId: string
       newSessionId: string
       reason: WireSessionTransitionReason
       occurredAt: string

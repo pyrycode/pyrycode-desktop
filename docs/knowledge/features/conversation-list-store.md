@@ -10,43 +10,129 @@ Introduced in [#208](../codebase/208.md), the store half of the conversation-lis
 (mirror mobile #312), split from and blocked by [#139](../codebase/139.md) (the transport half,
 shipped as PR #209). This ticket shipped no visible surface — #141 is its first consumer.
 
+**Keyed by server since #1086** — the third store in the multi-server-keying family, after
+[the session store](session-store.md#one-slot-per-server-since-1133) (#1085) and
+[the relay-link store](relay-link-store.md#one-slot-per-server-since-1134) (#1134). See
+§ "One slot per server, since #1086" below for how this store's shape had to diverge from both
+precedents.
+
 ## What it does
 
 Requests a fresh `conversations` list once the connection reaches `connected`, and holds the
-arriving rows in a read-only store until the next list arrives — whole-list replace, no merge, no
-dedupe. Deliberately **not** a [session store](session-store.md) facet: a list update never touches
-connection/messages state and vice versa, so a list arrival re-renders only components selecting
-this slice.
+arriving rows in a read-only store until the next list for that server arrives. Since #1086 this is
+per-server, not whole-store: each `conversationsReceived` replaces only the slot of the server it was
+stamped with, no merge and no dedupe within a slot, and the flat read every consumer sees is a
+**union across every server's slot**. Deliberately **not** a [session store](session-store.md) facet:
+a list update never touches connection/messages state and vice versa, so a list arrival re-renders
+only components selecting this slice.
 
 ## How it works
 
 ### The store (`src/renderer/src/store/conversationListStore.ts`)
 
 ```ts
+export type ConversationListOrigin = string | null | undefined   // which slot a reply is filed under (#1086)
+
+export interface ServerConversationSummary extends ConversationSummary {
+  readonly serverId: ConversationListOrigin
+}
+
 export interface ConversationListState {
-  conversations: readonly ConversationSummary[] | null   // null = not yet loaded
+  conversations: readonly ServerConversationSummary[] | null      // the UNION across servers, precomputed
+  byServer: ReadonlyMap<ConversationListOrigin, readonly ServerConversationSummary[]>
 }
 export type ConversationListStore = ConversationListState & {
-  setConversations: (conversations: readonly ConversationSummary[]) => void
+  setConversations: (conversations: readonly ConversationSummary[], serverId?: string | null) => void
+  clearAllConversations: () => void   // the pairing-boundary drop (#1086, AC5) — nullary
 }
 
 createConversationListStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
 conversationListStore                  // app-wide singleton
 useConversationListStore(selector)     // narrow-slice React binding: useStore(conversationListStore, selector)
-selectConversations(state)             // the only read surface
+selectConversations(state)             // the flat union — unchanged name and `| null`
+selectConversationsFor(origin)(state)  // one server's slot (#1086), defaulting a missing one to `null`
 ```
 
 Mirrors [`runConfigStore`](run-config-store.md)'s DI-factory → singleton → hook → selector structure
 verbatim, including the `null` "not yet loaded" sentinel — an empty array (`[]`) is a real, loaded
-"zero conversations" state, never coerced to or from `null`. A **single setter**, not a reducer:
-there is exactly one mutation ("record the latest list"), so a discriminated-union action set would
-be a one-member union — ceremony without benefit. Rows are held **verbatim in wire snake_case**: no
-parallel camelCase renderer type, no per-field remap — unlike `runConfigSnapshot`'s `used_tokens →
-usedTokens`, this reuses `ConversationSummary` directly so the slice needs zero per-field transform
-and stays drift-free against the mobile wire contract. No derivations are baked in — no `kind` enum,
-no "unnamed" flag, no relative-time formatting: "discussion vs channel" derives from the raw
+"zero conversations" state, never coerced to or from `null`. Still a **single setter**, not a
+reducer: keying adds no second *kind* of write, so the discriminated-union-would-be-ceremony argument
+stands; `clearAllConversations` is a second entry point but not a second kind of mutation — it is the
+pairing-boundary drop, and its nullary signature is the point (see below). Rows are held **verbatim
+in wire snake_case** with exactly one client-owned property added beside them: no parallel camelCase
+renderer type, no per-field remap — unlike `runConfigSnapshot`'s `used_tokens → usedTokens`, this
+reuses `ConversationSummary` directly (`ServerConversationSummary extends` it) so the slice needs
+zero per-field transform and stays drift-free against the mobile wire contract, and `serverId` rides
+beside the wire fields rather than folded into any of them. No derivations are baked in — no `kind`
+enum, no "unnamed" flag, no relative-time formatting: "discussion vs channel" derives from the raw
 `is_promoted` flag and "unnamed" is the literal `name === null`, both at #141's read boundary, not
 here.
+
+### One slot per server, since #1086
+
+Since [#1117](daemon-connection-routing.md) the registry dials one connection per paired server. With
+two servers both connected, each answering its own `list_conversations` request, the single
+`conversations` array was last-writer-wins — the second reply overwrote the first and the sidebar
+showed whichever server answered last, with no field on a row to even tell the two sets apart.
+
+**This is the one store in the family that could not leave its app-wide field last-writer-wins.**
+[The session store](session-store.md#one-slot-per-server-since-1133) and
+[the relay-link store](relay-link-store.md#one-slot-per-server-since-1134) both hung a per-server
+`Map` beside an untouched, still-last-writer-wins app-wide cell — neither needed to evict anything,
+because their single reader renders one machine's status at a time. Here a list showing only one
+server's rows **is** the bug being fixed, so `conversations` becomes a **union** recomputed from the
+map on every write: `flattenByServer` returns `null` for an empty map and otherwise concatenates
+every slot's rows, sorted by `compareOrigins`, into one array. A union reads every slot, which is
+exactly why a stale slot — one from a server whose pairing has since ended — would stay visible
+forever without a clear; see § AC5 below.
+
+`ConversationListOrigin` is the same three-case domain as `RelayLinkOrigin` and `StatusOrigin`, a
+**fourth** separate declaration rather than an import of either or a lift into `src/shared/` — the
+lift cannot reach `liveWindow.ts`'s copy without editing `src/main/`, out of this ticket's scope, and
+a shared type reaching three of four is worse than four honest, cross-referenced copies. Deferred,
+unchanged from #1134's own open question:
+
+- a **string** — one slot per paired server;
+- a **present `null`** — a producer bound while no paired record was in hand;
+- **absent** (`undefined`) — a producer that never went through a binding, unreachable in production,
+  reachable from tests. Filing it (rather than dropping it) is what keeps the write **total**.
+
+`byServer` is a `Map`, never a bare object — `ServerOrigin`'s docblock in `shared/ipc/events.ts`
+rules this for any consumer indexing by the id, since a `__proto__` id would otherwise write through
+`Object.prototype`. Growth is bounded by the distinct-origin count (one per paired server plus at
+most the two non-server keys); a daemon cannot influence which key its own event carries, so nothing
+it sends can mint a slot.
+
+**Cross-server order is by server id, ascending, code-unit** — not `localeCompare`, since an id is
+opaque and a locale-sensitive comparator would make the sidebar's order depend on the machine's
+locale. `Map` insertion order was considered and rejected: it is technically stable across writes,
+but *which* server answered first is an arrival race, so two launches of the same app could order the
+sidebar differently. The two non-string origins sort after every string, `null` before `undefined` —
+ranked rather than coerced so the comparator stays total, with `null` (bound, no paired record)
+placed closer to a real server than `undefined` (never bound), since both are diagnostic- or
+test-reachable rather than sidebar-facing and a real server's position must not depend on whether an
+exceptional slot happens to exist. **Within a server, wire order is preserved** — the daemon is the
+source of truth for ordering, so the stamp and the concatenation never re-sort rows; with one server
+the flat read is therefore exactly today's list, in today's order, plus the stamp.
+
+**The stamp must win over the row.** `setConversations` builds each stamped row as `{ ...row,
+serverId }` — spread first, stamp last. Written the other way round, a daemon that returned a
+`serverId` key on a conversation row would overwrite the client's stamp and file its rows under
+another server's slot — exactly the confusion the stamp exists to prevent. Today that is unreachable
+because `parseConversationSummary` (`src/main/transport/inboundMessage.ts`) is a closed
+reconstruction — seven named fields into a fresh literal, unknown keys never copied through — so the
+decoder is the deterministic guarantee and the spread order is the free second fabric. Flagged
+SHOULD FIX in #1086's security review specifically so a later tidy-up does not reorder it.
+
+`setConversations`'s `serverId` argument is **optional**, the `setRelayLinkStatus` property: it makes
+the absent case a genuine absent argument matching the three-case domain with no sentinel value, and
+it leaves an origin-less call filing under the unstamped slot rather than being dropped. The write is
+read **inside** the `set` updater rather than through `getState()` outside it (the `modelListStore`
+idiom), so two replies arriving back-to-back cannot interleave — zustand runs the updater
+synchronously against current state, closing the only check-then-act shape on this path. Untouched
+slots come back **by reference** (copy-on-write: `new Map(held)` then `set`, never a mutation of the
+map already handed out), so a component watching only one server does not re-render when a different
+one's slot changes.
 
 ### The data path (`src/renderer/src/store/conversationListBridge.ts`)
 
@@ -54,12 +140,16 @@ here.
 translateConversationsEvent(event: DaemonEvent): readonly ConversationSummary[] | null
 // switch (event.type) { case 'conversationsReceived': return event.conversations; default: return null }
 
+originOf(event: DaemonEvent): ConversationListOrigin   // since #1086
+// !('serverId' in event) → undefined; serverId === null → null; a string → that string;
+// anything else → undefined. Total by construction, never throws.
+
 requestConversationList(sendCommand: (c: RendererCommand) => void): void
 // sendCommand({ type: 'requestConversations' })  — bare, no new command/builder
 
 subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
 // onDaemonEvent(event => {
-//   const list = translateConversationsEvent(event); if (list !== null) setConversations(list)
+//   const list = translateConversationsEvent(event); if (list !== null) setConversations(list, originOf(event))
 //   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376, widened #515
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
@@ -88,10 +178,34 @@ no fresh-literal reconstruction is needed.
 either way, but the explicit `!== null` makes "an empty list still writes (loaded-zero, not
 not-loaded)" unmistakable to a reviewer.
 
+`originOf` is read only from #1068's event-level stamp, never from the reply's rows — the read-side
+twin of `setConversations`'s spread-then-stamp order. It is an `in`-guarded, `typeof`-checked access
+rather than a cast, and a fifth copy of the idiom rather than an import of `relayLinkBridge.ts`'s or
+`daemonEventBridge.ts`'s own `originOf`: both return a different module's key type, and importing
+either would couple this deliberately independent subscriber to that store's key domain. Widening the
+listener's parameter to `StampedDaemonEvent` was also rejected — this module's own tests build bare
+`DaemonEvent` literals, and `ServerOrigin.serverId` being required would make a bare event
+non-assignable.
+
+**A testing trap this ticket surfaced: `toEqual` ignores an `undefined`-valued property.** Every
+pre-existing bridge assertion of the form `expect(setConversations).toHaveBeenCalledWith(list)` (or
+`toEqual(list)` on a captured row) kept passing once rows carried `serverId: undefined` — green, but
+not because the stamp was verified. A test that actually wants to prove the stamp took must either
+read `row.serverId` explicitly or drive an event stamped with a real, non-`undefined` origin. This is
+worth re-checking on any future ticket that adds an optional property to an existing row or event
+type: a green run on the old assertions proves nothing about the new field.
+
+The useful counterpart: a spy's **arity** reddens where its behavior doesn't. Every pre-existing
+`toHaveBeenCalledWith(list)` on `setConversations` failed once the call site started passing
+`(list, originOf(event))`, forcing each existing test to state which slot a bare, unstamped event
+files under. That is a real tripwire on a signature change like this one; on a ticket where the
+assertion's arity is only incidental, the same failure would read as noise and invite loosening to
+`expect.anything()` rather than fixing the assertion.
+
 `ConversationListData` owns two effects:
 
-1. **Subscribe** (deps `[]`) — `subscribeConversations(window.pyry.onDaemonEvent, list =>
-   conversationListStore.getState().setConversations(list), () =>
+1. **Subscribe** (deps `[]`) — `subscribeConversations(window.pyry.onDaemonEvent, (list, serverId) =>
+   conversationListStore.getState().setConversations(list, serverId), () =>
    requestConversationList(window.pyry.sendCommand))`; the off-handle is the cleanup, so a
    StrictMode double-mount nets exactly one live listener. The third arg re-requests the list on a
    `conversationUpdated` broadcast (#275), a `conversationDeleted` reply (#376), or a
@@ -122,9 +236,15 @@ App mount → <ConversationListData/> (app-level, sibling of AppView)
 
 daemon → conversations frame → parseInboundMessage → conversationsReceived DaemonEvent [#139]
   → DAEMON_EVENT_CHANNEL → subscribeConversations listener
-    → translateConversationsEvent → rows (or null → skip)
-    → conversationListStore.setConversations(rows)   [whole-list replace]
-  → selectConversations / useConversationListStore   (read by #141)
+    → translateConversationsEvent → rows (or null → skip); originOf(event) → serverId   [#1086]
+    → conversationListStore.setConversations(rows, serverId)   [replaces only that server's slot]
+    → byServer written copy-on-write, conversations re-flattened as the UNION, same `set`   [#1086]
+  → selectConversations (union) / selectConversationsFor(serverId) / useConversationListStore
+    (read by #141; per-server read expected first from #1070)
+
+pairing ends (unpair, or pairing a different server from inside the shell) [#1086]
+  → clearPairingScopedState → deps.clearAllConversations() → conversationListStore.clearAllConversations()
+    → conversations: null, byServer: new Map()   [every server's slot dropped, not just the departed one]
 
 daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conversationUpdated DaemonEvent [#273]
   → DAEMON_EVENT_CHANNEL → subscribeConversations listener
@@ -156,6 +276,14 @@ new-discussion FAB's own subscription on the same event, #242)
   '@renderer/store/conversationListStore'`.
 - No component consumes `useConversationListStore` yet — it is exported ahead of its first consumer,
   the same shape `useRunConfigStore` shipped ahead of #188.
+- **Per-server import surface, since #1086, no production consumer yet**:
+  `import { selectConversationsFor } from '@renderer/store/conversationListStore'` — returns
+  `readonly ServerConversationSummary[] | null`, defaulting a missing slot to `null` (the store's own
+  not-loaded sentinel, since a loaded-empty server is `[]` rather than `null`). Call it only with an
+  id from this client's own paired-server list, never a daemon-supplied field — the read-side twin of
+  the write-side stamp rule above. Expected first consumer: #1070's per-server grouping.
+- `clearAllConversations` is invoked only by `clearPairingScopedState` (via `PairedShell.tsx`'s
+  `clearPairingDeps`), never two-way-bound from a component — see § AC5 below.
 
 ## Edge cases and limitations
 
@@ -163,8 +291,8 @@ new-discussion FAB's own subscription on the same event, #242)
   least once, without user action, after connected") plus natural robustness: a reconnect gets a
   fresh list, and a request lost to a mid-flight disconnect recovers on the next connect. This is
   layered with the intra-connection reflection (below) — the two triggers are independent and never
-  conflict, since the whole-list-replace setter makes every arrival idempotent regardless of what
-  triggered the request.
+  conflict, since the per-server replace setter (§ "One slot per server, since #1086") makes every
+  arrival idempotent within its own slot regardless of what triggered the request.
 - **The once-deferred "richer refresh policy" — intra-connection re-requests on a
   `conversation_updated` broadcast — landed in [#275](../codebase/275.md).** A promote (#274),
   rename, or archive fans out `conversation_updated`; `subscribeConversations`'s third param,
@@ -192,8 +320,32 @@ new-discussion FAB's own subscription on the same event, #242)
   unchanged. Being a correlated reply, the refresh is **creator-only**: a second client's list stays stale
   until its own next mutation, which needs a daemon-side broadcast to fix and is out of scope.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
-  not — is written unconditionally; safe because only the authenticated daemon can produce one (see
-  [conversation list fetch § Correlation is deliberately absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
+  not — is written unconditionally into its stamped slot; safe because only the authenticated daemon
+  can produce one (see [conversation list fetch § Correlation is deliberately
+  absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
+- **§ AC5 — cleared at the pairing boundary, since #1086, and this is the one regression keying
+  introduces.** This store was excluded from `clearPairingScopedState` from #531 onward, on the
+  argument that it self-heals: the mount-time `list_conversations` request re-lists, and the old
+  whole-array replace overwrote everything regardless of which daemon answered. **Keying removes that
+  self-heal** — the new pairing's reply now lands in the new server's slot, the departed server's slot
+  is never written again, and the union keeps rendering its rows: a silent stale-data leak across a
+  pairing boundary, attributing a departed machine's conversations to the operator's current session.
+  `clearAllConversations` closes it as the tenth, nullary member of `ClearPairingScopedStateDeps`
+  (`src/renderer/src/clearPairingScopedState.ts`, wired in `PairedShell.tsx`'s `clearPairingDeps`, so
+  both pairing-change paths drop it without either call site needing an edit). Nullary for the same
+  reason `clearAllModelLists`/`clearAllSlashCommandLists` are: no daemon-supplied conversation id may
+  steer which server's rows survive the boundary. Idempotent via the subscriber short-circuit — an
+  already-clear store hands back the same state object, so a redundant clear wakes no listener — not
+  the side-effect guard `clearAllLastRead` needs, since this clear reaches nothing outside memory and
+  cannot throw. **Per-server unpair does not exist in the renderer and this ticket does not build
+  toward it**: both pairing-change sites are whole-app, so this is a whole-set clear at the boundary
+  that exists today; per-server eviction is a later ticket's, once a per-server unpair exists.
+- **A store's exclusion from `clearPairingScopedState` is a claim about mechanisms elsewhere, and it
+  can go stale without anyone touching the store.** `clearPairingScopedState.ts`'s docblock names the
+  discriminator as "does a reconnect to the SAME daemon need to clear it?" — this store's answer
+  flipped from "no, it self-heals" to "yes" purely because keying changed what a reconnect's reply
+  overwrites, not because anything about the clear itself changed. Re-run that discriminator, rather
+  than trust the exclusion list, whenever a store already named there is keyed by server.
 - **No reply / list never arrives.** The slice stays `null` forever; #141 renders its own loading
   affordance. Out of scope here.
 - **`cwd` is untrusted daemon-supplied opaque display text**, carried forward from #139's security
@@ -240,3 +392,14 @@ new-discussion FAB's own subscription on the same event, #242)
   Channel-List-missing-a-new-discussion staleness bug.
 - [E2E test harness](e2e-harness.md) — documents "Gap A" (#440/#451/#452), the e2e-visible symptom of
   this staleness, and its comment-only reconciliation once #515 closed it.
+- [Session store](session-store.md#one-slot-per-server-since-1133) (#1085) and [relay-link
+  store](relay-link-store.md#one-slot-per-server-since-1134) (#1134) — the first two stores in the
+  multi-server-keying family; both left their app-wide field last-writer-wins with a per-server `Map`
+  beside it and evicted nothing. This store is the third and the one that could not copy that shape,
+  since its app-wide read is a union rather than a single most-recent value.
+- [Daemon connection routing](daemon-connection-routing.md) — the #1117 registry change (one
+  connection per paired server) that turned last-writer-wins from a simplification into a live defect
+  on this store, the same way it did on the other two.
+- `docs/specs/architecture/1086-conversation-list-keyed-by-server.md` — the full architecture spec:
+  the key-domain and ordering rulings, the AC5 pairing-boundary analysis, and the security review
+  (PASS, one SHOULD FIX — the stamp's spread-then-stamp order, folded in above).

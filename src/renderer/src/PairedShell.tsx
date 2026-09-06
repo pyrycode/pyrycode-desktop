@@ -31,6 +31,7 @@ import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { modelListStore } from './store/modelListStore'
+import { conversationListStore } from './store/conversationListStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -113,6 +114,11 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // gating branch to keep in one tested place. Adding it to THIS object is what makes both
   // pairing-change paths below drop it; neither call site needed an edit.
   clearAllModelLists: () => modelListStore.getState().clearAllModelLists(),
+  // #1086: every server's conversation rows, dropped as one. The same direct, nullary shape as the
+  // three clears above — no sampling or gating branch to keep in one tested place, because the store
+  // method takes nothing at all. Adding it to THIS object is what makes both pairing-change paths
+  // below drop it; neither call site needed an edit.
+  clearAllConversations: () => conversationListStore.getState().clearAllConversations(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

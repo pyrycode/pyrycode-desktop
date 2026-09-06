@@ -24,6 +24,11 @@ import {
   selectSlashCommandListFor
 } from './store/slashCommandListStore'
 import { createModelListStore, selectModelListFor } from './store/modelListStore'
+import {
+  createConversationListStore,
+  selectConversations,
+  selectConversationsFor
+} from './store/conversationListStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   ConversationCreatedPayload,
@@ -82,6 +87,7 @@ function spyDeps(): {
   clearAnnouncedModel: ReturnType<typeof vi.fn>
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
   clearAllModelLists: ReturnType<typeof vi.fn>
+  clearAllConversations: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -92,6 +98,7 @@ function spyDeps(): {
   const clearAnnouncedModel = vi.fn()
   const clearAllSlashCommandLists = vi.fn()
   const clearAllModelLists = vi.fn()
+  const clearAllConversations = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -103,6 +110,7 @@ function spyDeps(): {
       clearAnnouncedModel,
       clearAllSlashCommandLists,
       clearAllModelLists,
+      clearAllConversations,
       dispatchSession,
       clearAllLastRead
     },
@@ -113,6 +121,7 @@ function spyDeps(): {
     clearAnnouncedModel,
     clearAllSlashCommandLists,
     clearAllModelLists,
+    clearAllConversations,
     dispatchSession,
     clearAllLastRead
   }
@@ -139,7 +148,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all nine clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all ten clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -149,6 +158,7 @@ describe('clearPairingScopedState', () => {
       clearAnnouncedModel,
       clearAllSlashCommandLists,
       clearAllModelLists,
+      clearAllConversations,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -175,6 +185,12 @@ describe('clearPairingScopedState', () => {
     // for it: the rows are CLAUDE-AUTHORED text, so a clear taking an id would let a daemon-supplied
     // conversation id steer which machine's model menu survives the pairing boundary.
     expect(clearAllModelLists).toHaveBeenCalledWith()
+    expect(clearAllConversations).toHaveBeenCalledTimes(1)
+    // #1086, the same nullary property as the three whole-map clears above. It is the newest member
+    // and the only one that is here because a DIFFERENT ticket removed its self-heal: keying the list
+    // by server means the departed server's slot is simply never written again, so the union would go
+    // on rendering its rows under the new pairing.
+    expect(clearAllConversations).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -184,17 +200,18 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these nine stores', () => {
+  it('the pairing-scoped set is exactly these ten stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
     // names, so a TENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
     // here until it is added to the literal, and then fails this assertion until it is also asserted
     // called above — rather than being silently declared and never invoked. #779 was the seventh,
-    // #955 the eighth and #977 the ninth, and each updated this pin, which is the intended cost of
-    // adding one; loosening it is not.
+    // #955 the eighth, #977 the ninth and #1086 the tenth, and each updated this pin, which is the
+    // intended cost of adding one; loosening it is not.
     const { deps } = spyDeps()
 
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
+      'clearAllConversations',
       'clearAllLastRead',
       'clearAllModelLists',
       'clearAllSlashCommandLists',
@@ -457,6 +474,42 @@ describe('clearPairingScopedState', () => {
     // The half that survives a restart, and the half an in-memory-only assertion would miss.
     expect(lastReadStorage.persisted().size).toBe(0)
   })
+
+  it('real stores: a departed server’s conversations cannot appear under the new pairing (#1086 AC5)', () => {
+    const conversations = createConversationListStore()
+    const summary = {
+      id: 'c-old',
+      name: 'On the machine we just left',
+      is_promoted: true,
+      is_archived: false,
+      cwd: '/home/pyry/old',
+      last_message_ts: '2026-09-01T12:00:00Z',
+      last_used_at: '2026-09-01T12:05:00Z'
+    }
+    conversations.getState().setConversations([summary], 'srv-old')
+    conversations.getState().setConversations([{ ...summary, id: 'c-other' }], 'srv-other')
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        conversations
+      )
+    )
+
+    // Back to not-loaded, not to a loaded-empty `[]`: the next pairing's own reply is what fills it.
+    // Both servers go, because no per-server unpair exists in the renderer — the boundary is whole-app.
+    expect(selectConversations(conversations.getState())).toBeNull()
+    expect(selectConversationsFor('srv-old')(conversations.getState())).toBeNull()
+    expect(selectConversationsFor('srv-other')(conversations.getState())).toBeNull()
+  })
 })
 
 function realDeps(
@@ -468,7 +521,10 @@ function realDeps(
   session: ReturnType<typeof createSessionStore>,
   lastRead: ReturnType<typeof createConversationLastReadStore>,
   slashCommands: ReturnType<typeof createSlashCommandListStore>,
-  modelLists: ReturnType<typeof createModelListStore>
+  modelLists: ReturnType<typeof createModelListStore>,
+  // #1086's tenth store. Defaulted rather than threaded through every call site: only the case that
+  // asserts on the conversation rows needs to hold a reference to the store being cleared.
+  conversations: ReturnType<typeof createConversationListStore> = createConversationListStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -478,6 +534,7 @@ function realDeps(
     clearAnnouncedModel: () => announcedModel.getState().clearAnnouncedModel(),
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
+    clearAllConversations: () => conversations.getState().clearAllConversations(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

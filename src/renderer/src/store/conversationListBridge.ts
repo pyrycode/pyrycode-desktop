@@ -10,8 +10,39 @@ import { useEffect, useRef } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
-import { conversationListStore } from './conversationListStore'
+import { conversationListStore, type ConversationListOrigin } from './conversationListStore'
 import { useSessionStore } from './sessionStore'
+
+/**
+ * Read the server this event came from (#1086), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * `ServerOrigin.serverId` is required, so a bare `DaemonEvent` is not assignable to a
+ * `StampedDaemonEvent` — widening the parameter would fail this module's own tests, which build bare
+ * event literals and a fake bridge typed on the bare union. `relayLinkBridge.ts`'s `originOf` is the
+ * same idiom for the relay leg, `daemonEventBridge.ts`'s for the daemon leg and `liveWindow.ts`'s is
+ * its main-side original; a copy rather than an import, because `daemonEventBridge`'s is
+ * module-private and returns `sessionStore`'s key type, and taking it would couple two deliberately
+ * independent single-arm subscribers and drag this store's key domain onto the session store.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload — the same rule `stampRows` enforces
+ * one layer down. The reply's rows carry an `id` and a `cwd` the daemon chose; none of them names a
+ * server, and if one did it would be a daemon claiming a slot. The stamp is bound main-side at
+ * construction from a paired record this client holds, so a hostile or confused daemon cannot make its
+ * events file rows under another server and have them render as that machine's conversations.
+ */
+function originOf(event: DaemonEvent): ConversationListOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null files under the unstamped slot: no producer
+  // can emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot
+  // rather than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
+}
 
 /**
  * The filter: map the one owned arm to its rows, every other DaemonEvent to `null`. `default: null`
@@ -84,15 +115,25 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
  * not-loaded" unmistakable. `refreshOnChange` is required — the listener always needs to know what to
  * do on an update, so the contract forces every call site to opt in explicitly. The listener only
  * dispatches — it never throws into React.
+ *
+ * Since #1086 each write also carries the server the reply came from, so it replaces only that
+ * server's rows. `translateConversationsEvent` is left alone by the keying: the origin rides beside
+ * the union rather than inside the arm, so it is read here at the event, not folded into a filter
+ * whose whole job is selecting one named field. The refresh triggers are untouched too — they still
+ * re-request from every server; making a trigger re-request only from the server that emitted it is a
+ * command with a server id and belongs to the routing ticket.
  */
 export function subscribeConversations(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  setConversations: (conversations: readonly ConversationSummary[]) => void,
+  setConversations: (
+    conversations: readonly ConversationSummary[],
+    serverId?: string | null
+  ) => void,
   refreshOnChange: () => void
 ): () => void {
   return onDaemonEvent((event) => {
     const list = translateConversationsEvent(event)
-    if (list !== null) setConversations(list)
+    if (list !== null) setConversations(list, originOf(event))
     if (shouldRefreshList(event)) refreshOnChange()
   })
 }
@@ -116,14 +157,15 @@ export function ConversationListData(): null {
     // Subscribe first (declared before the request effect, so it runs first on mount): the listener
     // is live before any request goes out. The returned off handle is the effect cleanup, so a
     // StrictMode double-mount nets exactly one live listener (the daemonEventBridge idiom). Each
-    // conversationsReceived writes its rows verbatim into the app-singleton store via its setter; a
-    // conversationUpdated broadcast (#275), a conversationDeleted reply (#376) or a conversationCreated
-    // reply (#515) re-requests the list so the changed row lands without a reconnect.
-    // `window.pyry.sendCommand` is dereferenced only when the arrow runs (a refresh trigger fires),
-    // never during render — so the server-render-to-empty-markup invariant is unaffected.
+    // conversationsReceived writes its rows verbatim into the app-singleton store via its setter,
+    // under the server it came from (#1086); a conversationUpdated broadcast (#275), a
+    // conversationDeleted reply (#376) or a conversationCreated reply (#515) re-requests the list so
+    // the changed row lands without a reconnect. `window.pyry.sendCommand` is dereferenced only when
+    // the arrow runs (a refresh trigger fires), never during render — so the
+    // server-render-to-empty-markup invariant is unaffected.
     return subscribeConversations(
       window.pyry.onDaemonEvent,
-      (list) => conversationListStore.getState().setConversations(list),
+      (list, serverId) => conversationListStore.getState().setConversations(list, serverId),
       () => requestConversationList(window.pyry.sendCommand)
     )
   }, [])

@@ -41,7 +41,7 @@ Figma node 103:2968:
   § The open row's fill below, which is that ticket.
 
 **The status dot's centring is now a settled ruling, not a deferral.** See [the parent doc § The row's
-status dot](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874), whose "Vertical
+status dot](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874), whose "Vertical
 alignment" note previously deferred the design's 3px drop pending exactly this convergence — #1097
 measured it and kept the dot centred.
 

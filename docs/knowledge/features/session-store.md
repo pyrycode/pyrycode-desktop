@@ -73,9 +73,16 @@ and an untouched server's slot comes back by reference (no re-render for a compo
 
 `status` itself is **not** reshaped into the index — it stays the single most-recently-written cell,
 byte-for-byte its pre-#1133 behaviour. This is deliberate, not an oversight: it is what the connection
-banner, the composer's status row, the sidebar's `HostConnectionDotsControl` daemon leg, and the
-conversation-list connected gate all still read via `selectStatus`, untouched. A fold ("connected if any
-server is") was considered and rejected — it would change what those consumers say today.
+banner, the composer's status row, the repair control, and `composerSend`'s plain-argument taker all
+still read via `selectStatus`, untouched — four genuinely app-wide consumers.
+[#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) moved the sidebar's
+`HostConnectionDotsControl` daemon leg **off** this cell and onto `selectStatusFor(serverId)`, because a
+row that names one machine has to report that machine, not whichever connection last moved — so this
+cell keeps a real purpose in the four it still serves rather than surviving on inertia. `relayLinkStore`'s
+matching app-wide cell, `selectRelayLinkStatus`, is **not** in the same position — it lost its only
+reader in the same move (see [relay-link store](relay-link-store.md)) — so do not retire the two
+together on the strength of this one. A fold ("connected if any server is") was considered and rejected —
+it would change what the four remaining consumers say today.
 
 `StatusOrigin = string | null | undefined` is the renderer-side twin of
 [`liveWindow.ts`'s same-named type](live-window.md#one-slot-per-server-since-1121) (main-side, #1121,

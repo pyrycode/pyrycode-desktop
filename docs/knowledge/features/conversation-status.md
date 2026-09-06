@@ -9,7 +9,7 @@ Introduced in [#799](https://github.com/pyrycode/pyrycode-desktop/pull/805), spl
 [dot component](conversation-status-dot.md) ([#800](https://github.com/pyrycode/pyrycode-desktop/issues/800))
 draws its type as a type import; [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) is the
 first module to call `resolveConversationStatus` in production, composed per row in
-[`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801).
+[`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801).
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added the fourth state, `input-required`, and
 its leading `inputRequired` parameter; [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
 composed `selectHasOutstandingFor` at that call site, so all four states are reachable in production.
@@ -56,7 +56,7 @@ once.
      ([#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) AC2). A plain boolean, never a
      `conversationId` — see the SECURITY note below. Landed correct-but-unreachable behind a literal
      `false` at the one production call site
-     ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
+     ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
      — the same way #799 and #800 each landed before #801 wired them — until
      [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composed
      `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there.
@@ -105,7 +105,7 @@ once.
 - One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)/[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
   compose `selectHasOutstandingFor(id)`, `selectActivityFor(id)` and `isConversationUnread(timeline,
   lastRead)` at their shared call site
-  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
+  ([`ConversationStatusDotControl`](channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
   and pass all three results straight in; this module still does not read any source store itself.
 - Lives beside its two inputs under `store/`, not `screens/`, for the reason `conversationUnread.ts`
   already gives: its inputs are store slices rather than wire rows, and its consumer is the sidebar rather

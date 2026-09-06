@@ -335,7 +335,7 @@ above; the keyboard path (focus + Enter, same clipboard read-back); and the rest
 computed style — all four `border-radius` corners equal, `padding` 16/20, and the meta row's
 `justify-content` differing between the two sides. Filling the slot broke thirteen *other* specs' bubble
 text assertions across the fake tier plus four raw `textContent` reads in the real-claude tier — see
-[E2E test harness](e2e-harness.md#edge-cases-and-limitations) and [Real-claude liveness
+[E2E test harness — scenario history](e2e-harness-scenarios.md) and [Real-claude liveness
 e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the fix and the sweep
 method that finds the next one.
 

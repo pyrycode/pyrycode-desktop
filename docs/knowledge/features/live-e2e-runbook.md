@@ -71,6 +71,19 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1218 (2026-09-07) — the tier grows to 15 specs; the floor is already stale by two.**
+`e2e/real-claude-new-session.spec.ts` is the liveness proof for the [New session control
+action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218): pair,
+create through the FAB, send one real turn to give the daemon a child to rotate, capture a
+`nonEmptyAssistantCount` baseline **after** that turn quiesces (the vacuous-`>= 1` trap below applies
+here too), pick New session, assert exactly one `.session-delimiter`, send a second message and assert
+the count rises above the baseline. **Not yet run live** — `real-*.spec.ts` is `testIgnore`d by the
+default config, nothing in this ticket's own gate loads it, and it was verified only by an ad-hoc
+`tsc --noEmit`. `origin/main` already carried 14 `real-*.spec.ts` files at `373ae70` against the floor of
+13 recorded below (itself already stale by one, the same drift #1055's note two entries down describes),
+and this ticket's addition makes 15. **`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` needs bumping to 15** — the
+bump is the operator's, per § Automated coverage below.
+
 **Last run: 2026-09-04 — the tier grew to 13 specs.** `e2e/real-claude-attachment.spec.ts` ([#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055)) is the live proof that an attached file
 actually reaches claude: it pairs against a real spawned daemon, creates a conversation through the UI,
 drives one **cursor-stamp turn** first (an ordinary message, drained to quiesce), then stubs

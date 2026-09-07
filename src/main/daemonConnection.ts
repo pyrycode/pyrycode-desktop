@@ -2467,7 +2467,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const envelopeId = nextEnvelopeId
     // The payload is passed through without a fresh literal, unlike the renderer-supplied command
     // payloads: it is not renderer-supplied at all — planAttachmentChunks built it here in the main
-    // process as a closed nine-field object, so there is no smuggled field for a copy to strip.
+    // process as a closed nine-field object (#1205 made it nine), so there is no smuggled field for a
+    // copy to strip.
     const bytes = buildAttachmentChunk({ id: envelopeId, ts: now(), payload })
     nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
     live.sendMessage(bytes)

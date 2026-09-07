@@ -609,6 +609,7 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     // parseInboundMessage fell through to its content-free catch-all and returned null.
     const ATTACHMENT_ID = '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67'
     const chunk = (index: number): AttachmentChunkPayload => ({
+      conversation_id: 'conv-1',
       attachment_id: ATTACHMENT_ID,
       index,
       total_chunks: 2,
@@ -1171,11 +1172,12 @@ describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () =>
   // so its contract is provable without a second wasm standup. The sibling's round-trip above already
   // pins that a frame this builder shape produces survives the real ciphers; what is worth proving here
   // is which chunk it answers and that the client decodes the answer into the matching outcome.
-  const chunkFrame = (index: number, id: number): Uint8Array =>
+  const chunkFrame = (index: number, id: number, conversationId = 'conv-1'): Uint8Array =>
     buildAttachmentChunk({
       id,
       ts: '2026-01-01T00:00:05Z',
       payload: {
+        conversation_id: conversationId,
         attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67',
         index,
         total_chunks: 3,
@@ -1214,6 +1216,44 @@ describe('attachmentRejectReplyFrames — the upload leg refusals (#965)', () =>
       kind: 'daemon-error',
       inReplyTo: 42,
       outcome
+    })
+  })
+
+  it('is what the HEALTHY builder answers a chunk naming no conversation with (#1205)', () => {
+    // pyrycode #2143 mirrored: the daemon has no cursor to fall back to, so an absent or EMPTY
+    // conversation_id draws attachment.invalid_chunk on the first chunk carrying it, ahead of any
+    // completing-index logic. This is on `attachmentStoredReplyFrames` — the fake a healthy upload test
+    // uses — so a client that stops sending the field reddens in this tier rather than in the operator's
+    // composer, which is how the omission reached production. The absent case is built past the type:
+    // JSON.stringify drops an `undefined` value, so the key is genuinely missing on the wire.
+    const stored = attachmentStoredReplyFrames(0)
+    const absent = buildAttachmentChunk({
+      id: 43,
+      ts: '2026-01-01T00:00:05Z',
+      payload: {
+        ...(JSON.parse(
+          JSON.stringify(decodeEnvelope(chunkFrame(0, 0)).payload)
+        ) as AttachmentChunkPayload),
+        conversation_id: undefined
+      } as unknown as AttachmentChunkPayload
+    })
+
+    for (const [frames, id] of [
+      [stored(chunkFrame(0, 42, '')), 42],
+      [stored(absent), 43]
+    ] as const) {
+      expect(frames).toHaveLength(1)
+      expect(parseInboundMessage(frames[0])).toEqual({
+        kind: 'daemon-error',
+        inReplyTo: id,
+        outcome: 'attachment-invalid-chunk'
+      })
+    }
+    // A chunk that names one — the same completing index — is stored, not refused: the arm is about the
+    // field's presence, not the fake having a registry (it hosts nothing, so any name is "known").
+    expect(parseInboundMessage(stored(chunkFrame(0, 44))[0])).toEqual({
+      kind: 'attachment-stored',
+      attachmentStored: { attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67' }
     })
   })
 

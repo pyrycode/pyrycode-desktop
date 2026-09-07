@@ -17,9 +17,11 @@ import {
 } from '../shared/ipc/hostLabel'
 import {
   ATTACHMENT_PASTE_SOURCE,
+  ATTACHMENT_PICK_SOURCE,
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
   type AttachmentPasteRequest,
+  type AttachmentPickRequest,
   type AttachmentUploadEvent,
   type AttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
@@ -217,18 +219,21 @@ const api = {
    * outcome arrives later on the push channel below, because the flow reports MORE THAN ONE message
    * per intent once #864 adds progress.
    *
-   * CALLED WITH NO ARGUMENT, and that is the point rather than an omission: this window names an
-   * INTENT, never a file. Nothing crosses on THIS call, so no string it could supply reaches a host
-   * path, a declared filename, or the wire — the picker, the path and the bytes all stay in the
-   * background process. ATTACHMENT_UPLOAD_CHANNEL is fixed here so the renderer cannot address
-   * arbitrary IPC channels, and ipcRenderer never crosses the bridge.
+   * CALLED WITH THE DESTINATION AND NOTHING ELSE (#1205; with no argument at all before it): this window
+   * names an INTENT and the conversation the bytes are for, never a file. The one string that crosses is
+   * the open chat's daemon-minted id, which reaches the wire on every chunk as a lookup key the daemon
+   * validates against its own registry — and reaches no host path, no declared filename and no log line.
+   * The picker, the path and the bytes all stay in the background process. ATTACHMENT_UPLOAD_CHANNEL is
+   * fixed here so the renderer cannot address arbitrary IPC channels, and ipcRenderer never crosses the
+   * bridge.
    *
-   * The channel itself is no longer value-free — `dropAttachmentFile` below sends a request on it — so
-   * this paragraph is scoped to this function rather than to the channel. The two are told apart on the
-   * main side by presence: an argument-free send reaches no request field at all.
+   * The ask names itself with a client-owned literal, `pasteAttachmentImage`'s shape: presence used to
+   * tell the picker from the drop, and an ask that has to carry a field cannot be told apart by having
+   * none. A bare send now matches no guard on the main side and is dropped.
    */
-  requestAttachmentUpload: (): void => {
-    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL)
+  requestAttachmentUpload: ({ conversationId }: { conversationId: string }): void => {
+    const request: AttachmentPickRequest = { source: ATTACHMENT_PICK_SOURCE, conversationId }
+    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 
   /**
@@ -261,7 +266,7 @@ const api = {
    * the window is untrusted at the boundary regardless of the declared parameter type, so
    * `isAttachmentUploadRequest` re-checks on the main side and drops a malformed ask there.
    */
-  dropAttachmentFile: (file: File): void => {
+  dropAttachmentFile: (file: File, { conversationId }: { conversationId: string }): void => {
     let path: string
     try {
       path = webUtils.getPathForFile(file)
@@ -269,7 +274,9 @@ const api = {
       return
     }
     if (path === '') return
-    const request: AttachmentUploadRequest = { path }
+    // #1205: the destination rides beside the path. Same rule as the other two asks — see
+    // `requestAttachmentUpload` above for what the id does and does not reach.
+    const request: AttachmentUploadRequest = { path, conversationId }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 
@@ -281,9 +288,10 @@ const api = {
    * ⭐ IT CARRIES NOTHING, AND THAT IS THE WHOLE DESIGN. This is the REVERSE cut from
    * `dropAttachmentFile` above: a drop had to admit a host path because the OS hands the file to the
    * WINDOW, but a clipboard is readable from the background process, so the window asks and main reads.
-   * The one field on the wire is a client-owned literal that selects an arm — a renderer cannot vary it
-   * without `isAttachmentPasteRequest` refusing the ask — so no renderer-supplied value reaches a path,
-   * a filename, a byte or the wire on this path at all. The window never sees the image: the outcome
+   * The arm-selecting field on the wire is a client-owned literal — a renderer cannot vary it without
+   * `isAttachmentPasteRequest` refusing the ask — so no renderer-supplied value reaches a path, a
+   * filename or a byte on this path at all; the one value that reaches the WIRE is the conversation id
+   * (#1205), as a lookup key the daemon validates. The window never sees the image: the outcome
    * union is content-free by construction, so what comes back is "attached" or "no image", never a
    * pixel, a dimension or a length.
    *
@@ -307,16 +315,17 @@ const api = {
    * by asking for this one act. A text-flavoured secret yields an empty image and a refusal.
    *
    * ipcRenderer does not cross the bridge and ATTACHMENT_UPLOAD_CHANNEL is fixed here, so the
-   * renderer cannot address arbitrary channels. There is nothing to throw and nothing to filter —
-   * unlike its neighbour, this function STILL takes no argument at all, which is why the ask it
-   * mints below has no `serverId` on it. That is deliberate and temporary: the composer has no
-   * per-server surface to name a server from until #1086, so every ask this sender emits takes the
-   * resolver's unnamed path — the sole connection when the registry holds exactly one entry, a
-   * refusal when it holds more. The day a caller has a server to pass, this is where the parameter
-   * goes, and it is a routing key that is looked up and discarded, never a value main acts on.
+   * renderer cannot address arbitrary channels. There is nothing to throw and nothing to filter.
+   * Since #1205 it takes ONE argument, the destination — the open chat's daemon-minted id, required
+   * because the daemon refuses a chunk naming no conversation (pyrycode #2143) — and still no
+   * `serverId`, which is deliberate and temporary: the composer has no per-server surface to name a
+   * server from until #1086, so every ask this sender emits takes the resolver's unnamed path — the
+   * sole connection when the registry holds exactly one entry, a refusal when it holds more. The day a
+   * caller has a server to pass, this is where the parameter goes, and it is a routing key that is
+   * looked up and discarded, never a value main acts on.
    */
-  pasteAttachmentImage: (): void => {
-    const request: AttachmentPasteRequest = { source: ATTACHMENT_PASTE_SOURCE }
+  pasteAttachmentImage: ({ conversationId }: { conversationId: string }): void => {
+    const request: AttachmentPasteRequest = { source: ATTACHMENT_PASTE_SOURCE, conversationId }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 

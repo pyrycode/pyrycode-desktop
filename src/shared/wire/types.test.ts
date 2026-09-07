@@ -912,12 +912,14 @@ describe('attachment-chunk wire vocabulary (#860)', () => {
     expect(chunk).toBe('attachment_chunk')
   })
 
-  it('shapes AttachmentChunkPayload as the published eight fields, all always present', () => {
+  it('shapes AttachmentChunkPayload as the published nine fields, all always present', () => {
     // Mirrors the daemon SSOT (pyrycode #1752 / docs/protocol-mobile.md § Attachments) field-for-
     // field. Every field rides every chunk in BOTH directions — no omitempty — so a decoder may
-    // rely on all eight. A literal missing one, or carrying a ninth, fails to typecheck.
-    // Note what is NOT here: there is no conversation_id, and the omission is a security property.
+    // rely on all nine. A literal missing one, or carrying a tenth, fails to typecheck.
+    // `conversation_id` is FIRST, matching the daemon's struct order (pyrycode #2142), and it is
+    // REQUIRED: the daemon refuses a chunk without one since pyrycode #2143 (#1205).
     const payload: AttachmentChunkPayload = {
+      conversation_id: 'conv-1',
       attachment_id: 'att-1',
       index: 0,
       total_chunks: 2,
@@ -929,6 +931,7 @@ describe('attachment-chunk wire vocabulary (#860)', () => {
     }
 
     expect(Object.keys(payload)).toEqual([
+      'conversation_id',
       'attachment_id',
       'index',
       'total_chunks',
@@ -938,6 +941,7 @@ describe('attachment-chunk wire vocabulary (#860)', () => {
       'sha256',
       'data'
     ])
+    expect(payload.conversation_id).toBe('conv-1')
     expect(payload.attachment_id).toBe('att-1')
     expect(payload.index).toBe(0)
     expect(payload.total_chunks).toBe(2)
@@ -952,6 +956,7 @@ describe('attachment-chunk wire vocabulary (#860)', () => {
     // The no-drift pin: the position counter is a number on the wire. If the field were ever relaxed
     // to `string`, this line would stop erroring and fail the test at compile time.
     const wrong: AttachmentChunkPayload = {
+      conversation_id: 'conv-1',
       attachment_id: 'att-1',
       // @ts-expect-error index is a number, not a string
       index: '0',

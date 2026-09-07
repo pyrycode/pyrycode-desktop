@@ -139,6 +139,15 @@ export const DEFAULT_REKEY_RESUME_MESSAGE: Uint8Array = encodeEnvelope({
  * STATELESS BY CONSTRUCTION: the closure holds one number and no arrival set. Two transfers interleaving
  * on one session therefore cannot race here, and there is nothing to reset between tests.
  *
+ * ⭐ A CHUNK NAMING NO CONVERSATION IS REFUSED, ON EVERY INDEX (#1205). This mirrors pyrycode #2143: the
+ * daemon files an upload under the conversation the chunk names, has no cursor to fall back to, and
+ * answers an absent or empty `conversation_id` with `attachment.invalid_chunk` on the first chunk carrying
+ * it. The fake answers every such chunk rather than only the first — it keeps no arrival set — and a
+ * transfer settles on its first reject regardless, so the client-visible outcome is the same. It is here,
+ * in the HEALTHY fake, so that a client which stops sending the field goes red in the unit tier rather
+ * than in the operator's composer, which is exactly how the omission reached production. Not a registry
+ * check: the fake hosts no conversations, so any non-empty string is "known" to it.
+ *
  * Test-only scaffolding, and it lives beside the fake for DEFAULT_REKEY_RESUME_MESSAGE's reason: the fake
  * owns the daemon's side of the protocol, a test owns the assertions.
  */
@@ -155,7 +164,14 @@ export function attachmentStoredReplyFrames(
     if (envelope.type !== 'attachment_chunk') return []
     const payload = envelope.payload
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return []
-    const { attachment_id: attachmentId, index } = payload as Record<string, unknown>
+    const {
+      attachment_id: attachmentId,
+      conversation_id: conversationId,
+      index
+    } = payload as Record<string, unknown>
+    if (typeof conversationId !== 'string' || conversationId === '') {
+      return [attachmentRejectEnvelope(envelope.id, 'attachment.invalid_chunk')]
+    }
     if (typeof attachmentId !== 'string' || index !== completingIndex) return []
     return [
       encodeEnvelope({
@@ -251,18 +267,25 @@ export function attachmentRejectReplyFrames(
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return []
     const { index } = payload as Record<string, unknown>
     if (index !== rejectedIndex) return []
-    const { message, retryable } = ATTACHMENT_REJECTS[code]
-    return [
-      encodeEnvelope({
-        id: ATTACHMENT_REJECT_ID,
-        type: 'error',
-        ts: ATTACHMENT_REJECT_TS,
-        // The chunk THIS refusal answers — the one that triggered the condition, whatever its index.
-        in_reply_to: envelope.id,
-        payload: { code, message, retryable }
-      })
-    ]
+    return [attachmentRejectEnvelope(envelope.id, code)]
   }
+}
+
+/**
+ * One reject frame answering the chunk at `inReplyTo` — the chunk that triggered the condition,
+ * whatever its index. Shared by the reject builder above and by the healthy builder's absent-conversation
+ * arm (#1205), so the two cannot drift in shape: a faithful `{ code, message, retryable }` and nothing
+ * else, `retry_after_s` deliberately absent (see `attachmentRejectReplyFrames`).
+ */
+function attachmentRejectEnvelope(inReplyTo: number, code: AttachmentRejectCode): Uint8Array {
+  const { message, retryable } = ATTACHMENT_REJECTS[code]
+  return encodeEnvelope({
+    id: ATTACHMENT_REJECT_ID,
+    type: 'error',
+    ts: ATTACHMENT_REJECT_TS,
+    in_reply_to: inReplyTo,
+    payload: { code, message, retryable }
+  })
 }
 
 /** Config for one fake daemon. Test-only; nothing is persisted, no real credential is read. */

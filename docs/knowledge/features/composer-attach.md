@@ -20,9 +20,12 @@ The other four footer controls each read a store and render one of several state
 - **It renders unconditionally.** The three menus each wait on a run-config snapshot before drawing
   anything; the context reading waits on a usage figure. This button has no daemon-published anything to
   be missing, so it is the one item in the row present on a fresh launch with no snapshot at all.
-- **It takes no `conversationId` and reads no store.** The intent it dispatches names no conversation and
-  no file — the picker, the path and the bytes all stay in the background process. `requestAttach` is a
-  fire-and-forget call with no argument.
+- **It names the open conversation and nothing else (#1205; it named nothing until then).** The daemon
+  files an upload under the conversation the chunk names and refuses one naming none (pyrycode#2143), so
+  `useAttachmentUpload` takes the screen's `activeConversationId` — the value `submitMessage` already
+  sends under — and all three entries pass it on the ask; with no conversation open they no-op, the
+  send's rule for a null id. The file itself is still nowhere near this component: the picker, the path
+  and the bytes all stay in the background process.
 - **The button itself needs no disabled or in-flight state.** The composition root's `pickerOpen` flag
   (#862) already drops a second intent while a picker is open, so a double-clicked button is handled
   below the bridge. Drawing a state on the *glyph* would be exactly the placeholder

@@ -64,6 +64,7 @@ function harness(result: AttachmentTransferResult = { ok: true }): {
         return result
       },
       emit: (event) => events.push(event),
+      conversationId: 'conv-1',
       diagnosticLog: { event: (fields) => records.push(fields) }
     }
   }
@@ -335,7 +336,8 @@ describe('uploadAttachmentFile — driver terminals', () => {
       upload: async () => {
         throw new Error('contract violated')
       },
-      emit: (event) => events.push(event)
+      emit: (event) => events.push(event),
+      conversationId: 'conv-1'
     }
 
     await expect(uploadAttachmentFile(path, deps)).resolves.toBeUndefined()
@@ -425,6 +427,7 @@ function reportingHarness(
   return {
     events,
     deps: {
+      conversationId: 'conv-1',
       upload: async (_input, onProgress) => {
         for (const [sent, total] of reports) onProgress?.(sent, total)
         // `after` reports land once the driver has already answered — the shape a driver that ignored
@@ -573,6 +576,26 @@ describe('uploadClipboardImage', () => {
   })
 })
 
+describe('the destination (#1205)', () => {
+  it('names the conversation the ask carried on the plan input, from every entry', async () => {
+    // The daemon files an upload under the conversation the chunk names and refuses a chunk naming
+    // none (pyrycode #2143), so the id the ask carried has to reach the plan — and it has to reach it
+    // ONCE, as a value the plan spreads, because the daemon also refuses a later chunk of a transfer
+    // that names a different conversation than its first (pyrycode #2146). Read from the deps rather
+    // than from a store the operator can switch mid-upload.
+    const path = await fileWith(new Uint8Array([1]))
+    const { deps, uploads } = harness()
+
+    await uploadAttachmentFile(path, deps)
+    await uploadAttachmentBytes(
+      { bytes: new Uint8Array([1]), filename: 'pasted.png', mimeType: 'image/png' },
+      deps
+    )
+
+    expect(uploads.map((input) => input.conversation_id)).toEqual(['conv-1', 'conv-1'])
+  })
+})
+
 const TINY: Parameters<typeof uploadAttachmentBytes>[0] = {
   bytes: new Uint8Array([1]),
   filename: 'tiny.bin',
@@ -667,7 +690,8 @@ describe('the progress gate (#864 AC1-AC4)', () => {
         driven = true
         return { ok: true }
       },
-      emit: (event) => events.push(event)
+      emit: (event) => events.push(event),
+      conversationId: 'conv-1'
     }
 
     await uploadAttachmentBytes(

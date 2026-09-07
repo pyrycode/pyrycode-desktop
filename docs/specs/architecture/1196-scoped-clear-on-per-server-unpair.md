@@ -390,3 +390,42 @@ on. **Do not key a store here to make its clear scopeable.**
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — the e2e cannot drive AC3's surviving half, and no spec may interact after the unpair
+
+**What changed.** § Testing strategy planned to prove AC3's second half by re-opening the second
+server's row after the unpair and asserting its thread. That is not drivable in this fixture, and the
+constraint is broader than one assertion: **no post-unpair interaction that sends a command can be
+followed by a sidebar read.**
+
+**Why.** `launchPairedApp` starts BOTH fake servers through the same `startFakeServer`, which sets
+`buildReply: () => seedConversationsFrame()` — a one-row `conversations` frame built from `SEEDED_ROW`.
+The second server's own row reaches the app only through `pushFrame`, never through a reply. So any
+request answered by the surviving server — opening a conversation fires `requestSessionSettings` and
+`requestModelList` — draws a reply that overwrites the SURVIVOR's slot with the DEPARTED row's name.
+Measured: the first draft of the spec re-opened the survivor's row and then read `Seeded discussion`
+back out of the sidebar, with nothing wrong in the app.
+
+**What it is now.** The spec asserts AC1 and AC3's first half (the app-wide `.channel-list__title` set,
+plus `aria-current` count 0) and then stops interacting. AC3's second half moved to
+`clearServerScopedState.test.ts`, which drives it directly with the open conversation belonging to a
+server that is not the one departing — a case the e2e could not have reached cleanly anyway. The spec's
+header records the trap.
+
+**The assertion was mutation-checked**, because a sidebar read after an unpair is exactly the shape that
+passes vacuously: with `runUnpairServer`'s new `else` arm disabled and the app rebuilt, the drive fails on
+the title set (two rows instead of one) and passes again when it is restored.
+
+### 2026-09-07 — Open questions resolved
+
+1. **No intermediate paint between the active-conversation clear and the nav.** `clearActiveConversation`
+   and `navigateToList` are adjacent synchronous calls inside `exitActiveConversation`, reached from
+   `runUnpairServer`'s post-await continuation — a microtask, which React 18 auto-batches exactly as it
+   does an event handler, so both land in one commit. Not driven end to end: no fake-tier spec forces the
+   composer's terminal-error state with a second server paired AND a departed open chat, and
+   `unpair-repair.spec.ts`'s two-server drive (which does press Re-pair) still passes unchanged.
+2. **The e2e reads a row's title from `.channel-list__title`**, the `<span>` inside
+   `.channel-list__row-open`. Rows are addressed for clicking by the button, and read by the array form of
+   `toHaveText` over the title span.

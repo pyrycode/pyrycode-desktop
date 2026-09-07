@@ -29,6 +29,7 @@ import {
 } from './exitActiveConversation'
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
 import { requestModelList } from './store/modelListBridge'
+import { requestSystemPrompt } from './store/systemPromptBridge'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
@@ -40,6 +41,7 @@ import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
 import { modalStore } from './store/modalStore'
 import { runConfigStore } from './store/runConfigStore'
 import { runSettingsWriteStore } from './store/runSettingsWriteStore'
+import { systemPromptStore } from './store/systemPromptStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -64,13 +66,23 @@ const activateDeps: ActivateConversationDeps = {
     activeConversationStore.getState().setActiveConversation(conversation),
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
-  // #1167: the departing conversation's run configuration, both halves dropped as one act — the held
-  // daemon snapshot and the write machine's pending / confirmed / rejected state. Two `getState()`
-  // arrows in one body rather than two members, the `requestConversationConfig` shape below; these two
-  // singletons appear here and nowhere else in this file, and neither is subscribed to.
+  // #1167: the departing conversation's run configuration, all halves dropped as one act — the held
+  // daemon snapshot, the write machine's pending / confirmed / rejected state, and since #1231 the held
+  // system-prompt reading. Three `getState()` arrows in one body rather than three members, the
+  // `requestConversationConfig` shape below; these three singletons appear here and nowhere else in this
+  // file, and none is subscribed to.
+  //
+  // #1231 joins this body rather than earning a member of its own for the reason the member's docstring
+  // gives: it is the SAME act ("this chat's configuration is no longer the one to show"), it always
+  // fires with the other two, and it is a value describing one chat's session held in an app-wide
+  // singleton keyed by nothing. Its staleness is the sharpest of the three once #1078 lands — a stale
+  // prompt shown against another chat's thread is offered for EDIT, not merely displayed — while its
+  // self-healing is the weakest: this arm is reply-only, so nothing pushes a correction unsolicited and
+  // the only refill is the ask fired moments later from `requestConversationConfig` below.
   clearRunConfig: () => {
     runConfigStore.getState().clearSnapshot()
     runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+    systemPromptStore.getState().clearReading()
   },
   // #777: restore point 1 of "the open conversation's mark equals its own held item count" — the stamp
   // for the conversation being opened. It reaches its two singletons through the bridge's own production
@@ -83,11 +95,19 @@ const activateDeps: ActivateConversationDeps = {
   // store DIRECTLY, the `clearTimelineFor` / `clearAllTimelines` shape below: there is no sampling branch
   // to keep in one tested place, because the store method takes the id and nothing else.
   markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId),
-  // #1166: ask the daemon for the opened conversation's run configuration and its published model list.
-  // Both senders are the tested, React-free helpers on their own paths and each already refuses a falsy
-  // id, so this arrow holds no branch — only the two calls, in the order the two lanes were built. The
-  // sequence does not matter (both are fire-and-forget and their replies are whole-value replaces landing
-  // through app-lifetime subscribers), which is exactly why no gate or await appears here.
+  // #1166: ask the daemon for the opened conversation's run configuration and its published model list,
+  // and since #1231 its stored system prompt. All three senders are the tested, React-free helpers on
+  // their own paths and each already refuses a falsy id, so this arrow holds no branch — only the three
+  // calls, in the order the three lanes were built. The sequence does not matter (all are
+  // fire-and-forget and their replies are whole-value replaces landing through app-lifetime
+  // subscribers), which is exactly why no gate or await appears here.
+  //
+  // #1231's ask is the one that CANNOT be dropped without the vertical going dark. The other two frames
+  // are also pushed unsolicited, so a missing ask costs freshness; `system_prompt` is REPLY-ONLY, so
+  // with no ask the event never fires at all and the store stays permanently at its not-loaded state.
+  // Its sender's falsy guard is correspondingly load-bearing rather than tidy: this verb has no error
+  // frame, so an unroutable id would draw an ordinary-looking `no_session` reply that nothing
+  // downstream could tell from a true reading.
   //
   // `window.pyry` is dereferenced INSIDE the arrow body, the `getState()` shape every member above uses:
   // it runs only when a conversation is activated, never at module load and never during render, so this
@@ -95,6 +115,7 @@ const activateDeps: ActivateConversationDeps = {
   requestConversationConfig: (conversationId) => {
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
+    requestSystemPrompt(window.pyry.sendCommand, conversationId)
   }
 }
 
@@ -132,10 +153,13 @@ const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> =
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // #1167: the same one act as in `activateDeps` above, and the two bodies are deliberately identical —
-  // a delete or an archive ends the conversation this state describes exactly as a switch does.
+  // a delete or an archive ends the conversation this state describes exactly as a switch does. #1231
+  // added its third line to both in the same edit, for that reason: a store added to one body and not
+  // the other is precisely how #1167's own defect arose.
   clearRunConfig: () => {
     runConfigStore.getState().clearSnapshot()
     runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+    systemPromptStore.getState().clearReading()
   }
 }
 

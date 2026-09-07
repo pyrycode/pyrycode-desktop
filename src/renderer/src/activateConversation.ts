@@ -12,7 +12,8 @@ import type { ThreadEvent } from './store/threadTimeline'
  *  - `setActiveConversation`     — records the newly activated one (the same store's setter).
  *  - `dispatchTimeline`          — timelineStore's dispatch; carries #528's `reset`.
  *  - `clearSessionId`            — sessionIdStore's #529 clear.
- *  - `clearRunConfig`            — #1167's drop of the previous chat's run configuration, both stores.
+ *  - `clearRunConfig`            — #1167's drop of the previous chat's run configuration, all three
+ *                                  stores since #1231.
  *  - `stampLastRead`             — #777's last-read stamp for the conversation being opened.
  *  - `markViewed`                — #786's view stamp, conversationTimelineStore's eviction ranking.
  *  - `requestConversationConfig` — #1166's ask for the opened conversation's run configuration and
@@ -39,16 +40,24 @@ export interface ActivateConversationDeps {
   /**
    * #1167: drop the run configuration of the conversation being LEFT — `runConfigStore`'s held
    * snapshot and `runSettingsWriteStore`'s pending changes, confirmed overrides and standing
-   * rejection. Both stores are app-wide singletons keyed by nothing, and every value in them describes
-   * one chat's session, so without this the footer of the chat being opened reads the previous one's
-   * configuration.
+   * rejection — and since #1231 `systemPromptStore`'s held system-prompt reading. All three stores are
+   * app-wide singletons keyed by nothing, and every value in them describes one chat's session, so
+   * without this the footer of the chat being opened reads the previous one's configuration.
    *
-   * ONE member for two stores, not two members — `requestConversationConfig`'s precedent below,
-   * verbatim. The two are one act ("this chat's run configuration is no longer the one to show"), they
-   * always fire together, and neither is enough on its own: the snapshot half self-heals in one round
+   * ONE member for three stores, not three members — `requestConversationConfig`'s precedent below,
+   * verbatim. They are one act ("this chat's run configuration is no longer the one to show"), they
+   * always fire together, and none is enough on its own: the snapshot half self-heals in one round
    * trip (#1166 asks, #1176 refuses a reply naming another chat) while the write half never heals at
    * all, because a `set_session_settings` ack carries only a session id and never rewrites a snapshot.
    * Clearing only the store whose staleness is visible first would leave the durable half standing.
+   *
+   * #1231's third store sits between those two on self-healing and is the worst of the three to leave
+   * standing. It re-asserts only on the next activation — `system_prompt` is reply-only, so nothing
+   * pushes a correction unsolicited — and what would otherwise stand is the previous chat's
+   * operator-authored prompt text, which the editor surface (#1078) offers for EDIT rather than merely
+   * displaying. THE SIGNATURE DOES NOT CHANGE: this member stayed `() => void` and gained a third
+   * `getState()` arrow in each of its three production bodies, rather than being renamed for the store
+   * list it happens to cover.
    *
    * REQUIRED, not optional, for `stampLastRead`'s reason: `activateDeps` is module-private,
    * `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo runs a React effect
@@ -104,13 +113,20 @@ export interface ActivateConversationDeps {
   markViewed: (conversationId: string) => void
   /**
    * #1166: ask the daemon for the opened conversation's run configuration AND its published model list,
-   * one request each. It is the counterpart to `clearSessionId` above — that member wipes the address the
-   * footer's write controls need, and this one asks for the value that refills it, so a chat that has
-   * never had a turn no longer sits blank and inert until one ends.
+   * one request each — and since #1231 its stored system prompt, a third. It is the counterpart to
+   * `clearSessionId` above — that member wipes the address the footer's write controls need, and this
+   * one asks for the value that refills it, so a chat that has never had a turn no longer sits blank
+   * and inert until one ends.
    *
-   * ONE member for two requests, not two members. The two are one act — re-ask for what the switch just
-   * invalidated — they always fire together, and neither is enough for the footer on its own. It also
-   * holds this interface at THREE identical `(conversationId: string) => void` members rather than four.
+   * ONE member for three requests, not three members. They are one act — re-ask for what the switch
+   * just invalidated — they always fire together, and none is enough for the footer on its own. It also
+   * holds this interface at THREE identical `(conversationId: string) => void` members rather than
+   * five.
+   *
+   * #1231's ask is the one whose absence is not merely staleness. The other two frames are ALSO pushed
+   * unsolicited, so a missing ask there costs freshness; `system_prompt` is REPLY-ONLY, so with no ask
+   * the event never fires at all and its store stays permanently at its not-loaded state. That is why
+   * the ask joined this member rather than waiting for a consumer.
    *
    * REQUIRED, not optional, for `stampLastRead`'s and `markViewed`'s reason: `activateDeps` is
    * module-private, `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo runs a
@@ -184,12 +200,13 @@ export function activateConversation(
   if (previous?.id !== conversation.id) {
     deps.dispatchTimeline({ type: 'reset' })
     deps.clearSessionId()
-    // #1167, INSIDE the gate — that placement IS AC2. The four effects below run on a re-open by
-    // design; this one must not, or a re-click of the row the operator is already reading would blank
-    // its footer and cost a round trip to refill what was already correct. It joins the clear branch
-    // rather than starting a new one because "the id actually changed" is the same question for all
-    // three: the timeline rows, the session id and the run configuration were all authored by the chat
-    // being left. Order among the three is free — they are independent whole-value writes over
+    // #1167, INSIDE the gate — that placement IS AC2, and since #1231 it is also that ticket's AC3
+    // clause "NOT dropped on a re-open of the chat already open", true by construction here rather
+    // than by a new guard. The four effects below run on a re-open by design; this one must not, or a
+    // re-click of the row the operator is already reading would blank its footer and cost a round trip
+    // to refill what was already correct. It joins the clear branch rather than starting a new one
+    // because "the id actually changed" is the same question for all three: the timeline rows, the
+    // session id and the run configuration were all authored by the chat being left. Order among the three is free — they are independent whole-value writes over
     // separate stores — but the branch as a whole must precede `requestConversationConfig` below, and
     // being inside the gate puts it there by construction.
     deps.clearRunConfig()

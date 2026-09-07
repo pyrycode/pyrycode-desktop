@@ -464,7 +464,8 @@ distinguishable from "nothing has arrived for this chat yet", which is what make
 control's not-known rendering reachable at all.
 
 Both conversation-lifetime helpers call it through one shared `clearRunConfig` dep member that also
-resets [Run configuration write store](run-settings-write-store.md) in the same act — see that
+resets [Run configuration write store](run-settings-write-store.md) in the same act — and, since #1231,
+[System-prompt store](system-prompt-store.md)'s held reading, a third arrow in the same body. See that
 document's `conversationSwitched` arm and [Paired shell — conversation exits and stamps § The
 run-configuration clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167)
 for the placement in each helper. `activateConversation` calls it *inside* its id-change gate, so a
@@ -618,3 +619,6 @@ construction through `activateConversation` — a member there would guard state
   that also resets [Run configuration write store](run-settings-write-store.md). See § Scoped to the
   open chat since #1167 above and [Paired shell — conversation exits and stamps § The run-configuration
   clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167).
+- [System-prompt store](system-prompt-store.md) — [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231)
+  copied this store's DI-factory → singleton → hook → selector shape verbatim, joined
+  `requestConversationConfig` as a third ask and `clearRunConfig` as a third clear.

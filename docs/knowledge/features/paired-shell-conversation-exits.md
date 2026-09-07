@@ -380,19 +380,29 @@ if (previous?.id !== conversation.id) { dispatchTimeline({type:'reset'}); clearS
 setActiveConversation(conversation)
 stampLastRead(conversation.id)              // #777, unchanged
 markViewed(conversation.id)                 // #786, unchanged
-requestConversationConfig(conversation.id)  // #1166, new — outside the gate, last
+requestConversationConfig(conversation.id)  // #1166, new — outside the gate, last (#1231 widened its body)
 ```
 
-**One member firing two requests, not two members.** `PairedShell`'s `activateDeps.requestConversationConfig`
-arrow calls `requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)` then
-`requestModelList(window.pyry.sendCommand, conversationId)` — two visibly different named calls, no
-branch, no local state. The two are one act (re-ask for what `clearSessionId` just invalidated), they
-always fire together, and neither is meaningful for the footer without the other; folding them into one
-member also holds this interface at three identical `(conversationId: string) => void` members rather
-than four (see the cross-wire note above). Both sends are fire-and-forget and both replies are
-whole-value replaces landing through app-lifetime subscribers already listening
-(`subscribeRunConfig`/`subscribeModelList`), so the two calls need no ordering between them and a
-duplicate ask (a re-open landing beside an edge-driven refresh) costs nothing.
+**One member firing three requests, not three members.** `PairedShell`'s `activateDeps.requestConversationConfig`
+arrow calls `requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)`, then
+`requestModelList(window.pyry.sendCommand, conversationId)`, and since
+[#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) a third,
+`requestSystemPrompt(window.pyry.sendCommand, conversationId)` — three visibly different named calls,
+no branch, no local state. All three are one act (re-ask for what `clearSessionId` just invalidated),
+they always fire together, and none is meaningful for the footer without the others; folding them into
+one member also holds this interface at three identical `(conversationId: string) => void` members
+rather than five (see the cross-wire note above). All three sends are fire-and-forget and all three
+replies are whole-value replaces landing through app-lifetime subscribers already listening
+(`subscribeRunConfig`/`subscribeModelList`/`subscribeSystemPrompt`), so the calls need no ordering
+between them and a duplicate ask (a re-open landing beside an edge-driven refresh) costs nothing.
+
+**`requestSystemPrompt`'s absence costs more than the other two's.** `runConfigReceived` and
+`modelListReceived` are also pushed unsolicited on other edges, so a dropped ask there costs freshness
+only; `system_prompt` has no pushed half at all — with no ask the event never fires, and [System-prompt
+store](system-prompt-store.md) stays permanently at its not-yet-loaded state. That is why its sender's
+falsy-id guard is a correctness boundary rather than tidiness: this verb has no error frame, so an
+unroutable id would draw an ordinary-looking `no_session` reply nothing downstream can tell from a true
+reading. See [System-prompt store § The ask](system-prompt-store.md#the-ask-srcrenderersrcpairedshelltsx-activatedepsrequestconversationconfig).
 
 **Last, and the ordering is load-bearing in one direction.** `clearSessionId` (inside the gate, above)
 wipes the very value the run-configuration reply refills — the ask must follow it, or a reply landing in
@@ -452,25 +462,31 @@ it as the half a detector should be built on — a drive that only shows the sna
 \#1166's round trip instead.
 
 Both `ActivateConversationDeps` and `ExitActiveConversationDeps` gain one shared, required, nullary
-member, `clearRunConfig`:
+member, `clearRunConfig` — since [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) a
+third arrow wide:
 
 ```ts
 clearRunConfig: () => {
   runConfigStore.getState().clearSnapshot()
   runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
+  systemPromptStore.getState().clearReading()   // #1231
 }
 ```
 
-**One member for two stores, not two members** — the `requestConversationConfig` precedent from
+**One member for three stores, not three members** — the `requestConversationConfig` precedent from
 [§ The run-configuration and model-list ask](#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
-above, applied to the opposite direction: the two clears are one act ("this chat's run configuration is
-no longer the one to show"), they always fire together, and neither is sufficient alone — clearing only
-the snapshot store would leave a confirmed override standing over the newly opened chat's snapshot, and
+above, applied to the opposite direction: the clears are one act ("this chat's run configuration is no
+longer the one to show"), they always fire together, and none is sufficient alone — clearing only the
+snapshot store would leave a confirmed override standing over the newly opened chat's snapshot,
 clearing only the write store would leave the departing chat's raw snapshot on display until a reply
-arrived.
+arrived, and leaving [System-prompt store](system-prompt-store.md) standing would show the departed
+chat's system prompt, offered for edit by #1078, against the newly opened chat's thread. **The member
+is not renamed** for the third store it now covers — it names the act, not the store list, and its
+signature stays `() => void` at both declaration sites.
 
-`activateConversation`'s full sequence, current as of #1167 (extending the #1166 snippet above by one
-line inside the gate):
+`activateConversation`'s full sequence, current as of #1231 (extending the #1166 snippet above by one
+line inside the gate, widened again by #1231 without a new line of its own — the addition is inside
+`clearRunConfig`'s own body, shown above):
 
 ```
 previous = getActiveConversation()
@@ -500,8 +516,9 @@ note.** `clearRunConfig` is nullary, so on `ActivateConversationDeps` it is swap
 `clearSessionId`, and on `ExitActiveConversationDeps` with `clearSessionId`, `clearActiveConversation`
 and `navigateToList` — every swap compiles, and a bare `toHaveBeenCalled()` passes for both halves. The
 defence is unchanged in kind: both test files' `realDeps` integration cases wire the real
-`createRunConfigStore`/`createRunSettingsWriteStore` instances alongside the other real stores, so a swap
-leaves one store uncleared and another wrongly cleared, failing several cases together.
+`createRunConfigStore`/`createRunSettingsWriteStore`/`createSystemPromptStore` (since #1231) instances
+alongside the other real stores, so a swap leaves one store uncleared and another wrongly cleared,
+failing several cases together.
 
 **Consequence, already carried by the session-id clear and now widened by one more reading.** Clearing
 the snapshot drops `usedTokens`/`windowTokens` with it, so the footer's context-usage reading unmounts
@@ -509,8 +526,9 @@ until the newly opened (or, on exit, never-reopened) chat's own reply lands. Tha
 window, not a regression — see [Run configuration store § Scoped to the open chat since
 \#1167](run-config-store.md#scoped-to-the-open-chat-since-1167).
 
-**`clearPairingScopedState` stays out of scope, on the ticket's own rule.** An unpair leaves both stores
-held, but no footer renders until a chat is opened, and that open clears them by construction through
+**`clearPairingScopedState` stays out of scope, on the ticket's own rule — and #1231's third store
+inherits the same reasoning rather than re-arguing it.** An unpair leaves all three stores held, but no
+footer renders until a chat is opened, and that open clears them by construction through
 `activateConversation` — a member there would guard state nothing can read. That mirrors this document's
 existing "stores deliberately left out" list above for `exitActiveConversation`'s own five clears.
 

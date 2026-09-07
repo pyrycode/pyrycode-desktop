@@ -17,6 +17,7 @@ import { AnnouncedModelData } from './store/announcedModelBridge'
 import { ConversationActivityData } from './store/conversationActivityBridge'
 import { SlashCommandListData } from './store/slashCommandListBridge'
 import { ModelListData } from './store/modelListBridge'
+import { SystemPromptData } from './store/systemPromptBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -248,6 +249,20 @@ function App(): JSX.Element {
   // known — never from this mount. Delivery stays best-effort, so a conversation with no list is a normal
   // permanent state rather than something to retry. Ships dormant. No `connected` branch, for the reason
   // its twin has none; its pairing-scoped clear is clearPairingScopedState's (#977), not this leaf's.
+  // SystemPromptData (#1231) is the TWELFTH headless leaf: it lands the correlated `systemPromptReceived`
+  // reply — what system prompt the open conversation holds, and whether the running session was started
+  // with a different one — into the single-slot system-prompt store for the editor surface (#1078). The
+  // App-level rationale is the OTHER HALF of its neighbours': this arm is REPLY-ONLY, so unlike the two
+  // pushed frames above it can never arrive for a conversation the operator has never opened — but a
+  // reply CAN land after the operator has navigated on, so a screen-scoped listener would unmount before
+  // the reply its attribution gate exists to adjudicate ever arrives, and the drop would be silent. That
+  // gate is `subscribeSystemPrompt`'s third parameter, read per event: a reply describing any chat but
+  // the open one is dropped rather than held, and one arriving with nothing open lands nowhere.
+  // Reactive-only, no gate, no `connected` branch: the ask that makes this arm fire at all is
+  // `requestSystemPrompt`, sent from the conversation-activation path (PairedShell's
+  // `requestConversationConfig`) — the only place the conversation to name is known — never from this
+  // mount, and it is a one-shot on open rather than a retry. Its conversation-lifetime clear is the
+  // shared `clearRunConfig` dep member's, not this leaf's. Ships dormant.
   return (
     <>
       <ConversationListData />
@@ -261,6 +276,7 @@ function App(): JSX.Element {
       <RunConfigLiveData />
       <SlashCommandListData />
       <ModelListData />
+      <SystemPromptData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

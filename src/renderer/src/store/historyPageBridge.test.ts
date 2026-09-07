@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { DaemonEvent, HistoryTimelineEntry } from '@shared/ipc/events'
-import { reduceHistoryPage, subscribeHistoryPage } from './historyPageBridge'
+import type { RendererCommand } from '@shared/ipc/commands'
+import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
+import type { HistoryRequestState } from './conversationTimelineStore'
+import {
+  reduceHistoryPage,
+  requestOpeningHistory,
+  subscribeHistoryPage
+} from './historyPageBridge'
 import { reduceTimeline, initialTimelineState } from './threadTimeline'
 import type { ThreadEvent, ThreadItem } from './threadTimeline'
 
@@ -129,36 +135,79 @@ describe('subscribeHistoryPage', () => {
       listener = l
       return off
     })
-    const applyPage = vi.fn<(id: string, items: readonly ThreadItem[]) => void>()
-    const stop = subscribeHistoryPage(onDaemonEvent, applyPage)
-    return { emit: (e: DaemonEvent) => listener?.(e), applyPage, off, stop }
+    const applyPage =
+      vi.fn<(id: string, items: readonly ThreadItem[], cursor: string, atStart: boolean) => void>()
+    const settleFailure =
+      vi.fn<(id: string, reason: HistoryRequestFailure, retryable: boolean) => void>()
+    const stop = subscribeHistoryPage(onDaemonEvent, applyPage, settleFailure)
+    return { emit: (e: DaemonEvent) => listener?.(e), applyPage, settleFailure, off, stop }
   }
 
-  it('applies a page under the conversation id the event carries', () => {
+  it('applies a page under the conversation id the event carries, with its cursor and atStart', () => {
     const h = harness()
     h.emit(page)
 
-    expect(h.applyPage).toHaveBeenCalledWith('c-1', [
-      { kind: 'assistantText', turnId: 't', text: 'hi', createdAt: undefined }
-    ])
+    expect(h.applyPage).toHaveBeenCalledWith(
+      'c-1',
+      [{ kind: 'assistantText', turnId: 't', text: 'hi', createdAt: undefined }],
+      'cur',
+      false
+    )
+    expect(h.settleFailure).not.toHaveBeenCalled()
   })
 
   it('applies an empty page rather than dropping it', () => {
-    // The store owns the no-op; a subscriber that filtered here would hide an empty page from a future
-    // consumer that needs to know a page arrived at all.
+    // The store owns the no-op; a subscriber that filtered here would hide an empty page from a
+    // consumer that needs to know a page arrived at all — which since #1259 is how a conversation
+    // predating the log settles rather than staying permanently in flight.
     const h = harness()
-    h.emit({ ...page, entries: [] })
+    h.emit({ ...page, entries: [], cursor: '', atStart: true })
 
-    expect(h.applyPage).toHaveBeenCalledWith('c-1', [])
+    expect(h.applyPage).toHaveBeenCalledWith('c-1', [], '', true)
   })
 
-  it('ignores every other daemon-event arm, the failure half included', () => {
+  // #1259 claims the failure arm #1223 declined. All six members settle IDENTICALLY: the arm copies
+  // `reason` and `retryable` and branches on neither, so a future per-reason behaviour cannot be added
+  // without a test moving.
+  it('settles every refusal the same way, drawing nothing', () => {
+    const reasons: readonly HistoryRequestFailure[] = [
+      'conversation-not-found',
+      'history-invalid-request',
+      'history-invalid-page-size',
+      'history-invalid-cursor',
+      'history-unavailable',
+      'unclassified'
+    ]
     const h = harness()
-    h.emit({ type: 'historyRequestFailed', conversationId: 'c-1', reason: 'history-unavailable', retryable: true })
+    for (const reason of reasons) {
+      h.emit({ type: 'historyRequestFailed', conversationId: 'c-1', reason, retryable: false })
+    }
+
+    expect(h.settleFailure.mock.calls).toEqual(reasons.map((reason) => ['c-1', reason, false]))
+    expect(h.applyPage).not.toHaveBeenCalled()
+  })
+
+  it('carries the retryable flag as sent rather than re-deriving it', () => {
+    // `history.unavailable` is the set's one retryable member, computed at the single emit precisely so
+    // a walk driver cannot re-derive it wrong. Reading a value the event did not carry is the defect.
+    const h = harness()
+    h.emit({
+      type: 'historyRequestFailed',
+      conversationId: 'c-2',
+      reason: 'history-unavailable',
+      retryable: true
+    })
+
+    expect(h.settleFailure).toHaveBeenCalledWith('c-2', 'history-unavailable', true)
+  })
+
+  it('ignores every arm it does not own', () => {
+    const h = harness()
     h.emit({ type: 'assistantDelta', conversationId: 'c-1', turnId: 't', seq: 1, text: 'live' })
     h.emit({ type: 'disconnected' })
 
     expect(h.applyPage).not.toHaveBeenCalled()
+    expect(h.settleFailure).not.toHaveBeenCalled()
   })
 
   it('returns the unsubscribe handle it was given', () => {
@@ -166,5 +215,90 @@ describe('subscribeHistoryPage', () => {
     h.stop()
 
     expect(h.off).toHaveBeenCalledOnce()
+  })
+})
+
+// #1259 — the opening ask. The whole decision is a pure function of the conversation's held reading, so
+// it is provable here: `vitest.config.ts` is `environment: 'node'`, no renderer spec runs an effect, and
+// the activation seam's wiring is otherwise structurally uncoverable.
+describe('requestOpeningHistory', () => {
+  function deps(held: HistoryRequestState | null) {
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const markRequested = vi.fn<(id: string) => void>()
+    const getHeld = vi.fn<(id: string) => HistoryRequestState | null>(() => held)
+    return { sendCommand, markRequested, getHeld }
+  }
+
+  it('asks for the newest page when nothing is held, marking before sending', () => {
+    const d = deps(null)
+    requestOpeningHistory(d, 'c-1')
+
+    // An empty cursor is the normal OPENING value of a walk, never a missing one, and `limit: 0` is the
+    // published "you choose" value `buildRequestHistory` normalises a non-positive ask to.
+    expect(d.sendCommand).toHaveBeenCalledWith({
+      type: 'requestHistory',
+      payload: { conversation_id: 'c-1', cursor: '', limit: 0 }
+    })
+    expect(d.markRequested).toHaveBeenCalledWith('c-1')
+    // Mark FIRST: the invariant that matters is "never ask twice" (a duplicate ask duplicates rows),
+    // and a mark left standing over a send that threw is repaired by the next eviction.
+    expect(d.markRequested.mock.invocationCallOrder[0]).toBeLessThan(
+      d.sendCommand.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('does not ask again for a conversation already asking, drawn or refused', () => {
+    const settled: readonly (HistoryRequestState | null)[] = [
+      { status: 'requested' },
+      { status: 'loaded', cursor: 'cur', atStart: false },
+      { status: 'loaded', cursor: '', atStart: true },
+      { status: 'failed', reason: 'history-unavailable', retryable: true },
+      { status: 'failed', reason: 'conversation-not-found', retryable: false }
+    ]
+    for (const held of settled) {
+      const d = deps(held)
+      requestOpeningHistory(d, 'c-1')
+
+      // AC2 for the retained case, AC4 for the refused one — including the RETRYABLE refusal, which is
+      // recorded and not acted on: no timer, no backoff, no automatic re-ask anywhere in this slice.
+      expect(d.sendCommand).not.toHaveBeenCalled()
+      expect(d.markRequested).not.toHaveBeenCalled()
+    }
+  })
+
+  it('sends exactly once across two activations of the same conversation, and again once evicted', () => {
+    // The production sequence: `requestConversationConfig` fires on EVERY activation, including a
+    // re-click of the row already open, so the gate has to live here rather than at the seam.
+    let held: HistoryRequestState | null = null
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const d = {
+      sendCommand,
+      getHeld: () => held,
+      markRequested: () => {
+        held = { status: 'requested' }
+      }
+    }
+    requestOpeningHistory(d, 'c-1')
+    held = { status: 'loaded', cursor: 'cur', atStart: false }
+    requestOpeningHistory(d, 'c-1')
+
+    expect(sendCommand).toHaveBeenCalledOnce()
+
+    // AC3: an evicted slice takes its reading with it, so the reading is `null` again and the re-open
+    // refills from history rather than starting empty.
+    held = null
+    requestOpeningHistory(d, 'c-1')
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends nothing for an unaddressable conversation, and never consults the store for one', () => {
+    for (const id of [null, '']) {
+      const d = deps(null)
+      requestOpeningHistory(d, id)
+
+      expect(d.sendCommand).not.toHaveBeenCalled()
+      expect(d.markRequested).not.toHaveBeenCalled()
+      expect(d.getHeld).not.toHaveBeenCalled()
+    }
   })
 })

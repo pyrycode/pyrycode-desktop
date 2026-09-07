@@ -390,3 +390,36 @@ not applicable, nothing is written to disk.
 arm reads `reason` and `retryable` and writes them WITHOUT branching on the value, so no future
 per-reason behaviour can be added without a test moving. Out of scope and named: the unbounded
 per-slice byte growth (the store header's deferral), and #1247's status-row error surface.
+
+## Revisions
+
+### 2026-09-07 — the real-tier spec clears the timeline by archiving, not by reloading
+
+**Open question 1 is resolved against the plan's first choice.** The plan proposed `page.reload()` to
+discard the renderer's stores and force a second first-opening. Reading `conversationListBridge`'s
+`ConversationListData` settled it the other way: the conversation list is requested on the **`connected`
+edge** — a `useEffect` keyed on `sessionStore.status.type === 'connected'` — not on mount. After a
+reload the main process is still connected and the fresh renderer's session store starts disconnected,
+so whether the list ever repopulates depends on main re-announcing a status the window missed. That is
+unverifiable here (no `pyry` on this machine) and it would fail as a spec-infrastructure timeout rather
+than as a statement about history.
+
+`e2e/real-daemon-history-on-open.spec.ts` therefore uses the plan's own stated fallback: **archive →
+restore → re-open**. Archiving the ACTIVE conversation routes through `exitActiveConversation`, whose
+`clearTimelineFor` drops that conversation's held slice and, since this ticket, the record that it had
+already asked — so the re-open is a first opening as far as the client is concerned. Every step is
+transplanted from `real-daemon-conversation-lifecycle.spec.ts`, which drives the same sequence against a
+real daemon today, and the `.conversation` 1→0 delta is a positive observable that the exit actually ran,
+which is what keeps the closing assertion from passing against a slice that was never cleared.
+
+**No production code changed for this.** The contract the spec exercises is the same one the plan
+describes: an opening with nothing held asks, and a page fills the thread.
+
+### 2026-09-07 — open question 2: the real-tier spec spawns claude
+
+Resolved as written rather than as hoped. The marker has to be in the daemon's on-disk log for the ask to
+have an answer, and the only route by which this client writes to a conversation's log is a real
+`send_message` against a live session, so `spawnClaude` stays at its default. The claude turn is waited
+out purely as a barrier; nothing asserts on the reply. The `real-daemon-` prefix names the subject — the
+daemon's history verb — and both prefixes run in the same credentialed tier, since each Playwright config
+keys on `real-` alone.

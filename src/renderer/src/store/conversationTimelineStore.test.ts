@@ -4,7 +4,9 @@ import {
   MAX_RETAINED_TIMELINES,
   createConversationTimelineStore,
   initialConversationTimelineState,
-  selectTimelineFor
+  selectHistoryRequestFor,
+  selectTimelineFor,
+  type HistoryRequestState
 } from './conversationTimelineStore'
 import type { ThreadEvent, TimelineState } from './threadTimeline'
 
@@ -748,8 +750,153 @@ describe('conversationTimelineStore', () => {
     expect(initialConversationTimelineState.timelines.size).toBe(0)
 
     const seeded = createConversationTimelineStore({
-      timelines: new Map([['c1', { ...emptyTimeline, compacting: true }]])
+      timelines: new Map([['c1', { timeline: { ...emptyTimeline, compacting: true }, history: null }]])
     })
     expect(timelineFor(seeded, 'c1')).toEqual({ ...emptyTimeline, compacting: true })
+  })
+
+  // #1259 — the opening ask's per-conversation state, held BESIDE the timeline in the same slice so it
+  // dies with it. Four readings: `null` (never asked, or evicted — the two are deliberately the same
+  // reading, and that identity is AC3), `requested`, `loaded`, `failed`.
+  describe('the opening history request state', () => {
+    const historyFor = (store: Store, conversationId: string): HistoryRequestState | null =>
+      selectHistoryRequestFor(conversationId)(store.getState())
+
+    /** Put a slice in the map the way production does — `markViewed` at the activation seam. */
+    const open = (store: Store, conversationId: string): void =>
+      store.getState().markViewed(conversationId)
+
+    it('reads null for an unheld conversation, hostile keys included, before any write', () => {
+      const store = createConversationTimelineStore()
+
+      // On a `Record` keyspace the first two walk the prototype chain and hand back a truthy value.
+      for (const key of ['c1', '__proto__', 'constructor', '']) {
+        expect(historyFor(store, key)).toBeNull()
+      }
+    })
+
+    it('no-ops on an absent key, returning the state OBJECT so no subscriber wakes', () => {
+      const store = createConversationTimelineStore()
+      const before = store.getState()
+
+      store.getState().markHistoryRequested('never-opened')
+      store.getState().recordHistoryPage('never-opened', 'cur', false)
+      store.getState().recordHistoryFailure('never-opened', 'history-unavailable', true)
+
+      // A history write must never MINT a slice: the state it describes has to die with the timeline,
+      // and a timeline-less holder would outlive the thing it describes.
+      expect(store.getState()).toBe(before)
+      expect(timelineFor(store, 'never-opened')).toBeNull()
+      expect(historyFor(store, 'never-opened')).toBeNull()
+    })
+
+    it('records each reading on a held conversation, leaving its timeline identical', () => {
+      const store = createConversationTimelineStore()
+      open(store, 'c1')
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+      const heldTimeline = timelineFor(store, 'c1')
+
+      store.getState().markHistoryRequested('c1')
+      expect(historyFor(store, 'c1')).toEqual({ status: 'requested' })
+
+      store.getState().recordHistoryPage('c1', 'cur-1', true)
+      expect(historyFor(store, 'c1')).toEqual({ status: 'loaded', cursor: 'cur-1', atStart: true })
+
+      store.getState().recordHistoryFailure('c1', 'history-invalid-cursor', false)
+      expect(historyFor(store, 'c1')).toEqual({
+        status: 'failed',
+        reason: 'history-invalid-cursor',
+        retryable: false
+      })
+
+      // The rows are untouched by all three, and `Object.is`-identical, so a component reading this
+      // conversation's thread is not re-rendered by a request-state write.
+      expect(timelineFor(store, 'c1')).toBe(heldTimeline)
+    })
+
+    it('records the cursor verbatim, empty string included', () => {
+      const store = createConversationTimelineStore()
+      open(store, 'c1')
+      // `cursor` is EMPTY whenever `at_start` is true, so `''` is a valid held value and must not be
+      // normalised into "no cursor" — the two fields are carried as sent and never derived from each
+      // other (HistoryPagePayload's contract).
+      store.getState().recordHistoryPage('c1', '', true)
+
+      expect(historyFor(store, 'c1')).toEqual({ status: 'loaded', cursor: '', atStart: true })
+    })
+
+    it('re-orders nothing and changes no size — a history write is not a view', () => {
+      const store = createConversationTimelineStore()
+      open(store, 'a')
+      open(store, 'b')
+
+      store.getState().markHistoryRequested('a')
+      store.getState().recordHistoryPage('a', 'cur', false)
+
+      // `a` stays ahead of `b` in eviction order. Promoting on a history write would make the daemon's
+      // reply, rather than the operator's attention, decide which thread survives.
+      expect([...store.getState().timelines.keys()]).toEqual(['a', 'b'])
+      expect(store.getState().timelines.size).toBe(2)
+    })
+
+    it('dies with the timeline — eviction, single clear and whole-map clear all take it', () => {
+      const evicting = createConversationTimelineStore()
+      for (const id of ids(MAX_RETAINED_TIMELINES)) open(evicting, id)
+      const victim = ids(MAX_RETAINED_TIMELINES)[0]
+      evicting.getState().recordHistoryPage(victim, 'cur', true)
+      expect(historyFor(evicting, victim)).not.toBeNull()
+
+      // One more viewed conversation evicts the least recently viewed, and its reading goes with it —
+      // which is what makes a re-open of an evicted conversation ask again (AC3) rather than read
+      // `loaded` and stay empty forever.
+      open(evicting, 'newcomer')
+      expect(historyFor(evicting, victim)).toBeNull()
+
+      const single = createConversationTimelineStore()
+      open(single, 'c1')
+      single.getState().recordHistoryFailure('c1', 'conversation-not-found', false)
+      single.getState().clearTimelineFor('c1')
+      expect(historyFor(single, 'c1')).toBeNull()
+
+      const all = createConversationTimelineStore()
+      open(all, 'c1')
+      all.getState().markHistoryRequested('c1')
+      all.getState().clearAllTimelines()
+      expect(historyFor(all, 'c1')).toBeNull()
+    })
+
+    it('keeps the two halves of a slice independent across conversations', () => {
+      const store = createConversationTimelineStore()
+      open(store, 'a')
+      open(store, 'b')
+      store.getState().markHistoryRequested('a')
+
+      // Writing one conversation's request state leaves the other's slice `Object.is`-identical, so a
+      // component watching `b` is not woken (the by-reference survivor copy, one field deeper).
+      const heldB = store.getState().timelines.get('b')
+      store.getState().recordHistoryPage('a', 'cur', false)
+
+      expect(store.getState().timelines.get('b')).toBe(heldB)
+      expect(historyFor(store, 'b')).toBeNull()
+    })
+
+    it('lets a page for an unheld conversation create the slice, then settle on it', () => {
+      const store = createConversationTimelineStore()
+      // `prependHistoryFor`'s create-at-head branch (#1223) is unchanged and still mints the slice, so
+      // the record that follows it in `useHistoryPageBridge` finds a key to write. Draw first, then
+      // settle: the reverse order would drop the reading on the floor.
+      const replayed: ThreadItem = {
+        kind: 'userText',
+        text: 'replayed',
+        createdAt: undefined,
+        messageId: 'm1',
+        attachments: undefined
+      }
+      store.getState().prependHistoryFor('c1', [replayed])
+      store.getState().recordHistoryPage('c1', 'cur', false)
+
+      expect(timelineFor(store, 'c1')?.items).toEqual([replayed])
+      expect(historyFor(store, 'c1')).toEqual({ status: 'loaded', cursor: 'cur', atStart: false })
+    })
   })
 })

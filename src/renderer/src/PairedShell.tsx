@@ -30,6 +30,7 @@ import {
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
 import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
+import { openingHistoryDeps, requestOpeningHistory } from './store/historyPageBridge'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
@@ -120,10 +121,19 @@ const activateDeps: ActivateConversationDeps = {
   // `window.pyry` is dereferenced INSIDE the arrow body, the `getState()` shape every member above uses:
   // it runs only when a conversation is activated, never at module load and never during render, so this
   // module stays server-renderable and PairedShell still subscribes to no store.
+  //
+  // #1259's ask is the FOURTH and the only one that is not unconditional. The three above are
+  // whole-value replaces for which a duplicate costs nothing, so they fire on every activation
+  // including a re-click of the row already open. A duplicate history page replaces nothing — it
+  // PREPENDS its rows a second time — so that ask carries its own per-conversation gate, which lives
+  // inside `requestOpeningHistory` where a spy can reach it rather than as a branch in this arrow. It
+  // reaches its store through `openingHistoryDeps` (the `stampLastRead` shape) rather than a fourth
+  // `getState()` arrow here, so the read-then-mark decision stays in one tested place.
   requestConversationConfig: (conversationId) => {
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
     requestSystemPrompt(window.pyry.sendCommand, conversationId)
+    requestOpeningHistory(openingHistoryDeps, conversationId)
   }
 }
 

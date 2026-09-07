@@ -42,6 +42,8 @@ import type {
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
+  SessionPromptStatus,
+  SystemPromptPayload,
   SessionSettingsUpdatedPayload,
   HistoryEntry,
   HistoryPagePayload,
@@ -616,6 +618,20 @@ export type InboundDaemonMessage =
       inReplyTo?: number
     }
   | {
+      kind: 'system-prompt'
+      systemPrompt: SystemPromptPayload
+      // OPTIONAL, like `session-settings`' and `history-page`'s, and for the same reason as the
+      // latter: a reply without a correlation handle is merely UNCORRELATABLE, not malformed, so the
+      // fail-closed drop belongs one layer up rather than here as a decode failure.
+      //
+      // IT IS THE ONLY HANDLE THERE IS, and here that is a security property rather than an
+      // inconvenience. The reply carries no `conversation_id` — the omission is what makes an unhosted
+      // conversation's answer byte-identical to a hosted-but-quiet one, so the verb cannot be used as
+      // a membership probe. The consumer keeps its outstanding asks keyed by envelope id and this is
+      // what it matches on.
+      inReplyTo?: number
+    }
+  | {
       kind: 'attachment-chunk'
       attachmentChunk: RetrievedAttachmentChunk
       // REQUIRED, not optional — see the type's docblock above. It names the request_attachment this
@@ -997,6 +1013,80 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
   return { session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens }
+}
+
+/**
+ * Narrow the untrusted `session_prompt_status` string onto the three CLIENT-OWNED literals the daemon
+ * publishes, or fail closed (#1230). `narrowDaemonErrorOutcome`'s comparand idiom — a switch against
+ * constants written here, never a value carried through from the frame — with the one divergence that
+ * matters: that function cannot throw and lands an unrecognised code on a catch-all `'unclassified'`
+ * member, because a consumer there has four correlations to serve however mangled the frame. This one
+ * REJECTS, because the daemon sets one of exactly three on every path including every unresolvable
+ * one, so a fourth value has no defined reading and a catch-all would hand a consumer a case with no
+ * behaviour to attach to it.
+ *
+ * Returns the narrowed member or `null`; the caller turns `null` into the throw, so the rejected value
+ * stays out of this function and out of any message built from it.
+ */
+function narrowSessionPromptStatus(value: string): SessionPromptStatus | null {
+  switch (value) {
+    case 'matches':
+      return 'matches'
+    case 'differs':
+      return 'differs'
+    case 'no_session':
+      return 'no_session'
+    default:
+      return null
+  }
+}
+
+/**
+ * Narrow an opaque payload into a SystemPromptPayload (#1230). Fail-closed on both fields, and the two
+ * are narrowed DIFFERENTLY on purpose — see SystemPromptPayload for the wire contract.
+ *
+ * `system_prompt` goes through `optionalString`, which is exactly this tri-state already solved: an
+ * ABSENT key returns `undefined` (no prompt stored), `''` returns `''` (an explicitly empty prompt IS
+ * stored), any other string returns it verbatim, and a `null` / number / object / array throws. The
+ * `null` rejection is load-bearing rather than incidental: the daemon's `*string`-with-`omitempty`
+ * encoding omits the key for nil and NEVER writes null, so an explicit null is off-contract and has no
+ * legitimate reading — folding it into either no-bytes state would let it round-trip back as a write.
+ * Nothing here trims, parses or truthiness-tests the value; a `?? ''` or a `|| undefined` anywhere on
+ * this path is the collapse the whole tri-state exists to prevent.
+ *
+ * `session_prompt_status` is narrowed against a CLOSED client-owned set, which is the opposite of
+ * `parseSessionSettingsPayload`'s deliberate no-allowlist on `permission_mode` — and the divergence is
+ * upstream's rather than a style drift. That field's read half carries one mode its write half
+ * refuses, so a client-side allowlist would fail-close valid traffic. This field is a published
+ * three-value enum with no zero value: the daemon sets one of the three on EVERY path including every
+ * unresolvable one, so a fourth value is a malformed or hostile frame rather than a future one, and
+ * accepting it would hand a consumer a fourth case with no defined reading.
+ *
+ * NO LENGTH BOUND ON THE PROMPT, deliberately (the parseQueuedItem / ADR 0002 no-cross-validate
+ * posture). The daemon caps it write-side at 8192 bytes, and parseInboundMessage's frame-level
+ * MAX_PLAINTEXT_BYTES guard already fails an oversized frame before this runs; a second bound here
+ * would defend a failure that cannot reach this code and, if set below the daemon's, would silently
+ * fail-close valid prompts.
+ *
+ * Returns a FRESH literal of the two known fields, so a server-added key — a `conversation_id` this
+ * reply deliberately does not carry included — is tolerated for forward-compat but never copied
+ * through. Its messages name the failure CATEGORY and the client-owned field constant only: the value
+ * is the operator's own prompt text, and an Error message is a sink that reaches a stack trace, a
+ * crash reporter, and anything that catches and logs.
+ */
+function parseSystemPromptPayload(payload: unknown): SystemPromptPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed system_prompt payload')
+  }
+  const system_prompt = optionalString(payload, 'system_prompt')
+  const session_prompt_status = narrowSessionPromptStatus(
+    requireString(payload, 'session_prompt_status')
+  )
+  if (session_prompt_status === null) {
+    // The rejected value is NOT interpolated — it is daemon-supplied and this message is a sink.
+    throw new WireDecodeError('malformed field: session_prompt_status')
+  }
+  return { system_prompt, session_prompt_status }
 }
 
 /**
@@ -2746,6 +2836,31 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
+    }
+    case 'system_prompt': {
+      // Narrow BEFORE logging so a malformed reply throws first and leaves no record — and on this
+      // frame that ordering is the AC rather than a convention it shares with its neighbours. NO
+      // decoded field is ever logged: not the prompt, not the status, only the frame's byte length and
+      // a one-way hash, reusing the existing content-free field set (no new DiagnosticEvent field, so
+      // the renderer-side allowlist pin is untouched).
+      //
+      // THE PROMPT REACHES NO SINK ON ANY PATH, INCLUDING THE FAILURE PATH, and the check is against
+      // what a caught or wrapped error can QUOTE rather than only the fields this line names.
+      // parseSystemPromptPayload's messages carry the failure category and the client-owned field
+      // constant only, and the sole caller's catch (daemonConnection's `parseInboundMessage` try)
+      // drops its caught object outright — so a rejected frame leaves neither a diagnostic record nor
+      // an error string an operator could ship off-box in a debug bundle.
+      const systemPrompt = parseSystemPromptPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'system_prompt',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      // Propagate the ALREADY-decoded Envelope.in_reply_to — the reply's ONLY correlation handle,
+      // since it carries no conversation id of its own. `undefined` when the frame omits it, which
+      // makes the consumer's correlation fail closed one layer up.
+      return { kind: 'system-prompt', systemPrompt, inReplyTo: envelope.in_reply_to }
     }
     case 'history_page': {
       // Narrow BEFORE logging so a malformed page throws first and leaves no record. NO decoded field

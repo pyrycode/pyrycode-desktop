@@ -644,6 +644,27 @@ app.whenReady().then(() => {
         // retry — the reply is one `history_page` the inbound path correlates back to this ask.
         router.route(command.payload.conversation_id)?.requestHistory(command.payload)
         return
+      case 'requestSystemPrompt': {
+        // ROUTED BY CONVERSATION, mirroring the cases above — a system prompt belongs to one
+        // conversation, so the frame goes to the server that hosts it or to no wire at all (#1230).
+        // ONE local, read twice, so the id routed by and the id sent can never be two different
+        // expressions. No `?.` on `payload`: it is required, and `isRequestSystemPromptPayload` has
+        // already proven it at the boundary. Direct to the connection method — a prompt read has no
+        // orchestrator and no consumer yet (#1231 subscribes), and no retry.
+        //
+        // THIS `?.` CARRIES MORE WEIGHT HERE THAN ON ANY NEIGHBOUR, and it is the whole of AC1. Every
+        // other conversation-scoped verb whose id the daemon cannot resolve draws something a client
+        // can see — a `conversation.not_found` error, or a zero-valued reply. This verb has NO error
+        // frame: an id that reached the wire unroutable would draw an ordinary-looking `no_session`
+        // reply with an absent prompt, and the correlation map would file that false "no prompt, no
+        // session" reading against a real conversation. Nothing downstream could tell it from a true
+        // one. The refusal is therefore this routing lookup — which already refuses and logs in
+        // `conversationRouter.ts` — and NOT an emptiness check in the boundary guard or the builder,
+        // both of which check type and shape as their siblings do.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.requestSystemPrompt(conversationId)
+        return
+      }
       case 'requestConversations':
         // ROUTED BY SERVER (#1120). `servers.route` answers the connection for the server the window
         // NAMED — resolved against the registry's held entries, never trusted as a hint — or, when the

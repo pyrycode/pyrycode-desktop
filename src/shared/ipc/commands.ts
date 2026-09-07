@@ -30,6 +30,7 @@ import type {
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
   RequestModelListPayload,
+  RequestSystemPromptPayload,
   RequestHistoryPayload,
   InterruptPayload,
   NewSessionPayload,
@@ -214,6 +215,14 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * never parsed, never rewritten, and never treated as a secret or a capability (it is deliberately
  * unsigned; authorization is pairing, at the Noise handshake). It has NO renderer sender in the slice
  * that declares it — #1224 adds the trigger.
+ * And `requestSystemPrompt` (#1230), which reuses the wire RequestSystemPromptPayload (a single
+ * REQUIRED `conversation_id` string — a routing id, not a secret) to ask what system prompt a
+ * conversation holds and whether the running session was started with a different one. Payload-REQUIRED
+ * like the three above, and its divergence from them is that it is the ONLY member whose verb has no
+ * error frame at all: an id the daemon cannot resolve draws an ordinary-looking `no_session` reply
+ * rather than a refusal a client can see, so an unroutable id must be stopped BEFORE the send — which
+ * is `main/index.ts`'s routing lookup, not this guard, which checks type as its siblings do. It has NO
+ * renderer sender in the slice that declares it — #1231 adds the trigger.
  * And `newSession` (#1217), which asks the daemon to KILL claude and spawn a fresh one in the
  * conversation it names — not the `/clear` the Actions menu's Reset session already sends as ordinary
  * message text, which clears context in place and keeps the process. It is the only member whose
@@ -262,6 +271,7 @@ export type RendererCommand =
   | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
   | { type: 'requestModelList'; payload: RequestModelListPayload }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
+  | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
   | { type: 'requestRecentWorkspaces'; serverId?: string }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
@@ -424,6 +434,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
       return 'payload' in value && isRequestHistoryPayload(value.payload)
+    case 'requestSystemPrompt':
+      // Payload-required (#1230) — the neighbours' idiom verbatim, including why the
+      // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.
+      return 'payload' in value && isRequestSystemPromptPayload(value.payload)
     case 'requestConversations':
       // Bare member (#139): no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)
@@ -839,6 +853,35 @@ function isRequestSessionSettingsPayload(value: unknown): value is RequestSessio
  *  not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one id.
  *  Pure; never throws. */
 function isRequestModelListPayload(value: unknown): value is RequestModelListPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the requestSystemPrompt payload (#1230). The guard
+ *  above with the name changed: one present-and-string `conversation_id` check, so a missing key, a
+ *  literal `null`, and a non-string are all rejected.
+ *
+ *  CHECKS TYPE, NOT EMPTINESS, like every sibling except `newSession` — and here that choice is worth
+ *  reading before "hardening" it, because this verb's divergence pushes the other way. Its neighbours
+ *  tolerate `''` because the daemon answers an unresolvable id visibly: `conversation.not_found` on
+ *  `request_model_list`, a zero-valued reply on `request_session_settings`. THIS VERB HAS NO ERROR
+ *  FRAME AT ALL, so an empty id on the wire would draw an ordinary-looking `no_session` reply with an
+ *  absent prompt, and the correlation map would file that false "no prompt, no session" reading
+ *  against a real conversation — a reading nothing downstream can tell from a true one. The refusal
+ *  that keeps such a frame off the wire is nonetheless NOT here: it is the ROUTING LOOKUP at the IPC
+ *  arm (`router.route(id)?.…`), which already refuses and logs an id no server has claimed, and which
+ *  refuses far more than emptiness. A second, weaker bound here would be a rule to keep in agreement
+ *  with the router's while never being the one that actually fires. `newSession`'s emptiness clause is
+ *  the one NOT to copy for the opposite reason: there `''` is a WIRE MEANING (restart whichever
+ *  conversation the daemon's process-wide cursor points at), and this verb has no such fallback.
+ *
+ *  The value is client-owned (this app's own conversation state, not network input) and reaches
+ *  exactly two sinks past here: `conversationRouter.route`, a read-only `Map` lookup against an index
+ *  built from the daemon's own conversation lists, and `buildRequestSystemPrompt`, which rebuilds a
+ *  fresh literal — never a log line, path, attribute, or cache key. Structural minimum: an extra field
+ *  is not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one
+ *  id. Pure; never throws. */
+function isRequestSystemPromptPayload(value: unknown): value is RequestSystemPromptPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

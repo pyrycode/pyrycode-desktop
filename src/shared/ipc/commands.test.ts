@@ -419,6 +419,62 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(named)).toBe(true)
   })
 
+  it('accepts a requestSystemPrompt naming a conversation, checking type not emptiness (#1230)', () => {
+    // The requestModelList arm's shape with the verb changed. `''` passes THIS layer for the sibling's
+    // reason — the guard checks type, not emptiness — even though this verb's divergence pushes the
+    // other way: it has NO error frame, so an empty id on the wire draws an ordinary-looking
+    // `no_session` reply that nothing downstream can tell from a true one. The refusal that keeps such
+    // a frame off the wire is main/index.ts's routing lookup, which refuses far more than emptiness; a
+    // second, weaker bound here would be a rule to keep in agreement with it while never being the one
+    // that fires. `newSession`'s emptiness clause is the one NOT to copy — there `''` is a wire
+    // meaning, and here it is merely an id no router resolves.
+    expect(
+      isRendererCommand({ type: 'requestSystemPrompt', payload: { conversation_id: 'conv-1' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({ type: 'requestSystemPrompt', payload: { conversation_id: '' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'requestSystemPrompt',
+        payload: { conversation_id: 'conv-1', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects requestSystemPrompt with no payload, or an explicitly undefined one (#1230)', () => {
+    // The explicitly-undefined arm is rejected BY VALUE, not by `'payload' in value`: structured clone
+    // PRESERVES an explicitly-undefined property across the IPC bridge, so the `in` check alone would
+    // pass it straight through — isRequestSystemPromptPayload is what refuses it.
+    expect(isRendererCommand({ type: 'requestSystemPrompt' })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSystemPrompt', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSystemPrompt', extra: 'ignored' })).toBe(false)
+  })
+
+  it('rejects a requestSystemPrompt whose payload is present but not a conversation id (#1230)', () => {
+    // A present payload must be a well-formed one — a non-string id, a missing key, and a literal null
+    // are all type lies that would otherwise reach encodeEnvelope's bare JSON.stringify.
+    expect(
+      isRendererCommand({ type: 'requestSystemPrompt', payload: { conversation_id: 42 } })
+    ).toBe(false)
+    expect(isRendererCommand({ type: 'requestSystemPrompt', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSystemPrompt', payload: null })).toBe(false)
+  })
+
+  it('types requestSystemPrompt as payload-REQUIRED — a bare send does not compile (#1230)', () => {
+    // Compile-time half, the one the runtime guard above cannot prove; see the requestModelList twin
+    // for why an unused expect-error directive is itself a failure and why this prose line may not
+    // open with the directive's own name.
+    // @ts-expect-error payload is required — a request with no conversation has nothing to ask about
+    const barePrompt: RendererCommand = { type: 'requestSystemPrompt' }
+    const namedPrompt: RendererCommand = {
+      type: 'requestSystemPrompt',
+      payload: { conversation_id: 'conv-1' }
+    }
+    expect(isRendererCommand(barePrompt)).toBe(false)
+    expect(isRendererCommand(namedPrompt)).toBe(true)
+  })
+
   it('accepts a requestHistory carrying all three fields, EMPTY cursor included (#1222)', () => {
     // The empty cursor is not a tolerated edge here — it is the NORMAL OPENING VALUE of every walk
     // ("start at the newest"), so a non-empty clause on that field would refuse the first ask of every

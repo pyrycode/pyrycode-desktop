@@ -372,3 +372,25 @@ Fakes over mocks throughout: the existing `daemonConnection.test.ts` driver fake
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+**2026-09-07 — Phase B, open questions closed. No design change.**
+
+1. **`systemPrompt: string | undefined` vs `systemPrompt?: string`** — the required-key form shipped, as
+   the Design section specified. Both bridges and `daemonConnection`'s emit typecheck against it and
+   the three states cross intact.
+2. **A fifth `DaemonEvent` enumeration site** — there is none. `src/shared/ipc/events.test.ts` does not
+   inventory the union, and the four bridge switches are the only exhaustive readers, so the arm count
+   in the size table stands at 12 production files.
+
+**One implementation refinement worth naming.** The plan described the off-contract-status rejection as
+a check inside `parseSystemPromptPayload`. It shipped split: `narrowSessionPromptStatus` maps the
+untrusted string onto one of three client-owned literals or returns `null`, and the caller turns `null`
+into the throw. The rejected value therefore never enters the function that could interpolate it into a
+message — a structural version of AC4's rule rather than one held by comment discipline. It also
+avoids an `as SessionPromptStatus` cast, which an `includes`-based guard would have needed.
+
+**Non-vacuity, mutation-checked and reverted.** Weakening the correlation gate in the `system-prompt`
+arm to `pendingSystemPromptRequests.get(inReplyTo) ?? '<some open conversation>'` reddened 3 tests;
+collapsing the tri-state with `system_prompt ?? ''` at the emit reddened 1. Both were reverted.

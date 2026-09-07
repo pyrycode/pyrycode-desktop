@@ -1113,8 +1113,20 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   closed three-value enum, independent of the prompt and never derived from it. (#1230,
   security-sensitive, builder self-review PASS, one SHOULD FIX closed by a dedicated test — the
   emitted `conversationId` must come from the correlation map, not the decoded payload.) Split from
-  #1078. Ships with **no renderer consumer**: #1231 stores it and fires the ask, #1078 renders it; all
-  four exhaustive bridges take a dormant no-op arm.
+  #1078. **#1231 closed the read half** — see [System-prompt store](features/system-prompt-store.md)
+  below; #1078 still owns the render.
+
+- [System-prompt store](features/system-prompt-store.md) — the renderer half of reading a
+  conversation's system prompt: a single-slot Zustand store (`runConfigStore`'s DI-factory →
+  singleton → hook → selector shape, named setters) holding a four-state reading (not-yet-loaded,
+  distinct from the daemon's own absent/empty/text tri-state) plus the independent
+  `sessionPromptStatus`. A fifth, independent bridge subscriber (`default: null`, deliberately not an
+  `assertNever` — that guard would stringify the operator's prompt into an `Error`) fires the ask from
+  `PairedShell`'s conversation-activation seam (a third call on `requestConversationConfig`) and drops
+  the held reading through the shared `clearRunConfig` dep member (a third arrow, joining [run-config
+  store](features/run-config-store.md)'s and [run-settings write
+  store](features/run-settings-write-store.md)'s clears) at all three lifecycle seams — switch, exit,
+  per-server unpair. Ships dormant; #1078 is the first reader. (#1231, split from #1078.)
 
 ## Architecture
 

@@ -7,10 +7,15 @@ prompt takes effect only at a conversation's *next* session start, so a client t
 perform the write (pyrycode#2151) had no way to learn what a conversation holds, or that the child it
 is typing at predates an edit — this slice teaches the transport to ask.
 
-Introduced in [#1230](../codebase/1230.md), split from #1078. **Nothing asks for a prompt yet** —
-[#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) is the store and the fire-on-open
-trigger — and **nothing renders one** — [#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)
-is the editor surface. All four exhaustive renderer bridges take a dormant no-op arm.
+Introduced in [#1230](../codebase/1230.md), split from #1078.
+[#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) closed the renderer read half: the
+ask now fires on conversation activation and a dedicated store holds the correlated reply — see
+[System-prompt store](system-prompt-store.md). **Nothing renders one yet** —
+[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078) is the editor surface. The four
+exhaustive renderer bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`, `questionBridge`)
+keep their dormant no-op arm permanently — #1231 added a *fifth*, independent subscriber rather than
+touching those four; see that document's § The bridge for why an exhaustive sixth switch here would be
+a security regression.
 
 Nearest shapes in the tree: [request-history-send](request-history-send.md) (#1222) is the closer
 analogue — a reply naming no conversation, correlated purely by envelope id — copied for the
@@ -274,7 +279,7 @@ daemon → system_prompt frame → parseSystemPromptPayload (fail-closed)
 | `requestSystemPrompt` (connection method) | `void` | Inert no-op when `driver === null`. `try/catch` drops any thrown object silently — never logged, never forwarded, **no retry, ever**. |
 | `case 'system-prompt'` (consumer) | `void` | Absent or unmatched `inReplyTo` → dropped silently. A hit → exactly one `systemPromptReceived`. |
 | Daemon | — | **No error frame exists for this verb.** Every unresolvable case (no such conversation, no session, an unnamed request) comes back as an ordinary `no_session` reading with an absent prompt — ordinary traffic, not a failure this client can distinguish. A non-negotiated connection is answered with nothing at all, same as a dropped frame. |
-| Window | — | `systemPromptReceived` ships dormant across all four bridges; #1231 is the first consumer. |
+| Window | — | `systemPromptReceived` ships dormant across the four exhaustive bridges; [System-prompt store](system-prompt-store.md)'s fifth, independent subscriber is the first consumer (#1231), fired from an ask on conversation activation. |
 
 ## Security properties
 
@@ -362,6 +367,8 @@ Fakes over mocks throughout: the existing `daemonConnection.test.ts` driver fake
 
 ## Related
 
+- [System-prompt store](system-prompt-store.md) — the renderer read half (#1231): the store, the
+  fifth-subscriber bridge, the activation ask, and the drop joining `runConfigStore`'s clear seam.
 - [Daemon connection — correlation § System-prompt read correlation
   (#1230)](daemon-connection-correlation.md#system-prompt-read-correlation-1230) — the
   `pendingSystemPromptRequests` walk-through in full.

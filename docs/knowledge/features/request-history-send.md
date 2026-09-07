@@ -18,8 +18,14 @@ is the first sender**, firing this ask once per conversation activation and clai
 too — see [Conversation timeline store](conversation-timeline-store.md) for the opening-ask design and
 [Internals § The opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the
 mechanics. **Nothing joins a page to the live stream yet** (that's
-[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)), and the scroll-back walk that reads the
-`cursor`/`atStart`/`retryable` #1259 records is [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s.
+[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). The scroll-back walk that reads the
+`cursor`/`atStart` #1259 records is [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s,
+shipped: a second asker, `requestOlderHistory`, sends the same `RequestHistoryPayload` shape from a second
+renderer call site once the reader scrolls back near the top of a thread that hasn't reached `at_start` —
+no new wire verb, no new frame type, nothing on this transport-only leg changed. `retryable` is still read
+nowhere; #1260 confirmed the reasoning that named it dormant (no timer, no backoff, no automatic re-ask)
+rather than building a reader for it. See [Conversation timeline store § Edge
+cases](conversation-timeline-store.md#edge-cases-and-limitations) for the walk itself.
 
 Nearest shapes in the tree: `ddd9a0b` ([session settings send](session-settings-send.md), request +
 reply decode) is the full request-and-decode analogue; `e199833` (#1165, `requestModelList`) is the

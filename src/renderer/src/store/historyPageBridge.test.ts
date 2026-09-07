@@ -4,6 +4,7 @@ import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@
 import type { HistoryRequestState } from './conversationTimelineStore'
 import {
   reduceHistoryPage,
+  requestOlderHistory,
   requestOpeningHistory,
   subscribeHistoryPage
 } from './historyPageBridge'
@@ -296,6 +297,140 @@ describe('requestOpeningHistory', () => {
       const d = deps(null)
       requestOpeningHistory(d, id)
 
+      expect(d.sendCommand).not.toHaveBeenCalled()
+      expect(d.markRequested).not.toHaveBeenCalled()
+      expect(d.getHeld).not.toHaveBeenCalled()
+    }
+  })
+})
+
+// #1260 — the scroll-back walk. Same posture as the opening ask above and for the same reason: the whole
+// decision is a pure function of the conversation's held reading plus one boolean about where the reader
+// is, so it is provable here while the scroll handler that supplies that boolean is not.
+describe('requestOlderHistory', () => {
+  function deps(held: HistoryRequestState | null) {
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const markRequested = vi.fn<(id: string) => void>()
+    const getHeld = vi.fn<(id: string) => HistoryRequestState | null>(() => held)
+    return { sendCommand, markRequested, getHeld }
+  }
+
+  const loaded = (cursor: string, atStart: boolean): HistoryRequestState => ({
+    status: 'loaded',
+    cursor,
+    atStart
+  })
+
+  it('asks for the page before the oldest loaded one, echoing the cursor verbatim', () => {
+    const d = deps(loaded('opaque-cursor-1', false))
+    requestOlderHistory(d, 'c-1', true)
+
+    // ECHOED, not derived: the cursor goes from the held reading into the payload untouched. Nothing
+    // parses it, compares it, or builds anything out of it — the daemon owns its shape entirely.
+    expect(d.sendCommand).toHaveBeenCalledWith({
+      type: 'requestHistory',
+      payload: { conversation_id: 'c-1', cursor: 'opaque-cursor-1', limit: 0 }
+    })
+    expect(d.markRequested).toHaveBeenCalledWith('c-1')
+    // Mark FIRST, the opening ask's ordering and its argument.
+    expect(d.markRequested.mock.invocationCallOrder[0]).toBeLessThan(
+      d.sendCommand.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('sends exactly one ask however often the reader fires the detector', () => {
+    // ⭐ THE ONE-ASK-IN-FLIGHT PROOF, and it needs the second firing to read a MOVED reading. `onScroll`
+    // fires at frame rate while the reader sits in the band, and a `markRequested` moved AFTER the send
+    // would pass every single-firing case in this describe while sending on every frame.
+    let held: HistoryRequestState | null = loaded('opaque-cursor-1', false)
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const d = {
+      sendCommand,
+      getHeld: (): HistoryRequestState | null => held,
+      markRequested: (): void => {
+        held = { status: 'requested' }
+      }
+    }
+
+    requestOlderHistory(d, 'c-1', true)
+    requestOlderHistory(d, 'c-1', true)
+    requestOlderHistory(d, 'c-1', true)
+
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again with the new cursor once a page has settled', () => {
+    // The walk STEPPING, which is the other half of the case above: the gate is the reading, not a
+    // one-shot latch, so a page landing between two firings produces a second ask carrying its cursor.
+    let held: HistoryRequestState | null = loaded('opaque-cursor-1', false)
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    const d = {
+      sendCommand,
+      getHeld: (): HistoryRequestState | null => held,
+      markRequested: (): void => {
+        held = { status: 'requested' }
+      }
+    }
+
+    requestOlderHistory(d, 'c-1', true)
+    held = loaded('opaque-cursor-2', false)
+    requestOlderHistory(d, 'c-1', true)
+
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+    expect(sendCommand.mock.calls[1][0]).toEqual({
+      type: 'requestHistory',
+      payload: { conversation_id: 'c-1', cursor: 'opaque-cursor-2', limit: 0 }
+    })
+  })
+
+  it('stops walking once a page reports the start of the log', () => {
+    // AC3. `atStart` is the ONLY stop: nothing here counts entries, so neither an empty page nor a short
+    // one can end a walk, and only the daemon's own flag can.
+    const d = deps(loaded('opaque-cursor-3', true))
+    requestOlderHistory(d, 'c-1', true)
+
+    expect(d.sendCommand).not.toHaveBeenCalled()
+    expect(d.markRequested).not.toHaveBeenCalled()
+  })
+
+  it('does not ask while an ask is already on the wire, after a refusal, or with nothing held', () => {
+    // The three declining readings. `requested` is the in-flight gate; `failed` is terminal, with no
+    // branch on `reason` and no read of `retryable` — there is no timer, no backoff and no re-ask
+    // anywhere in this family. `null` belongs to the opening path: a walk never restarts itself
+    // mid-screen from an empty cursor, and an evicted slice reads as `null` exactly as a never-opened
+    // one does.
+    const readings: (HistoryRequestState | null)[] = [
+      { status: 'requested' },
+      { status: 'failed', reason: 'history-unavailable' as HistoryRequestFailure, retryable: true },
+      { status: 'failed', reason: 'unknown-conversation' as HistoryRequestFailure, retryable: false },
+      null
+    ]
+
+    for (const held of readings) {
+      const d = deps(held)
+      requestOlderHistory(d, 'c-1', true)
+      expect(d.sendCommand).not.toHaveBeenCalled()
+      expect(d.markRequested).not.toHaveBeenCalled()
+    }
+  })
+
+  it('does not ask while the reader is anywhere but near the top', () => {
+    // The asking reading with the detector clear — the case that proves the position is a real term in
+    // the decision rather than a parameter the function ignores.
+    const d = deps(loaded('opaque-cursor-1', false))
+    requestOlderHistory(d, 'c-1', false)
+
+    expect(d.sendCommand).not.toHaveBeenCalled()
+    expect(d.markRequested).not.toHaveBeenCalled()
+  })
+
+  it('does not reach the wire, or the store, for an unaddressable conversation', () => {
+    // `requestOpeningHistory`'s guard verbatim and for its reason: `''` is the same failure as `null`
+    // spelled differently, not a second case. It returns BEFORE consulting the store, so an unusable id
+    // cannot read a reading either.
+    for (const id of [null, '']) {
+      const d = deps(loaded('opaque-cursor-1', false))
+      requestOlderHistory(d, id, true)
       expect(d.sendCommand).not.toHaveBeenCalled()
       expect(d.markRequested).not.toHaveBeenCalled()
       expect(d.getHeld).not.toHaveBeenCalled()

@@ -138,7 +138,7 @@ export function subscribeHistoryPage(
 }
 
 /**
- * The effects `requestOpeningHistory` performs, injected so the decision is a pure, deterministic
+ * The effects the two askers below perform, injected so the decision is a pure, deterministic
  * function tested with plain spies — which it has to be, because `vitest.config.ts` is
  * `environment: 'node'`, no renderer spec in this repo runs an effect, and the activation seam's own
  * wiring is therefore structurally uncoverable.
@@ -147,7 +147,7 @@ export function subscribeHistoryPage(
  * deps object below is module-scope and app-lifetime, so a reading captured once would freeze at
  * whatever the store held when the module loaded.
  */
-export interface OpeningHistoryDeps {
+export interface HistoryAskDeps {
   sendCommand: (command: RendererCommand) => void
   getHeld: (conversationId: string) => HistoryRequestState | null
   markRequested: (conversationId: string) => void
@@ -191,7 +191,7 @@ export interface OpeningHistoryDeps {
  * no timer and nothing to cancel.
  */
 export function requestOpeningHistory(
-  deps: OpeningHistoryDeps,
+  deps: HistoryAskDeps,
   conversationId: string | null
 ): void {
   if (!conversationId) return
@@ -209,7 +209,55 @@ export function requestOpeningHistory(
  * it. Every member reaches its singleton inside the arrow BODY, so nothing is dereferenced at module
  * load and `window.pyry` is never touched during render.
  */
-export const openingHistoryDeps: OpeningHistoryDeps = {
+/**
+ * Ask for the page BEFORE a conversation's oldest loaded entry — the scroll-back walk (#1260).
+ *
+ * `nearTop` is a PARAMETER, not a measurement taken here, and that is the split this module depends on.
+ * The geometry is `threadScrollPosition`'s `isNearTop`, a pure function of three numbers; the readings
+ * are this one. Taking the boolean is what lets a plain vitest spy exercise every reading against both
+ * positions with no DOM — and it leaves the scroll handler with no branch of its own, which is the shape
+ * `onScroll`'s own docblock asks for.
+ *
+ * FOUR READINGS, THREE OF WHICH DECLINE, and the one that asks is the narrowest. `requested` means an ask
+ * is already on the wire — that is what holds this to ONE ask in flight while a reader parked in the band
+ * fires the handler at frame rate, and what keeps the deliberately non-idempotent `prependHistoryFor`
+ * from applying one page twice. `failed` is terminal: nothing branches on `reason` and nothing reads
+ * `retryable`, so there is no timer, no backoff and no automatic re-ask anywhere in this family. `null` —
+ * nothing held, because the slice was evicted or never opened — belongs to `requestOpeningHistory`
+ * instead: a walk never restarts itself mid-screen from an empty cursor.
+ *
+ * ⭐ `atStart` IS THE ONLY STOP. A page that fills exactly at the log's first entry reports `at_start`
+ * false with a usable cursor, and the daemon re-asks its own log at a smaller size rather than truncating
+ * to fit the envelope cap — so an EMPTY page and a SHORT page each leave the walk running. Nothing here
+ * counts entries or compares a page against the limit it asked with, which is what makes "a short page is
+ * not an end-of-log signal" structural rather than remembered.
+ *
+ * THE CURSOR IS ECHOED VERBATIM: read off the held reading, placed in the payload, and touched by nothing
+ * in between. It is not parsed, split, compared, derived from, reused across conversations or logged, and
+ * it never becomes a key, a path or a React key. The daemon merges its cursor failure causes into one
+ * indistinguishable answer on purpose, so there is deliberately no attempt to tell them apart; the repair
+ * for all of them is a fresh walk from an empty cursor, which is the next opening's job.
+ *
+ * Mark before send, the falsy-id guard before the store read, and a fresh three-key literal rather than a
+ * spread — all three carried from `requestOpeningHistory` above, for the reasons its docblock gives.
+ */
+export function requestOlderHistory(
+  deps: HistoryAskDeps,
+  conversationId: string | null,
+  nearTop: boolean
+): void {
+  if (!nearTop) return
+  if (!conversationId) return
+  const held = deps.getHeld(conversationId)
+  if (held === null || held.status !== 'loaded' || held.atStart) return
+  deps.markRequested(conversationId)
+  deps.sendCommand({
+    type: 'requestHistory',
+    payload: { conversation_id: conversationId, cursor: held.cursor, limit: 0 }
+  })
+}
+
+export const historyAskDeps: HistoryAskDeps = {
   sendCommand: (command) => window.pyry.sendCommand(command),
   getHeld: (conversationId) =>
     selectHistoryRequestFor(conversationId)(conversationTimelineStore.getState()),

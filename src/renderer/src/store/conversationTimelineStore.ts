@@ -169,12 +169,36 @@ export type HistoryRequestState =
 export interface ConversationSlice {
   timeline: TimelineState
   history: HistoryRequestState | null
+  /**
+   * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
+   * (#1260) — a monotonically rising count, never reset while the slice lives.
+   *
+   * ⭐ IT EXISTS FOR ONE CONSUMER AND IT IS NOT A STATISTIC: `Timeline` keys its item rows by array
+   * index, on the stated premise that the list "never inserts or reorders mid-list". A history prepend is
+   * exactly that insertion, and under index keys it makes React update every already-drawn row IN PLACE
+   * with a different item's content — after which Chromium's scroll anchoring compensates by the wrong
+   * delta, because its anchor node never moved, it merely started rendering a different message. Offset
+   * by this count, a row's key names its position from the CONVERSATION'S ORIGIN rather than from the
+   * head of the held array, which is stable under both mutations this list performs: an append leaves the
+   * count alone so the streaming tail bubble is not remounted, and a prepend of N raises it by N while
+   * every surviving row's index rises by N, so their keys do not move.
+   *
+   * It lives on the SLICE rather than on `TimelineState` for the reason `history` beside it does: it has
+   * to die with the timeline it describes, and membership of the slice makes that structural rather than
+   * maintained. `ConversationSlice` is also constructed in three places, all in this file, where
+   * `TimelineState` is the render model the whole screen and thirty-odd specs build.
+   */
+  prependedRows: number
 }
 
 /** A slice for a conversation nothing is yet held for: an empty thread and no ask. Sharing one frozen
  *  reference is safe for the reason the seeding note below gives — `reduceTimeline` is pure and every
  *  write path here replaces rather than mutates. */
-const emptySlice: ConversationSlice = { timeline: initialTimelineState, history: null }
+const emptySlice: ConversationSlice = {
+  timeline: initialTimelineState,
+  history: null,
+  prependedRows: 0
+}
 
 /** The whole state. A key ABSENT from the map means "nothing is held for that conversation" — no event
  *  has ever arrived and it was never opened, or it was evicted — and is a DISTINCT state from a present
@@ -459,7 +483,8 @@ export function createConversationTimelineStore(
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: reduceTimeline(initialTimelineState, event),
-              history: null
+              history: null,
+              prependedRows: 0
             })
           }
         }
@@ -500,7 +525,11 @@ export function createConversationTimelineStore(
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: { ...initialTimelineState, items },
-              history: null
+              history: null,
+              // A create-at-head prepend lands on nothing, so these rows are the conversation's first
+              // and their keys count from zero exactly as an appended row's would. Counting them here
+              // would offset a list they are the whole of.
+              prependedRows: 0
             })
           }
         }
@@ -509,7 +538,11 @@ export function createConversationTimelineStore(
         const next = new Map(s.timelines)
         next.set(conversationId, {
           ...held,
-          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items] }
+          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items] },
+          // `fresh.length`, NOT `items.length`: rows dropped by `withoutHeldEchoes` never entered the
+          // list, so counting the ask rather than the insertion would shift every drawn row's key by the
+          // number of echoes the page happened to duplicate.
+          prependedRows: held.prependedRows + fresh.length
         })
         return { timelines: next }
       }),
@@ -648,3 +681,21 @@ export const selectHistoryRequestFor =
   (conversationId: string) =>
   (s: ConversationTimelineState): HistoryRequestState | null =>
     s.timelines.get(conversationId)?.history ?? null
+
+/**
+ * #1260's read surface — how many rows history has prepended onto this conversation, for the row key the
+ * slice's own field explains.
+ *
+ * `?? 0` COLLAPSES rather than preserving, and unlike `selectHistoryRequestFor`'s `?? null` that is the
+ * whole point: "no slice at all" and "a slice nothing has been prepended to" are the same fact for a key
+ * offset, because a list that was never prepended to counts from zero either way. A caller reading this
+ * is asking where the first row's key starts, never whether a conversation is held — `selectTimelineFor`
+ * answers that and is the one that must stay nullable.
+ *
+ * A bare `Map.get` again, so an unknown id is an explicit no-match that can never resolve onto a
+ * neighbour's count, and the hostile-key property of the keyspace carries over untouched.
+ */
+export const selectPrependedRowsFor =
+  (conversationId: string) =>
+  (s: ConversationTimelineState): number =>
+    s.timelines.get(conversationId)?.prependedRows ?? 0

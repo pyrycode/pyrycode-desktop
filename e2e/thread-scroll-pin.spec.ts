@@ -3,15 +3,21 @@ import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import { AT_BOTTOM_TOLERANCE_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
+import {
+  AT_BOTTOM_TOLERANCE_PX,
+  HISTORY_ASK_BAND_PX
+} from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 import type {
   AssistantDeltaPayload,
   AttachmentChunkPayload,
+  HistoryPagePayload,
+  MessagePayload,
   QueuedItem,
   QueueStatePayload,
   RequestAttachmentPayload,
+  RequestHistoryPayload,
   SendMessagePayload,
   SessionTransitionPayload,
   StallPayload,
@@ -1154,4 +1160,204 @@ test('a thumbnail resolving in the last row leaves a bottom-resting reader at th
   // this closes is exactly the window before something unrelated snaps the reader back. Against `main` this
   // reads 172px; the observer takes it to zero.
   await expectPinnedToBottom(page)
+})
+
+// ---------------------------------------------------------------------------------------------------
+// #1260 — a served history page prepended above the reader must not move them.
+//
+// THIS IS THE POSITION THE WALK ACTUALLY FIRES FROM, and that is why the case belongs here rather than
+// beside the walk drive in `history-walk.spec.ts`. The two anchoring tests above drive a growth in the
+// MIDDLE of the thread, from a park at 40%; the walk fires from inside `HISTORY_ASK_BAND_PX` of the top,
+// where nothing had measured the reader's place. The band is above zero for exactly that reason —
+// Chromium suppresses scroll anchoring at a scroll offset of exactly zero, so an ask that only fired at
+// the wall would fire where the mechanism holding the reader's place is off.
+//
+// ⭐ THE REFERENCE ROW IS ADDRESSED BY ITS OWN TEXT, NEVER BY INDEX, and that is the whole detector rather
+// than a stylistic preference. `Timeline` keys item rows by their position from the conversation's ORIGIN
+// (#1260) precisely because a bare index does not survive a prepend: under index keys React matches key 0
+// to key 0, so every already-drawn row is updated IN PLACE with a different item's content and N fresh
+// nodes appear at the END. An index-addressed reference row would then sit exactly where it was — the
+// node never moved — and this test would pass against the bug it exists to catch. Matching the row by the
+// text it carried before the page landed is what makes "the reader's place" mean the reader's CONTENT.
+//
+// The growth is REAL rows through the real path: the walk's own ask is withheld (the `withheldThumbnails`
+// shape above), the reader takes their place, and only then is the correlated `history_page` pushed.
+
+/** The opening page's single row (#1259), which exists here only to leave the conversation holding a
+ *  `loaded` reading with a cursor — the state the walk asks from. Its text shares no substring with the
+ *  primer's replies or with the walked-back rows. */
+const OPENING_HISTORY_TEXT = 'the newest thing already in the log'
+/** The cursor the opening page hands back, and therefore the one the walk must echo to be served. */
+const WALK_CURSOR = 'cursor-one-page-older'
+const walkedBackText = (n: number): string => `an older exchange, number ${n} from the walk`
+/** Enough rows that the growth is unambiguously hundreds of pixels rather than one row's worth. */
+const WALKED_BACK_ROWS = 8
+/** The floor that growth must clear for the assertions to be testing anything. Not the exact height: a
+ *  bubble's box is padding plus a line of text plus the thread's gap, all of which the type scale and the
+ *  spacing tokens move, and pinning it would redden this spec on a restyle that broke nothing. */
+const WALKED_BACK_GROWTH_FLOOR_PX = 200
+
+const historyEntry = (id: number, text: string): HistoryPagePayload['entries'][number] => ({
+  id,
+  type: 'message',
+  ts: FIXED_TS,
+  payload: {
+    conversation_id: SEEDED_ROW.id,
+    message_id: `stored-m${id}`,
+    role: 'user',
+    text
+  } satisfies MessagePayload
+})
+
+const historyPageFrame = (
+  inReplyTo: number,
+  entries: HistoryPagePayload['entries'],
+  cursor: string,
+  atStart: boolean
+): Uint8Array =>
+  encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'history_page',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: { entries, cursor, at_start: atStart } satisfies HistoryPagePayload
+  })
+
+interface WithheldWalk {
+  /** Composed into `launchPairedApp` in place of the module-level builder, which it delegates to. */
+  buildReplyFrames: (inbound: Uint8Array) => Uint8Array[]
+  /** The correlated page for the walk's own ask, once that ask has actually reached the daemon. */
+  serve: () => Promise<Uint8Array>
+}
+
+/**
+ * Answer the OPENING ask at once and withhold the WALK's, handing back the frame that releases it.
+ *
+ * The withholding is the whole case, for `withheldThumbnails`' reason verbatim: a page whose rows are in
+ * hand before the reader takes their position exercises nothing. So the walk's ask is recorded and
+ * answered with no frames, the thread is allowed to settle, the reader parks in the band, and only then is
+ * the correlated frame pushed out of band with `daemon.pushFrame`.
+ *
+ * Per-test state, not module state, because `playwright.config.ts` sets `workers: 1` and
+ * `fullyParallel: false` — a capture at module scope would carry one test's request ids into the next.
+ */
+function withheldWalk(): WithheldWalk {
+  let walkRequestId: number | null = null
+  return {
+    buildReplyFrames: (inbound) => {
+      const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'request_history') {
+        const asked = (envelope.payload as RequestHistoryPayload).cursor
+        if (asked === '') {
+          return [
+            historyPageFrame(envelope.id, [historyEntry(100, OPENING_HISTORY_TEXT)], WALK_CURSOR, false)
+          ]
+        }
+        // The walk's ask, keyed on the cursor it had to echo to get here: a client that mangled the
+        // cursor records nothing and the poll below fails as a statement about the walk.
+        if (asked === WALK_CURSOR) walkRequestId = envelope.id
+        return []
+      }
+      return buildReplyFrames(inbound)
+    },
+    serve: async () => {
+      await expect.poll(() => walkRequestId !== null, { timeout: STREAM_TIMEOUT_MS }).toBe(true)
+      if (walkRequestId === null) throw new Error('unreachable: the poll above proved the ask arrived')
+      return historyPageFrame(
+        walkRequestId,
+        Array.from({ length: WALKED_BACK_ROWS }, (_, i) =>
+          historyEntry(200 + i, walkedBackText(WALKED_BACK_ROWS - i))
+        ),
+        'cursor-older-still',
+        false
+      )
+    }
+  }
+}
+
+/** The full text of the assistant row at `index`, as the DOM holds it — meta row included. Captured
+ *  before the page lands and matched with `===` afterwards, which is what makes the reference row
+ *  identifiable by CONTENT rather than by position. Every streamed reply's text is distinct, so the match
+ *  is unambiguous. */
+const assistantRowContentAt = (page: Page, index: number): Promise<string> =>
+  page
+    .locator('.conversation__thread .bubble[data-thread-role="assistant"]')
+    .nth(index)
+    .evaluate((element) => element.textContent ?? '')
+
+/** That same row's top edge in VIEWPORT coordinates, found by the content captured above. Throwing when
+ *  no row carries it is the guard that keeps the comparison meaningful. */
+const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Promise<number> =>
+  page.locator('.conversation__thread').evaluate((thread, wanted) => {
+    const row = [...thread.querySelectorAll('.bubble[data-thread-role="assistant"]')].find(
+      (element) => (element.textContent ?? '') === wanted
+    )
+    if (row === undefined) throw new Error('the reference row is no longer in the thread')
+    return row.getBoundingClientRect().top
+  }, content)
+
+test('a page walked back above the reader leaves them looking at the same row', async ({
+  launchPairedApp
+}) => {
+  const withheld = withheldWalk()
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: withheld.buildReplyFrames })
+
+  // The opening page lands first, so the conversation holds a cursor and the walk has something to ask
+  // with. Waiting for its row is what proves that happened rather than assuming it.
+  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: OPENING_HISTORY_TEXT }))
+    .toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
+
+  await primeOverflowingThread(page)
+
+  // Park inside the band and ABOVE zero — the offset the walk fires from. Programmatic for the reasons the
+  // tests above give; the rAF settle is not optional, because the flag is still `true` at the instant of
+  // the assignment and the scroll event that clears it is what also fires the ask.
+  const parked = HISTORY_ASK_BAND_PX / 2
+  await page.locator('.conversation__thread').evaluate((el, top) => {
+    el.scrollTop = top
+  }, parked)
+  await settleScrollEvent(page)
+
+  // The preconditions. The reader is where the test put them, that place is inside the band, it is NOT
+  // the anchoring-suppressed zero, and it is a full viewport clear of the bottom — so nothing that
+  // follows can be explained by the pin re-asserting instead.
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBe(parked)
+  expect(before.scrollTop).toBeGreaterThan(0)
+  expect(before.scrollTop).toBeLessThanOrEqual(HISTORY_ASK_BAND_PX)
+  expect(distanceFromBottom(before)).toBeGreaterThan(before.clientHeight)
+
+  // The reference row: the first assistant bubble resting entirely inside the visible band, remembered by
+  // its CONTENT. See this section's header for why an index would make the whole test vacuous.
+  const referenceIndex = await firstFullyVisibleAssistantRow(page)
+  const referenceContent = await assistantRowContentAt(page, referenceIndex)
+  const referenceTopBefore = await viewportTopOfAssistantRowWithContent(page, referenceContent)
+
+  // Release the page the walk asked for. `serve` polls for the ask first, so reaching this line is itself
+  // the proof that the park fired a real request carrying the opening page's cursor.
+  daemon.pushFrame(await withheld.serve())
+  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: walkedBackText(1) }))
+    .toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
+  await settleScrollEvent(page)
+
+  const after = await readThreadMetrics(page)
+
+  // NON-VACUITY: the rows really landed and really grew the thread. Without it the criterion passes
+  // against an app in which the page never arrived — which, for a reader who did not move, is
+  // indistinguishable from the behaviour under test.
+  const grewBy = after.scrollHeight - before.scrollHeight
+  expect(grewBy).toBeGreaterThanOrEqual(WALKED_BACK_GROWTH_FLOOR_PX)
+
+  // AC2. The row under the reader's eyes did not move on screen — the reader-facing quantity, and the one
+  // that reddens both when nothing compensates for the insertion and when the rows are re-keyed under it.
+  expect(await viewportTopOfAssistantRowWithContent(page, referenceContent)).toBeCloseTo(
+    referenceTopBefore,
+    0
+  )
+  // The mechanism, made visible: the offset advanced by exactly what was inserted above it, so a future
+  // reader of a failure can tell "the place moved" from "nothing compensated at all".
+  expect(after.scrollTop - before.scrollTop).toBeCloseTo(grewBy, 0)
+  // And NOT yanked to the bottom — the over-reach guard, for the picture-below arm's reason: a mechanism
+  // that re-pinned on any content growth would pass every assertion above and fail this one.
+  expect(distanceFromBottom(after)).toBeGreaterThan(AT_BOTTOM_TOLERANCE_PX + SUBPIXEL_PX)
 })

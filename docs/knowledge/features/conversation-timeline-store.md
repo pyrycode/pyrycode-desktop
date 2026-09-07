@@ -2,291 +2,31 @@
 
 The renderer's read/write surface over the [thread timeline](thread-timeline.md) model: a dedicated,
 unidirectional Zustand store wrapping the pure `reduceTimeline` reducer, plus a
-`daemonEventBridge`-shaped translator + React binding that feeds it from the two v2 interactive-stream
-`DaemonEvent` arms. Together, the store and bridge are what the render slice
-([#203](../codebase/203.md), shipped) mounts and paints — the "single, ordered source of truth" #203's
-spec called for.
+`daemonEventBridge`-shaped translator + React binding that feeds it from the v2 interactive-stream
+`DaemonEvent` arms, from a served history page, and from the composer's own optimistic echo. Together,
+the store and its bridges are what every render slice below reads and paints — the "single, ordered
+source of truth" [#203](../codebase/203.md)'s spec called for.
 
-Introduced in [#202](../codebase/202.md), the L2 (store) slice of the Phase-2 structured-streaming
-vertical, blocked-by [#199](../codebase/199.md) (the L1 transport slice, shipped) and built directly
-on [#121](../codebase/121.md) (the pure model, shipped). Purely additive, Strangler Fig: nothing in
-the coarse `message`/`message_chunk` path imports or is changed by either new file. [#203](../codebase/203.md)
-(shipped) is now the sole reader — the store's read surface (`selectItems`/`selectPhase`) and
-`useTimelineBridge()` mount are otherwise unchanged from what #202 shipped.
-
-[#214](../codebase/214.md) added a third arm to `translateTimelineEvent`'s owned block, `turnState` —
-the transport slice that finally feeds `phase` a live value. `selectPhase` now has a real upstream
-source; [#215](../codebase/215.md) gave it its first reader, `ConversationScreen`'s `ThinkingIndicator`
-(see [Conversation shell § Thinking indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
-
-[#217](../codebase/217.md) added a fourth arm, `toolUse` — the tool-call enrichment of the same v2
-interactive stream. Unlike the three arms before it, this is the first whose mapping produces a
-durable, appended `ThreadItem` (a `toolCall`, `result: null`) rather than growing text or setting a
-scalar: `reduceTimeline`'s pre-existing `toolUse` arm (#121) splits the turn's text into
-`[assistantText, toolCall, assistantText]`. `selectItems` now has a second content kind to expose
-beyond `assistantText`; nothing in the renderer paints a `toolCall` row yet — that is the sibling slice
-[#218](https://github.com/pyrycode/pyrycode-desktop/issues/218).
-
-[#201](../codebase/201.md) added `modalShown` / `modalDismissed` to `translateTimelineEvent`'s
-**inverse-filter** `null` list (alongside `conversationsReceived`), **not** its owned block — the first
-`DaemonEvent` pair since this bridge existed that this store does **not** consume. A modal is neither a
-session action nor a timeline event; the real consumer is the third, independent [modal store +
-bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md).
-This forced a matching `null` case in `daemonEventBridge.ts` at the same time — the third pair of arms
-to force both `assertNever`-guarded switches at once (after `turnState` #214 and `toolUse` #217).
-
-[#229](../codebase/229.md) added a fifth owned arm, `toolResult` — the outcome half of the `tool_use`
-enrichment (#217), the last transport slice of the vertical. Unlike every prior owned arm, this one
-**resolves** an existing `ThreadItem` rather than appending or setting a scalar: `reduceTimeline`'s
-pre-existing `toolResult` arm folds it through `fillResult` (#121), correlating by `toolUseId` and filling
-the matching `toolCall`'s `result` in place; an orphan or duplicate is a deterministic same-reference
-no-op. `DaemonEvent.toolResult` and `ThreadEvent.toolResult` are field-for-field identical, so the mapping
-is again a pure filter-and-copy. This also forced a case in a **third** exhaustive `DaemonEvent` switch —
-[modal store + bridge](modal-store-bridge.md)'s `modalBridge.ts` (#223) — a cost the #229 spec's own scope
-self-check (written before #223 merged) undercounted by one file; see [#229 codebase
-notes](../codebase/229.md) § Lessons learned. `selectItems` now exposes a `toolCall`'s resolved outcome;
-no render yet — that's the sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
-
-[#773](../codebase/773.md) widened the fifth owned arm, `toolResult` ([#229](../codebase/229.md)) — no
-new arm, one field added straight through every layer at once: wire, IPC, and both the bridge's
-`DaemonEvent`/`ThreadEvent` sides gained `resultDetail?: string`, the daemon's short précis of a tool's
-structured outcome (pyrycode#2024). Unlike #642/#643's two-ticket split, a scalar has none of the
-daemon-chosen-keys surface that justified separating decode from carry, so this ticket also widens the
-`ThreadItem` the reducer resolves onto (`toolCall.result.resultDetail`) in the same pass —
-`reduceTimeline`'s `fillResult` needed no change, its existing spread already preserves the field, the
-`input` (#643) precedent exactly. Absence (a daemon predating pyrycode#2024) and an empty string stay
-distinct facts at every hop, pinned by tests asserting `=== undefined` rather than
-`'resultDetail' in …`; per the upstream contract the two carry no different *meaning* — both mean "no
-count" — they are simply never collapsed into each other, since collapsing is the lossy transform this
-ticket exists not to perform. Ships dormant: `selectItems` carries the field but nothing reads it yet —
-that's [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856).
-
-[#317](../codebase/317.md) added a sixth owned arm, `stallDetected` — the daemon's onset-only stall
-liveness signal ([#315](../codebase/315.md)), moved out of the inverse-filter `null` list it shipped
-dormant in. At ship time, unlike every prior owned arm, both the `DaemonEvent` and the `ThreadEvent`
-sides were **nullary** (`{ type: 'stallDetected' }`), so the mapping was arm-selection only — no field
-to filter or copy. [#732](../codebase/732.md) later widened the `DaemonEvent` side with
-`conversationId` (the same routing-key widening [#724](../codebase/724.md) did for `turnState`); the
-mapping is now a **filter**, not pure arm-selection — `translateTimelineEvent` still returns the fresh
-nullary `{ type: 'stallDetected' }` literal, so `ThreadEvent.stallDetected` alone stays nullary.
-`reduceTimeline`'s arm sets a second scalar, `stalled: boolean`, beside `phase`; the four other owned
-arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) now also clear it as a side effect of being
-turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read surface.
-
-[#493](../codebase/493.md) added a seventh owned arm, `apiRetry` — the daemon's api-retry status signal
-([#492](../codebase/492.md)), also moved out of the inverse-filter `null` list it shipped dormant in.
-At ship time, unlike `stallDetected`, this arm carried data, so `DaemonEvent.apiRetry` and
-`ThreadEvent.apiRetry` were field-for-field identical (a filter-and-copy, the `toolUse`/`toolResult`
-shape) rather than arm-selection-only. [#737](../codebase/737.md) later widened the `DaemonEvent` side
-with `conversationId` — the same routing-key widening [#724](../codebase/724.md) did for `turnState`
-and [#732](../codebase/732.md) did for `stallDetected` — so the bridge case is now a filter that also
-drops a field, not a plain copy; `ThreadEvent.apiRetry` is the side that stays four-field.
-`reduceTimeline`'s new arm sets a third scalar, `apiRetry: ApiRetryStatus | null`,
-beside `phase`/`stalled` — but with the **clear semantics inverted** from `stalled`: the four
-turn-activity arms carry it through unchanged (compile-forced, one line each) rather than clearing it,
-since `api_retry` has an explicit wire falling edge (`active: false`) and `stall` does not. The falling
-edge sets the scalar to `null` unconditionally, discarding any counter on that event by construction.
-`selectApiRetry` joins `selectItems`/`selectPhase`/`selectStalled` as the read surface.
-
-[#496](../codebase/496.md) added an eighth owned arm, `compacting` — the daemon's compaction-liveness
-signal ([#495](../codebase/495.md)), also moved out of the inverse-filter `null` list it shipped dormant
-in. At ship time, like `apiRetry`, this arm carried data (`active`), so `DaemonEvent.compacting` and
-`ThreadEvent.compacting` were field-for-field identical (a filter-and-copy, not `stallDetected`'s
-arm-selection-only shape). [#742](../codebase/742.md) later widened the `DaemonEvent` side with
-`conversationId` — the same routing-key widening [#737](../codebase/737.md) gave `apiRetry` — so the
-bridge case is now a filter that also drops a field, not a plain copy; `ThreadEvent.compacting` is the
-side that stays one-field. `reduceTimeline`'s new arm sets a fourth scalar, **`compacting: boolean`**,
-beside `phase`/`stalled`/`apiRetry` — deliberately **not** `| null`: unlike `apiRetry` there is no
-counter to hide on clear, so a plain boolean is the honest representation and `boolean | null` would
-invent a state the wire cannot produce. The clear semantics match `apiRetry`'s inversion of `stalled`:
-the four turn-activity arms carry it through unchanged, and it clears only on its own explicit falling
-edge (`active: false`). Both edges collapse into one same-reference-or-fresh-state ternary — simpler
-than `apiRetry`'s two-branch body, since there's no counter to compare. `selectCompacting` joins
-`selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry` as the read surface.
-
-[#538](../codebase/538.md) added a ninth owned arm, `connected`→`reconnected` — unlike every arm before
-it, this one is **connection-lifecycle, not stream content**: it moves `connected` out of the null
-fall-through cluster into its own case, ahead of where the cluster opens, and returns a payload-free
-`{ type: 'reconnected' }`, ignoring the `connected` `DaemonEvent`'s `HelloAckPayload` entirely — there is
-no field to filter or copy, so like `stallDetected` this is arm-selection only. `reduceTimeline`'s new
-arm implements `docs/protocol-mobile.md`'s Mode B reset-on-reconnect contract for the timeline's two
-two-edged chrome scalars (`apiRetry`, `compacting`), which were otherwise stuck forever once their wire
-falling edge was lost to a disconnect: it clears `phase`/`stalled`/`apiRetry`/`compacting` in one step
-via a hand-written five-field literal (not a spread of `initialTimelineState`, so a future sixth field
-is a compile error here rather than cleared for free) while preserving `items` **by reference** — the
-same Mode A (cursor-backfill transcript) / Mode B (reset-and-rebuild control state) split the wire
-contract draws. `daemonEventBridge.ts` and `sessionStore.ts` remain independent consumers of the same
-`connected` edge, untouched by this ticket — this is the [`modalStore` #415](../codebase/415.md) /
-`queueStore` #197 reconcile shape applied a third time, not a centralisation of the edge.
-
-[#650](../codebase/650.md) added a sixth `TimelineState` scalar, `localSendPending: boolean`, but
-**not** a tenth owned arm — no new `DaemonEvent`, no new bridge case. It is the first chrome scalar
-written by a renderer-sourced event rather than a daemon one: the existing `userText` arm (the
-composer's optimistic echo, live since [#179](../codebase/179.md)) now also sets
-`localSendPending: true`, opening the working indicator's window the moment the composer accepts a
-submit rather than a network round-trip later. Every other arm classifies it: `turnState` and
-`reconnected` close it (the daemon speaking, or a reconcile, is authoritative), `reset` clears it
-for free via the shared constant, and the eight turn-content arms (`assistantDelta`/`toolUse`/
-`toolResult`/`turnEnd`/`sessionBoundary`/`stallDetected`/`apiRetry`/`compacting`) all carry it
-through unchanged — the deliberate inverse of `stalled`, since content can arrive before any
-`turn_state` and clearing on it would blank the indicator mid-turn. Both of the reducer's
-compiler-invisible early-outs (`turnState`'s no-churn guard, `reconnected`'s `nothingLive`
-predicate) gained a matching widened clause, the same shape as `stalled`'s guard in #317.
-`selectLocalSendPending` joins the read surface. See [Conversation shell § Thinking / working
-indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
-for the view-side composition.
-
-[#643](../codebase/643.md) widened the fourth owned arm, `toolUse` ([#217](../codebase/217.md)) — no
-new arm, one field added to both the `DaemonEvent` and `ThreadEvent` sides: the tool's input map
-carried to the IPC boundary by [#642](../codebase/642.md). Unlike every prior widen on this arm, this
-one also widens the `ThreadItem` the reducer appends (`toolCall.input`), not just the event — the
-bridge's fresh literal and the reducer's appended literal each gained one line, `input: event.input`,
-unconditional and by reference. Absence (a pre-pyrycode#1678 daemon) and an empty map stay distinct
-facts at both hops, pinned by tests asserting `=== undefined` rather than `'input' in …`. `fillResult`
-needed no change — its existing spread already preserves the field. Ships dormant: `selectItems`
-carries the field but nothing reads it yet — that's [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645).
-
-[#756](../codebase/756.md) adds no new owned arm and no new `DaemonEvent`/`ThreadEvent` field —
-`translateTimelineEvent`'s signature and body are byte-identical before and after. What it adds is a
-second production writer for the [keyed holder](conversation-timeline-holder.md) (#755), which had
-shipped with none: a new sibling pure function, `timelineTargetFor(event): string | null`, answers which
-conversation each owned arm belongs to (the eight id-carrying arms return their own `conversationId`;
-`sessionTransition`/`unrecognizedMessage`/`connected` return `null` — they carry nothing to attribute, not
-because they're dormant). `subscribeTimeline`'s injected `dispatch` widened by **arity**, not a new
-parameter — `(event) => void` to `(event, conversationId: string | null) => void` — so all 20 existing
-call sites kept compiling and running unedited. `useTimelineBridge` became the fan-out composition root:
-it still writes `timelineStore` unconditionally and first (nothing here changes), then additionally calls
-`conversationTimelineStore.getState().dispatchFor(conversationId, event)` when the id is non-null. Every
-rendered surface stays byte-identical — this ticket's own AC4 — because nothing reads the keyed holder yet
-([#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) is the reader cutover). The composer's
-optimistic echo (`composerSend.ts`, see [composer send](composer-send.md)) gained the same second write
-path in the same ticket, since it is the timeline's other row-adding writer.
-
-[#784](../codebase/784.md) widened `DaemonEvent.unrecognizedMessage` with `conversationId`, moving its
-`timelineTargetFor` case out of the id-less group — the arms `timelineTargetFor` returns `null` for and
-(since #785, below) `timelineWriteTarget` reads the open-conversation fallback for is `sessionTransition`
-and `connected` **only**, from #784 onward. `ThreadEvent.unrecognizedMessage` stays four-field; the id
-still stops at the bridge.
-
-[#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) gives the keyed holder its first write for those remaining two id-less arms —
-`sessionTransition`→`sessionBoundary` and `connected`→`reconnected` — which `timelineTargetFor` still
-maps to `null` and always will (neither's wire payload carries a conversation id; widening either is a
-daemon protocol change, out of scope here). A new sibling pure function, `timelineWriteTarget(event,
-conversationId, getOpenConversationId)`, resolves the actual write key: the event's own attribution wins
-if present, and only for these two named `ThreadEvent` arms does it fall back to
-`getOpenConversationId()` — an injected getter, never an import, so `timelineBridge.ts`'s import list
-stays byte-identical and the AC3 "no reference to the open conversation in scope" ban narrows to "no
-reference inside `timelineTargetFor`" rather than disappearing. The fallback is enumerated, not blanket
-(`conversationId ?? getOpenConversationId()` is explicitly banned) — a future owned arm with no
-`timelineTargetFor` case still falls through `timelineWriteTarget`'s own `default` to `null`, the same
-safe direction, rather than silently inheriting the screen. `useTimelineBridge` gained one parameter,
-`getOpenConversationId: () => string | null`, threaded from a new module-level constant in `App.tsx`
-(`openConversationId`, reading `activeConversationStore` via `selectActiveConversation`) — its only
-production call site, so no cascade. `timelineTargetFor` and `subscribeTimeline` are both byte-identical
-before and after, including their tests: the two design oracles (`timelineTargetFor` returns `null` for
-both arms; `subscribeTimeline` passes that `null` through unchanged) are what keep the open-conversation
-read out of the pure translation/routing layer and confined to the fan-out. A session boundary or
-reconnect now lands in the retained slice of whichever conversation is open **when the event arrives**
-(read at dispatch time, not subscribe time, since one app-lifetime listener outlives any number of chat
-switches) and is dropped from the keyed path — with no key invented — when none is. The flat store keeps
-receiving both arms exactly as before: this ships as a verified no-op on what the operator sees, same as
-\#756.
-
-[#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) widened `translateTimelineEvent` and
-`subscribeTimeline` with one optional trailing parameter each, `now?: () => number` — read only on the
-`assistantDelta` arm, assigned unconditionally as `createdAt: now?.()`, every other arm byte-identical.
-Optional and trailing for `subscribeTimeline`'s own #756 reason (a required parameter would cascade over
-all 25 existing call sites; an optional one over none), but with **no `Date.now` fallback** — the
-load-bearing half, since a defaulting clock would stamp every event a spec produces by calling
-`translateTimelineEvent`/`subscribeTimeline` with no clock, and those events are asserted with `toEqual`,
-which fails on a defined `createdAt` where the fixture names none. `useTimelineBridge` is the clock's
-composition root for the assistant side: it passes `Date.now` (referenced, not called) as
-`subscribeTimeline`'s third argument, read once per translated event inside the listener — so each
-assistant bubble is stamped at *its own* arrival, not at subscribe time — and outside the effect's
-dependency array, since `Date.now` is a module-level intrinsic whose identity never changes. See [Thread
-timeline § Types](thread-timeline.md#types) for the full field-pair contract and the "why not a reducer
-parameter" arithmetic; [composer send](composer-send.md) has the mirror wiring for the user echo.
-
-[#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) draws a served history page — #1222's
-ask, #1227's per-entry decode. It is **not** a tenth owned arm on `translateTimelineEvent`'s switch over
-`historyPageReceived`; that case stays in the dormant fall-through group, unclaimed. Instead the function's
-**parameter** widens to `DaemonEvent | HistoryTimelineEvent` — a widening, not a signature change, since
-every `HistoryTimelineEvent` arm is its live twin minus the `conversationId` no case reads, so no case body
-moves and `assertNever` stays total. That widen is what lets a **new** module, `historyPageBridge.ts`,
-reuse this same function one entry at a time rather than write a second mapping, which is what makes "a
-page produces the rows the live stream would have" structural rather than asserted.
-`translateTimelineEvent` also gains its tenth owned arm in the process, `messageReceived`→`userText`,
-gated on `event.message.role === 'user'` — the operator's own turn, which the daemon stores in its log but
-never pushes as a live frame, so this arm draws only from a page. `timelineTargetFor` is deliberately
-**not** widened to route it: a live `messageReceived` (which this daemon never sends) still resolves to no
-keyed target and reaches the flat `timelineStore` only, whose `items` no screen reads — the live lane is
-therefore a verified no-op, not an assumed one.
-
-[#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) is the first sender: `historyPageBridge.ts`
-gains `requestOpeningHistory`, fired once per activation from `PairedShell`'s `requestConversationConfig`,
-and `subscribeHistoryPage` widens to claim `historyRequestFailed` too — the arm #1223 left unclaimed. The
-per-conversation request state (asked / drawn / refused, plus the `cursor`/`atStart`
-[#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s walk will read) lives beside the
-timeline it describes, a second field on the [keyed holder](conversation-timeline-holder.md)'s slice, so it
-dies with the timeline, not in a new store or a screen-level ref. `null` (an absent key) means both
-"never asked" and "evicted" — deliberately the same reading, since a re-opened evicted conversation must
-refill rather than stay empty (AC3). See [Internals § The opening
-ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the shapes and write paths. All six
-`HistoryRequestFailure` members settle identically: the conversation stops asking, nothing is drawn, and
-`history-unavailable`'s `retryable` is recorded, never acted on — no timer, no backoff, no re-ask.
-
-`historyPageBridge.ts` is a **fifth** independent channel subscriber, beside the session, timeline, modal
-and question bridges — not a widening of `subscribeTimeline`'s injected `dispatch`, which would cascade
-over its 20+ call sites to buy nothing (#756's own arithmetic). It owns `historyPageReceived` and (since
-\#1259) `historyRequestFailed`, and exports two pieces: `reduceHistoryPage(entries)`, a pure function
-that reverses a copy of the page (the
-wire serves `entries` newest-first, every `reduceTimeline` arm appends, so folding in arrival order would
-draw the transcript backwards) and folds each translated entry through `reduceTimeline` against a
-**scratch** `TimelineState` seeded from `initialTimelineState`, returning only its `items`; and
-`useHistoryPageBridge()`, the React mount (`App.tsx`, beside `useQuestionBridge()`) that hands each page to
-the store's new `prependHistoryFor(conversationId, items)` write path. No clock reaches the fold — AC5 —
-so no replayed row is stamped with the moment it was drawn, at both this seam and the bridge arm above.
-
-The scratch-state fold is the answer to the question this doc's `userText` arm below and
-`threadTimeline.ts`'s own comment pose ("if a second `userText` producer is ever added — a history
-backfill is the obvious candidate — it must be re-examined against this arm"): **neither a distinct event
-nor a flag** — a page never reaches the *held* state's reducer at all, so `localSendPending` and the other
-four chrome scalars a page's entries might carry (`turn_state`, `stall`, `api_retry`, `compacting`) are
-structurally unable to escape the discarded scratch fold. `reduceTimeline` itself needed no edit for any
-of this. (`threadTimeline.ts`'s own comment at the `userText` arm still names only the composer as the
-producer and does not yet record this third answer — a verifier SHOULD FIX on PR #1229, not blocking.)
-
-`prependHistoryFor` is a fifth store write path, beside `dispatchFor`/`markViewed`/`clearAllTimelines`/
-`clearTimelineFor` (see [Conversation timeline holder](conversation-timeline-holder.md)) — it takes
-already-reduced rows, not an event, because a page is not one event. An empty page (or one that dedups to
-nothing) returns the state object unchanged, so zustand's `Object.is` short-circuit fires; a key-absent
-conversation creates its slice through the existing `withNewSliceAtHead`; a key-present one is spread with
-a new `items: [...fresh, ...held.items]`, carrying every chrome scalar through by spread rather than
-recomputing it, so no future sixth scalar can be forgotten here. `fresh` drops any page row whose
-`messageId` a held `userText` already carries — the operator's optimistic echo and the daemon's stored copy
-of the same message are the same message arriving by two routes (AC4), and the **held echo wins**: it
-carries the operator's own `createdAt` and `attachments`, which the replayed row has neither of. The match
-is a strict-equality scan over the held rows, never a `Set` or `Map` of ids — a page's `messageId` is the
-id *another* client minted, stored and replayed, untrusted on the same terms as every other `messageId`
-read (see `threadTimeline.ts` § Types), and a keyed collection of them is exactly what that field's "never
-a lookup path, a cache key, a Map key" contract denies (a first-draft `Set<string>` was the plan's own MUST
-FIX, caught in security review before ship — `Set.prototype.has` is in fact prototype-safe, which is
-exactly why it read as fine). Deliberately **not idempotent**: applying the same page twice prepends its
-non-`userText` rows twice. Unreachable in practice since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
-shipped the opening ask — not because the ask fires once, but because `pendingHistoryRequests` deletes its
-entry on the first match, so a second `history_page` under the same `in_reply_to` resolves no conversation
-and applies nothing. The general fix still needs the entry-level join key #1225 owns — a guard here would
-be that join built early and wrong.
+Introduced in [#202](../codebase/202.md), built directly on [#121](../codebase/121.md) (the pure
+[thread timeline](thread-timeline.md) model, shipped). Grew ten owned `DaemonEvent` arms, ten
+`TimelineState` scalars/write paths, and — since [#1223](../codebase/1223.md) — a second, keyed axis (the
+[keyed holder](conversation-timeline-holder.md)) plus a **fifth** independent channel subscriber,
+`historyPageBridge.ts`, that draws a served history page and, since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)/[#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260),
+asks for one — first on opening a conversation, then again each time the operator scrolls back to its
+top, until the daemon reports the start of the log. The full ticket-by-ticket account of how each piece
+arrived is in [Conversation timeline store — history](conversation-timeline-store-history.md); this page
+covers what's true today.
 
 ## Where the detail lives
 
 Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the link points at the right file.
 
 - [Internals](conversation-timeline-store-internals.md) — The store itself, the translator and React binding that feed it from the daemon event stream, and the flow between them.
+- [History](conversation-timeline-store-history.md) — The ticket-by-ticket changelog of every arm, scalar, write path and channel subscriber this store and its bridges have grown.
 
 ## What it does
 
-Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
+Turns the ten owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
 `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
@@ -345,6 +85,13 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   passed every renderer unit test (a static server render mounts no effects) and only reddened the three
   `question-*` e2e specs. Takes no `openConversationId` unlike `useTimelineBridge`: a page's
   `conversationId` is required and client-owned, so there is nothing to fall back to.
+- **`historyPageBridge.ts` has two askers as of [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260):**
+  `requestOpeningHistory` (fired once per activation, [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259))
+  and `requestOlderHistory` (fired from `useThreadScrollPin`'s `onScroll`, right after its existing pin
+  write, passing the container's own `conversationId`). The production deps singleton feeding both was
+  renamed `OpeningHistoryDeps`/`openingHistoryDeps` → `HistoryAskDeps`/`historyAskDeps` — same shape, six
+  call sites across two production files plus the spec — since the old name would read as a claim about
+  which asker it serves.
 
 ## Edge cases and limitations
 
@@ -408,16 +155,41 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   seam, opening a conversation already creates and promotes its slice, so a later `reconnected` reconcile
   finds an existing slice rather than minting a fresh one for any conversation that has actually been
   opened.
-- **Prepending shifts every held row's index key** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
-  `ConversationScreen` keys timeline rows by array index (see [Thread timeline § Edge
-  cases](thread-timeline.md#edge-cases-and-limitations)), so a page landing at the head re-keys and
-  re-renders every row already held. The rows are pure functions of their props, so the output is still
-  correct — only the reconciliation work changes. Re-keying the list is a separate change with its own
-  detector, not made here.
+- **A prepend keys off the conversation's origin, not the head of the held array**
+  ([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260), fixing what [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)
+  shipped). `ConversationScreen` originally keyed timeline rows by array index (see [Thread timeline §
+  Edge cases](thread-timeline.md#edge-cases-and-limitations)) on the premise that the list never inserts
+  mid-list — true of `reduceTimeline`'s own array, false of a page landing at the head via
+  `prependHistoryFor`. Under an index key, prepending N rows made React match key 0 to key 0, so every
+  already-drawn row was updated in place with a *different* item's content instead of N new nodes
+  appearing at the head; Chromium's scroll anchoring then measured its anchor node's own offset before
+  and after and compensated by the wrong delta, since that node never actually moved. Not harmless
+  reconciliation churn: measured by mutation, the reader's row drifted from a viewport top of 112px to
+  848px. The slice now carries a fourth field, `prependedRows: number` (0 on every fresh slice, raised by
+  `fresh.length` — never `items.length` — only on the branch of `prependHistoryFor` that actually
+  inserts), read by `selectPrependedRowsFor(id)` and passed to `Timeline` as an optional `firstRowKey`
+  prop (`ConversationScreen` passes `firstRowKey={-prependedRows}`; every pre-#1260 render site passes
+  nothing and defaults to 0). An item row keys as `firstRowKey + index`, unchanged by an append and
+  shifted by exactly a prepend's count, so every surviving row keeps its key and only the new rows are
+  new.
 - **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see § the write path above for why a guard was
   deliberately not built here.
+- **The walk asks from a band above the top, never from the top itself** ([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)).
+  `requestOlderHistory(deps, conversationId, nearTop)` sends only when the held reading is `loaded` with
+  `atStart` false and `nearTop` is true; `requested`/`failed`/`null` all decline (see [Internals § The
+  opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for why `null` never
+  restarts a walk mid-screen). `nearTop` comes from `isNearTop(metrics)`
+  (`threadScrollPosition.ts`), true within `HISTORY_ASK_BAND_PX` (200) of the scroll wall rather than
+  only at it, because Chromium suppresses scroll anchoring at a scroll offset of exactly zero — the one
+  position where the mechanism holding the reader's place while a page lands above them is off. `atStart`
+  is the only stop: nothing here counts entries or compares a page against the `limit` it was asked
+  with, so neither an empty page nor a short one is read as the end of the log. A page too small to push
+  the reader out of the band leaves them still near the top, and Chromium's own anchoring adjustment
+  after a prepend is itself a scroll event — so a handful of small pages can walk several steps for one
+  operator scroll, with no further operator action. See [Conversation shell § Thread scroll
+  pin](conversation-shell-scroll-pin.md) for the band's arithmetic.
 
 ## Related
 
@@ -551,3 +323,9 @@ event the composer dispatches directly (see below), the store's one non-bridge w
 - [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) — the opening ask, covered above; split
   from #1224 alongside [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) (the walk). Spec:
   `docs/specs/architecture/1259-history-on-open.md`.
+- [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) — the walk: `requestOlderHistory`
+  beside `requestOpeningHistory` (both now under the renamed `historyAskDeps`), the `prependedRows`
+  slice field and `Timeline`'s `firstRowKey` prop that make a prepend key-stable, covered above and in
+  full in [History](conversation-timeline-store-history.md). See [Conversation shell § Thread scroll
+  pin](conversation-shell-scroll-pin.md) for the trigger band and `thread-scroll-pin.spec.ts` for the
+  anchoring proof. Spec: `docs/specs/architecture/1260-history-scroll-back-walk.md`.

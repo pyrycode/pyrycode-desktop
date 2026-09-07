@@ -402,3 +402,45 @@ to the conversation its request named and emits `historyPageReceived`/`historyRe
 four exhaustive renderer bridges (`daemonEventBridge`/`timelineBridge`/`modalBridge`/`questionBridge`)
 null both arms — `timelineBridge`'s dormantly, the other three permanently. Architect (builder)
 self-review PASS, no MUST FIX findings.
+
+[#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) added a twenty-seventh kind,
+`system_prompt` → `system-prompt` — the read half of a conversation's system prompt (the write half,
+`set_system_prompt`, is pyrycode#2151 and not this client's yet); see [System prompt
+send](system-prompt-send.md) for the whole verb pair (the ask is the new `request_system_prompt`
+outbound envelope). Answers a conversation's stored system prompt and whether the running session was
+started with a different one, reading `internal/protocol/system_prompt.go` field-for-field. One new
+narrower plus one new field helper: `narrowSessionPromptStatus(value)` is the comparand idiom
+(`narrowDaemonErrorOutcome`'s shape) applied to a **rejecting** rather than catch-all narrower — it
+switches the untrusted `session_prompt_status` string against the three client-owned literals the
+daemon publishes and returns `null` outside them, and the caller turns `null` into a throw naming only
+the field constant, never the rejected value, so a hostile status string never reaches a message this
+narrower could build. `parseSystemPromptPayload` (an `isRecord` guard, then `optionalString(payload,
+'system_prompt')` for the tri-state, then the status narrow) is the file's first payload where the
+existing `optionalString` tri-state (absent → `undefined`, `''` → `''`, text → text, `null`/non-string
+→ throw) is exactly the field's whole contract rather than one of several fields narrowed the same
+way — `permission_mode` and the other optional wire strings in this file get the identical treatment,
+but none of them carries a documented three-state meaning the way this one does. An explicit
+`system_prompt: null` is off-contract (the daemon's `*string`-with-`omitempty` encoding never emits
+one) and is rejected by `optionalString`'s existing `null` throw, not by a new check.
+
+**No length bound and no `daemon-error` counterpart, both deliberate.** The frame-level
+`MAX_PLAINTEXT_BYTES` guard already fails an oversized frame before this runs, and the daemon caps the
+prompt write-side at 8192 bytes the way it caps `model` at 256, so a second bound here would either
+defend an unreachable failure or fail-close a valid prompt. More sharply than any prior kind in this
+file: **this verb mints no wire error code and has no failure branch at all**, so unlike
+`history_page`/`session_settings` there is no sibling widening of the `daemon-error` kind to record —
+every unresolvable case (no such conversation, no session, an unnamed request) already has a truthful
+answer, `session_prompt_status: 'no_session'`, which deliberately merges five daemon states and must
+be read as one reading, never repaired back apart.
+
+Content-free-logged as `inbound-decoded(code: 'system_prompt')` before the `default` branch, narrowed
+before logging so a malformed reply leaves no record; neither the prompt nor the status ever reaches a
+log line, and `parseSystemPromptPayload`'s throw messages name the client-owned field constant only
+(`'malformed field: session_prompt_status'`), never the daemon's string. Ships with a real consumer
+immediately: [daemon connection](daemon-connection.md)'s new `pendingSystemPromptRequests` correlation
+map attributes each reply to the conversation its request named and emits `systemPromptReceived`, but
+all four exhaustive renderer bridges null the one arm — present only so each bridge's `assertNever`
+guard, which stringifies the whole event into an `Error` message, cannot become a second sink for the
+prompt text. Architect (builder) self-review PASS, no MUST FIX findings (one SHOULD FIX — the emitted
+`conversationId` must come from the correlation map and not the decoded payload — closed by a
+dedicated test before ship).

@@ -61,6 +61,12 @@ send mechanics and required-id posture, but with no reply of any kind.
   envelope-id → conversation-id correlation map + `dial()` reset it added, and the `history-page` /
   history leg of `daemon-error` inbound arms — the transport-only slice of conversation scroll-back,
   shipped dormant with all four exhaustive bridges nulling `historyPageReceived`/`historyRequestFailed`.
+- [System prompt send](system-prompt-send.md) / #1230 — the `requestSystemPrompt(conversationId)`
+  method added to this factory (a `requestModelList` send-mechanics twin: required scalar id, no
+  retry, ever), the `pendingSystemPromptRequests` envelope-id → conversation-id correlation map + the
+  `dial()` reset it added, and the `system-prompt` inbound arm → `systemPromptReceived` — the read half
+  of the system-prompt round trip, shipped with no renderer consumer; #1231 stores it, #1078 renders
+  it.
 - [The connection registry](daemon-connection-registry.md#the-connection-registry-1117) / #1117 — the composition root's actual caller since this module stopped being constructed directly at the root: one registry, one connection per stored paired record, reconciled against the store on every pairing/unpair signal.
 - [Live window](live-window.md) / [#519](../codebase/519.md) — the composition root's `sink: live.sink`
   and the `openWindow()` load handler's `live.replayStatus()` call, which converges a dock-reopened

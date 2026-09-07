@@ -506,6 +506,19 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   is expected to claim them. See [Request history send](request-history-send.md) for the whole verb
   pair: the outbound builder, the fail-closed decode, and the correlation map both arms are emitted
   from.
+- **`systemPromptReceived{conversationId,systemPrompt,sessionPromptStatus}`**
+  ([#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)) is the read half of a
+  conversation's system prompt. **`conversationId` is client-owned**, `historyPageReceived`'s
+  provenance exactly — the reply carries no conversation id at all, so [daemon
+  connection](daemon-connection.md)'s new `pendingSystemPromptRequests` map resolves it from the
+  envelope id the request was sent under; the omission is a **security property** here, keeping an
+  unhosted conversation's reply byte-identical to a hosted-but-quiet one. `systemPrompt: string |
+  undefined` is a **required key**, not optional, so the tri-state (absent/`''`/text) survives the
+  bridge unchanged; `sessionPromptStatus` is a closed three-value literal, independent of the prompt.
+  Untrusted operator text reaching no log sink; the four exhaustive bridges each take a dormant no-op
+  arm, since their shared `assertNever` is the one sink left. This verb has **no error frame** at all,
+  unlike `historyPageReceived`'s sibling refusal. See [System prompt send](system-prompt-send.md) for
+  the whole verb pair.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

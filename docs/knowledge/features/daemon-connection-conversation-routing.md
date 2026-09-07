@@ -9,10 +9,11 @@ about a conversation on host A still went to whichever host was paired most rece
 conversation id: `sendMessage`, `requestSessionSettings`, `promoteConversation`, `archiveConversation`,
 `unarchiveConversation`, `deleteConversation`, `renameConversation`, `changeWorkspace`,
 `dequeueMessage`, and the attachment-retrieval channel. The id these commands send **is** the routing
-key, so no renderer file changed and no wire type widened. (`requestModelList` and `newSession` later
-joined this set once their own tickets gave the daemon a conversation id to name; `interrupt` joined
-too, in [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), once it left #1120's
-server-scoped router — see § The four plain call sites, below.)
+key, so no renderer file changed and no wire type widened. (`requestModelList`, `newSession`,
+`requestHistory` and `requestSystemPrompt` later joined this set once their own tickets gave the
+daemon a conversation id to name; `interrupt` joined too, in
+[#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), once it left #1120's server-scoped
+router — see § The four plain call sites, below.)
 
 Like the registry, it is Electron-free and unit-tested with fakes — `src/main/index.ts` has no unit
 test in this repo, so the lookup-and-refuse decision lives in an injectable module and the root keeps
@@ -89,7 +90,8 @@ window.
 `connectionFor(serverId): ActiveConnection | null` is `connectionRegistry.ts`'s new member, found with a
 linear `entries.find(... === serverId)` — never an object key, `server` being untrusted QR/paste input,
 same reasoning as `reconcile`'s own lookup. Its view is built by the same `viewOf` helper `active` uses,
-extracted so the 22-member delegation list is written exactly once: the `ActiveConnection` `Omit` (no
+extracted so the delegation list — 26 members as of [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)'s
+`requestSystemPrompt` addition — is written exactly once: the `ActiveConnection` `Omit` (no
 `start`/`stop`/`reconnect`) is therefore enforced at runtime on **both** accessors by construction, not
 by a second hand-copied literal that could drift. A stale view is inert rather than dangerous — every
 `DaemonConnection` member is a documented no-op once `stop()`ped.

@@ -120,16 +120,19 @@
                                      shipping three quarters of a quartet would surprise the next
                                      consumer of the step (the --text-label-medium-weight precedent one
                                      block below, for the same reason). */
-  --text-title-small-weight-emphasized: 600; /* M3 Static/Title Small/Weight-emphasized = SemiBold — the
-                                                message bubble's own text, assistant and user (#969, Figma
-                                                nodes 132:4477 / 132:4508). Read from the Figma VARIABLE
-                                                (get_variable_defs on both nodes, 2026-09-03). The step
-                                                --text-label-medium-weight-emphasized's comment predicted:
-                                                "the same node already uses title-small-emphasized, so more
-                                                are coming". --text-label-large-* reads 14/20/0.1 too and is
-                                                deliberately NOT borrowed — that is the coincidence the same
-                                                comment rules out reaching for, and a bubble typed from the
-                                                label vocabulary would be wearing another step's name. */
+  --text-title-small-weight-emphasized: 600; /* M3 Static/Title Small/Weight-emphasized = SemiBold, read
+                                                from the Figma VARIABLE (get_variable_defs, 2026-09-03).
+                                                NO CONSUMER TODAY, like the base weight above it: #969
+                                                added this whole family for the message bubble's text
+                                                (Figma nodes 132:4477 / 132:4508) and #1113 moved that
+                                                text to the design's body-medium when the drawing changed,
+                                                leaving the family in place and dormant per the note at the
+                                                head of this file. It is still the heaviest weight in the
+                                                scale. --text-label-large-* reads 14/20/0.1 too and is
+                                                deliberately NOT borrowed for this step — that is the
+                                                coincidence --text-label-medium-weight-emphasized's comment
+                                                rules out reaching for, and text typed from the label
+                                                vocabulary would be wearing another step's name. */
 
   --text-body-large-size: 16px;
   --text-body-large-line: 24px;

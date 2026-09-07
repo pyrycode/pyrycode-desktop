@@ -47,7 +47,7 @@ const ICON_HEIGHT_PX = 60
 const EXT_SLOT_WIDTH_PX = 44
 // --space-3, the rhythm the row keeps with the text above it and the meta row below.
 const RHYTHM_PX = 12
-// The row's top inside the bubble: --space-4 of padding + one 20px title-small line of message text +
+// The row's top inside the bubble: --space-4 of padding + one 20px body-medium line of message text +
 // --space-3. The drawing's own number for the same three parts — it puts the text at 16→36 and the row at
 // 48→108 — which is why this is the criterion rather than an over-specification of it.
 const ROW_TOP_IN_BUBBLE_PX = 48

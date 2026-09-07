@@ -222,10 +222,24 @@ never pushes as a live frame, so this arm draws only from a page. `timelineTarge
 keyed target and reaches the flat `timelineStore` only, whose `items` no screen reads — the live lane is
 therefore a verified no-op, not an assumed one.
 
+[#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) is the first sender: `historyPageBridge.ts`
+gains `requestOpeningHistory`, fired once per activation from `PairedShell`'s `requestConversationConfig`,
+and `subscribeHistoryPage` widens to claim `historyRequestFailed` too — the arm #1223 left unclaimed. The
+per-conversation request state (asked / drawn / refused, plus the `cursor`/`atStart`
+[#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s walk will read) lives beside the
+timeline it describes, a second field on the [keyed holder](conversation-timeline-holder.md)'s slice, so it
+dies with the timeline, not in a new store or a screen-level ref. `null` (an absent key) means both
+"never asked" and "evicted" — deliberately the same reading, since a re-opened evicted conversation must
+refill rather than stay empty (AC3). See [Internals § The opening
+ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the shapes and write paths. All six
+`HistoryRequestFailure` members settle identically: the conversation stops asking, nothing is drawn, and
+`history-unavailable`'s `retryable` is recorded, never acted on — no timer, no backoff, no re-ask.
+
 `historyPageBridge.ts` is a **fifth** independent channel subscriber, beside the session, timeline, modal
 and question bridges — not a widening of `subscribeTimeline`'s injected `dispatch`, which would cascade
-over its 20+ call sites to buy nothing (#756's own arithmetic). It owns exactly `historyPageReceived` and
-exports two pieces: `reduceHistoryPage(entries)`, a pure function that reverses a copy of the page (the
+over its 20+ call sites to buy nothing (#756's own arithmetic). It owns `historyPageReceived` and (since
+\#1259) `historyRequestFailed`, and exports two pieces: `reduceHistoryPage(entries)`, a pure function
+that reverses a copy of the page (the
 wire serves `entries` newest-first, every `reduceTimeline` arm appends, so folding in arrival order would
 draw the transcript backwards) and folds each translated entry through `reduceTimeline` against a
 **scratch** `TimelineState` seeded from `initialTimelineState`, returning only its `items`; and
@@ -258,9 +272,11 @@ read (see `threadTimeline.ts` § Types), and a keyed collection of them is exact
 a lookup path, a cache key, a Map key" contract denies (a first-draft `Set<string>` was the plan's own MUST
 FIX, caught in security review before ship — `Set.prototype.has` is in fact prototype-safe, which is
 exactly why it read as fine). Deliberately **not idempotent**: applying the same page twice prepends its
-non-`userText` rows twice. Unreachable today (nothing asks for a page until #1224, and #1222's correlation
-settles each request once), and the general fix needs the entry-level join key #1225 owns — a guard here
-would be that join built early and wrong.
+non-`userText` rows twice. Unreachable in practice since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
+shipped the opening ask — not because the ask fires once, but because `pendingHistoryRequests` deletes its
+entry on the first match, so a second `history_page` under the same `in_reply_to` resolves no conversation
+and applies nothing. The general fix still needs the entry-level join key #1225 owns — a guard here would
+be that join built early and wrong.
 
 ## Where the detail lives
 
@@ -532,3 +548,6 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   (the walk) and [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) (joining a page to the
   live stream) are still open. Spec:
   `docs/specs/architecture/1223-draw-a-history-page-through-the-timeline-reducer.md`.
+- [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) — the opening ask, covered above; split
+  from #1224 alongside [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) (the walk). Spec:
+  `docs/specs/architecture/1259-history-on-open.md`.

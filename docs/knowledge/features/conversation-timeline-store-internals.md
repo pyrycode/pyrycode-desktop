@@ -150,6 +150,65 @@ there's no counter to discard on the falling edge. The reducer arm collapses to 
 `state.compacting === event.active ? state : {…}` ternary — the edge *is* the state, with no
 rising/falling branch split needed.
 
+## The opening ask (#1259)
+
+```ts
+export interface ConversationSlice {
+  timeline: TimelineState
+  history: HistoryRequestState | null
+}
+export type HistoryRequestState =
+  | { status: 'requested' }
+  | { status: 'loaded'; cursor: string; atStart: boolean }
+  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean }
+```
+
+`conversationTimelineStore`'s map value widens from a bare `TimelineState` to this two-field slice — the
+request state that backfilled a conversation's timeline lives beside it instead of in a new store or a
+screen-level ref, so it dies with the timeline on eviction. `selectTimelineFor`'s signature is unchanged
+(projects `.timeline`, still `TimelineState | null`); a new `selectHistoryRequestFor` projects `.history`,
+its `?? null` collapsing "never opened" and "opened, then evicted" into the one reading that means ASK
+NOW — the whole of AC3.
+
+Three new write paths, each `set((s) => withHistory(s, id, …))` against a shared helper that clones only
+the slice's `history` half (leaving `timeline` by reference, so no timeline reader is woken) and no-ops on
+an absent key — a slice minted by a history write alone would be a timeline-less holder outliving the
+thing it describes:
+
+- `markHistoryRequested(id)` → `{ status: 'requested' }`, called by `requestOpeningHistory` before the send.
+- `recordHistoryPage(id, cursor, atStart)` → `{ status: 'loaded', cursor, atStart }`, called by
+  `useHistoryPageBridge` right after `prependHistoryFor` draws the page — draw first, so a page for a
+  since-evicted slice still finds a key to record against.
+- `recordHistoryFailure(id, reason, retryable)` → `{ status: 'failed', reason, retryable }`, called from
+  the new `settleFailure` arm below.
+
+None of the three re-orders the map or promotes the key: a daemon reply must not decide which conversation
+survives `MAX_RETAINED_TIMELINES`, only the operator's own `markViewed` does that.
+
+```ts
+export function requestOpeningHistory(deps: OpeningHistoryDeps, conversationId: string | null): void {
+  if (!conversationId) return
+  if (deps.getHeld(conversationId) !== null) return
+  deps.markRequested(conversationId)
+  deps.sendCommand({ type: 'requestHistory', payload: { conversation_id: conversationId, cursor: '', limit: 0 } })
+}
+```
+
+Fired from `PairedShell.tsx`'s `requestConversationConfig` — the fourth call there and the only gated one:
+`requestRunConfigSnapshot`/`requestModelList`/`requestSystemPrompt` are whole-value replaces that fire on
+every activation for free, but a duplicate history page *prepends*, so this call carries its own
+per-conversation gate rather than relying on the seam. Mark-before-send, both calls synchronous with no
+`await` between the read and the write, so no concurrent handler can interleave a second ask in. Every
+terminal reading (`requested`/`loaded`/`failed`) is non-null, which is what makes a retry loop structurally
+unreachable rather than merely absent — the one reading that asks is `null`.
+
+`subscribeHistoryPage` widens from one callback to two — `applyPage(conversationId, items, cursor,
+atStart)` and `settleFailure(conversationId, reason, retryable)` — claiming `historyRequestFailed` for the
+first time. The two parameter types (`readonly ThreadItem[]` vs `HistoryRequestFailure`) are mutually
+unassignable under `strictFunctionTypes`, so swapping them is a compile error, not a runtime bug. Every one
+of the six `HistoryRequestFailure` members reaches the same `recordHistoryFailure` call with no branch on
+`reason`.
+
 ## Data flow
 
 ```
@@ -191,8 +250,14 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
    (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
     reconnected, or reset arm above, never by a fourth path of its own)
 
+opening a conversation ─(PairedShell's activateDeps.requestConversationConfig, #1259)→
+   requestOpeningHistory(openingHistoryDeps, conversationId)
+   → getHeld(conversationId) === null ?
+        markHistoryRequested(id) → sendCommand({type:'requestHistory', payload:{conversation_id:id, cursor:'', limit:0}})
+      : return   // `requested`/`loaded`/`failed` all short-circuit — every terminal reading is non-null
+
 served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,
-   conversationId, entries: HistoryTimelineEntry[]}
+   conversationId, entries: HistoryTimelineEntry[], cursor, atStart}
    → window.pyry.onDaemonEvent (SAME channel, a FIFTH independent listener — historyPageBridge.ts, not
                                  subscribeTimeline)
    → subscribeHistoryPage → reduceHistoryPage(entries):
@@ -200,9 +265,18 @@ served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→
         .map(entry => translateTimelineEvent(entry.event))   // SAME function as the live lane, no clock
         .reduce(reduceTimeline, initialTimelineState)         // against a SCRATCH state, discarded
         → .items                                              // only the rows survive the fold
-   → conversationTimelineStore.getState().prependHistoryFor(conversationId, items)
+   → conversationTimelineStore.getState().prependHistoryFor(conversationId, items)        [draw, #1223]
         → held slice spread with items: [...fresh, ...held.items]   // fresh = items minus held-echo dupes
         → chrome (phase/stalled/apiRetry/compacting/localSendPending) carried by the spread, untouched
+   → conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart)   [settle, #1259]
    (#1223 — no reader wiring needed beyond the existing selectTimelineFor(conversationId): the keyed
-    holder's read surface does not distinguish a live-appended row from a prepended one)
+    holder's read surface does not distinguish a live-appended row from a prepended one. Draw runs BEFORE
+    settle so a page for a since-evicted slice still finds a key to record against.)
+
+refused history ask ─(daemon-error tier's fourth member — see Request history send § Correlation)→
+   DaemonEvent{historyRequestFailed, conversationId, reason, retryable}
+   → window.pyry.onDaemonEvent → subscribeHistoryPage's settleFailure arm
+   → conversationTimelineStore.getState().recordHistoryFailure(conversationId, reason, retryable)   (#1259)
+   (all six `reason` members land here identically — nothing drawn, no banner, no timer, no re-ask;
+    `retryable` is carried for #1260's walk and read by nothing in this slice)
 ```

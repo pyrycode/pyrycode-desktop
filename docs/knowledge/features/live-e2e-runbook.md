@@ -71,6 +71,29 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1259 (2026-09-07) — the tier grows to 16 specs.** `e2e/real-daemon-history-on-open.spec.ts` is the
+liveness proof for [opening a conversation asking for its newest page of
+history](conversation-timeline-store.md): it pairs against a real `pyry`, opens a conversation, sends a
+marker message, waits it drawn, archives the active conversation (routing through
+`exitActiveConversation`'s `clearTimelineFor` — the `.conversation` 1→0 delta is the positive observable
+that the exit actually ran), restores it from the Archive view, re-opens it, and asserts the marker draws
+again **with no second send** — the reload-based approach the architecture spec first proposed was
+rejected after reading `conversationListBridge`: the conversation list refreshes only on the `connected`
+*edge*, which a `page.reload()` cannot reliably reproduce against a live daemon. **`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`
+needs bumping to 16** — the bump is the operator's, per § Automated coverage below.
+
+The first gate run reddened at the very first assertion (`.channel-list__rename` not found in 45s) because
+the spec's prose called its seed "promoted" without ever declaring `test.use({ seedPromoted: true })` — the
+fixture's default is `false`, and `test.use` additions are silent, so the missing option was invisible to
+everything except the gate run itself (no typecheck or lint covers `e2e/`). The second correction moved the
+send barrier off the composer's optimistic echo: a claude-less rehearsal showed the marker landing as a
+queued backlog row rather than a bubble whenever the bound session already reports a running turn, and
+reading the daemon settled why — `newOperatorMessageHistory` is wired as the send queue's `OnDelivered`
+callback, so the operator's turn reaches the on-disk log **on delivery to claude, not on receipt**. The spec
+now polls `real-claude.spec.ts`'s `nonEmptyAssistantCount`, base-relative, as the barrier a completed reply
+proves. Both corrections are spec-only; no production code changed. See PR #1261's "Lessons learned" for
+the full account.
+
 **#1218 (2026-09-07) — the tier grows to 15 specs; the floor is already stale by two.**
 `e2e/real-claude-new-session.spec.ts` is the liveness proof for the [New session control
 action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218): pair,

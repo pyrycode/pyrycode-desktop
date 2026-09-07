@@ -215,6 +215,28 @@ by-construction coverage the AC asks for. Noted here so the omission is a decisi
    whole-repo sweep at the start of Phase B confirms; a missed site is a compile error, not a silent
    break, since both signatures gain a required parameter.
 
+## Revisions
+
+**2026-09-07 — Phase B.** Both open questions resolved; no design change.
+
+1. **The fixture exposes the seeded id.** `launchPairedApp` exports `SEEDED_ROW`, and both fake-tier
+   specs already import it, so the payload assertions name `SEEDED_ROW.id` rather than a literal.
+   `launchPairedApp` navigates by clicking that single seeded row, which is what makes it the *open*
+   conversation the frame must name.
+2. **No further call sites.** The whole-repo sweep found only the sites the plan listed. Both new
+   required parameters made every miss a compile error; `npm run typecheck` is clean.
+
+**One production file beyond the plan's nine**, all of it comment: `requestDebugBundleEnvelope.ts`'s
+`buildRequestDebugBundle` docblock cited `interrupt` as its bare-control-frame sibling to justify the
+present-but-empty `payload: {}`. That citation is stale — `request_debug_bundle` is now the only bare
+one of the three — so the sweep the plan prescribed caught it and it is corrected in place. No code
+change there.
+
+**Also corrected by the same sweep**, none of it foreseen at plan time but all of it the same stale
+claim: the `interrupt` entry in `commands.ts`'s union-header prose, and `escape-interrupt.spec.ts`'s
+secret-hygiene note (frames are now asserted by payload as well as by `type` — the payload is the
+app's own conversation id, a client-owned value it already renders, not a secret).
+
 ## Security review
 
 **Verdict:** PASS

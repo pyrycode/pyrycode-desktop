@@ -168,10 +168,21 @@ function sentMessageId(captured: Envelope[], text: string): string | undefined {
   return frame === undefined ? undefined : (frame.payload as SendMessagePayload).message_id
 }
 
-// Count captured interrupt frames. The interrupt payload is bare `{}` (no ids to match), so match by
-// `type` only, never a payload deep-equal; `.toBe(1)` proves send-once.
+// Count captured interrupt frames. Matched by `type` alone so `.toBe(1)` stays a send-once proof;
+// `interruptPayloads` below is where the payload is read, keeping the two contracts separable.
 function interruptFrames(captured: Envelope[]): number {
   return captured.filter((e) => e.type === 'interrupt').length
+}
+
+/**
+ * Every captured `interrupt` frame's payload, in order (#1092). THE PAYLOAD IS NO LONGER BARE `{}` —
+ * each frame names the OPEN conversation and nothing else, because the bare form the frame carried until
+ * pyrycode#2103 means the daemon's process-wide follow-active cursor, i.e. whichever chat any client last
+ * sent to. Read off the CAPTURED FRAME, never the daemon's reaction: the loopback fake answers this frame
+ * with nothing, so a reaction-based read would be asserting the fake rather than this client.
+ */
+function interruptPayloads(captured: Envelope[]): unknown[] {
+  return captured.filter((e) => e.type === 'interrupt').map((e) => e.payload)
 }
 
 test('queued backlog renders distinctly, drops a queued message, and interrupts a running turn', async ({
@@ -302,10 +313,14 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   await expect(interruptButton).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(runningIndicator).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // Non-optimistic: the interrupt helper only emits a bare `interrupt` frame; the controls retract only on
-  // the daemon's turn_state{idle}, not on the click.
+  // Non-optimistic: the interrupt helper only emits the `interrupt` frame and posts no local state; the
+  // controls retract only on the daemon's turn_state{idle}, not on the click.
   await interruptButton.click()
   await expect.poll(() => interruptFrames(captured), { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  // #1092 AC1: the one frame names the OPEN conversation — the row `launchPairedApp` clicked to get here
+  // — and carries nothing else. `toEqual` on the whole payload rather than a property read, so a frame
+  // that also smuggled a second field reddens.
+  expect(interruptPayloads(captured)).toEqual([{ conversation_id: SEEDED_ROW.id }])
 
   daemon.pushFrame(turnStateFrame('idle'))
   await expect(interruptButton).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })

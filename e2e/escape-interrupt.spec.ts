@@ -28,7 +28,8 @@ import type {
 // AC2 names — clicking Send leaves focus on that control, which then becomes the stop control.
 //
 // SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM text, values, focus and
-// counts, plus captured wire frames by `type`. The interrupt payload is bare `{}`; the drafted texts are
+// counts, plus captured wire frames by `type` and, since #1092, by payload. That payload is the app's own
+// conversation id — the client-owned value it already renders — and not a secret; the drafted texts are
 // the operator's own display text and no failure diagnostic serialises a token, key or plaintext. The
 // pairing plumbing lives in launchPairedApp and is never echoed.
 
@@ -118,12 +119,32 @@ function capturingEscapeFake(captured: Envelope[]): (inbound: Uint8Array) => Uin
 
 /**
  * A RUNNING TOTAL of captured `interrupt` frames, and every assertion below names the total it expects at
- * that point rather than a bare 1. The interrupt payload is bare `{}` (no ids to match), so this matches by
- * `type` only and never by a payload deep-equal.
+ * that point rather than a bare 1. Matching by `type` alone is what keeps it a total: `interruptPayloads`
+ * below is where the payload is read, so the counting contract and the payload proof stay separable.
  */
 function interruptFrames(captured: Envelope[]): number {
   return captured.filter((e) => e.type === 'interrupt').length
 }
+
+/**
+ * Every captured `interrupt` frame's payload, in order (#1092).
+ *
+ * THE PAYLOAD IS NO LONGER BARE `{}`, and the comments in this file that said so were rewritten with it.
+ * Each frame must name the OPEN conversation — `SEEDED_ROW.id`, which `launchPairedApp` navigates to by
+ * clicking the single seeded row — and nothing else, because the bare form the frame carried until
+ * pyrycode#2103 means the daemon's process-wide follow-active cursor, i.e. whichever chat any client last
+ * sent to.
+ *
+ * It reads the CAPTURED FRAME rather than the daemon's reaction, deliberately: the loopback fake answers
+ * `interrupt` with nothing at all, so there is no reaction to read, and a spec that inferred the id from
+ * one would be asserting the fake's behaviour instead of this client's.
+ */
+function interruptPayloads(captured: Envelope[]): unknown[] {
+  return captured.filter((e) => e.type === 'interrupt').map((e) => e.payload)
+}
+
+/** What every interrupt this spec provokes must carry: the open conversation, and one field only. */
+const EXPECTED_INTERRUPT_PAYLOAD = { conversation_id: SEEDED_ROW.id }
 
 const panelOf = (page: Page): Locator =>
   page.getByRole('menu', { name: TYPE_AHEAD_LABEL, exact: true })
@@ -177,10 +198,14 @@ test('Escape stops the running turn from the message box and from the stop contr
 
   await page.keyboard.press('Escape')
   await expect.poll(() => interruptFrames(captured), { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  // #1092 AC1, asserted at the point the first frame lands rather than only in the sweep at the end: the
+  // frame names the OPEN conversation and carries nothing else. `toEqual` on the whole payload is the
+  // detector — a `toHaveProperty` would pass on a frame that also smuggled a second field.
+  expect(interruptPayloads(captured)).toEqual([EXPECTED_INTERRUPT_PAYLOAD])
   // Non-optimistic: the control retracts only on the daemon's turn_state{idle}, never on the interrupt.
   await expect(stopButton).toBeVisible()
 
-  // --- 3. AC1: caret in the message box, turn still running. One Escape, one bare interrupt frame. ---
+  // --- 3. AC1: caret in the message box, turn still running. One Escape, one interrupt frame. ---
   await box.click()
   await page.keyboard.type(DRAFT_TEXT)
   await page.keyboard.press('Escape')
@@ -206,4 +231,15 @@ test('Escape stops the running turn from the message box and from the stop contr
   await page.keyboard.press('Escape')
   await expect.poll(() => interruptFrames(captured), { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(3)
   await expect(box).toHaveValue(SLASH_FRAGMENT)
+
+  // --- 5. #1092 AC1 across every route to Stop. ---
+  // The three frames above came from the stop control (leg 2) and from the message box twice (legs 3 and
+  // 4) — the two call sites in `Composer`, which read `activeConversationId` independently. All three must
+  // name the same open conversation, so a call site left holding a stale or absent id shows up here rather
+  // than as a wrong-chat Stop in production.
+  expect(interruptPayloads(captured)).toEqual([
+    EXPECTED_INTERRUPT_PAYLOAD,
+    EXPECTED_INTERRUPT_PAYLOAD,
+    EXPECTED_INTERRUPT_PAYLOAD
+  ])
 })

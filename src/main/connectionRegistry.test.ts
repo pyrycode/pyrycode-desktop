@@ -83,6 +83,13 @@ interface BuiltConnection {
    * the argument, not a count: the delegate that dropped it would still count right.
    */
   newSessions: string[]
+  /**
+   * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
+   * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
+   * (two tests assert `calls` as a whole object), and a count cannot tell a delegate that forwards its
+   * argument from one that drops it.
+   */
+  interrupts: string[]
 }
 
 /** Records every construction and every lifecycle call, so a test can assert which one was touched. */
@@ -94,7 +101,14 @@ function createFactoryFake() {
   }): DaemonConnection => {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
     const newSessions: string[] = []
-    built.push({ serverId: spec.serverId, pairedServer: spec.pairedServer, calls, newSessions })
+    const interrupts: string[] = []
+    built.push({
+      serverId: spec.serverId,
+      pairedServer: spec.pairedServer,
+      calls,
+      newSessions,
+      interrupts
+    })
     const noop = (): void => {}
     return {
       start: () => {
@@ -106,8 +120,9 @@ function createFactoryFake() {
       reconnect: () => {
         calls.reconnect += 1
       },
-      interrupt: () => {
+      interrupt: (conversationId: string) => {
         calls.interrupt += 1
+        interrupts.push(conversationId)
       },
       newSession: (conversationId: string) => {
         newSessions.push(conversationId)
@@ -407,7 +422,7 @@ describe('createConnectionRegistry', () => {
       const { store, factory, registry } = harness([record('alpha'), record('beta')])
       await settle()
 
-      registry.active.interrupt()
+      registry.active.interrupt('conv-1')
       expect(factory.for('beta').calls.interrupt).toBe(1)
 
       // A re-pair of alpha moves it to the end of the collection, so `store.load()` — and therefore
@@ -416,7 +431,7 @@ describe('createConnectionRegistry', () => {
       registry.reconcile()
       await settle()
 
-      registry.active.interrupt()
+      registry.active.interrupt('conv-1')
       expect(factory.for('alpha').calls.interrupt).toBe(1)
       expect(factory.for('beta').calls.interrupt).toBe(1)
     })
@@ -424,7 +439,7 @@ describe('createConnectionRegistry', () => {
     it('is inert rather than throwing before the first store read resolves', () => {
       const { registry } = harness([record('alpha')])
 
-      expect(() => registry.active.interrupt()).not.toThrow()
+      expect(() => registry.active.interrupt('conv-1')).not.toThrow()
     })
   })
 
@@ -436,10 +451,25 @@ describe('createConnectionRegistry', () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])
       await settle()
 
-      registry.connectionFor('alpha')?.interrupt()
+      registry.connectionFor('alpha')?.interrupt('conv-1')
 
       expect(factory.for('alpha').calls.interrupt).toBe(1)
       expect(factory.for('beta').calls.interrupt).toBe(0)
+    })
+
+    it('forwards interrupt to the named server with the conversation id verbatim (#1092)', async () => {
+      // `viewOf` writes the delegating member list exactly once, and every member there is a hand-typed
+      // arrow. `interrupt` acquired a parameter in this ticket, and a view that kept the old
+      // `() => resolve().interrupt()` shape would still type-check against a widened signature and
+      // still count right — it would just send the daemon an `undefined` id, i.e. the bare frame this
+      // ticket exists to stop sending. Asserting the recorded ARGUMENT is what catches that.
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      registry.connectionFor('beta')?.interrupt('conv-42')
+
+      expect(factory.for('beta').interrupts).toEqual(['conv-42'])
+      expect(factory.for('alpha').interrupts).toEqual([])
     })
 
     it('forwards newSession to the named server with the conversation id verbatim (#1217)', async () => {
@@ -507,7 +537,7 @@ describe('createConnectionRegistry', () => {
 
       const sole = registry.soleConnection()
       expect(sole?.serverId).toBe('alpha')
-      sole?.connection.interrupt()
+      sole?.connection.interrupt('conv-1')
       expect(factory.for('alpha').calls.interrupt).toBe(1)
     })
 
@@ -522,7 +552,7 @@ describe('createConnectionRegistry', () => {
       const sole = registry.soleConnection()
       expect(sole).not.toBeNull()
       expect(sole?.serverId).toBeNull()
-      expect(() => sole?.connection.interrupt()).not.toThrow()
+      expect(() => sole?.connection.interrupt('conv-1')).not.toThrow()
     })
 
     it('answers null while more than one server is paired, so an unnamed command refuses', async () => {

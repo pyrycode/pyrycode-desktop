@@ -30,6 +30,7 @@ import type {
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
   RequestModelListPayload,
+  InterruptPayload,
   NewSessionPayload,
   DequeueMessagePayload,
   QuestionAnswerPayload,
@@ -64,6 +65,27 @@ export type AnswerModalCommandPayload = Omit<ModalAnswerPayload, 'answer_token'>
  * a convention, and `isNewSessionPayload` refuses the runtime equivalent (`''`) at the boundary.
  */
 export type NewSessionCommandPayload = Required<NewSessionPayload>
+
+/**
+ * The `interrupt` command's payload (#1092) — the wire `InterruptPayload` with its lone
+ * `conversation_id` made REQUIRED.
+ *
+ * `NewSessionCommandPayload`'s derivation verbatim, for the twin verb and for the same reason, so
+ * read that docblock for the "derive rather than hand-write, so the two cannot drift" argument. What
+ * differs is only the defect each one closes: an unnamed `new_session` restarts whichever conversation
+ * the daemon's follow-active cursor points at, and an unnamed `interrupt` stops that same
+ * conversation's turn. The cursor is process-wide and stamped only by a routed `send_message`, so with
+ * a sidebar that makes switching chats without sending ordinary, it is the last chat ANY client
+ * messaged rather than the one on screen.
+ *
+ * IT IS TIGHTER THAN THE WIRE TYPE ON PURPOSE, and neither side is the one to "fix". The wire type
+ * mirrors the daemon, which publishes the field optional because the absent form is a compatibility
+ * promise for clients written before pyrycode#2103. This app always holds an id, and the protocol's
+ * own rule is that a client which CAN name a conversation must always name one, so the bare form is
+ * not something a sender here should be able to construct. `Required` makes it a compile error rather
+ * than a convention, and `isInterruptPayload` refuses the runtime equivalent (`''`) at the boundary.
+ */
+export type InterruptCommandPayload = Required<InterruptPayload>
 
 /**
  * The fields the renderer supplies to resolve an outstanding question batch with the operator's
@@ -154,9 +176,10 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * opaque correlation key, never a token/key/raw frame and never serialized onto the wire; and
  * `dequeueMessage` (#300), whose `payload` reuses the wire DequeueMessagePayload verbatim
  * (`conversation_id` + `queued_msg_id`) to ask the daemon to drop one queued message — ungated (#720),
- * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`); and the bare `interrupt`
- * (#306), which carries NO payload — it stops the running turn (a fire-and-forget bare control frame the
- * daemon maps to a single claude Esc; daemon SSOT pyrycode #707); and `notify` (#391), whose `payload`
+ * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`); and `interrupt` (#306,
+ * named by #1092), which stops the running turn in the conversation it names — fire-and-forget with no
+ * reply, and payload-required for `newSession`'s reason, since an unnamed one is the daemon's
+ * process-wide follow-active cursor (daemon SSOT pyrycode #707, widened by #2103); and `notify` (#391), whose `payload`
  * is NotifyPayload — the sole member whose payload type is defined in THIS file, not imported from
  * ../wire/types, because it is a MAIN-LOCAL side-effect command that never reaches the transport. It
  * carries only the closed `kind` enum (`turn-complete` | `prompt`) — no free-text title/body, no id, no
@@ -194,19 +217,26 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
- * SIX MEMBERS CARRY AN OPTIONAL `serverId` (#1120): `requestConversations`, `requestRecentWorkspaces`,
- * `createConversation`, `createWorkspaceFolder`, `interrupt` and `requestDebugBundle`. These are the
- * SERVER-SCOPED commands — each is about a whole server and carries no id of any kind to route by, so
+ * FIVE MEMBERS CARRY AN OPTIONAL `serverId` (#1120): `requestConversations`, `requestRecentWorkspaces`,
+ * `createConversation`, `createWorkspaceFolder` and `requestDebugBundle`. These are the SERVER-SCOPED
+ * commands — each is about a whole server and carries no id of any kind to route by, so
  * with more than one server paired they reached whichever host was paired most recently. The field is a
  * top-level string sibling of `payload`, NEVER a field inside it, exactly as `changeId` is: the envelope
  * builders consume only `payload`, so the key stays off the wire BY CONSTRUCTION rather than by
- * discipline, and four of the six are bare members with no payload at all, so it costs no payload type
+ * discipline, and three of the five are bare members with no payload at all, so it costs no payload type
  * and no new wire-type import. It is a background-process ROUTING KEY, resolved against the connection
  * registry's held entry set by `serverRouter.ts` and refused when it names no connected server; it is
  * never a capability, a token selector, a path, or a log field.
  *
+ * `interrupt` WAS THE SIXTH AND LEFT THE SET (#1092), which is the shape a member leaves it by. It
+ * qualified only because it carried no id of any kind; once pyrycode#2103 let the frame name the
+ * conversation whose turn to stop, that conversation id became the address, and a `serverId` beside it
+ * would have been a second one free to disagree with the first. It routes through #1118's
+ * conversation index now, like every other conversation-scoped member. A member joins this set for
+ * want of an id and leaves it the moment it acquires one.
+ *
  * It is OPTIONAL, and that is what keeps #1120 main-only: a required field would be a compile-forced
- * edit in six renderer senders and their fixtures, none of which has a per-server surface to source an
+ * edit in five renderer senders and their fixtures, none of which has a per-server surface to source an
  * id from until #1070/#1085/#1086 land. An absent id resolves to the sole connection when the registry
  * holds exactly one entry, and is refused when it holds more — bounded and observable, never an
  * arbitrary server. `notify` is deliberately NOT in this set: it is main-local (fireNotification owns
@@ -238,7 +268,7 @@ export type RendererCommand =
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
-  | { type: 'interrupt'; serverId?: string }
+  | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'notify'; payload: NotifyPayload }
 
@@ -331,23 +361,25 @@ export function newSessionCommand(fields: NewSessionCommandPayload): RendererCom
 }
 
 /**
- * Construct the bare `interrupt` command (#306) — asks the background process to stop the running
- * turn. Pure and zero-arg: the frame carries NO payload (no token, no conversation selector — the
- * daemon maps it to a single claude Esc, daemon SSOT pyrycode #707), so there is nothing to wrap. The
- * twin of a bare `requestConversations` constructor, not the payload-bearing `dequeueMessageCommand`.
- * The RendererCommand return type is the compile-time guarantee (AC4). Its caller is the render
- * affordance in #307.
+ * Construct the `interrupt` command (#306, named by #1092) — asks the background process to stop the
+ * running turn in the conversation it names. Pure; there is no token to mint, because the frame
+ * carries none at all (no nonce, no answer token, no correlation key), so — like
+ * `newSessionCommand` and unlike `answerModalCommand` — the payload type is the wire-derived one
+ * directly.
  *
- * `serverId` (#1120) names the server whose turn to stop — a background-process routing key that never
- * reaches the wire (the frame stays payload-free; main resolves the key and drops it). OPTIONAL,
- * because no caller has a per-server surface to source one from yet: omitted, it reaches the sole
- * connection when exactly one is held, and is refused when more are. Assigned UNCONDITIONALLY into the
- * literal — this file's own `attachment_ids` idiom, whose docblock records that structured clone
- * preserves an own property holding `undefined` and that the boundary guard therefore reads
- * absent-or-undefined-or-string rather than present-or-absent.
+ * It takes the payload rather than a bare `conversationId` scalar, matching every other
+ * payload-bearing constructor in this file; the scalar unwrap happens main-side, at the dispatch arm,
+ * where one local is read twice so the id routed by and the id sent cannot be two expressions.
+ *
+ * `InterruptCommandPayload` is what stops a caller naming nothing: the wire type's optional id is
+ * `Required` here, so a Stop with no conversation is a compile error rather than a frame that quietly
+ * stops whichever conversation the daemon's cursor last pointed at. THE ZERO-ARG FORM IS GONE
+ * DELIBERATELY, and its absence is the AC4 property rather than a signature tidy-up — the old
+ * constructor took an optional `serverId` (#1120) and could always be called bare. Its callers are the
+ * two Stop affordances in `Composer`, through `sendInterrupt`.
  */
-export function interruptCommand(serverId?: string): RendererCommand {
-  return { type: 'interrupt', serverId }
+export function interruptCommand(fields: InterruptCommandPayload): RendererCommand {
+  return { type: 'interrupt', payload: fields }
 }
 
 /**
@@ -424,8 +456,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'dequeueMessage':
       return 'payload' in value && isDequeueMessagePayload(value.payload)
     case 'interrupt':
-      // Bare member (#306): no payload to validate, so the optional server id (#1120) is the whole check.
-      return hasValidServerId(value)
+      // The newSession arm's shape (#1092) — a required payload, refused BY isInterruptPayload rather
+      // than by the `in` check, for the reason the requestModelList arm records. NO serverId arm any
+      // more: the conversation id already selects the connection, so a second addressing scheme would
+      // be a way for the two to disagree.
+      return 'payload' in value && isInterruptPayload(value.payload)
     case 'newSession':
       // The requestModelList arm's shape (#1217) — a required payload, refused BY isNewSessionPayload
       // rather than by the `in` check, for the reason that arm records. NO serverId arm: the
@@ -440,8 +475,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 }
 
 /**
- * The optional `serverId` arm of the guard above (#1120) — ONE helper for all six server-scoped
- * members, so they cannot drift apart into six subtly different acceptance rules.
+ * The optional `serverId` arm of the guard above (#1120) — ONE helper for all five server-scoped
+ * members, so they cannot drift apart into five subtly different acceptance rules. (`interrupt` was
+ * the sixth until #1092 gave the frame a conversation to name; see the union's own header.)
  *
  * ABSENT-OR-UNDEFINED-OR-STRING, and every word of that is load-bearing. `'serverId' in value` alone
  * is wrong in BOTH directions here. Structured clone PRESERVES an own property whose value is
@@ -819,6 +855,44 @@ function isRequestModelListPayload(value: unknown): value is RequestModelListPay
  *  literal — never a log line, path, attribute, or cache key. Structural minimum: an extra field is
  *  not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one id.
  *  Pure; never throws. */
+/** The `interrupt` command's payload guard (#1092) — `isNewSessionPayload`'s clause for the twin verb.
+ *
+ *  `''` IS THE ONE THAT MATTERS, and the sibling's reasoning transfers word for word: the protocol
+ *  makes no payload, `{}`, an absent id and an explicitly empty one ONE wire meaning — stop the turn
+ *  in whichever conversation the daemon's process-wide follow-active cursor points at, a cursor only a
+ *  routed `send_message` stamps and every connection shares. So a sender that read an id from a
+ *  not-yet-loaded slice and passed `''` would stop a DIFFERENT conversation's turn: the
+ *  cross-conversation misfire pyrycode#2103 exists to close, and the whole defect #1092 fixes. Nothing
+ *  else in this repo reddens on a relaxed clause — the frame compiles, typechecks and is silently
+ *  accepted — which is why the refusal is stated here, at the untrusted boundary, and not left to
+ *  `conversationRouter`, whose index happens to skip empty ids but whose contract is routing rather
+ *  than payload validity.
+ *
+ *  A missing key, a literal `null`, an explicitly-undefined payload and a non-string are all rejected
+ *  as in the siblings; a missing key for a STRONGER reason, since absent is the bare form here too —
+ *  and here that form is one every shipped build sent until this ticket, so the rejection is what
+ *  turns a wrong-chat Stop into a Stop that does nothing.
+ *
+ *  NO LENGTH CAP, deliberately matching `isNewSessionPayload` exactly rather than diverging: two twin
+ *  verbs with subtly different acceptance rules is the worse failure. It fails closed downstream
+ *  regardless — an over-cap id makes `encodeEnvelope` throw and the connection method drops the send —
+ *  and this path only READS `conversationRouter`'s index, so no renderer input can grow it.
+ *
+ *  The value is client-owned (this app's own conversation state, not network input) and reaches
+ *  exactly two sinks past here: `conversationRouter.route`, a read-only `Map` lookup against an index
+ *  built from the daemon's own conversation lists — a `Map` and never a `Record`, so an untrusted key
+ *  has no prototype chain to reach — and `buildInterrupt`, which rebuilds a fresh literal. Never a log
+ *  line, path, attribute, or cache key. Structural minimum: an extra field is not rejected here, and
+ *  cannot reach the wire because that rebuild bounds the frame to the one id. Pure; never throws. */
+function isInterruptPayload(value: unknown): value is InterruptCommandPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    value.conversation_id.length > 0
+  )
+}
+
 function isNewSessionPayload(value: unknown): value is NewSessionCommandPayload {
   if (typeof value !== 'object' || value === null) return false
   return (

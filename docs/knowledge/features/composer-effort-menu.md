@@ -173,6 +173,86 @@ of unrelated fan-out on top of it. Its own note records the actual finding: the 
 merits, but every footer ticket that meets it arrives already at its own size budget, so it belongs to a
 standalone tidy-up rather than to whichever control happens to land next.
 
+## The default apply (#1169)
+
+Before [#1169](../codebase/1169.md), a chat whose session reported no explicit effort
+(`SessionSettingsPayload.effort === ''`, the wire's "inherited daemon default") drew the first rendering
+above — `null` — forever, since unlike the model there was nothing to fall back on: claude's session-open
+line carries no effort field at all. #1169 makes sure such a session *has* a level rather than reporting
+one nobody holds: **a new chat opens at the last effort level used**, remembered client-side on a daemon
+confirm ([Last-effort store](last-effort-store.md)) and validated against the opened chat's own published
+levels before it is applied. With nothing usable remembered, the control still stays blank — no level is
+invented, #988's constraint intact.
+
+**A separate file and a separate leaf, not an effect inside this control.** `EffortDefaultData.tsx`
+(`src/renderer/src/screens/conversation/EffortDefaultData.tsx`) holds a pure decision function,
+`composerEffortMenuModel`'s own shape one file over, plus a headless `EffortDefaultData(): null` mounted
+beside `<ComposerEffortMenu />` in the composer footer. This control is documented as reading no state of
+its own beyond what it draws; folding a write policy into it would fuse two unrelated concerns and make
+its own tests answer for a decision they do not own. The leaf renders no DOM node, so no footer count,
+anchor or geometry assertion anywhere in `e2e/` can see it — and the write path is otherwise untouched:
+`changeSetting` → `submitSettingsChange` still sends the one existing single-field `set_session_settings`.
+
+```ts
+effortDefaultToApply(input: EffortDefaultInput): string | null
+// input = { conversationId, appliedFor, sessionId, effort, model, models, remembered }
+```
+
+Six rules, in order, each returning `null` unless every one clears:
+
+1. No chat open (`conversationId === null`) → nothing to apply to.
+2. Nothing remembered (`remembered === null`) → AC4's first arm.
+3. This chat's opening already had its one attempt (`appliedFor === conversationId`) → AC3's no-retry
+   arm and the one-per-chat-opening rule, the same rule.
+4. The chat already reports an effort of its own (`effort !== ''`, `selectEffectiveSettings`'s **composed**
+   value) → AC2. It has already answered the question this feature exists to answer.
+5. No addressable session id (`isAddressableSessionId`, reused from `runSettingsControls` rather than
+   restated) → nothing to write to. This is also the cross-chat guard: between #1167's clear on a switch
+   and the new chat's reply, this rule stops a default being written into the session the operator just
+   left.
+6. The remembered level is not among `effortRowFor(models, model)?.effort_levels ?? []`, checked by
+   `Array.prototype.includes` — an equality scan, never an object keyed by daemon text — → AC4's second
+   arm. Levels are published per model; a level carried over from one model may not exist for the next.
+   No fallback, no repair, no normalisation, per this document's own "no fallback, ever" above.
+
+**Rules 3 and 4 are different fabric, and together they are what stops a self-inflicted write loop
+against the daemon over the relay.** Rule 4 is the store's composed truth about the session — the
+optimistic overlay makes `effort` non-empty in the same synchronous step the send is recorded, so a
+second frame from the *same* attempt cannot go out. Rule 3 is this leaf's own record of what it did, kept
+in a `useRef` rather than shared state: it is the only guard that survives a **rejection**, since a
+rejection rolls the composed effort back to `''` and would otherwise satisfy rule 4 again. The obvious
+alternative — gating on `runSettingsWriteStore.error` — is wrong and is recorded as a mistake caught in
+review at [Run configuration write store § Remembering the confirmed level](run-settings-write-store.md#remembering-the-confirmed-level-1169):
+`changeDispatched` clears `error` on any unrelated field change, so it re-arms the retry rather than
+closing it.
+
+**One per chat *opening*, not one per chat ever.** `appliedFor` lives in a `useRef` scoped to this leaf's
+mount, so leaving the conversation screen and returning, or switching away and back, resets it — a
+deliberate, bounded choice (recorded as an open question in the architecture spec) rather than the
+maximal one: a durable per-chat memo would need a conversation-keyed store for a documented upstream
+asymmetry (the daemon refusing a level it published) that costs exactly one refused frame per opening and
+needs a fresh operator action each time regardless.
+
+**The effect re-reads store state through `getState()` rather than closing over render-time values, for
+two independent reasons.** `main.tsx` wraps the app in `React.StrictMode`, which double-invokes an effect
+against the *same* closure — a render-time `effort` of `''` would still read `''` on the second
+invocation even though the first already dispatched; the `appliedFor` ref closes that independently (a
+ref survives StrictMode's simulated remount). And rule 4 needs to be true of the *store*, not of a render
+already superseded. `models` is the one exception, read from the render closure rather than `getState()`:
+it is in the effect's dependency array so no wake is missed, and zustand hands out the same object
+identity across a StrictMode double-invoke, so there is no stale-closure hazard of the kind `getState()`
+exists to close for the other four inputs.
+
+**Reaches the launch arguments, never the turn stream.** Since pyrycode#2085 the claude process starts on
+the first message while the conversation's session is minted and bound at creation, so a
+`set_session_settings` against a never-messaged conversation persists with no child running, and the
+first message materialises the child with the setting already composed in. Nothing new on the wire; a
+per-message effort field would be the wrong shape.
+
+Mounted at `ConversationScreen.tsx`'s composer footer, `<EffortDefaultData conversationId={activeConversationId} />`,
+beside `<ComposerEffortMenu />` — where the conversation id is already in hand and where the leaf's
+lifetime matches the open chat's.
+
 ## Security
 
 Every string in `effort_levels`, plus `value` used as the join key, is claude-authored text that crossed
@@ -227,3 +307,39 @@ inert.
 See [PR #1019](https://github.com/pyrycode/pyrycode-desktop/pull/1019) and
 `docs/specs/architecture/989-composer-effort-menu.md` for the full plan, its security review, and its
 `## Revisions` entry recording the two e2e lessons above.
+
+### Testing the default apply (#1169)
+
+`EffortDefaultData.test.tsx` covers `effortDefaultToApply` as a table — each of the six rules returning
+`null` in isolation, the one path returning the level, the empty-model row substitution (#1168's
+`effortRowFor`) reaching the `default` row's levels, and a near-miss level (a published level absent
+from the remembered one's model) returning `null` — plus a smoke render proving the leaf emits no
+markup. The write-loop guard is pinned against the **real** `runSettingsWriteStore` rather than a
+hand-built input, since a hand-built `effort: 'x'` would assert a belief about the composition rather than
+the composition itself: dispatch → confirm → assert refused (rule 4), dispatch → reject → assert refused
+(rule 3, the marker) → dispatch an **unrelated** model change → assert still refused, which is the
+regression the security review's MUST FIX named.
+
+`e2e/composer-effort-default.spec.ts` (fake tier) is a **three**-chat drive, not two — the plan originally
+called for two and the shipped spec's own header records why a third was added. Chat A reports an effort
+of its own and is where a level is picked and confirmed (writing the remembered level); chat B reports
+none and is where the remembered level must be applied, exactly once, naming B's session; chat C reports
+an effort of its own *while something is already remembered*, and must be left alone. C is load-bearing:
+without it, A's own "nothing was sent yet" reading at launch is vacuous, since nothing is remembered
+either at that point — the assertion would pass with the whole feature deleted. Detected instead by the
+frame count on chat A jumping the moment a rule-4-less build would fire (2, not 0) the instant A's own
+confirm lands.
+
+`e2e/real-claude-effort-default.spec.ts` (real-claude tier, AC5) proves the one thing the fake tier
+cannot: that a `set_session_settings` against a **never-messaged** conversation persists with no claude
+child running and is composed into the child's launch arguments on its first message (the pyrycode#2085
+premise this whole feature rests on), and that no `/effort` line appears in the thread. It drives its one
+real turn through the harness's **seeded** row rather than a FAB-created chat, because a never-messaged
+conversation's published levels can only come from the daemon's connect-time or on-demand model-list
+fallback (pyrycode#2124/#2125), whose source is the *bootstrap* session's retained list — and the harness
+binds only the seeded row to that bootstrap session. Getting this spec green needed three real-environment
+fixes, none of them a production change, recorded in the architecture spec's `## Revisions`: two vacuous
+turn-quiesce gates (a closing `toHaveCount(0)` that resolves before the send does anything, and a
+`nonEmptyAssistantCount >= 1` gate that is sound only in a chat proven empty, which the seeded row is not)
+and a stale gate-host daemon binary lacking the model-list fallback the drive depends on, diagnosed from
+the binary's own symbols rather than assumed.

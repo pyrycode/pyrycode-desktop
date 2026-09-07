@@ -29,9 +29,104 @@ import type {
   WireModalOption,
   WireQuestion,
   WireSlashCommand,
-  WireModelOption,
-  HistoryEntry
+  WireModelOption
 } from '../wire/types'
+
+/**
+ * A stored history entry's payload, decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) —
+ * one arm per type the timeline draws, plus the operator's own `message`, which appears only in history
+ * (the daemon pushes no `message` frame on the interactive lane). A consumer can run the window's
+ * existing live-lane mapping over one of these unchanged.
+ *
+ * IT MIRRORS `DecodedHistoryEvent` IN `src/main/transport/inboundMessage.ts` BY HAND rather than
+ * importing it, and that is the placement rule rather than an oversight. `inboundMessage.ts` is IPC-free
+ * by construction — the `transport/` directory holds the wire boundary and never imports this module — so
+ * a type the decode produces cannot be shared across the boundary it exists to cross. `HistoryRequestFailure`
+ * above and `AttachmentUploadFailure` already mirror a transport type the same way for the same reason.
+ * The two are kept in agreement structurally: `daemonConnection`'s single emit assigns the decoded array
+ * into this field, so an arm missing here is a compile error at that one site, and a type-only
+ * mutual-assignability guard in `daemonConnection.test.ts` catches the other direction. One residual gap,
+ * stated rather than papered over: an added OPTIONAL field on one side alone passes both checks.
+ *
+ * NO ARM CARRIES A `conversationId`. Every live-lane parser requires the payload's `conversation_id`, but
+ * that value is DAEMON-ASSERTED while a page is attributed by CORRELATION to the conversation this client
+ * asked about — so it is dropped at the decode, and `historyPageReceived.conversationId` stays the only
+ * routing key on the page. Carrying both would hand a consumer two ids that can disagree and a routing
+ * decision it must never be given, which is the misattribution #1222's correlation exists to remove.
+ *
+ * SECURITY — DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT. `assistantDelta.text`,
+ * `toolUse.name` / `inputSummary` and BOTH the keys and the values of its `input` map,
+ * `toolResult.resultSummary` / `resultDetail`, `unrecognizedMessage.raw` / `messageType`,
+ * `sessionTransition.workspaceCwd` and `message.text` are all REPLAYED daemon-, claude- or
+ * operator-authored strings carrying exactly the trust class of the live frame they mirror — nothing about
+ * one is more trusted for having been stored, and the daemon's § Security model threat 1 lands on every
+ * one. Each is PLAIN TEXT ONLY at the render boundary: never into a raw-markup sink (no innerHTML /
+ * dangerouslySetInnerHTML), never into an attribute or a URL, and never a filename, a cache key or a
+ * lookup path — if a consumer indexes by one, the index is a `Map`. `workspaceCwd` is the trap worth
+ * naming twice: it is a daemon-supplied filesystem PATH and no consumer resolves, joins or opens it.
+ *
+ * No token, key or raw frame can ride any arm (by construction — every field is a scalar or a
+ * string→string map built solely from a decoded payload). The `__proto__`-as-an-own-data-property hazard
+ * `HistoryEntry` warns its consumers about does NOT reach here: every arm is a fresh literal and the
+ * decoder drops the three reserved keys from `input`, so no reference to the `JSON.parse` result survives.
+ *
+ * `toolUse.input` and `toolResult.resultDetail` stay OPTIONAL — test `=== undefined`, never `'input' in
+ * event`, which structured clone makes true either way. Absence means the WIRE omitted it (an older
+ * daemon); an empty map and `''` are different facts and are never collapsed into it.
+ */
+export type HistoryTimelineEvent =
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnState'; state: WireTurnState }
+  | {
+      type: 'toolUse'
+      turnId: string
+      toolUseId: string
+      name: string
+      inputSummary: string
+      input?: Readonly<Record<string, string>>
+    }
+  | {
+      type: 'toolResult'
+      turnId: string
+      toolUseId: string
+      isError: boolean
+      resultSummary: string
+      resultDetail?: string
+    }
+  | {
+      type: 'sessionTransition'
+      newSessionId: string
+      reason: WireSessionTransitionReason
+      occurredAt: string
+      workspaceCwd: string | null
+    }
+  | { type: 'stallDetected' }
+  | { type: 'apiRetry'; active: boolean; current: number; total: number }
+  | { type: 'compacting'; active: boolean }
+  | {
+      type: 'unrecognizedMessage'
+      site: WireUnrecognizedSite
+      messageType: string
+      raw: string
+      truncated: boolean
+    }
+  | { type: 'messageReceived'; message: Omit<MessagePayload, 'conversation_id'> }
+
+/**
+ * ONE ENTRY of a served history page, decoded (#1227) — the typed timeline event beside the entry's own
+ * durable log `id` and its `ts`. Both survive the decode deliberately: #1225 joins a loaded page to the
+ * live stream on `ts` and cannot recover one lost here.
+ *
+ * `id` IS THE ON-DISK LOG ID AND IS NEVER JOINED AGAINST AN `event_id` — that one belongs to the
+ * in-memory replay ring, is reset by a daemon restart, and means something else entirely. They are
+ * different sequences that both look like small integers, which is why a join would typecheck and be wrong.
+ */
+export interface HistoryTimelineEntry {
+  id: number
+  ts: string
+  event: HistoryTimelineEvent
+}
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
  *  Single source of truth: the emit helper sends on it, the preload subscribes to it.
@@ -1075,10 +1170,24 @@ export type DaemonEvent =
   // is one stored envelope's worth, operator-authored for a stored `message` and `claude`-authored for
   // a stored assistant frame, carrying EXACTLY the trust class of the live frame it mirrors — nothing
   // about it is more trusted for having been stored, and the daemon's § Security model threat 1 lands
-  // here. Its `type` is a stored string nothing re-validates and its `payload` crosses unparsed and
-  // opaque; the render surface applies the same sanitisation the live lane gets, and the two
-  // consumer-side rules (no `Object.assign` through a payload, no field of it as a path or key) are
-  // stated on `HistoryEntry` itself. No token, key or raw frame can ride either arm.
+  // here.
+  //
+  // SINCE #1227 NOTHING UNTYPED CROSSES. #1222 shipped this field as `readonly HistoryEntry[]` — a
+  // stored `type` string nothing re-validated beside a `payload` of arbitrary unparsed JSON — and the
+  // window would have had to parse it, on the wrong side of the boundary CLAUDE.md draws. The
+  // background process now decodes each entry against the same payload parser the live lane uses, so
+  // what crosses is `HistoryTimelineEntry`: a closed union of scalars, with the entry's `id` and `ts`
+  // beside it. That NARROWS this arm rather than widening it, and it is where the untrusted-text rules
+  // now live — see `HistoryTimelineEvent` above, which names every replayed string and binds each to
+  // plain text only, never a markup sink, an attribute, a URL, a filename, a cache key or a lookup path.
+  //
+  // TWO SKIPS ARE ORDINARY AND NEITHER COSTS THE PAGE. An entry of a stored type the timeline does not
+  // draw is skipped, and so is one whose payload fails to parse; order is preserved among the
+  // survivors, and a page every entry of which was skipped crosses as an EMPTY page rather than as a
+  // failure, so #1224's walk can still step past it. NO PROMPT EVER CROSSES: `modal_shown` /
+  // `question_shown` have no arm in the decode, so nothing answerable can reach the window from
+  // history, whether a future daemon starts logging one or a hostile one plants one in a page.
+  // No token, key or raw frame can ride either arm.
   //
   // `cursor` and `atStart` cross AS SENT and are never inferred from each other or from the entry
   // count. `atStart` is the ONLY termination signal — a page filling exactly at the log's first entry
@@ -1089,7 +1198,7 @@ export type DaemonEvent =
   | {
       type: 'historyPageReceived'
       conversationId: string
-      entries: readonly HistoryEntry[]
+      entries: readonly HistoryTimelineEntry[]
       cursor: string
       atStart: boolean
     }

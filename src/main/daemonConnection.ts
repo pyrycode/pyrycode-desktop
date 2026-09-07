@@ -1120,11 +1120,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             //
             // Both are carried AS SENT: nothing normalises a short or empty page into an end-of-log
             // flag, because `atStart` is the only termination signal and a page filling exactly at the
-            // log's first entry reports it false. `entries` is the decoded array by reference — the
-            // entry payloads are REPLAYED CONTENT and stay opaque here, interpreted by nothing in this
-            // slice. `conversationId` is the map's value, never a field of the payload (there is none),
-            // and the numeric in_reply_to it was resolved from is NOT placed on the event: the window
-            // receives the id it supplied, not the wire routing id.
+            // log's first entry reports it false. Nor is either inferred from how many entries
+            // survived the decode: an EMPTY `entries` here can mean an empty page OR a page every
+            // entry of which was skipped (#1227), and both must still settle the ask.
+            //
+            // `entries` is the TYPED array by reference — since #1227 the transport decodes each stored
+            // payload against the live-lane parser for its type, so nothing untyped crosses from here.
+            // This assignment is also the drift guard between `DecodedHistoryEvent` and its
+            // `HistoryTimelineEvent` mirror: the two are declared in separate modules (transport is
+            // IPC-free by construction), and an arm that stopped matching is a compile error at this
+            // one site. `conversationId` is the map's value, never a field of the payload (there is
+            // none) — and no entry carries a payload's daemon-asserted `conversation_id` either, so
+            // this stays the page's ONLY routing key. The numeric in_reply_to it was resolved from is
+            // NOT placed on the event: the window receives the id it supplied, not the wire routing id.
             emitDaemonEvent(sink, {
               type: 'historyPageReceived',
               conversationId,

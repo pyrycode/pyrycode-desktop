@@ -7,7 +7,13 @@ import {
   type DaemonConnectionDeps
 } from './daemonConnection'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
-import type { DaemonEvent, StampedDaemonEvent } from '../shared/ipc/events'
+import type {
+  DaemonEvent,
+  StampedDaemonEvent,
+  HistoryTimelineEntry,
+  HistoryTimelineEvent
+} from '../shared/ipc/events'
+import type { DecodedHistoryEvent } from './transport/inboundMessage'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
 import type {
@@ -7957,17 +7963,45 @@ describe('daemonConnection — server origin (#1068)', () => {
   })
 })
 
+// A COMPILE-TIME drift guard between the two mirrored history-event unions (#1227), not a runtime test.
+// `DecodedHistoryEvent` (src/main/transport/inboundMessage.ts) and `HistoryTimelineEvent`
+// (src/shared/ipc/events.ts) are declared separately because the transport directory is IPC-free by
+// construction, so nothing but structural assignability keeps them in agreement. The emit in
+// daemonConnection.ts already checks one direction; this checks the OTHER, so an arm or a required field
+// added on either side alone is a typecheck failure (`npm run typecheck` covers src/main/**, this file
+// included) rather than a silent divergence. Residual gap, stated rather than papered over: an added
+// OPTIONAL field on one side alone still passes both.
+type MirrorsIpcEvent = HistoryTimelineEvent extends DecodedHistoryEvent ? true : never
+type MirrorsTransportEvent = DecodedHistoryEvent extends HistoryTimelineEvent ? true : never
+const _historyEventMirrorsBothWays: [MirrorsIpcEvent, MirrorsTransportEvent] = [true, true]
+void _historyEventMirrorsBothWays
+
 describe('createDaemonConnection — requestHistory (history page request/reply, #1222)', () => {
   /** The conversation the request names, and therefore the one the reply describes. */
   const CONV = 'conv-hist'
   /** A daemon-minted opaque cursor — the committed example, kept intact so a "tidying" rewrite shows. */
   const CURSOR = 'MS4zZjhiMWMwNC05ZDI3LTRlNWEtYjZjMS0yZTlmNzBkOGE0MTMuNy40MDk2'
 
+  /** One stored entry, as served. Its payload carries `conversation_id` since #1227 — every live-lane
+   *  parser requires it, so an entry without one is skipped at the decode and this fixture would stand
+   *  for an empty page. The value is deliberately NOT `CONV`: it is daemon-asserted, and pinning a
+   *  DIFFERENT id here is what proves it never reaches the event beside the correlation-resolved one. */
   const ENTRY = {
     id: 412,
     type: 'assistant_delta',
-    payload: { turn_id: 't1', seq: 3, text: 'stored assistant text' },
+    payload: {
+      conversation_id: 'a-different-conversation',
+      turn_id: 't1',
+      seq: 3,
+      text: 'stored assistant text'
+    },
     ts: FIXED_TS
+  }
+  /** What ENTRY decodes to (#1227): the entry's own id and ts, the typed event, no conversation id. */
+  const DECODED_ENTRY: HistoryTimelineEntry = {
+    id: 412,
+    ts: FIXED_TS,
+    event: { type: 'assistantDelta', turnId: 't1', seq: 3, text: 'stored assistant text' }
   }
   const PAGE = { entries: [ENTRY], cursor: CURSOR, at_start: false }
 
@@ -8061,10 +8095,49 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
       {
         type: 'historyPageReceived',
         conversationId: CONV,
-        entries: [ENTRY],
+        entries: [DECODED_ENTRY],
         cursor: CURSOR,
         atStart: false
       }
+    ])
+  })
+
+  it('lets no entry carry the payload conversation_id beside the correlated one (#1227)', async () => {
+    // The one value that could contradict the correlation. ENTRY's payload names a DIFFERENT
+    // conversation, so a consumer handed both would have a routing decision it must never be given —
+    // and the whole point of #1222's correlation is that there is only one id to route by.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+
+    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
+    expect(JSON.stringify(event)).not.toContain('a-different-conversation')
+    expect(JSON.stringify(event)).not.toContain('conversation_id')
+  })
+
+  it('settles the ask with an EMPTY page when every entry was skipped (#1227)', async () => {
+    // A page of undrawn and malformed entries still emits. Dropping it would stall #1224's walk with
+    // no terminal and no way to step past the entries this client cannot draw, so `cursor`/`atStart`
+    // must arrive as served even when nothing survived the decode.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: historyPagePlaintext(
+        {
+          entries: [
+            { id: 1, type: 'model_announced', payload: { conversation_id: CONV }, ts: FIXED_TS },
+            { id: 2, type: 'assistant_delta', payload: {}, ts: FIXED_TS }
+          ],
+          cursor: CURSOR,
+          at_start: false
+        },
+        replyTo
+      )
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
+      { type: 'historyPageReceived', conversationId: CONV, entries: [], cursor: CURSOR, atStart: false }
     ])
   })
 
@@ -8107,7 +8180,13 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     })
 
     expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
-      { type: 'historyPageReceived', conversationId: CONV, entries: [ENTRY], cursor: '', atStart: true }
+      {
+        type: 'historyPageReceived',
+        conversationId: CONV,
+        entries: [DECODED_ENTRY],
+        cursor: '',
+        atStart: true
+      }
     ])
   })
 

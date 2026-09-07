@@ -9,9 +9,11 @@ slice teaches the desktop transport to ask the daemon's append-only on-disk log
 Introduced in [#1222](../codebase/1222.md), split from #1088. **Nothing asks for a page** (that's
 [#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)), **nothing renders one** (that's
 [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)), and **nothing joins a page to the
-live stream** (that's [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). All four
-exhaustive bridges take permanent-for-now null arms; this ticket ships the ability to ask and the
-ability to decode the answer, nothing more.
+live stream** (that's [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). #1222 shipped
+the ask and the envelope-level decode with an entry's `type`/`payload` still opaque; **[#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
+added the payload decode** — see § Payload decode below — so `historyPageReceived.entries` now carries
+typed events, not stored pairs. `timelineBridge`'s two arms stay dormant (#1223 still owns rendering
+them); `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null.
 
 Nearest shapes in the tree: `ddd9a0b` ([session settings send](session-settings-send.md), request +
 reply decode) is the full request-and-decode analogue; `e199833` (#1165, `requestModelList`) is the
@@ -38,8 +40,9 @@ reused here rather than re-derived.
 | `requestHistory` command / `isRequestHistoryPayload` guard | `src/shared/ipc/commands.ts` | the sealed union member + untrusted-boundary guard |
 | `case 'requestHistory'` | `src/main/index.ts` | conversation-routed dispatch |
 | `requestHistory` delegate | `src/main/connectionRegistry.ts` | the stand-in's one added line |
-| `HistoryRequestFailure`, `historyPageReceived` / `historyRequestFailed` | `src/shared/ipc/events.ts` | the two `DaemonEvent` arms |
-| null arms | `timelineBridge.ts` / `daemonEventBridge.ts` / `modalBridge.ts` / `questionBridge.ts` | the four exhaustive bridges, dormant |
+| `HistoryRequestFailure`, `HistoryTimelineEvent`, `HistoryTimelineEntry`, `historyPageReceived` / `historyRequestFailed` | `src/shared/ipc/events.ts` | the two `DaemonEvent` arms; the mirrored decoded-entry types (#1227) |
+| `DecodedHistoryEvent`, `DecodedHistoryEntry`, `DecodedHistoryPage`, `decodeHistoryEvent`, `decodeHistoryPage` | `src/main/transport/inboundMessage.ts` | the payload-decode stage (#1227) — see § Payload decode |
+| null arms | `timelineBridge.ts` / `daemonEventBridge.ts` / `modalBridge.ts` / `questionBridge.ts` | the four exhaustive bridges; `timelineBridge`'s dormant, the rest permanent |
 
 ## The wire types (`src/shared/wire/types.ts`)
 
@@ -87,10 +90,16 @@ history (v2)* of the daemon's `docs/protocol-mobile.md`.
   and is carried through, never rejected.
 - **`HistoryEntry.payload` is replayed content, not more trusted for having been stored.** It is typed
   `Record<string, unknown>` rather than a union of known wire payloads (it can hold a `type` this
-  client doesn't recognise), crosses **verbatim**, and is interpreted nowhere in this ticket — #1223
-  owns the reduction. `MessagePayload` (already in `types.ts`) is named in the comment so no one mints
-  a duplicate; nothing here narrows an entry into it. It carries the daemon's § *Security model* threat
-  1 exactly as the live frame it mirrors does.
+  client doesn't recognise), and it stays this shape at the wire boundary — this is the pre-decode
+  type, unchanged since #1222. [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227) added
+  the stage that actually reads it (§ Payload decode below); before that, nothing did. It carries the
+  daemon's § *Security model* threat 1 exactly as the live frame it mirrors does.
+- **`HistoryEntry.type` was `send_message` in the SSOT prose and is `message` in the daemon — fixed by
+  #1227.** `docs/protocol-mobile.md` § *A history entry* and its worked example both say
+  `send_message`, but the daemon's third history producer (`operator_message_history.go`,
+  pyrycode#2115) appends `protocol.TypeMessage` — `"message"` — carrying a `MessagePayload`. The
+  decoder matches on `message`, matching the daemon rather than the stale doc; `HistoryEntry`'s
+  docblock states this explicitly now so a future reader doesn't "fix" the decoder to match the SSOT.
 - **`HistoryPagePayload` carries no `conversation_id` — a decision, not an omission.** See § The one
   fact above.
 - **`at_start` is the only termination signal.** A page filling exactly at the log's first entry
@@ -230,6 +239,78 @@ meaning ("this code is outside the published history set") read at exactly one e
 the IPC event's `'unclassified'` member. Keeping it optional also avoids reddening the eleven existing
 `daemon-error` assertions for no behavioural gain.
 
+## Payload decode (`src/main/transport/inboundMessage.ts`, #1227)
+
+`parseHistoryPagePayload` above narrows the **envelope** of each entry (`id`/`type`/`payload`/`ts`) and
+still fails the **whole page** closed on a malformed one — unchanged since #1222. What #1222 left an
+entry's `payload` as was still `Record<string, unknown>`, opaque, crossing IPC verbatim. #1227 adds a
+second stage, run immediately after, that reads it: `decodeHistoryPage(page: HistoryPagePayload):
+{ page: DecodedHistoryPage; skipped: number }`, called from `parseInboundMessage`'s `'history_page'`
+case right after the existing content-free `inbound-decoded` log line (so the throwing envelope-level
+narrow still runs, and is still logged, before this non-throwing stage does).
+
+```ts
+export interface DecodedHistoryEntry { id: number; ts: string; event: DecodedHistoryEvent }
+export interface DecodedHistoryPage {
+  entries: readonly DecodedHistoryEntry[]
+  cursor: string
+  at_start: boolean
+}
+```
+
+`DecodedHistoryEvent` is an eleven-arm union, one per type the timeline draws — the non-null arms of
+`translateTimelineEvent` (`timelineBridge.ts`) minus its client-side `connected` edge, plus the
+operator's own `message`. Each arm carries the same camelCase render fields its live `DaemonEvent` twin
+carries, so a consumer can run the window's existing live-lane mapping over one unchanged; the IPC side
+mirrors it by hand as `HistoryTimelineEvent`/`HistoryTimelineEntry` in `events.ts` (`inboundMessage.ts`
+is IPC-free by placement rule, so the transport type cannot cross the boundary it exists to define — the
+same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
+
+- **`decodeHistoryEvent(type: string, payload: Record<string, unknown>): DecodedHistoryEvent | null`**
+  — a `switch` over the eleven wire type strings, each arm calling its existing live-lane parser
+  (`parseAssistantDeltaPayload`, `parseToolUsePayload`, `parseMessagePayload`, …) and building a
+  **fresh named-field literal**, dropping `conversation_id` (and, on `session_transition`,
+  `previous_session_id`) the same way `translateTimelineEvent` drops it on every live arm — one layer
+  earlier. `default: return null`.
+- **It MUST be a `switch`, never an object-literal dispatch table** — this is the ticket's one MUST FIX
+  security finding, fixed before ship. `type` is a stored, daemon-authored string nothing re-validates,
+  so `TABLE[type]` would be a lookup path on untrusted input: `'__proto__'` resolves to
+  `Object.prototype` (truthy, then invoked) and `'constructor'` is worse. The same rule binds any later
+  "which types do we draw?" set in this codebase — a `Set`, never a bare object used as a map.
+- **`decodeHistoryPage`'s loop wraps the call in `try { … } catch { event = null }`, binding no error.**
+  A payload that fails to parse and a type outside the eleven both fall out as `null` and are skipped
+  the same way; order is preserved among survivors, and a page every entry of which was skipped crosses
+  as `entries: []` rather than as a failure, so #1224's walk can still step past it. Never throws.
+- **`modal_shown`/`question_shown` have no arm at all — the sharpest case, closed by construction.**
+  Neither type is in the switch, so neither can produce an event under any payload: nothing answerable
+  reaches the window from history, whether a future daemon starts logging one or a hostile one plants
+  one in a page. A replayed prompt answered "now" would be a resolution for a modal that closed hours
+  ago.
+- **The other `default`-covered types are all ordinary, not errors**: six the live lane decodes but
+  never draws in a thread (`background_task_started`/`_updated`/`_roster`, `model_announced`,
+  `model_list`, `slash_command_list`), two with no parser at all (`thinking_progress`, `rate_limited`),
+  and any type a later daemon invents.
+- **No `conversation_id` crosses on any arm — the daemon-asserted value is dropped, the page's
+  correlation-resolved `conversationId` stays the only routing key.** Every one of the eleven parsers
+  requires `conversation_id` (it is the live-lane routing key, and that fail-closed read is what makes
+  `?? ''` misattribution impossible there), but carrying it onward here would hand a consumer two ids
+  that can disagree — exactly the misattribution #1222's correlation exists to remove.
+- **Skip diagnostics are aggregated to one line per page, never one per entry — a security constraint,
+  not a tidiness one.** #1222's own test proves ~1200 entries fit in one frame; a hostile daemon can
+  send them all malformed and repeat the frame, so a per-entry line is a three-orders-of-magnitude
+  log-write amplifier. `decodeHistoryPage`'s skip count is logged once, only when `> 0`:
+  `{ event: 'inbound-decode-skipped', code: 'history_page_entry', count, hash }` — `hash` is the same
+  page-line digest, so the two lines correlate. Never the entry's `type`, `id`, `ts`, or any payload
+  field.
+
+**The two mirrors (`DecodedHistoryEvent` / `HistoryTimelineEvent`) are held in agreement at two
+points**: the `daemonConnection.ts` emit assigns the decoded array straight into the IPC-typed field, so
+an arm missing on one side is a compile error there; and a type-only mutual-assignability guard in
+`daemonConnection.test.ts` (typechecked — `tsconfig.node.json` includes `src/main/**/*`, test files
+included) catches drift the other way, mutation-checked rather than assumed (adding a required field to
+one union's `stallDetected` arm reddens `npm run typecheck` at the guard). Residual gap, stated rather
+than papered over: an *optional* field added on one side alone passes both checks.
+
 ## Correlation (`src/main/daemonConnection.ts`)
 
 A fifth correlation store, `pendingHistoryRequests: Map<number, string>` — envelope id → the
@@ -269,10 +350,16 @@ export type HistoryRequestFailure =
   | 'history-invalid-cursor' | 'history-unavailable' | 'unclassified'
 
 | { type: 'historyPageReceived'; conversationId: string
-    entries: readonly HistoryEntry[]; cursor: string; atStart: boolean }
+    entries: readonly HistoryTimelineEntry[]; cursor: string; atStart: boolean }
 | { type: 'historyRequestFailed'; conversationId: string
     reason: HistoryRequestFailure; retryable: boolean }
 ```
+
+**`entries` changed shape under #1227.** #1222 shipped it as `readonly HistoryEntry[]` — a stored `type`
+string beside an opaque `payload`, which the window would have had to parse itself. It is now `readonly
+HistoryTimelineEntry[]` — see § Payload decode above — a closed union of scalars with the entry's `id`
+and `ts` alongside. This **narrows** the arm rather than widening it: nothing untyped crosses IPC on this
+path any more.
 
 - **`HistoryRequestFailure` duplicates `HistoryRejectReason`'s members by hand** rather than importing
   them — `inboundMessage.ts` is IPC-free by placement rule, so the narrowed type cannot cross the
@@ -290,18 +377,31 @@ export type HistoryRequestFailure =
 - **`conversationId` on both arms is client-owned**, carrying `runConfigReceived`'s provenance
   argument verbatim — see § The one fact above. It is a routing key, never rendered text, and reaches
   no log sink. The numeric `in_reply_to` it was resolved from is **not** carried.
-- **`entries` is the most untrusted payload on this union.** Each entry mirrors the daemon's §
-  *Security model* threat 1 exactly as the live frame it replays does; nothing about being stored makes
-  it more trusted, and the eventual render surface owes it the same sanitisation the live lane already
-  gets.
+- **`entries` is still the most untrusted payload on this union — decoding narrowed the shape, never the
+  content.** Each `HistoryTimelineEvent` field is replayed content mirroring the daemon's § *Security
+  model* threat 1 exactly as the live frame it replays does; nothing about being stored, or now decoded,
+  makes it more trusted. The docblock on `HistoryTimelineEvent` names every field this binds
+  (`assistantDelta.text`, `toolUse.name`/`inputSummary`/`input`'s keys and values,
+  `toolResult.resultSummary`/`resultDetail`, `unrecognizedMessage.raw`/`messageType`,
+  `sessionTransition.workspaceCwd`, `message.text`) and the render surface owes each the same
+  sanitisation the live lane already gets — plain text only, never a markup sink, an attribute, a URL, a
+  filename, a cache key or a lookup path. `workspaceCwd` is the one worth remembering twice: a
+  daemon-supplied filesystem path, never resolved, joined or opened by this client.
 
 The four exhaustive bridges (`timelineBridge`, `daemonEventBridge`, `modalBridge`, `questionBridge`)
 each gain two null arms — the compile-time guard doing its job. `daemonEventBridge`'s disposition is
 **permanent** (a replayed frame is never a `SessionAction`); `modalBridge`'s is **permanent** for the
-same reason a page may *carry* a stored `modal_shown` without *being* one; `questionBridge`'s is
+same reason a page may *carry* a stored `modal_shown` among its wire entries without *being* one —
+though since #1227 that's true only of the pre-decode wire page: the decode has no `modal_shown` arm at
+all, so one can no longer reach `modalBridge`'s switch in the first place; `questionBridge`'s is
 permanent on the same "not a question event" grounds. `timelineBridge`'s two arms are **dormant, not
-permanent** — a page's entries are literally timeline items (that's the whole point of an entry
-carrying a stored frame's `type`/`payload`), and #1223 is expected to claim them.
+permanent** — a page's entries are literally timeline items, and #1223 is expected to claim them, now
+against the typed `HistoryTimelineEntry` shape rather than the raw `{type, payload}` pair. **Stale
+comments, not blocking:** as of #1227 the `timelineBridge.ts` and `modalBridge.ts` arms above still
+describe the pre-decode shape in prose (`timelineBridge`: "that is the whole point of a history entry
+carrying a stored frame's `type` and `payload`"; `modalBridge`: "a page may CARRY a stored `modal_shown`
+among its entries") — flagged as a verifier NIT on PR #1228, left for #1223 to correct when it claims
+the `timelineBridge` arm.
 
 ## Data flow
 
@@ -312,9 +412,10 @@ window → sendCommand({type:'requestHistory', payload:{conversation_id, cursor,
       → buildRequestHistory (fresh 3-key literal) → driver.sendMessage
         → pendingHistoryRequests.set(envelopeId, conversation_id)   [only after a successful send]
 
-daemon → history_page frame → parseHistoryPagePayload (fail-closed) → { kind:'history-page', historyPage, inReplyTo }
+daemon → history_page frame → parseHistoryPagePayload (fail-closed, whole page)
+      → decodeHistoryPage (#1227: per-entry payload decode, skip-not-fail) → { kind:'history-page', historyPage: DecodedHistoryPage, inReplyTo }
       → daemonConnection matches inReplyTo against pendingHistoryRequests
-      → hit:  delete entry → DaemonEvent{ historyPageReceived, conversationId, entries, cursor, atStart }
+      → hit:  delete entry → DaemonEvent{ historyPageReceived, conversationId, entries: HistoryTimelineEntry[], cursor, atStart }
       → miss / absent inReplyTo: dropped silently, no event
 
 daemon → error frame (in_reply_to matches a pending history ask)
@@ -332,6 +433,7 @@ daemon → error frame (in_reply_to matches a pending history ask)
 | `buildRequestHistory` | `Uint8Array` | May throw `WireEncodeError` (unpublished cursor length); the sole caller catches and drops — an over-cap ask fails closed as a dropped send. |
 | `isRequestHistoryPayload` | `boolean` | A missing/mistyped field is rejected at the untrusted→trusted boundary; the command is dropped before reaching main logic. |
 | `parseHistoryPagePayload` / `parseHistoryEntry` | `HistoryPagePayload` | Throws `WireDecodeError` on any malformed shape — non-array `entries`, one bad element, a missing/mistyped field, a non-object entry `payload`. Never a partial page. |
+| `decodeHistoryPage` / `decodeHistoryEvent` (#1227) | `{ page: DecodedHistoryPage; skipped: number }` | Never throws. An entry of a type the timeline doesn't draw, or one whose payload fails its parser, is skipped (not counted as page failure); order preserved among survivors; an all-skipped page yields `entries: []`. |
 | `parseInboundMessage` | frame-level | An oversized frame throws before any parse (`MAX_PLAINTEXT_BYTES`); the consumer's existing `catch` drops it with no event, no log. |
 | `narrowHistoryRejectReason` | `HistoryRejectReason \| undefined` | Total; never throws. A non-record payload, an absent `code`, a non-string `code`, or an unrecognised one all yield `undefined` → `'unclassified'` at the IPC emit. |
 | `requestHistory` (connection method) | `void` | Inert no-op when `driver === null`. `try/catch` drops any thrown object silently — never logged, never forwarded, no retry. |
@@ -342,7 +444,9 @@ daemon → error frame (in_reply_to matches a pending history ask)
 ## Security properties
 
 Ticket carries `security-sensitive`; builder self-review verdict **PASS**, no MUST FIX findings (two
-SHOULD FIX, both documentation-only — see below).
+SHOULD FIX, both documentation-only — see below). #1227's own security review, on the payload-decode
+stage: **PASS** (first pass FAIL — three MUST FIX findings, all fixed before ship — plus two SHOULD FIX,
+both verified against the tree rather than taken on report; see below).
 
 - **One boundary per direction, both named types.** Inbound: `parseHistoryPagePayload` /
   `parseHistoryEntry` / `narrowHistoryRejectReason` in `inboundMessage.ts` — `payload: unknown` never
@@ -353,19 +457,44 @@ SHOULD FIX, both documentation-only — see below).
   app's own outbound frame, held in main-process memory, and handed back; never parsed from an inbound
   payload. Naming a conversation is not authorization; the daemon validates it against its own
   registry and authorization is pairing at the Noise handshake.
-- **An entry's `payload` is trusted in shape and untrusted in content (SHOULD FIX, documentation-only).**
-  A decoded `HistoryEntry` looks settled but its `type` and `payload` are replayed content — the
-  daemon's § *Security model* threat 1 lands here exactly as it does on the live frame each entry
-  mirrors. `HistoryEntry`'s docblock states this in the same voice `RetrievedAttachmentChunk` uses, so
-  #1223 cannot read the type as pre-sanitised. Not a MUST FIX because nothing in this slice renders,
-  resolves, or dispatches on either field.
-- **`payload` crosses by reference and a `__proto__` key survives in it (SHOULD FIX,
-  documentation-only).** `JSON.parse` makes `__proto__` an ordinary own data property — inert to read,
-  spread, and `structuredClone`. The reachable hazard is `Object.assign(target, entry.payload)` or a
-  `target[k] = v` copy loop in a **later** consumer; `HistoryEntry`'s docblock records the rule.
-  Deep-copying or key-stripping here was rejected: the payload is arbitrary nested JSON, a recursive
-  scrub would be unbounded work on a hostile frame, and `RESERVED_MAP_KEYS`'s precedent is scoped to a
-  flat map whose keys the daemon chooses.
+- **An entry's `payload` was trusted in shape and untrusted in content at #1222 ship time (SHOULD FIX,
+  documentation-only) — closed by #1227, which is the consumer this finding anticipated.** `payload`
+  stayed opaque past #1222; #1227's `decodeHistoryEvent` is now the (sole) reader, and it reads through
+  the same fail-closed live-lane parsers rather than trusting the shape. `HistoryTimelineEvent`'s
+  docblock (events.ts) carries the untrusted-content warning forward onto every decoded field, so
+  #1223 — the actual render consumer — inherits it from there rather than from the pre-decode type.
+- **`payload` crossed by reference with a `__proto__` key surviving in it at #1222 ship time (SHOULD
+  FIX, documentation-only) — also closed by #1227.** `decodeHistoryEvent` never spreads or
+  `Object.assign`s the decoded payload; every arm is a fresh named-field literal built from named
+  parser output, so no reference to the original `JSON.parse` result survives into what crosses IPC.
+  Verified rather than assumed: #1227's security review re-checked that `optionalStringMap`
+  (`toolUse.input`, the one daemon-keyed map on this path) type-checks every *value* before dropping
+  `RESERVED_MAP_KEYS`, and a test pins a `__proto__` key built through an actual `JSON.parse` (a
+  `{ __proto__: 'x' }` object literal creates no own property at all and would pin nothing) decoding
+  inertly with no prototype pollution. `HistoryEntry`'s own docblock still carries the original warning
+  for its remaining reader — the decoder itself.
+- **The decode dispatch is a `switch`, never an object-literal table (MUST FIX, fixed before ship,
+  #1227).** `type` is a stored, daemon-authored string nothing re-validates; `TABLE[type]` would be a
+  lookup path on untrusted input (`'__proto__'` resolves to `Object.prototype`, truthy and then
+  invoked). See § Payload decode above.
+- **A per-entry skip diagnostic would be a log-write amplifier a hostile daemon drives directly (MUST
+  FIX, fixed before ship, #1227).** ~1200 entries fit in one frame (#1222's own test), all could be
+  malformed, and the frame can repeat — aggregating to one line per page keeps the rate at what the
+  transport already runs at.
+- **The mirrored `DecodedHistoryEvent`/`HistoryTimelineEvent` types shipped without the
+  untrusted-text contract on their first draft (MUST FIX, fixed before ship, #1227).** A mirror that
+  drops the plain-text-only warning its live `DaemonEvent` twin carries is exactly how an inherited
+  "never used as X" contract goes false in a new consumer — and #1223 is precisely that consumer, with
+  the DOM sink. Both docblocks now state it, naming every field it binds.
+- **`unrecognizedMessage.raw` is the least predictable string on the union (SHOULD FIX, verified —
+  #1227).** It's a bounded snippet of a line the daemon could not parse. Not a new exposure — it
+  crosses verbatim on the live lane today and the daemon bounds it at construction — but the decode
+  must not re-derive, trim or re-bound it; it doesn't.
+- **No prompt can reach the window from history (addressed by construction, #1227).** `modal_shown` /
+  `question_shown` have no arm in `decodeHistoryEvent`, so neither type can produce an event under any
+  payload — closed for a future daemon that starts logging one and for a hostile one that plants one in
+  a page alike. A replayed prompt answered "now" would be a resolution for a modal that closed hours
+  ago; page forgery generally still closes one layer up, at the correlation gate.
 - **The cursor is deliberately unsigned, not a secret, and not a capability.** It is stored and echoed
   verbatim, never compared, validated, derived, or checked with `timingSafeEqual` (which would imply a
   secret it is not). It reaches no disk and no `safeStorage`.
@@ -420,6 +549,33 @@ All vitest; no Playwright spec, since nothing in the window reaches this path in
 - `commands.test.ts` — the guard accepts a well-formed payload and rejects each missing/mistyped field;
   `''` cursor and `''` conversation id pass.
 
+**#1227's payload-decode tests, added to the two files above:**
+
+- Per-type decode, table-driven over all eleven types — a well-formed payload (including
+  `conversation_id`) in, the expected fresh event literal out, via `toEqual` so a smuggled extra field
+  reddens. Covers both enum-bearing arms and both optional-field arms (`toolUse.input`,
+  `toolResult.resultDetail`, pinning `undefined` rather than `{}`/`''`).
+- No `conversation_id` crosses on any arm; `session_transition`'s `previous_session_id` is dropped too.
+- AC3 skip matrix: the six drawn-nowhere-but-decoded-live types, the two with no parser
+  (`thinking_progress`, `rate_limited`), an unseen type, and `modal_shown`/`question_shown` pinned
+  outright with payloads that *would* parse on the live lane — every one yields an empty page from a
+  one-entry page, `cursor`/`atStart` intact.
+- AC4: a payload missing `conversation_id`, an out-of-set enum field, an empty-object payload — each
+  skipped while a well-formed sibling in the same page survives; order preserved among survivors.
+- Empty page and all-skipped page both cross as `entries: []`.
+- A `__proto__` key in an entry payload, built through an actual `JSON.parse` (a bare object literal
+  wouldn't pin anything — see § Security properties), decodes inertly and pollutes nothing.
+- The skip diagnostic: only `event`/`code`/`count`/`hash`, no entry `type`/`id`/`ts`/payload field; no
+  line emitted when nothing was skipped.
+- `daemonConnection.test.ts` gains a type-only mutual-assignability guard between `DecodedHistoryEvent`
+  and `HistoryTimelineEvent`, mutation-checked (a required field added to one union's `stallDetected`
+  arm alone reddens `npm run typecheck`).
+- The shipped #1222 fixtures move: `HISTORY_ENTRY` gains `conversation_id` so a page still has a
+  surviving entry; the "carries an unrecognised type" / "carries a payload verbatim" tests invert into
+  skip tests; the no-count-bound test drops its entry count from 1200 to 800 because a *decodable*
+  minimal entry is larger than the old unparsed one, and 1200 of the new size overflowed
+  `MAX_PLAINTEXT_BYTES` at encode.
+
 Fakes over mocks throughout: the existing driver fake drives the frames, exactly as the
 `session_settings` tests do.
 
@@ -446,3 +602,12 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   open questions (whether a correlated `message.too_long` is observed in practice; whether an
   outstanding ask needs a deadline, deferred to #1224) and the full security review this doc
   summarizes.
+- `docs/specs/architecture/1227-decode-history-entries-into-typed-events.md` — the #1227 architecture
+  spec: the sizing overage measured and accepted (call-site count and line total both exceed a size-S
+  ticket's boundaries, with no split surviving the floor rule), the full security review (three MUST
+  FIX findings fixed before ship), and the `## Revisions` section recording the four departures from
+  plan — `decodeHistoryPage` returning `{ page, skipped }` rather than a bare page, the 1200→800 fixture
+  count, and the two Open Questions both resolving as planned.
+- `src/renderer/src/store/timelineBridge.ts`'s `historyPageReceived` / `historyRequestFailed` arms are
+  where #1223 claims the typed entries this ticket produces; its comment there is stale as of #1227
+  (see § The `DaemonEvent` arms above).

@@ -312,7 +312,7 @@ files this message is being sent with, i.e. the uploads that completed since the
 would cost thirteen mechanical edits to buy a compile error; and an unwired take means no attachments
 rather than a fallback to some other source. It differs from `now` in the one way that decides where it
 sits in `submitMessage`: **the take is destructive.** [Composer attach § Pending
-attachments](composer-attach.md#pending-attachments-1039)'s implementation, `drainPendingAttachments`,
+attachments](composer-attach-pending.md#pending-attachments-1039)'s implementation, `drainPendingAttachments`,
 removes the pending set from its holder *and* hands back the means to put it back:
 
 ```ts
@@ -443,7 +443,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 - [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) — added `takeAttachments` to
   `ComposerSendDeps`, covered in full above (§ 10). Producer: [Composer attach § Pending
-  attachments](composer-attach.md#pending-attachments-1039)'s `drainPendingAttachments`, bound to
+  attachments](composer-attach-pending.md#pending-attachments-1039)'s `drainPendingAttachments`, bound to
   `takePendingAttachments` on `useAttachmentUpload`. Consumer: [Thread
   timeline](thread-timeline.md#types)'s `userText.attachments` field.
 - [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) — reworked #1039's take into a

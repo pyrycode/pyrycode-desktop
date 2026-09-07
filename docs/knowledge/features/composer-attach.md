@@ -407,11 +407,11 @@ renderer memory on a timeline item) and the strip's is the new DOM sink the deri
 - [Composer attach — the paste entry](composer-attach-paste.md) (#1033) — landed; clipboard paste, split to
   its own page 2026-09-04. A third concurrent-upload entry alongside the click and the drop, interleaving
   into the same one-slot outcome the same way; adds no correlation either.
-- [Composer attach — pending attachments and the strip](composer-attach-pending.md) (#1039, #1262) —
-  landed; split to its own page 2026-09-08. The pending set an upload completing accumulates, and the row
-  of file tiles above the message box that draws it, replacing the completion sentence. #1263 (the picture
-  inside an image tile), #1264 (the remove control) and #1265 (the name-on-hover tooltip) are the next
-  three slices of this family and are still open.
+- [Composer attach — pending attachments and the strip](composer-attach-pending.md) (#1039, #1262, #1263) —
+  landed; split to its own page 2026-09-08. The pending set an upload completing accumulates, the row of
+  file tiles above the message box that draws it (replacing the completion sentence), and the picture an
+  image-named tile draws instead of the file icon. #1264 (the remove control) and #1265 (the name-on-hover
+  tooltip) are the next two slices of this family and are still open.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),

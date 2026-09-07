@@ -188,9 +188,13 @@ existed. This module minting a URL nothing could point at yet was the same stage
 `requestAttachmentBytes` was until this landed — not a defect, and not papered over here with a CSP edit
 that would have put two slices in one file for a merge conflict bought for nothing.
 
-[#1045](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045) is that consumer, shipped:
-it draws the `<img>`, decides imageness from the untrusted filename, and widened `img-src` — **and only
-`img-src`**, exactly as this module's header called for. A `blob:` URL inherits the creating document's
+[#1045](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045) is that first consumer,
+shipped: it draws the `<img>`, decides imageness from the untrusted filename, and widened `img-src` — **and only
+`img-src`**, exactly as this module's header called for.
+[#1263](composer-attach-pending.md#the-picture-inside-an-image-tile-1263) is the second, drawing an image-named
+pending attachment as a tile in the composer strip before it is ever sent — the same singleton, the same
+refcount, consumed rather than reconstructed for the reason its own header states: a second instance would
+revoke a URL the other consumer's view is still showing. A `blob:` URL inherits the creating document's
 origin, so a blob of HTML *navigated to* would run script holding the preload bridge. Three existing guards
 close that independent of the CSP and stayed untouched by both tickets: `will-navigate` confines in-place
 navigation to the app's own document; `setWindowOpenHandler` denies every scheme and externalises only
@@ -311,3 +315,7 @@ them apart would produce a child unverifiable on its own.
 - [#869](attachment-open.md) — the thumbnail's own open-in-viewer click. Shipped as a single
   fire-and-forget ask rather than a third fetch-then-act instance — see § No shared fetch-then-act
   machinery was lifted, above.
+- [Composer attach — pending attachments and the strip § The picture inside an image
+  tile](composer-attach-pending.md#the-picture-inside-an-image-tile-1263) (#1263) — the second consumer,
+  drawing a pending (not-yet-sent) attachment's picture in the composer strip. First ask, anywhere in this
+  app, for an attachment no message references yet.

@@ -1,9 +1,10 @@
-# Composer attach — pending attachments and the strip (#1039, #1262)
+# Composer attach — pending attachments and the strip (#1039, #1262, #1263)
 
 Split from [Composer attach](composer-attach.md) on 2026-09-08 to stay under the size cap. Part of the same
 feature: the button (#863), the outcome line, `useAttachmentUpload`, its in-flight progress (#864) and the
 copy module are documented on the parent page; this page covers only the pending-attachments set an upload
-completing accumulates (#1039) and the tile strip that draws it above the message box (#1262).
+completing accumulates (#1039), the tile strip that draws it above the message box (#1262), and the picture
+an image-named tile draws instead of the file icon (#1263).
 
 ## Pending attachments (#1039) — what an upload completing means to the message not yet sent
 
@@ -159,6 +160,81 @@ opposite of the outcome line beneath the footer, which moves the message box dow
 detector for "reserves no space" with nothing pending is therefore the *composer's own height* at launch
 versus after a take clears it, not the message box's position.
 
+## The picture inside an image tile (#1263)
+
+An attachment whose name `isImageAttachmentName` accepts draws its own picture in the 45×60 tile instead of
+`AttachmentFileIcon`'s outline — closing [#891](https://github.com/pyrycode/pyrycode-desktop/issues/891):
+until this, every tile #1262 drew read "PNG", picture or not. Any other name keeps the file tile, which is
+also the fallback for a picture that fails to retrieve or fails to decode.
+
+**New module, `ComposerAttachmentImage.tsx`, split the way
+[`BubbleAttachmentImage.tsx`](conversation-shell-message-bubble-attachments.md#the-attachment-image-thumbnail-1045)
+is split — a pure `ComposerAttachmentTile` and a container owning one `useState` plus one `useEffect`.** Renderer
+specs are `renderToStaticMarkup` under `environment: 'node'` with no DOM and no effects, so a state reachable only
+from a `useEffect` is unprovable there; splitting keeps every one of the three drawn states an ordinary static
+render. `ComposerAttachmentStrip` picks this component over `AttachmentFileIcon` per attachment with one branch
+on `isImageAttachmentName(attachment.filename)` — the message bubble's own rule, over the same untrusted string,
+deciding only what is *drawn*, never what is fetched or from where (the fetch is addressed by `attachmentId`,
+which the predicate never sees).
+
+**`AttachmentThumbnailState` is reused from `BubbleAttachmentImage.tsx`, not re-declared.** Same closed set for
+the same reason (bytes absent, bytes here, ask ended with nothing drawable), and its `failed` arm still carries
+no reason — more load-bearing here than in the bubble, since this tile's failure drawing has no text node at
+all to interpolate one into. The container consumes the shipped `attachmentImageSources` singleton directly —
+never a second instance, which would mint its own URL per mount, revoke none of the others, and could revoke a
+URL the bubble's own thumbnails are still showing on a different screen.
+
+**Two deliberate departures from the bubble's three arms, both in `ComposerAttachmentTile`'s switch:**
+
+- **`pending` draws the frame, not nothing.** `AttachmentThumbnail`'s `pending` arm draws nothing because
+  reserving a box would need the picture's aspect ratio; here the box is a fixed 45×60 regardless of what the
+  picture turns out to be, so drawing an empty `<span className="composer__attachment" />` is what makes the
+  strip's tile count and every tile's position a property of the *pending set* rather than of what any one
+  picture is doing. No spinner and no placeholder fill — the design draws no loading state for the slot.
+- **`ready` wraps no `<button>` and adds no control.** #869 gave the bubble's picture a click-to-open; clicking
+  a composer tile to open the file was never planned, and #1264's remove control is the one control this tile
+  will ever get. No tab stop, no handler, no `width`/`height` attribute (the box is the frame's).
+
+**The fetch is a real round trip, and that is the accepted cost, not an oversight.** The upload leg streams the
+picked file and keeps no local copy, and the app-private attachment directory has one writer — the retrieval
+leg (see [Attachment bytes](attachment-bytes.md)'s sole-writer rule). So the picture the operator has just
+attached has to come back from the host before an `<img>` can point at it, one round trip per image tile. A
+send drains the strip (`mirrorTakeToDisplay`); a rolled-back send remounts every tile and each re-fetches from
+scratch, blinking back to its empty frame — correct rather than merely tolerable, since `release` is idempotent
+and the map entry is recorded before `onOutcome` runs. If the round trip proves slow in daily use, retaining
+the picked file locally is its own ticket, and it would have to answer the sole-writer rule first.
+
+**CSS is one rule, `.composer__attachment-image`** — `display: block; width: 100%; height: 100%;
+object-fit: cover`. No radius and no clip of its own: `.composer__attachment` already carries
+`overflow: hidden` and `--radius-xs`, and #1262's own comment records that this picture is what that clip was
+for. `centred` needs no declaration either — `object-position` defaults to `50% 50%`. Shares no whole class
+token with `.composer__attachment`, `-glyph` or `-ext`, so no shipped locator or whole-attribute-run assertion
+reaches it.
+
+**AC4 — the one criterion no fake tier can reach.** Nothing had asked the host for an attachment *no message
+references yet* before this ticket: every retrieval shipped so far names an attachment already recorded on a
+timeline item, where a pending composer attachment is not. The client half was never in doubt — composer and
+retrieval driver read the conversation id from the same `activeConversationStore` expression, and the pending
+attachment's id is the `attachment_id` the host itself acknowledged at upload — but whether the *real* daemon
+answers `request_attachment` for such an id was an open question the fake tier cannot settle, since it answers
+that request itself. `real-claude-attachment.spec.ts` carries the proof now: its old `toHaveText('PNG')` gate
+(a `.png` tile is no longer a label) is replaced by polling the tile's `<img>` for `naturalWidth > 0`, so a host
+that never answers reads as a timeout rather than a wrong value. This is why the ticket carried
+`needs-real-claude`, and confirming the real host's answer is the operator's `npm run e2e:real:gate` run —
+CLAUDE.md's real-claude-tier trap applies: read the skip reasons, not the exit code.
+
+**A geometry assertion on the `<img>`'s own box is not a detector for `object-fit`.** An `<img>` at
+`width/height: 100%` lays out at 45×60 under `fill`, `contain` *and* `cover` alike — only what it paints
+*inside* that box differs, which is the computed `object-fit` value, not the box. `e2e/composer-attachment-image.spec.ts`
+keeps the box read (it proves the element fills the frame in both axes) but asserts the computed style
+separately; deleting the CSS rule flips the computed value to `fill` and is what actually reddens the spec.
+
+**A never-answered `request_attachment` is a usable fixture, not a hang.** `attachmentRetrieval` sets no
+deadline, so an id the fake daemon serves nothing for holds a tile in `pending` for the whole run. The e2e spec
+uses exactly this to turn "the frame is drawn while bytes are in flight" from a race into a deterministic
+position assertion on the *neighbouring* tile (a permanently-pending first tile puts the second tile's left
+edge at 57px rather than 0 — the tell that the in-flight arm reserves the box rather than collapsing it).
+
 ## Testing
 
 Renderer specs are static server renders (`environment: 'node'`, no DOM). `ComposerAttach.test.tsx` walks
@@ -184,12 +260,26 @@ the moment a tile draws; the two shipped negatives (`uploadId`, `filename`) are 
 blank Enter leaves the tiles; a send empties the strip. Rounded deltas use `toBeCloseTo(…, 0)` per #868's
 `-0` rule. The rollback arm stays unit-only (`mirrorTakeToDisplay`'s test) for the reason #1055's own
 rollback proof gives: `window.pyry` is a frozen `contextBridge` object, so a throwing bridge cannot be
-staged from the page. `real-claude-attachment.spec.ts`'s upload gate moved from the deleted sentence to the
-tile plus `attachmentExtensionLabel`, a stronger gate than the one it replaced. Four further specs that push
-a `completed` event on the same channel (`attachment-file-row`, `attachment-image-open`,
-`attachment-image-thumbnail`, `thread-scroll-pin`) needed no repair — confirmed by a green `npm run e2e`,
-per § Geometry above (the strip growing moves the composer's own top edge, not the message box's position,
-which is why `thread-scroll-pin`'s post-send measurements were unaffected).
+staged from the page. Four further specs that push a `completed` event on the same channel
+(`attachment-file-row`, `attachment-image-open`, `attachment-image-thumbnail`, `thread-scroll-pin`) needed no
+repair — confirmed by a green `npm run e2e`, per § Geometry above (the strip growing moves the composer's own
+top edge, not the message box's position, which is why `thread-scroll-pin`'s post-send measurements were
+unaffected).
+
+**#1263's tests.** `ComposerAttachmentImage.test.tsx` (new, static tier) asserts each of the three drawn
+states as an exact markup equality — `pending` is the bare frame with no `<img>`, no `<svg>` and no text;
+`ready` is exactly one `<img>` classed `composer__attachment-image`, named by `ATTACHMENT_IMAGE_ALT` and
+nothing else; `failed` is the file tile's own markup with no `<img>` at all — plus a hostile filename
+reaching no attribute in any of the three arms. `ComposerAttach.test.tsx`'s own `tile('shot.png')` assertion,
+which used to assert an image name draws `>PNG</span>`, is re-aimed to the image tile's frame — the case
+\#1262's comment named as this ticket's to replace. `e2e/composer-attachment-image.spec.ts` (new, fake
+transport, separate from `composer-attach.spec.ts` because serving attachment bytes would change the daemon
+under that file's one continuous drive) pushes four tiles in a fixed order — a permanently-`pending` image,
+a non-image, a served 800×100 PNG, and one served bytes that fail to decode — and reads tile count, each
+tile's box, the neighbour-position tell above, `object-fit`'s computed value, and `naturalWidth` (also the
+CSP detector: a refused source never decodes and reads 0). `real-claude-attachment.spec.ts`'s upload gate,
+which used to assert the tile's text against `attachmentExtensionLabel`, now polls the tile's `<img>` for
+`naturalWidth > 0` — a stronger gate, and the one AC4 above rests on.
 
 ## Security
 
@@ -216,6 +306,25 @@ tile now actually guards. The glyph is inlined, never a Figma `https://` asset U
 Security review for the full write-up, including the concurrency note that the take must keep reading the
 ref rather than the display mirror.
 
+**#1263's review, also PASS.** No new channel, no new bridge member, no new `ipcMain` handler, and the CSP
+is untouched — `img-src 'self' blob:` already permitted this since #1045. The two untrusted inputs each keep
+one sink: `filename` reaches `isImageAttachmentName` (a read) and, only in the `failed` arm,
+`AttachmentFileIcon`'s existing bound — never an attribute in any arm, since `alt` is the client-owned
+`ATTACHMENT_IMAGE_ALT`. The host-chosen bytes reach `URL.createObjectURL` inside the shipped singleton and
+then one `<img> src`, never a second attribute, a log line or a lookup path. New in this component
+specifically: an untrusted name now decides *whether a fetch happens at all* in the composer, where in the
+bubble every drawn attachment was already recorded on a timeline item — but the name takes no part in the
+request payload (`{ conversationId, attachmentId }`, built from this window's own values), so a lying name
+produces only a picture that fails to decode, never a different file or a different request. Two properties
+inherited rather than introduced: `awaitTerminal` sets no deadline, so a host that never answers leaves the
+tile `pending` forever (identical to the bubble, and less visible in consequence — an empty 45×60 frame
+rather than a thumbnail that never appears); and the host is authoritative for the picture the operator sees
+before sending, since the upload leg retains no local copy — a hostile or buggy daemon answering
+`request_attachment` with different bytes would draw a picture that is not the file about to be sent (the
+send still names the attachment by id regardless of what drew, so the risk is misleading content, not
+misdirected destination). Both are named follow-ups, not gaps this slice must close. See
+`docs/specs/architecture/1263-image-attachment-tile.md` § Security review for the full write-up.
+
 ## Related
 
 - [Composer attach](composer-attach.md) — the parent page: the button, the outcome line, in-flight
@@ -227,8 +336,15 @@ ref rather than the display mirror.
 - [Conversation shell — message bubble § The attachment file
   row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) (#815) — the other
   consumer of `AttachmentFileIcon`, untouched by the lift.
-- #1263 (the picture inside an image tile), #1264 (the remove control) and #1265 (the name-on-hover
-  tooltip) are the next three slices of this family and are still open.
+- [Attachment image source](attachment-image-source.md) — the `attachmentImageSources` singleton #1263
+  consumes as its second caller, alongside the bubble's thumbnails; the release-handle contract and refcount
+  this page's tile relies on.
+- [Attachment bytes](attachment-bytes.md) — the sole-writer rule for the app-private attachment directory,
+  which is why #1263 fetches rather than retaining the picked file.
+- #1264 (the remove control) and #1265 (the name-on-hover tooltip) are the next two slices of this family
+  and are still open.
 - [PR #1269](https://github.com/pyrycode/pyrycode-desktop/pull/1269),
-  `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` and
-  `docs/specs/architecture/1262-composer-attachment-strip.md` for the full plans and their security reviews.
+  [PR #1270](https://github.com/pyrycode/pyrycode-desktop/pull/1270),
+  `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md`,
+  `docs/specs/architecture/1262-composer-attachment-strip.md` and
+  `docs/specs/architecture/1263-image-attachment-tile.md` for the full plans and their security reviews.

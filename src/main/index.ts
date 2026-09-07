@@ -701,6 +701,22 @@ app.whenReady().then(() => {
         // siblings.
         servers.route(command.serverId)?.interrupt()
         return
+      case 'newSession': {
+        // ROUTED BY CONVERSATION (#1217), mirroring requestModelList and NOT the interrupt arm above
+        // — a restart kills claude in one conversation, so the conversation id is the address and a
+        // `serverId` would be a second one that could disagree with it. ONE local, read twice, so the
+        // id routed by and the id sent can never be two different expressions. No `?.` on `payload`:
+        // it is required, and `isNewSessionPayload` has already proven it a NON-EMPTY string at the
+        // boundary — an empty id would be the daemon's process-wide follow-active cursor, i.e. some
+        // other conversation's restart. Direct to the connection method — a restart has no
+        // orchestrator and no consumer, and NO REPLY is awaited: the daemon answers this frame with
+        // nothing at all, and the break surfaces as the existing session_transition marker. Inert
+        // no-op when nothing is connected, and when the id names a conversation no connection holds
+        // the `?.` is the refusal, so no frame reaches any wire (AC4).
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.newSession(conversationId)
+        return
+      }
       case 'promoteConversation':
         // Direct to the connection method (mirrors createConversation), no orchestrator — a promote
         // request has no consumer/reassembler. Sends promote_conversation; the daemon confirms with one

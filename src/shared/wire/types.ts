@@ -94,6 +94,15 @@ export type EnvelopeType =
   // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
   // `interactive` capability; fire-and-forget (no reply). SSOT pyrycode #707.
   | 'interrupt'
+  // v2-only phone→binary control frame — asks the daemon to KILL claude and spawn a fresh one under a
+  // new session id in the conversation it names. Grouped with `interrupt` above rather than with the
+  // payload-carrying request verbs because it shares that frame's daemon-side character: intercepted
+  // by the v2 session manager before dispatch.Route, `interactive`-capability-gated, fire-and-forget
+  // with no reply. Carries NewSessionPayload (one optional conversation_id) and NO nonce, answer token
+  // or correlation key. NOT the `/clear` this app's Reset-session action sends as ordinary text: that
+  // clears context in place and the process keeps everything it holds, this discards the process.
+  // SSOT pyrycode docs/protocol-mobile.md § New session (v2), widened by pyrycode#2099.
+  | 'new_session'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'
@@ -1086,6 +1095,49 @@ export interface QueueStatePayload {
 export interface DequeueMessagePayload {
   conversation_id: string
   queued_msg_id: number
+}
+
+/**
+ * Outbound `new_session` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2099,
+ * docs/protocol-mobile.md § New session (v2)) field-for-field: ONE field and nothing else. Asks the
+ * daemon to kill claude and spawn a fresh one under a newly minted session id — on the stream path a
+ * kill and respawn, NOT the `/clear` keystroke the terminal-era framing described, and not the
+ * `/clear` this app's Reset-session action sends as ordinary message text (that clears context in
+ * place and the process keeps its loaded instructions, tool servers and spawn settings; this discards
+ * all of it, so every stored setting re-applies at the spawn).
+ *
+ * UNGATED BY TOKEN and carrying NO nonce, answer token, idempotency key or correlation key: the frame
+ * is fire-and-forget with no reply at all, and the daemon documents a replay as harmless (it simply
+ * starts another fresh session), so there is nothing to dedup and nothing to correlate. The daemon's
+ * `interactive` capability gate is the only gate, and it is daemon-side.
+ *
+ * `conversation_id` IS OPTIONAL BECAUSE THE DAEMON PUBLISHES IT SO, NOT BECAUSE THIS CLIENT OMITS IT.
+ * The frame carried no payload at all from pyrycode#831 until #2099, so upstream keeps the absent form
+ * meaningful as a compatibility promise: no payload, `{}`, an absent id and an explicitly EMPTY one
+ * are ONE wire meaning — restart whichever conversation the daemon's process-wide follow-active cursor
+ * points at, a cursor only a routed `send_message` stamps and every connection shares.
+ *
+ * THIS APP NEVER SENDS THAT FORM, and the asymmetry is deliberate rather than a mismatch to reconcile.
+ * The protocol's own rule is that a client which CAN name a conversation must always name one, because
+ * another device's send can move the cursor between the operator's button press and the restart —
+ * opening chat B and restarting before sending anything to B killed chat A mid-work, the defect #2099
+ * closed. So the id is REQUIRED on `NewSessionCommandPayload` (a `Required` derivative of this
+ * interface) and on `NewSessionInput`, and `isNewSessionPayload` refuses `''`. Do NOT tighten it HERE
+ * to match them: this interface answers to the daemon, and narrowing it would be a wire drift
+ * (CLAUDE.md no-drift). `types.test.ts` pins the optionality.
+ *
+ * The id is a REGISTRY-VALIDATED LOOKUP KEY, never authorization and never a path component — the rule
+ * this protocol already publishes for `request_attachment` and `attachment_chunk`. Naming a
+ * conversation is not a widening of trust: a device could already route a message to any conversation
+ * to move the cursor there and then send the bare frame. A named id the daemon cannot act on (not
+ * canonical, not hosted, no bound session, no live child) is SILENTLY INERT — no restart, no reply,
+ * and never a fall-through to another conversation, so the frame answers no question about which
+ * conversation ids exist. The observable effect, when there is one, is the existing
+ * `session_transition` marker, which carries the NAMED conversation's id and reaches every interactive
+ * connection.
+ */
+export interface NewSessionPayload {
+  conversation_id?: string
 }
 
 /**

@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
+import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
@@ -323,6 +324,23 @@ export interface DaemonConnection {
    * of the module (parity #490).
    */
   interrupt(): void
+  /**
+   * Encrypt a payload-carrying `new_session` control envelope onto the live session — asks the daemon
+   * to KILL claude in the named conversation and spawn a fresh one under a newly minted session id, so
+   * every stored setting re-applies at the spawn. NOT the `/clear` the Actions menu's Reset session
+   * sends as ordinary message text: that clears context in place and the process keeps everything it
+   * holds. Takes the conversation id as a SCALAR, like `requestModelList` and unlike `dequeueMessage`
+   * — the builder rebuilds a fresh literal, so no renderer-supplied key reaches the wire — and it is
+   * REQUIRED: an unnamed restart is the daemon's process-wide follow-active cursor, which is another
+   * conversation's restart as often as it is this one's (pyrycode#2099). The `send` TWIN, not
+   * `requestDebugBundle`: an inert no-op when not connected (`driver === null` → return), never a
+   * `consumer.fail`. FIRE-AND-FORGET — no answer token, NO REPLY of any kind (not even an error; a
+   * named id the daemon cannot act on is silently inert), and no correlation memory to leave dangling;
+   * the break surfaces through the existing `session_transition` marker the timeline already handles.
+   * Its caller is the render affordance in the sibling ticket; this slice only wires the command path.
+   * NEVER throws out of the module (parity #490).
+   */
+  newSession(conversationId: string): void
   /**
    * Encrypt a payload-carrying `promote_conversation` control envelope onto the live session — asks the
    * daemon to promote a discussion into a saved channel (all three fields required: the id must resolve,
@@ -2103,6 +2121,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function newSession(conversationId: string): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A restart request has no consumer to fail and is
+    // fire-and-forget; a frame sent while disconnected simply restarts nothing (no session, no reply).
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / interrupt — no second counter — so ids
+      // stay unique across interleaved calls, though nothing correlates a reply to this one: the
+      // daemon never answers this frame.
+      // The id is forwarded verbatim to the builder, which rebuilds a fresh literal, so no
+      // renderer-supplied key reaches the wire. Never logged: the catch below drops its caught object
+      // and adds no line, and the routing refusal one layer up logs a static code with no id in it.
+      const bytes = buildNewSession({ id: nextEnvelopeId, ts: now(), conversationId })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the conversation id;
+      // no log, no event (classify-don't-forward, inherited #62). NO RETRY: a restart is destructive
+      // and unacknowledged, so a resend is a second kill rather than a second attempt at the first.
+    }
+  }
+
   function promoteConversation(payload: PromoteConversationPayload): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A promote request has no consumer to fail; a request sent
@@ -2673,6 +2714,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     createWorkspaceFolder,
     dequeueMessage,
     interrupt,
+    newSession,
     promoteConversation,
     archiveConversation,
     unarchiveConversation,

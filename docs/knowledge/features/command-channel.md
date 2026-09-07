@@ -140,6 +140,22 @@ ask](model-list-wire-types.md#outbound-ask-1165) for the frame this command asks
 rule that governs it, and [Daemon connection — methods](daemon-connection-methods.md) for the connection
 method + registry delegate it drives.
 
+The union gained a `newSession` member in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217):
+asks the daemon to **kill** claude and spawn a fresh one in the conversation it names — not the `/clear`
+the Actions menu's Reset session already sends as ordinary message text, which clears context in place
+and keeps the process. It is the **only** member whose payload type *tightens* its wire type rather than
+reusing it verbatim or `Omit`-ing a field from it: `NewSessionCommandPayload = Required<NewSessionPayload>`.
+The wire `NewSessionPayload.conversation_id` is optional because the daemon publishes it so (pyrycode#2099)
+— the absent/`{}`/empty forms are one wire meaning, the daemon's process-wide follow-active cursor — and
+a client that can name a conversation must always name one, so the command payload makes the bare form a
+compile error instead. `isNewSessionPayload` is `isRequestModelListPayload` with one clause added: it
+also rejects `''`, the **one guard in this file that checks emptiness** rather than type alone, because
+on this verb an empty id is not an unresolvable id — it is the bare-form restart, which would hand the
+daemon's shared cursor to a renderer that read a not-yet-loaded conversation id. See [New session
+envelope](new-session-envelope.md) for the full frame, the builder, and why the wire type stays optional
+regardless (CLAUDE.md no-drift). Ships with **no renderer sender** in the slice that declares it, like
+`requestModelList` before it — the sibling ticket adds the trigger.
+
 **Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
 guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
 not prove the *type* forbids one. `src/shared/**/*` is inside `tsconfig.node.json`'s include, so
@@ -312,5 +328,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
 - [Model-list wire types § Outbound ask](model-list-wire-types.md#outbound-ask-1165) / [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165) — the payload-carrying `requestModelList` member + `isRequestModelListPayload` guard this channel's union gained, required from the start; ships with no renderer sender, consumer is #1166.
+- [New session envelope](new-session-envelope.md) / [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) — the payload-carrying `newSession` member + `isNewSessionPayload` guard this channel's union gained, the only member whose payload type *tightens* its wire type (`Required<NewSessionPayload>`) and the only guard in this file that rejects an empty string; ships with no renderer sender, consumer is the sibling ticket.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

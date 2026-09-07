@@ -183,6 +183,12 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
     page.locator('.conversation__queued .message-row--user', { hasText: text })
   const dropButton = (text: string) =>
     queuedRow(text).getByRole('button', { name: 'Drop queued message' })
+  // #1213: one DELIVERED timeline echo, addressed by its text. `data-thread-role="user"` is the delivered
+  // role and never matches a queued row (those carry "queued"), so the two never collide. msg1 and msg2
+  // both end with the run nonce but differ before it, and Playwright's `hasText` is a substring match, so
+  // neither text is a substring of the other.
+  const deliveredEcho = (text: string) =>
+    page.locator('[data-thread-role="user"]', { hasText: text })
 
   await pairFromUnpairedLaunch(page, payload)
 
@@ -216,11 +222,19 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // send behaviour mid-turn (that asymmetry is #678's AC4) and the composer's own gate is unchanged (canSend
   // on `connected`, no turn-phase gate), so the frame still goes to the daemon while turn 1 runs.
   // submitMessage ALSO dispatches an unconditional optimistic userText echo, so msg2 renders a
-  // data-thread-role="user" timeline row TOO; that is expected and harmless — every queued-flow assertion
-  // below scopes to data-thread-role="queued" / .conversation__queued, distinct from the `user` echo, so
-  // there is no collision. ---
+  // data-thread-role="user" timeline row TOO. Every queued-flow assertion below scopes to
+  // data-thread-role="queued" / .conversation__queued, distinct from the `user` echo, so there is no
+  // collision — but that duplicate is NO LONGER harmless once the message is dropped, which is what #1213
+  // fixed and what this spec now asserts. This comment used to read "expected and harmless" and scope every
+  // assertion away from the echo; a drop that left the echo behind was a delivered-looking bubble for a
+  // message claude was never handed, standing in the transcript forever. ---
   await composer.fill(msg2)
   await composer.press('Enter')
+
+  // --- #1213 baseline: msg2's delivered echo IS on screen before the drop. ---
+  // The positive half of the post-drop absence below. Without it that absence could pass against a thread
+  // where the echo never rendered at all, which is precisely the failure it is meant to catch.
+  await expect(deliveredEcho(msg2)).toHaveCount(1, { timeout: TURN_TIMEOUT_MS })
 
   // --- Assert msg2 enqueues (AC2) — the ENQUEUE liveness proof: the real daemon held msg2 mid-turn and
   // pushed queue_state, rendering exactly one queued row. A timeout here means the "a mid-turn send enqueues"
@@ -241,6 +255,16 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // fresh queue_state omitting it. A timeout here is a real dropQueuedMessage/dequeue_message regression (or
   // the daemon ignored the drop) — file separately. ---
   await expect(queuedBubbles).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+
+  // --- #1213: the drop takes msg2's delivered ECHO too, against a REAL daemon's message_id. ---
+  // The queued-row assertion directly above is the positive wait this absence needs: it is a real 1 → 0
+  // mutation driven by the daemon's own fresh queue_state, so it cannot have been true before the click.
+  // This is also the only tier that proves the correlation key survives the real round trip — the fake tier
+  // reads the id back off its own captured frame, while here the real daemon relays it byte-for-byte
+  // (pyrycode#2092) and a drift in that field would show up as an echo that stubbornly stays.
+  await expect(deliveredEcho(msg2)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  // Only the dropped message's echo goes: msg1 RAN, so its delivered row must survive untouched (AC4).
+  await expect(deliveredEcho(msg1)).toHaveCount(1)
 
   // --- Drop-before-drain proof, post-drop (AC4 support). ---
   // Turn 1 is STILL running after the row left (the gate file has not been created yet, so the poll loop is

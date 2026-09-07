@@ -179,7 +179,7 @@ Nothing imports this module yet.
   before the event is built, so the store never has to decide what an empty list means. Full field and
   type documentation lives on the parent page (§ Types); the composer-side accumulation
   (`reducePendingAttachments`, the pending-set ref) is [Composer attach § Pending
-  attachments](composer-attach.md#pending-attachments-1039).
+  attachments](composer-attach-pending.md#pending-attachments-1039).
 
 ## Related
 

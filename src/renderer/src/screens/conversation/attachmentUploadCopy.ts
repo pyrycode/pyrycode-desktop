@@ -8,14 +8,14 @@
 // carries for a claude-authored label. What IS at stake is coverage: every terminal the channel can
 // deliver must produce a sentence.
 //
-// ONE MEMBER NOW CARRIES THE FILE'S NAME, AND THIS MODULE STILL DOES NOT READ IT (#1038). The completed
+// ONE MEMBER CARRIES THE FILE'S NAME, AND THIS MODULE STILL DOES NOT READ IT (#1038). The completed
 // terminal names the stored file, which is the first OPERATOR-supplied string the channel delivers —
-// but the `completed` arm below returns a constant, so nothing here interpolates it and the paragraph
-// above stays true of every sentence this module can produce. That is deliberate rather than pending:
-// #1038 ships the supply with no consumer. The first consumer inherits two obligations this module is
-// therefore free of — a LAYOUT bound (a 255-byte name needs the max-width + ellipsis treatment the
-// footer's labels carry, not a raw interpolation) and not assuming the value is non-empty. Its own
-// tests assert the constant stays a constant, so acquiring either obligation is a deliberate change.
+// and the `completed` arm below now returns NOTHING AT ALL (#1262 cut its sentence; the tile above the
+// message box is the report), so the paragraph above stays true of every sentence this module can still
+// produce, by a wider margin than before. The name's first consumer is the tile, and it inherited the two
+// obligations this module is free of: a LAYOUT bound, discharged by drawing only the four-character
+// extension label rather than the name, and not assuming the value is non-empty, discharged by
+// `attachmentExtensionLabel`'s designed empty case. Neither obligation arrived here.
 
 import type {
   AttachmentUploadEvent,
@@ -118,10 +118,12 @@ export function uploadProgressPercent(sentChunks: number, totalChunks: number): 
   return Math.min(100, Math.max(0, Math.floor((sentChunks / totalChunks) * 100)))
 }
 
-/** The acknowledgement a stored file gets. It exists because #815 has not landed: until a file row
- *  appears in the message bubble, this sentence is the ONLY evidence anywhere that an upload stored
- *  anything, and a silent success would be indistinguishable from a cancelled picker. */
-const COMPLETED_COPY = 'File attached.'
+/** #1262 DELETED `COMPLETED_COPY` ('File attached.'). It existed because a completion had no other
+ *  evidence anywhere — "until a file row appears in the message bubble, this sentence is the ONLY evidence
+ *  that an upload stored anything, and a silent success would be indistinguishable from a cancelled
+ *  picker". A completion now draws a TILE above the message box, so the sentence stated the same fact
+ *  twice; Juhana ruled on 2026-09-05 that the tile is the report. See the `completed` arm below, which
+ *  stays. A cancelled picker is still distinguishable, and by the same evidence: it draws no tile. */
 
 /**
  * What a paste that found nothing gets (#1032). It NAMES THE CLIPBOARD, which is the whole of the
@@ -176,7 +178,14 @@ export function attachmentUploadOutcomeCopy(event: AttachmentUploadEvent): strin
     case 'failed':
       return FAILURE_COPY_BY_REASON.get(event.reason) ?? UNREPRESENTABLE_FAILURE_COPY
     case 'completed':
-      return COMPLETED_COPY
+      // ⭐ NO SENTENCE, AND THE ARM STAYS ANYWAY (#1262). The completion's copy was cut because the tile
+      // above the message box is the report now — but deleting the ARM would give up this switch's
+      // compiler-forced exhaustiveness, which has caught two real additions (#864's `progress`, #999's two
+      // retrieval codes) and is the third criterion's whole mechanism. So it stays and answers nothing.
+      // Unreachable in production: `ComposerAttachOutcome` returns null for a completion before it can
+      // call this. Anything that DOES reach it renders an empty line rather than a stale sentence, which
+      // is the honest degradation — the file is reported by its tile either way.
+      return ''
     case 'progress':
       // THE FIGURE IS THIS CLIENT'S OWN ARITHMETIC over two counts it computed, which is why it may be
       // interpolated where `reason` may not: the rule one docblock up is about a daemon-SELECTED value

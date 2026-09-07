@@ -79,6 +79,15 @@ const COMPLETED: AttachmentUploadEvent = {
   filename: 'e2e-report.pdf'
 }
 
+// #1262's second file, so the strip can be proved to be the pending SET rather than the latest event: a
+// distinct uploadId (two transfers can be live at once) and an extension that shares no character with the
+// first's, so the two tiles' labels tell them apart and their ORDER is observable.
+const COMPLETED_SECOND: AttachmentUploadEvent = {
+  type: 'completed',
+  uploadId: 'e2e-upload-5',
+  filename: 'e2e-bundle.zip'
+}
+
 // #864's two in-flight reports and the terminal that ends them. `totalChunks` is 200 — a ~9 MB file,
 // comfortably over the background process's ATTACHMENT_PROGRESS_MIN_CHUNKS, which is what a real
 // transfer of this size would report. The two figures are far apart so an advancing line is
@@ -116,6 +125,13 @@ test('composer footer: the attach button dispatches the intent and states the la
   const outcome = page.locator('.composer__attach-outcome')
   const progress = page.locator('.composer__attach-progress')
   const messageBox = page.locator('.composer__row')
+  // #1262: the pending strip and its tiles. Both located by the production classes, which share no whole
+  // class token with the three above — a prefix is not a match for a class selector, so `.composer__attach`
+  // and `.composer__attachment` cannot collide under strict mode.
+  const strip = page.locator('.composer__attachments')
+  const tiles = page.locator('.composer__attachment')
+  const statusRow = page.locator('.composer-status')
+  const composer = page.locator('.composer')
 
   await expect(attach).toHaveCount(1)
   await expect(attach).toBeVisible()
@@ -157,6 +173,12 @@ test('composer footer: the attach button dispatches the intent and states the la
   // message box's position is recorded here so the clear at the end can be proven to restore it. ---
   await expect(outcome).toHaveCount(0)
   const messageBoxYBefore = (await messageBox.boundingBox())!.y
+  // #1262, AC1's last clause, and the same shape of assertion for the same reason: with nothing pending
+  // the strip mounts NO ELEMENT. A count, because an element that mounted empty would be invisible and
+  // would still cost the column's gap plus its own margin on every launch forever. The composer's launch
+  // height is recorded so the clear at the end can prove it reserved nothing on its way in or out.
+  await expect(strip).toHaveCount(0)
+  const composerHeightBefore = (await composer.boundingBox())!.height
 
   // --- Stub the picker in the MAIN process, recording that it was asked for and answering as a cancelled
   // dialog. defineProperty rather than a plain assignment: it succeeds against a data property and an
@@ -232,19 +254,27 @@ test('composer footer: the attach button dispatches the intent and states the la
   })
   await expect(outcome).toHaveCount(1)
 
+  // ⭐ #1262 REPLACED THIS ARM'S SENTENCE WITH A TILE, and the two halves are asserted together because
+  // they are one swap: the tile draws, and the line that used to say 'File attached.' does not mount at
+  // all. The rest of the drive continues past this point with one tile on screen, which is deliberate —
+  // the progress and connection-lost arms below must keep behaving identically while it is up.
   await push(COMPLETED)
-  await expect(outcome).toHaveText(attachmentUploadOutcomeCopy(COMPLETED), {
-    timeout: OUTCOME_TIMEOUT_MS
-  })
-  await expect(outcome).toHaveCount(1)
-  // The uploadId reaches no attribute and no text node — it is a discriminator this window cannot use.
-  await expect(outcome).not.toContainText(COMPLETED.uploadId)
-  // Nor does the stored file's NAME (#1038). The field crosses the bridge and the composer ignores it:
-  // this slice supplies the value and #1039 is where a consumer decides to render it. Asserted through
-  // the running app rather than only in a unit render, because the bridge is the half a unit test
-  // cannot reach — a preload that helpfully stringified the whole event into the slot would pass
-  // ComposerAttach.test.tsx and fail here.
-  await expect(outcome).not.toContainText(COMPLETED.filename)
+  await expect(tiles).toHaveCount(1, { timeout: OUTCOME_TIMEOUT_MS })
+  // AC2: a completed upload writes NOTHING beneath the footer. A count, not a text comparison — the
+  // element does not mount for a completion, so there is no text to compare.
+  await expect(outcome).toHaveCount(0)
+  await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
+  // AC5, RE-AIMED. These two assertions shipped against the outcome line; against an element that no
+  // longer mounts for a completion they would pass vacuously and guard nothing, so they now read the
+  // element that DOES mount. The uploadId is a host-side storage handle the window cannot use, and the
+  // stored file's NAME is untrusted display text — the tile draws its derived extension label and nothing
+  // else. Asserted through the running app rather than only in a unit render, because the bridge is the
+  // half a unit test cannot reach: a preload that helpfully stringified the whole event into the strip
+  // would pass ComposerAttach.test.tsx and fail here.
+  await expect(strip).not.toContainText(COMPLETED.uploadId)
+  await expect(strip).not.toContainText(COMPLETED.filename)
+  // The label is what draws, and it is the extension of that name.
+  await expect(tiles.first()).toHaveText('PDF')
 
   // --- #864, AC1 and AC3: an in-flight report takes the slot the terminal was in, ADVANCES as further
   // chunks go out, and is then replaced by a terminal of its own. Pushed on the same channel through
@@ -294,4 +324,62 @@ test('composer footer: the attach button dispatches the intent and states the la
     .poll(async () => (await messageBox.boundingBox())!.y, { timeout: OUTCOME_TIMEOUT_MS })
     .toBeCloseTo(messageBoxYBefore, 0)
   expect((await footer.boundingBox())!.height).toBe(20)
+
+  // ================================================================================================
+  // #1262 — the strip's own drive, continuing from the one tile the completion above drew. Geometry
+  // first (the drawing), then a second tile (the row), then the two ways a submit may not take
+  // (unchanged) and the one that does.
+  // ================================================================================================
+
+  // --- AC1's measurements, all four from the design's own node boxes: the area at x=0 with 45x60 tiles,
+  // 8px clear of the status area above (32 -> 40) and of the input below (100 -> 108). Deltas are compared
+  // with toBeCloseTo rather than a rounded toBe, #868's rule for a signed-zero difference. ---
+  const firstTile = (await tiles.first().boundingBox())!
+  const statusBox = (await statusRow.boundingBox())!
+  const messageBoxBox = (await messageBox.boundingBox())!
+  expect(firstTile.width).toBeCloseTo(45, 0)
+  expect(firstTile.height).toBeCloseTo(60, 0)
+  // ⭐ LEFT-ALIGNED WITH THE MESSAGE BOX'S OWN EDGE, which is the design's x=0 — deliberately NOT the x=16
+  // its TEXT starts at and that `.composer__attach-outcome` pads to reach. This is the assertion that
+  // reddens if the strip ever acquires that padding by analogy with the line beneath the footer.
+  expect(firstTile.x).toBeCloseTo(messageBoxBox.x, 0)
+  expect(firstTile.y - (statusBox.y + statusBox.height)).toBeCloseTo(8, 0)
+  expect(messageBoxBox.y - (firstTile.y + firstTile.height)).toBeCloseTo(8, 0)
+
+  // --- A second completion joins the row rather than replacing it: the strip is the pending SET, where
+  // the line beneath the footer was only ever the latest event. 12px apart, in completion order. ---
+  await push(COMPLETED_SECOND)
+  await expect(tiles).toHaveCount(2, { timeout: OUTCOME_TIMEOUT_MS })
+  await expect(tiles.nth(0)).toHaveText('PDF')
+  await expect(tiles.nth(1)).toHaveText('ZIP')
+  const secondTile = (await tiles.nth(1).boundingBox())!
+  const firstAgain = (await tiles.nth(0).boundingBox())!
+  expect(secondTile.x - (firstAgain.x + firstAgain.width)).toBeCloseTo(12, 0)
+  expect(secondTile.y).toBeCloseTo(firstAgain.y, 0)
+  // Still nothing beneath the footer, and the footer itself is untouched by a strip two tiles wide.
+  await expect(outcome).toHaveCount(0)
+  expect((await footer.boundingBox())!.height).toBe(20)
+
+  // --- AC4's two non-takes. A blank Enter never reaches the take — `submitMessage` reads its
+  // `takeAttachments` dep below both of its `false` returns — so the operator's attached files survive for
+  // the send they were attached for. (Its sibling, a submit with no active conversation, is the same
+  // `false` return one branch up and is unreachable from a paired launch; `composerSend.test.ts` owns it.)
+  // Held over a real interval rather than read once, so a late clear would still fail this. ---
+  const input = page.getByPlaceholder('Message…')
+  await input.click()
+  await input.press('Enter')
+  await page.waitForTimeout(250)
+  await expect(tiles).toHaveCount(2)
+
+  // --- AC4's take: sending empties the strip in one act, because `drainPendingAttachments` empties the
+  // set in one act. ---
+  await input.fill('the files are attached')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(strip).toHaveCount(0, { timeout: OUTCOME_TIMEOUT_MS })
+
+  // --- AC1's last clause, closed: with the strip gone the composer is exactly the height it launched at,
+  // so the tiles reserved nothing on their way in or out — and the message box is still where it started,
+  // which is what makes the composer's growth upward into the thread rather than downward. ---
+  expect((await composer.boundingBox())!.height).toBeCloseTo(composerHeightBefore, 0)
+  expect((await messageBox.boundingBox())!.y).toBeCloseTo(messageBoxYBefore, 0)
 })

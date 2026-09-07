@@ -49,7 +49,7 @@ exactly: it clears the held outcome and calls `window.pyry.dropAttachmentFile(fi
 hook rather than being reimplemented at the drop site, because "dropping clears whatever outcome line is
 showing" is the same act `requestAttach` already performs, and a second copy is where the two could drift.
 It does **not** touch the pending-attachments set #1039 later added beside it — see [Composer attach §
-Pending attachments](composer-attach.md#pending-attachments-1039) for why the gesture clear and the
+Pending attachments](composer-attach-pending.md#pending-attachments-1039) for why the gesture clear and the
 pending-set clear are kept apart.
 
 **`useComposerFileDrop({ onFile })`** is the container: a `useState` depth counter (ADR 0006 — ephemeral,

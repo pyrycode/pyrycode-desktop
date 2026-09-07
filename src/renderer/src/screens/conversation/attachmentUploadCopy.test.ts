@@ -165,12 +165,19 @@ describe('attachmentUploadOutcomeCopy — the three arms (#863 AC3)', () => {
     expect(noImage).not.toContain('23 MB')
   })
 
-  // AC3's third arm. #815 is not started, so nothing else anywhere is evidence that a file was stored —
-  // a silent success would be indistinguishable from a cancelled picker, which reports nothing at all.
-  it('acknowledges a completed upload rather than saying nothing', () => {
+  // ⭐ #1262 CUT THE COMPLETION'S SENTENCE AND KEPT ITS ARM, which is what this now pins. The tile above
+  // the message box is the report, so a sentence saying 'File attached.' stated the same fact twice — but
+  // deleting the arm would give up this switch's compiler-forced exhaustiveness, the mechanism that has
+  // already caught #864's `progress` and #999's two retrieval codes. So the arm answers nothing at all,
+  // and the assertion inverts the one that stood here ("rather than saying nothing").
+  //
+  // The two ways to get this wrong both redden: an arm that fell through would make this function able to
+  // return undefined (TS2366 at the switch, not here), and one that kept a stale sentence would fail the
+  // equality below.
+  it('#1262: says nothing for a completed upload — the tile is the report', () => {
     const copy = attachmentUploadOutcomeCopy({ type: 'completed', uploadId: 'a', filename: 'r.pdf' })
-    expect(copy.trim()).not.toBe('')
-    // It reads as success, not as one of the failure sentences.
+    expect(copy).toBe('')
+    // And it is not silently answering one of the failure sentences instead.
     expect(Object.values(ATTACHMENT_UPLOAD_FAILURE_COPY)).not.toContain(copy)
   })
 

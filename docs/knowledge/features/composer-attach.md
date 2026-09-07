@@ -44,13 +44,14 @@ The other four footer controls each read a store and render one of several state
   and a drop both still surface only the latest event, and fixing that remains open, unclaimed by any
   landed ticket.
 
-## Two pure views and a container hook, not one component
+## Three pure views, a shared drawing, and a container hook, not one component
 
-`ComposerAttach.tsx` is the [`LogDataSection`](conversation-shell-composer.md) split, because the button
-and the outcome mount in **different places**:
+`ComposerAttach.tsx` is the [`LogDataSection`](conversation-shell-composer.md) split, because the button,
+the outcome and (since #1262) the pending strip mount in **different places**:
 
 ```
 Composer
+├── ComposerAttachmentStrip                 composer column's own FIRST child (#1262)
 ├── .composer__row
 ├── .composer__footer                      (unchanged five, plus:)
 │   └── ComposerAttachButton                sixth and last item, margin-left: auto
@@ -66,13 +67,25 @@ Composer
   `<div>`/`<span>` maps to `role="generic"` and drops its name. `.composer__send` already names its two
   icon-only variants this way.
 - **`ComposerAttachOutcome({ outcome })`** — `null` when `outcome` is `null` (not an empty element holding
-  the slot — [`ContextUsageReading`](conversation-shell-composer.md)'s exact-empty rule restated); an
-  `outcome.type === 'progress'` branch renders `<div key="in-flight" className="composer__attach-progress">`
-  with **no live-region role** (#864, see § In-flight progress below); every other (terminal) branch
-  renders `<div key="terminal" className="composer__attach-outcome" role="status">` — both holding
+  the slot — [`ContextUsageReading`](conversation-shell-composer.md)'s exact-empty rule restated) **and,
+  since #1262, `null` again when `outcome.type === 'completed'`** — a completion now draws a tile in the
+  strip instead, so a sentence here would state the same fact twice; an `outcome.type === 'progress'`
+  branch renders `<div key="in-flight" className="composer__attach-progress">` with **no live-region role**
+  (#864, see § In-flight progress below); every other (terminal) branch renders
+  `<div key="terminal" className="composer__attach-outcome" role="status">` — both holding
   `attachmentUploadOutcomeCopy(outcome)`. `<div>`s, not `<p>`s — this repo ships no margin reset and it is
   a flex item in the composer column, so a `<p>`'s UA margin would move the message box for no semantic
   gain (`ComposerErrorChip`'s ruling verbatim).
+- **`ComposerAttachmentStrip({ attachments })`** (#1262) — the pending set, drawn. `null` for an empty set,
+  not an empty element, applying `ComposerAttachOutcome`'s own rule to the column's *first* child instead
+  of its last: `.composer` is a flex column with a `--space-1` gap, so an element that mounted empty would
+  move the message box down forever. Otherwise a `.composer__attachments` `<div>` holding one
+  `AttachmentFileIcon` per attachment, keyed by array index (`BubbleAttachmentRow`'s reason: the list only
+  appends and is cleared wholesale, so index identity is stable). Every attachment draws the file tile,
+  image or not — #1263's picture-bearing tile needs this as its own undecodable fallback, so it is a
+  shipped state rather than scaffolding. See [Composer attach — pending attachments and the
+  strip](composer-attach-pending.md) for the shared `AttachmentFileIcon` drawing and the pending set it
+  renders.
 - **`useAttachmentUpload()`** — `useState<AttachmentUploadEvent | null>(null)` plus one `useEffect`
   returning the bridge's own unsubscribe handle as cleanup, `[]` deps — one live listener per mount, the
   `LogDataSection` / daemon-event-bridge idiom. `requestAttach` clears the held outcome **and then** sends
@@ -235,108 +248,9 @@ under the size cap):
   `.composer__input`.
 
 Both reuse `useAttachmentUpload`'s outcome channel and, since #1039, both feed the pending-attachments set
-below through the same listener the button does — see § Pending attachments.
-
-## Pending attachments (#1039) — what an upload completing means to the message not yet sent
-
-The first thing in this app that associates an attachment with a message. Nothing rendered by this
-control needed to change — the outcome line above is still the only thing on screen — but the composer now
-also *remembers* which uploads have completed since the operator last pressed send, so
-[`submitMessage`](composer-send.md) can record them on the message's own timeline item. See [Thread
-timeline § Types](thread-timeline.md#types) for `MessageAttachment` and the `userText` item/event fields
-this feeds. Since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055), the same ids also
-name the message's attachments on the outbound `send_message` frame — display was the whole of it before;
-now it is also how claude learns which files to read.
-
-**It is a pure function for a reason this file's other four are not.** `composerClassName`,
-`dragCarriesFiles`, `reduceFileDropDepth`, `fileToAttach` and `pasteCarriesImageOnly` are pure so the
-static tier can walk gestures nothing in this repo can perform. `reducePendingAttachments` is pure because
-there is no other tier *at all*: nothing renders the pending set, so Playwright has nothing to observe,
-and this repo's renderer specs are static server renders with no DOM and no `renderHook`, so a rule living
-only inside the hook would be reachable by no test anywhere.
-
-```ts
-export const NO_PENDING_ATTACHMENTS: readonly MessageAttachment[] = []
-
-export function reducePendingAttachments(
-  pending: readonly MessageAttachment[],
-  event: AttachmentUploadEvent
-): readonly MessageAttachment[]
-
-export function drainPendingAttachments(holder: {
-  current: readonly MessageAttachment[]
-}): PendingAttachmentTake
-```
-
-- **`reducePendingAttachments`** folds one arriving event into the set the next send will record. Only
-  `completed` adds anything — `refused`, `failed` and `progress` each return the **same reference**, not
-  an equal copy, so "an upload that was refused, that failed, or that is still in flight contributes
-  nothing" is structural rather than incidental. The pair recorded is `{ attachmentId: event.uploadId,
-  filename: event.filename }` — the daemon's own id (`driveUpload` sends `attachment_id: uploadId`) and
-  #1038's display name, its first consumer. Order is **completion order**, the only order this window can
-  know: the composer never learns the `uploadId` its own click minted
-  (`requestAttachmentUpload()` returns `void`), so it cannot order by gesture. An explicit return type and
-  **no `default`**, `attachmentUploadOutcomeCopy`'s idiom — a member added to `AttachmentUploadEvent`
-  upstream trips TS2366 here too, and is sufficient (unlike that module's `reason` read) because this
-  switches on the *discriminator*, which only this app's own background process mints, never a value a
-  hostile daemon chooses.
-- **`drainPendingAttachments`** hands the set to a send and empties it, in one act — generic over a
-  `{ current }` holder the way `fileToAttach` is generic over the element, so a `MutableRefObject`
-  satisfies it with no React import. Take-and-clear cannot be split: a reader that didn't empty, or an
-  emptier a caller had to remember to call, would each open a window in which one send's attachments could
-  be recorded twice. Since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) it returns a
-  `PendingAttachmentTake` — `{ attachments, rollback }` — rather than the bare set: `attachments` is the
-  same take as before, and `rollback` restores exactly it to the holder, undoing the drain without
-  splitting it into a peek/consume pair. The type is declared in `composerSend.ts`, its consumer, not
-  here — see [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
-  for why the boundary runs that way and why restoring is sound (the caller is synchronous end to end, so
-  nothing can arrive between the take and a rollback for it to clobber).
-
-**The pending set lives in a `useRef`, not `useState`, because nothing renders it.** The consumers are
-\#815's file row (shipped, [Conversation shell — message bubble § The attachment file
-row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816)) and #868's image
-thumbnail (shipped, same document), and both read the *timeline item* the send records, not this hook, so a `useState` would re-render the
-whole composer on every arriving upload event for a value no
-markup consults. Worse, its batching would open a real drop window: a completion arriving after the last
-commit but before the click would be invisible to the closure the click reads, and a subsequent take would
-then clear it unsent. A ref is written by the listener and read by the send synchronously, so that window
-does not exist. It is still [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
-state in every other respect — ephemeral, screen-local, per-mount — and it resets on a conversation switch
-for the held outcome's own free reason: `PairedShellView` keys the chat pane on the conversation id, so a
-switch rebuilds this component with an empty set.
-
-The listener folds beside the existing assign:
-
-```ts
-window.pyry.onAttachmentUploadEvent((event) => {
-  setOutcome(event)
-  pendingRef.current = reducePendingAttachments(pendingRef.current, event)
-})
-```
-
-and the hook exposes one new member, `takePendingAttachments: () => PendingAttachmentTake`, bound
-to this mount's ref via `drainPendingAttachments`.
-
-**The pending set does not ride the gesture-clear, and this is the one place a shared clear would be
-wrong.** `requestAttach`, `dropFile` and `pasteImage` each call `setOutcome(null)` on the gesture — about
-the *displayed* line, since a cancelled picker or an unresolvable drop reports nothing at all, and an
-event-driven clear would otherwise strand a stale refusal on screen. A pending set sharing that clear
-would erase the first file the moment the operator attached a second, which is exactly the "one or more"
-the acceptance criteria ask for. The two clears answer different questions and are kept apart on purpose.
-
-**What this falsifies, honestly.** § Two pure views above still states the hook's *display* correctly —
-one nullable, latest event wins, and `uploadId` is still unread by everything that renders — but a
-paragraph used to conclude from "the renderer cannot correlate a click to an id" that the listener
-"assigns; it does not merge, queue or correlate," full stop. That conclusion was too broad: a message's
-attachments don't need a click correlated to an id, only the completions that *arrived* since the last
-send, which the events give on their own arrival order. The listener now assigns **and** accumulates; it
-still correlates nothing to a gesture.
-
-**Where the send reads it — `submitMessage` (`composerSend.ts`).** See [Composer send §
-10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
-for the read site, why it sits below both of `submitMessage`'s early `false` returns, why it now sits
-*above* the guarded send (the ids ride the outbound `send_message` frame since #1055), and how an empty
-or unwired take normalises to an absent field on both the frame and the echo.
+through the same listener the button does — see [Composer attach — pending attachments and the
+strip](composer-attach-pending.md) for the set itself, `mirrorTakeToDisplay`, and the file-tile strip
+(#1262) that draws it above the message box, replacing the completion sentence.
 
 ## CSS
 
@@ -357,6 +271,20 @@ plus the drop-target rule below:
   need this because their label's own `max-width` absorbs a narrow row first).
 - **`.composer__attach-outcome`** — `.composer__context`'s body-small-in-`--color-primary` treatment, with
   no `height`/`min-height` (see above) and deliberately no `white-space: nowrap`.
+- **`.composer__attachments` / `.composer__attachment` / `.composer__attachment-glyph` /
+  `.composer__attachment-ext`** (#1262) — the strip and its tiles. `.composer__attachments` is
+  `display: flex; flex-wrap: wrap; gap: var(--space-3)` (the drawn 12px, both axes, so more tiles than fit
+  the width wrap to a second row rather than overflow) plus `margin-bottom: var(--space-1)`, arithmetic
+  against the column's own `--space-1` gap to reach the drawn `--space-2` below the strip — the 8px *above*
+  needs no rule at all, since `.composer`'s existing `padding-top: var(--space-2)` already sits there.
+  `.composer__attachment` is the 45×60 frame (`width`/`height`/`border-radius: var(--radius-xs)` — inert
+  for an outline, drawn anyway because it is the slot's own clip and #1263's picture is what it's for) and
+  carries `color: var(--color-inverse-primary)` for the glyph's stroke; `.composer__attachment-ext` is
+  `.bubble__file-ext`'s overlay geometry plus the body-small-emphasized type this composer column does not
+  otherwise inherit, and `color: var(--color-primary)`. No horizontal padding — the strip's left edge is
+  `.composer__row`'s, which is the design's x=0. Shares no whole class token with `.composer__attach`,
+  `.composer__attach-outcome` or `.composer__attach-progress`, so no shipped locator or whole-attribute-run
+  assertion can reach it.
 - **`.composer--drop-target`** (#890) — `outline: 1px solid var(--color-primary); outline-offset: -1px`,
   the drop-in-progress edge. `outline`, not `border`: `.composer` has no resting border at all — it is
   padding over the pane card, with no paint of its own since #1099 — so a `border:` in the active state
@@ -425,17 +353,11 @@ live claude.
 (`renderToStaticMarkup` drops keys, and the fake e2e tier cannot observe a screen-reader announcement) —
 see § In-flight progress above. Carried by a code comment, not a test.
 
-**Pending attachments (#1039, reworked #1055) are unit-only, by design — see § Pending attachments above
-for why.** `ComposerAttach.test.tsx` walks `reducePendingAttachments` across all four
-`AttachmentUploadEvent` arms (a `completed` appends; `refused`/`failed`/`progress` each return the same
-reference via `toBe`; two completions record in completion order; the input array is never mutated) and
-`drainPendingAttachments` against a plain `{ current }` object (empties the holder; its `attachments` is
-the shared empty constant on a second take; `rollback` restores exactly the taken set, and a take after a
-rollback yields that same set again) — no `File`, no DOM, no React needed for either. The listener's
-assignment line and the ref read at the click are the one gap no tier closes; see [Composer send §
-10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055)
-for the corresponding gap on the read side. The one thing this file's unit tier still cannot prove is
-AC4 — that the named ids actually reach claude — which is [`e2e/real-claude-attachment.spec.ts`](real-claude-liveness-e2e.md)'s job.
+**Pending attachments (#1039) and the tile strip that draws them (#1262) are documented, tested and
+security-reviewed on their own split page** — [Composer attach — pending attachments and the
+strip](composer-attach-pending.md) — including `reducePendingAttachments`, `drainPendingAttachments`,
+`mirrorTakeToDisplay`, `AttachmentFileIcon`, and the `e2e/composer-attach.spec.ts` geometry drive for the
+strip.
 
 ## Security
 
@@ -458,17 +380,10 @@ Nothing renderer-side changed the trust posture: no new channel, no new bridge m
 totalises over `ipcRenderer.on`'s untyped runtime value with `Number.isFinite` rather than trusting the
 declared type. See `docs/specs/architecture/864-attachment-upload-progress.md` § Security review.
 
-**#1039's review, also PASS.** No new channel, no new bridge member, no new capability — the pending set
-only reads the two fields the completed terminal already carries. Retention is the property that changed:
-`filename` was consumed once for a sentence and is now held in renderer memory on a timeline item, with no
-sink in this slice (nothing renders, logs, or builds a path from it) and no re-sanitising, since the save
-leg re-runs `sanitizeAttachmentFilename` on the value it actually builds a path from. `attachmentId` is a
-`randomUUID` identifier, not a capability — the daemon authorises retrieval by the Noise session, not by
-knowledge of the id. A hostile daemon can claim `completed` for an upload it never stored, so the timeline
-can record an attachment the host doesn't have; blast radius is one wrong record with nothing drawing it
-in this slice, surfaced visibly since #868's retrieval landed: the image thumbnail's `failed` fallback
-(or, for a non-image name, a file row whose download/open click answers `unavailable`). See
-`docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` § Security review.
+**#1039's and #1262's reviews, also PASS — see [Composer attach — pending attachments and the
+strip](composer-attach-pending.md#security) for both.** Neither widens a capability: no new channel, no new
+bridge member, no new `ipcMain` handler. The pending set's own risk is retention (`filename` now lives in
+renderer memory on a timeline item) and the strip's is the new DOM sink the derived extension label reaches.
 
 ## Related
 
@@ -492,15 +407,15 @@ in this slice, surfaced visibly since #868's retrieval landed: the image thumbna
 - [Composer attach — the paste entry](composer-attach-paste.md) (#1033) — landed; clipboard paste, split to
   its own page 2026-09-04. A third concurrent-upload entry alongside the click and the drop, interleaving
   into the same one-slot outcome the same way; adds no correlation either.
-- [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) (pending attachments) — landed; see §
-  Pending attachments above. The first thing in this app that associates an attachment with a message;
-  feeds [Thread timeline](thread-timeline.md#types)'s new `userText.attachments` field via [Composer
-  send](composer-send.md#attachments-taken-at-send-1039). #815 (shipped) renders it; #868 (the image
-  thumbnail) is still open.
+- [Composer attach — pending attachments and the strip](composer-attach-pending.md) (#1039, #1262) —
+  landed; split to its own page 2026-09-08. The pending set an upload completing accumulates, and the row
+  of file tiles above the message box that draws it, replacing the completion sentence. #1263 (the picture
+  inside an image tile), #1264 (the remove control) and #1265 (the name-on-hover tooltip) are the next
+  three slices of this family and are still open.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),
-  `docs/specs/architecture/890-composer-file-drop.md`, `docs/specs/architecture/1032-paste-clipboard-image-attach.md`,
-  `docs/specs/architecture/1033-paste-image-to-attach.md` and
-  `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md` for the full plans and their
-  security reviews.
+  `docs/specs/architecture/890-composer-file-drop.md`, `docs/specs/architecture/1032-paste-clipboard-image-attach.md`
+  and `docs/specs/architecture/1033-paste-image-to-attach.md` for the full plans and their security reviews.
+  [Composer attach — pending attachments and the strip](composer-attach-pending.md) cites the #1039/#1262
+  plans and PRs.

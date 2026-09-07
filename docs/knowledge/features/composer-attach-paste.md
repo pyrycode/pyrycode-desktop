@@ -64,7 +64,7 @@ strands a previous line, while #1032's clipboard path draws exactly one terminal
 `no-image` included. It clears anyway, so all three entries behave identically and the line that appears
 next is unambiguously about the paste just made. Like `dropFile`, it does **not** touch the
 pending-attachments set — see [Composer attach § Pending
-attachments](composer-attach.md#pending-attachments-1039).
+attachments](composer-attach-pending.md#pending-attachments-1039).
 
 **One argument since #1205, the destination; still no server.** `AttachmentPasteRequest` gained an
 optional `serverId` in #1129 that this call site has nothing to source until #1086, and a *required*

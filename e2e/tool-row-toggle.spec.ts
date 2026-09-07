@@ -1,7 +1,12 @@
-import type { Locator } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
-import type { ToolResultPayload, ToolUsePayload } from '../src/shared/wire/types'
+import type {
+  AssistantDeltaPayload,
+  ToolResultPayload,
+  ToolUsePayload,
+  TurnEndPayload
+} from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the tool-row toggle (#697): opening a resolved tool row to read what the tool
 // returned, and closing it again. It drives the whole client path — Noise wire → decode → IPC → bridge
@@ -1188,4 +1193,320 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
   expect(commandBody.padLeft, 'the command block was restyled').toBe(token.space4)
   expect(commandBody.whiteSpace, 'the command block stopped wrapping').toBe('pre-wrap')
   expect(commandBody.maxHeight, 'the command block gained a cap it never had').toBe('none')
+})
+
+// #1073 — consecutive tool rows join into ONE stack: no gap between them, exactly one border line at each
+// join, square internal corners, one shadow for the whole run, and a failed row's red carried onto whichever
+// neighbour shares its edge. A SEVENTH sibling test with its own launchPairedApp, for the reason the six
+// above record: four more rows on any of their pages would make their bare `.tool-row` locators
+// strict-mode-ambiguous.
+//
+// EVERYTHING HERE IS RENDERED GEOMETRY OR COMPUTED STYLE — where a row's box top sits relative to its
+// predecessor's bottom, four corner radii, a box-shadow, and the two border colours that meet at a join. The
+// renderToStaticMarkup unit tier sees no stylesheet at all and can observe none of it; this slice adds no
+// element, class or attribute, so that tier gains nothing to pin and its specs are unedited.
+//
+// ONE RUN OF FOUR REACHES EVERY CASE THE ACs NAME. The rows resolve pending / resolved / FAILED / resolved,
+// which yields a pending-to-resolved join, a join with the failed row BELOW it, and a join with the failed row
+// ABOVE it. Those last two are distinct cases rather than one stated twice: paint order alone would settle
+// them oppositely (a later sibling paints over an earlier one, but a pending row's 50% opacity makes it an
+// atomic group that paints above regardless of DOM order), which is why the join's colour is a rule and not a
+// consequence. The assistant bubble pushed in front of the run is AC1's other half — a tool row beside a
+// NON-tool row keeps the thread's gap on that side.
+//
+// THE RUN IS DOM ADJACENCY, NOT ITEM ADJACENCY, and the drive below exercises that on purpose: the pushed
+// turn closes with a `turn_end`, so a `turnBoundary` item sits between the bubble and the calls — and
+// TimelineRow renders that arm as `null`, emitting no element. Nothing breaks a run except a row that
+// actually draws.
+
+const JOIN_TURN_ID = 'turn-1073'
+
+// Arrival order is the thread's order, and each index below is a state this test needs at that position.
+const JOIN_PENDING_ID = 'tool-use-1073-pending'
+const JOIN_PLAIN_ID = 'tool-use-1073-plain'
+const JOIN_FAILED_ID = 'tool-use-1073-failed'
+const JOIN_TRAILING_ID = 'tool-use-1073-trailing'
+
+// A square corner is the ABSENCE of the row's own --radius-xs on two corners, not a radius value in the
+// scale — so `0px` is asserted literally, as CSS's own initial value, while the 6px it replaces is read off
+// the token (#1103's convention for exactly this distinction).
+const SQUARE_CORNER = '0px'
+
+/** One unsolicited assistant turn -> the `.bubble` the run has to keep its 12px away from. PUSHED rather than
+ *  scripted onto a send's reply: this test needs only that a non-tool row precedes the run, and a push costs
+ *  no buildReplyFrames, no decode and no composer drive (thread-scroll-pin.spec.ts pushes deltas this way). */
+function joinAssistantDeltaFrame(): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'assistant_delta',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: JOIN_TURN_ID,
+      seq: 0,
+      text: 'a reply the run has to clear'
+    } satisfies AssistantDeltaPayload
+  })
+}
+
+/** Its `turn_end` — closes the turn, which is what puts a (DOM-less) `turnBoundary` between bubble and run. */
+function joinTurnEndFrame(): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'turn_end',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: JOIN_TURN_ID,
+      stop_reason: 'end_turn'
+    } satisfies TurnEndPayload
+  })
+}
+
+type JoinedRow = {
+  top: number
+  bottom: number
+  marginTop: number
+  borderTopWidth: number
+  borderBottomWidth: number
+  borderTopColor: string
+  borderRightColor: string
+  borderBottomColor: string
+  borderLeftColor: string
+  radiusTopLeft: string
+  radiusTopRight: string
+  radiusBottomLeft: string
+  radiusBottomRight: string
+  boxShadow: string
+  opacity: string
+}
+
+type JoinSnapshot = { rowGap: number; radiusXs: string; bubbleBottom: number; rows: JoinedRow[] }
+
+/**
+ * Every number this test compares, read in ONE evaluate.
+ *
+ * The thread is a scroll region, so a bubble measured in one round trip and a row measured in the next could
+ * be read against different scroll offsets and the 12px between them would come out as anything; one
+ * snapshot puts every box in one coordinate system by construction. The gap is read as the thread's own
+ * computed `row-gap` and the corner as the inherited `--radius-xs`, so a retune of --space-3 or of the radius
+ * moves the expectations with the rules rather than reddening this test.
+ */
+async function joinSnapshotOf(page: Page): Promise<JoinSnapshot> {
+  return page.locator('.conversation__thread').evaluate((thread) => {
+    const threadStyle = getComputedStyle(thread)
+    const bubble = thread.querySelector('.bubble[data-thread-role="assistant"]')
+    if (bubble === null) throw new Error('the assistant bubble the run has to clear is not mounted')
+    return {
+      rowGap: parseFloat(threadStyle.rowGap),
+      radiusXs: threadStyle.getPropertyValue('--radius-xs').trim(),
+      bubbleBottom: bubble.getBoundingClientRect().bottom,
+      rows: [...thread.querySelectorAll('.tool-row')].map((row) => {
+        const style = getComputedStyle(row)
+        const box = row.getBoundingClientRect()
+        return {
+          top: box.top,
+          bottom: box.bottom,
+          marginTop: parseFloat(style.marginTop),
+          borderTopWidth: parseFloat(style.borderTopWidth),
+          borderBottomWidth: parseFloat(style.borderBottomWidth),
+          borderTopColor: style.borderTopColor,
+          borderRightColor: style.borderRightColor,
+          borderBottomColor: style.borderBottomColor,
+          borderLeftColor: style.borderLeftColor,
+          radiusTopLeft: style.borderTopLeftRadius,
+          radiusTopRight: style.borderTopRightRadius,
+          radiusBottomLeft: style.borderBottomLeftRadius,
+          radiusBottomRight: style.borderBottomRightRadius,
+          boxShadow: style.boxShadow,
+          opacity: style.opacity
+        }
+      })
+    }
+  })
+}
+
+/**
+ * AC1 for one join: the lower row's border box begins exactly ONE border width above where the upper row's
+ * ends, so the two 1px borders occupy the same pixel band and one line is drawn. A `>= 0` overlap would pass
+ * on a 2px double line and a 13px one alike; the equality is what makes this a detector.
+ */
+function expectOneLineAtJoin(upper: JoinedRow, lower: JoinedRow, at: string): void {
+  expect(upper.borderBottomWidth, `${at}: the upper row's border is not 1px`).toBe(1)
+  expect(lower.borderTopWidth, `${at}: the lower row's border is not 1px`).toBe(1)
+  expect(
+    Math.abs(lower.top - (upper.bottom - upper.borderBottomWidth)),
+    `${at}: the rows do not overlap by exactly one border width`
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(
+    lower.borderTopColor,
+    `${at}: the two coincident borders are different colours, so the drawn line depends on paint order`
+  ).toBe(upper.borderBottomColor)
+}
+
+test('tool row: consecutive rows join into one stack with a single border at each join', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  const rows = page.locator('.tool-row')
+
+  // The non-tool neighbour first, so the run lands under it.
+  daemon.pushFrame(joinAssistantDeltaFrame())
+  daemon.pushFrame(joinTurnEndFrame())
+  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1, {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+
+  // Four calls, then results for all but the first: pending / resolved / FAILED / resolved.
+  daemon.pushFrame(routedToolUseFrame(JOIN_PENDING_ID, 'read_file'))
+  daemon.pushFrame(routedToolUseFrame(JOIN_PLAIN_ID, 'read_file'))
+  daemon.pushFrame(routedToolUseFrame(JOIN_FAILED_ID, 'Bash', { command: SHELL_COMMAND }))
+  daemon.pushFrame(routedToolUseFrame(JOIN_TRAILING_ID, 'read_file'))
+  daemon.pushFrame(routedToolResultFrame(JOIN_PLAIN_ID))
+  daemon.pushFrame(failedToolResultFrame(JOIN_FAILED_ID))
+  daemon.pushFrame(routedToolResultFrame(JOIN_TRAILING_ID))
+
+  const failedRow = rows.nth(2)
+  const trailingRow = rows.nth(3)
+  // The LAST result to arrive is the settle signal — every earlier frame is already applied by then.
+  await expect(trailingRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(failedRow).toHaveClass(/tool-row--error/)
+  await expect(rows).toHaveCount(4)
+
+  const snapshot = await joinSnapshotOf(page)
+  const [pending, plain, failed, trailing] = snapshot.rows
+  const joins = [
+    [pending, plain, 'the pending-to-resolved join'],
+    [plain, failed, 'the join above the failed row'],
+    [failed, trailing, 'the join below the failed row']
+  ] as const
+
+  // --- AC4's state half, asserted FIRST because the three joins are only meaningful if each row is in the
+  // state this drive put it in.
+  expect(pending.opacity, 'the pending row stopped dimming inside a run').toBe('0.5')
+  for (const [row, what] of [
+    [plain, 'the resolved row'],
+    [failed, 'the failed row'],
+    [trailing, 'the trailing row']
+  ] as const) {
+    expect(row.opacity, `${what} did not lift the pending dimming`).toBe('1')
+  }
+
+  // --- AC1. No space, one line, at every join of a run of four.
+  for (const [upper, lower, at] of joins) expectOneLineAtJoin(upper, lower, at)
+
+  // The margin that closes the gap, read against the thread's OWN gap plus the border rather than as -13px:
+  // the first row of the run keeps the column's spacing, every later one cancels it and overlaps by 1.
+  expect(pending.marginTop, 'the first row of a run took a negative margin it should not have').toBe(0)
+  for (const [row, what] of [
+    [plain, 'the second row'],
+    [failed, 'the third row'],
+    [trailing, 'the fourth row']
+  ] as const) {
+    expect(row.marginTop, `${what} does not cancel the thread's gap`).toBeCloseTo(
+      -(snapshot.rowGap + row.borderTopWidth),
+      1
+    )
+  }
+
+  // --- AC1's other half: the run keeps the thread's 12px away from the NON-tool row above it. This is the
+  // assertion that reddens if the join is implemented as a rule on `.tool-row` rather than on a join.
+  expect(
+    Math.abs(pending.top - snapshot.bubbleBottom - snapshot.rowGap),
+    'the run swallowed the gap between itself and the bubble above it'
+  ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC2. The run's OUTER corners keep the 6px and its internal ones go square, so no facing curves and
+  // no notch of thread background appear at a join. All four corners of all four rows, since the failure this
+  // catches — the design node's own render, two instances overlapped with every corner still round — differs
+  // from the fix on exactly the corners a first/last-only check would skip.
+  const corners = [
+    [pending, snapshot.radiusXs, SQUARE_CORNER, 'the first row of the run'],
+    [plain, SQUARE_CORNER, SQUARE_CORNER, 'the second row'],
+    [failed, SQUARE_CORNER, SQUARE_CORNER, 'the third row'],
+    [trailing, SQUARE_CORNER, snapshot.radiusXs, 'the last row of the run']
+  ] as const
+  for (const [row, top, bottom, what] of corners) {
+    expect(row.radiusTopLeft, `${what} draws the wrong leading top corner`).toBe(top)
+    expect(row.radiusTopRight, `${what} draws the wrong trailing top corner`).toBe(top)
+    expect(row.radiusBottomLeft, `${what} draws the wrong leading bottom corner`).toBe(bottom)
+    expect(row.radiusBottomRight, `${what} draws the wrong trailing bottom corner`).toBe(bottom)
+  }
+
+  // --- AC3. Exactly one shadow per run, cast by the LAST row. Every interior row's --shadow-thread would
+  // otherwise reach 9px down across the join onto its successor and 2.5px past the stack's sides — and where
+  // a pending row precedes a resolved one, its atomic paint group would put that shadow fully on top. The
+  // exact value stays thread-shadow.spec.ts's, read there on the lone row where the design pins it.
+  for (const [row, what] of [
+    [pending, 'the first row of the run'],
+    [plain, 'the second row'],
+    [failed, 'the third row']
+  ] as const) {
+    expect(row.boxShadow, `${what} still casts a shadow across its join`).toBe('none')
+  }
+  expect(trailing.boxShadow, 'the run casts no shadow at all').not.toBe('none')
+
+  // --- AC4's join half. `plainColour` is the pending row's TOP edge: the one edge in this run that no join
+  // rule reaches, so it is the base border colour by construction rather than by assumption. Asserted
+  // comparatively, #1102's convention, so a token retune cannot redden this.
+  const plainColour = pending.borderTopColor
+  const failureColour = failed.borderTopColor
+  expect(failureColour, 'the failed row draws no failure device at all').not.toBe(plainColour)
+
+  // A failed row's outline stays CLOSED and red on all four sides — the join squares two of its corners, it
+  // does not open the box.
+  for (const [side, drawn] of [
+    ['top', failed.borderTopColor],
+    ['right', failed.borderRightColor],
+    ['bottom', failed.borderBottomColor],
+    ['left', failed.borderLeftColor]
+  ] as const) {
+    expect(drawn, `the failed row's ${side} edge is not the error colour`).toBe(failureColour)
+  }
+
+  // The single line drawn at a join is the error colour whichever side the failed row is on — the row below
+  // gains a red top edge, the row above gains a red bottom edge, and `expectOneLineAtJoin` has already
+  // pinned that the two halves agree.
+  expect(plain.borderBottomColor, 'the row above the failed one kept the plain colour at the join').toBe(
+    failureColour
+  )
+  expect(trailing.borderTopColor, 'the row below the failed one kept the plain colour at the join').toBe(
+    failureColour
+  )
+  // And the pending/resolved join reads the plain colour, so the tint is the FAILURE's and not the join's.
+  expect(pending.borderBottomColor, 'a join with no failed row drew the error colour').toBe(plainColour)
+
+  // Two controls that the tint stops at the shared edge rather than smearing down the run: the neighbours
+  // keep the plain colour on their other three sides.
+  for (const [row, what] of [
+    [plain, 'the row above the failed one'],
+    [trailing, 'the row below the failed one']
+  ] as const) {
+    expect(row.borderLeftColor, `${what} took the error colour on its leading edge`).toBe(plainColour)
+    expect(row.borderRightColor, `${what} took the error colour on its trailing edge`).toBe(plainColour)
+  }
+  expect(plain.borderTopColor, 'the error colour smeared past the join onto the row above').toBe(plainColour)
+  expect(trailing.borderBottomColor, 'the error colour smeared past the join onto the row below').toBe(
+    plainColour
+  )
+
+  // --- AC5. Expanding a row INSIDE the run does not break the stack: the body stays inside its own border
+  // (#1102's test proves the containment; what this proves is that the row still joins on both sides after
+  // it has grown) and the row below still joins cleanly beneath it.
+  await rows.nth(1).locator('.tool-row__chip--toggle').click()
+  await expect(rows.nth(1)).toHaveClass(/tool-row--expanded/)
+  const expandedSnapshot = await joinSnapshotOf(page)
+  const [pendingAfter, expanded, failedAfter, trailingAfter] = expandedSnapshot.rows
+  expect(
+    expanded.bottom - expanded.top,
+    'the row did not actually grow, so the joins below are unchanged for the wrong reason'
+  ).toBeGreaterThan(plain.bottom - plain.top)
+  for (const [upper, lower, at] of [
+    [pendingAfter, expanded, 'the join above the expanded row'],
+    [expanded, failedAfter, 'the join below the expanded row'],
+    [failedAfter, trailingAfter, 'the join below the failed row, after expanding']
+  ] as const) {
+    expectOneLineAtJoin(upper, lower, at)
+  }
 })

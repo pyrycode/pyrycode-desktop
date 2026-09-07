@@ -203,8 +203,9 @@ Both callers share one rule — forgetting a server flips the route to the pairi
 *refreshed* collection comes back empty — implemented once, in `runUnpairServer`, because that helper
 is the only one holding the post-erase list. Since [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)
 they share a second rule the same way: when a record *does* remain, the departed server's own renderer
-state — its conversation rows, every one of its conversations' retained threads, and its open chat if
-one was open — is dropped through `clearServerScopedState`
+state — its conversation rows, every one of its conversations' retained threads, its open chat if one was
+open, and (since [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)) its conversations'
+last-read marks — is dropped through `clearServerScopedState`
 (`src/renderer/src/clearServerScopedState.ts`). `UnpairServerDeps` gained a required
 `clearServerScopedState: (serverId: string) => void` member for this, so `UnpairDeps extends
 UnpairServerDeps` means the composer inherits it rather than re-declaring it — the same inheritance
@@ -226,10 +227,15 @@ prevent. The one member that legitimately differs per caller is `navigateToList`
 while the composer's `ComposerErrorSlotControl` supplies `() => onBack?.()` — unconditionally, since
 `serverIdForOpenConversation` (below) means the open conversation on this path is always one of the
 departing machine's. See [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
-for `clearConversationsFor` and `selectExclusiveConversationIdsFor`, the two store-level primitives this
-clear composes, and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
+for `clearConversationsFor` and `selectExclusiveConversationIdsFor`, and [Conversation last-read
+store](conversation-last-read-store.md) for `clearLastReadFor` — the three store-level primitives this
+clear composes — and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
 `clearServerScopedState` calls once per departed conversation id to close the open-chat case (AC3)
-without re-deriving its gate.
+without re-deriving its gate. `clearLastReadFor` rides the same exclusive id set as `clearConversationsFor`
+rather than taking a fresh read, and runs last — after every `exitActiveConversation`-driven thread clear —
+because it is the only one of the three that reaches outside memory (`localStorage`) and the only one a
+still-mounted last-read bridge can re-mint mid-loop; see [Conversation last-read store § How it
+works](conversation-last-read-store.md#how-it-works) for the ordering argument.
 
 **The departed conversation-id set is the one daemon-supplied input on this path, and it is not trusted
 verbatim.** The ids come from the departing server's own `conversationsReceived` reply, so a confused or
@@ -419,6 +425,16 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   #1196), this was a stale-display gap only — no credential and no live connection ever survived
   (`reconcile()` already dropped the connection) — and both unpair paths now reach the fix through the
   one `clearServerScopedState` implementation (§ The two renderer callers).
+- **Closed by [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197), the last open slice of
+  the #1090 family: the same departed-machine residue #1196 closed for rows now closes for read marks.**
+  Since [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)/[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
+  a per-server unpair that left other servers paired dropped the departed rows and threads but left the
+  departed conversations' [last-read marks](conversation-last-read-store.md) in `localStorage`
+  indefinitely — the one residue #1196 named and deliberately did not reach, because it is the only member
+  of the departed-state set that survives outside memory. `clearServerScopedState` now drops them too,
+  last, through `conversationLastReadStore`'s new `clearLastReadFor` (§ The two renderer callers above).
+  Still out of scope, named rather than silently left: `queueStore`'s backlogs, `backgroundTaskRosterStore`'s
+  rosters, and `modalPrompts`' outstanding prompts — the remaining #1090 slices.
 
 ## Related
 

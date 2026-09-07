@@ -207,6 +207,61 @@ dependency array, since `Date.now` is a module-level intrinsic whose identity ne
 timeline § Types](thread-timeline.md#types) for the full field-pair contract and the "why not a reducer
 parameter" arithmetic; [composer send](composer-send.md) has the mirror wiring for the user echo.
 
+[#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) draws a served history page — #1222's
+ask, #1227's per-entry decode. It is **not** a tenth owned arm on `translateTimelineEvent`'s switch over
+`historyPageReceived`; that case stays in the dormant fall-through group, unclaimed. Instead the function's
+**parameter** widens to `DaemonEvent | HistoryTimelineEvent` — a widening, not a signature change, since
+every `HistoryTimelineEvent` arm is its live twin minus the `conversationId` no case reads, so no case body
+moves and `assertNever` stays total. That widen is what lets a **new** module, `historyPageBridge.ts`,
+reuse this same function one entry at a time rather than write a second mapping, which is what makes "a
+page produces the rows the live stream would have" structural rather than asserted.
+`translateTimelineEvent` also gains its tenth owned arm in the process, `messageReceived`→`userText`,
+gated on `event.message.role === 'user'` — the operator's own turn, which the daemon stores in its log but
+never pushes as a live frame, so this arm draws only from a page. `timelineTargetFor` is deliberately
+**not** widened to route it: a live `messageReceived` (which this daemon never sends) still resolves to no
+keyed target and reaches the flat `timelineStore` only, whose `items` no screen reads — the live lane is
+therefore a verified no-op, not an assumed one.
+
+`historyPageBridge.ts` is a **fifth** independent channel subscriber, beside the session, timeline, modal
+and question bridges — not a widening of `subscribeTimeline`'s injected `dispatch`, which would cascade
+over its 20+ call sites to buy nothing (#756's own arithmetic). It owns exactly `historyPageReceived` and
+exports two pieces: `reduceHistoryPage(entries)`, a pure function that reverses a copy of the page (the
+wire serves `entries` newest-first, every `reduceTimeline` arm appends, so folding in arrival order would
+draw the transcript backwards) and folds each translated entry through `reduceTimeline` against a
+**scratch** `TimelineState` seeded from `initialTimelineState`, returning only its `items`; and
+`useHistoryPageBridge()`, the React mount (`App.tsx`, beside `useQuestionBridge()`) that hands each page to
+the store's new `prependHistoryFor(conversationId, items)` write path. No clock reaches the fold — AC5 —
+so no replayed row is stamped with the moment it was drawn, at both this seam and the bridge arm above.
+
+The scratch-state fold is the answer to the question this doc's `userText` arm below and
+`threadTimeline.ts`'s own comment pose ("if a second `userText` producer is ever added — a history
+backfill is the obvious candidate — it must be re-examined against this arm"): **neither a distinct event
+nor a flag** — a page never reaches the *held* state's reducer at all, so `localSendPending` and the other
+four chrome scalars a page's entries might carry (`turn_state`, `stall`, `api_retry`, `compacting`) are
+structurally unable to escape the discarded scratch fold. `reduceTimeline` itself needed no edit for any
+of this. (`threadTimeline.ts`'s own comment at the `userText` arm still names only the composer as the
+producer and does not yet record this third answer — a verifier SHOULD FIX on PR #1229, not blocking.)
+
+`prependHistoryFor` is a fifth store write path, beside `dispatchFor`/`markViewed`/`clearAllTimelines`/
+`clearTimelineFor` (see [Conversation timeline holder](conversation-timeline-holder.md)) — it takes
+already-reduced rows, not an event, because a page is not one event. An empty page (or one that dedups to
+nothing) returns the state object unchanged, so zustand's `Object.is` short-circuit fires; a key-absent
+conversation creates its slice through the existing `withNewSliceAtHead`; a key-present one is spread with
+a new `items: [...fresh, ...held.items]`, carrying every chrome scalar through by spread rather than
+recomputing it, so no future sixth scalar can be forgotten here. `fresh` drops any page row whose
+`messageId` a held `userText` already carries — the operator's optimistic echo and the daemon's stored copy
+of the same message are the same message arriving by two routes (AC4), and the **held echo wins**: it
+carries the operator's own `createdAt` and `attachments`, which the replayed row has neither of. The match
+is a strict-equality scan over the held rows, never a `Set` or `Map` of ids — a page's `messageId` is the
+id *another* client minted, stored and replayed, untrusted on the same terms as every other `messageId`
+read (see `threadTimeline.ts` § Types), and a keyed collection of them is exactly what that field's "never
+a lookup path, a cache key, a Map key" contract denies (a first-draft `Set<string>` was the plan's own MUST
+FIX, caught in security review before ship — `Set.prototype.has` is in fact prototype-safe, which is
+exactly why it read as fine). Deliberately **not idempotent**: applying the same page twice prepends its
+non-`userText` rows twice. Unreachable today (nothing asks for a page until #1224, and #1222's correlation
+settles each request once), and the general fix needs the entry-level join key #1225 owns — a guard here
+would be that join built early and wrong.
+
 ## Where the detail lives
 
 Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the link points at the right file.
@@ -268,6 +323,12 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   [keyed-holder](conversation-timeline-holder.md) fields the container destructures. See
   [Conversation shell § Thinking / working
   indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
+- **`useHistoryPageBridge()` mounts in `App.tsx`** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)),
+  beside `useQuestionBridge()` rather than replacing it — the first rework pass on this ticket landed a
+  hunk that deleted the neighbouring call while keeping its now-unused-looking import, which compiled and
+  passed every renderer unit test (a static server render mounts no effects) and only reddened the three
+  `question-*` e2e specs. Takes no `openConversationId` unlike `useTimelineBridge`: a page's
+  `conversationId` is required and client-owned, so there is nothing to fall back to.
 
 ## Edge cases and limitations
 
@@ -331,6 +392,16 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   seam, opening a conversation already creates and promotes its slice, so a later `reconnected` reconcile
   finds an existing slice rather than minting a fresh one for any conversation that has actually been
   opened.
+- **Prepending shifts every held row's index key** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
+  `ConversationScreen` keys timeline rows by array index (see [Thread timeline § Edge
+  cases](thread-timeline.md#edge-cases-and-limitations)), so a page landing at the head re-keys and
+  re-renders every row already held. The rows are pure functions of their props, so the output is still
+  correct — only the reconciliation work changes. Re-keying the list is a separate change with its own
+  detector, not made here.
+- **`prependHistoryFor` is not idempotent, by design** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)).
+  Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
+  suppressed, by the AC4 echo dedup. Unreachable today; see § the write path above for why a guard was
+  deliberately not built here.
 
 ## Related
 
@@ -452,3 +523,12 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   pair with `resultDetail`, in one ticket rather than #642/#643's two-ticket split, since a scalar has
   no daemon-chosen keys to separate decode from carry over. Still dormant —
   [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) renders it.
+- [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) — draws a served history page: widens
+  `translateTimelineEvent`'s parameter to `DaemonEvent | HistoryTimelineEvent`, adds its tenth owned arm
+  (`messageReceived`→`userText`, live-lane-dormant by construction), and adds the fifth channel subscriber
+  (`historyPageBridge.ts`) and fifth store write path (`prependHistoryFor`) covered in full above.
+  Blocked-by [#1222](request-history-send.md) (the ask + transport decode) and
+  [#1227](request-history-send.md) (the per-entry payload decode); [#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)
+  (the walk) and [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) (joining a page to the
+  live stream) are still open. Spec:
+  `docs/specs/architecture/1223-draw-a-history-page-through-the-timeline-reducer.md`.

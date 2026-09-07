@@ -46,6 +46,22 @@ immediately before and after the drop, the DOM-only answer to the #442-class deq
 hazard), and — reusing #445's two-signal-quiesce-plus-settle idiom verbatim — the turn drains to prove
 the dropped send produced no assistant turn at all.
 
+**[#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) added the echo half this spec used
+to explicitly wave off.** At ship time #446 knew the drop left a delivered-looking `userText` echo
+standing beside the vanished queued row and said so in prose, scoping every queued assertion away from
+it as "expected and harmless" — that was the actual product bug #1213 fixed. The spec now asserts msg2's
+delivered echo is present *before* the drop and gone *after*, with msg1's own echo untouched, using the
+existing `queuedBubbles` 1 → 0 mutation-check as the positive wait a closing absence assertion needs in
+front of it (an opening `toHaveCount(0)` proves nothing on its own — it can pass before the click's async
+work resolves). This is the one assertion in the tier that depends on the real `pyry` binary actually
+shipping pyrycode#2092: against an older daemon the `queue_state` frame carries no `message_id`, the
+drop correlates with nothing, and the echo-gone assertion is the one that reddens — check the binary
+before the diff if it's this line. See [Dequeue message
+envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
+timeline](thread-timeline.md#types) for the client-side mechanism; the fake-tier twin is
+`e2e/queued-backlog-interrupt.spec.ts`, updated in the same PR, whose fixture literals had to gain
+`message_id` by hand since nothing typechecks `e2e/`.
+
 [#432](../codebase/432.md), the third sibling on this tier, is `e2e/real-claude-permission-modal.spec.ts`
 — the deepest liveness net in the suite. It clones the same precondition and swaps the turn body for a
 prompt engineered to force exactly one deterministic, permission-gated tool call, waits for
@@ -380,6 +396,11 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [Queue store](queue-store.md) / [#446 codebase notes](../codebase/446.md) — #445's twin
   (`real-claude-queue-drop.spec.ts`); the real-stack liveness net over the queue-while-busy-then-drop
   client wiring.
+- [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+  [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — widened `real-claude-queue-drop.spec.ts`
+  with the echo-removal assertion covered in full above; no new `real-*` file, so
+  `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` does not drift. Full design:
+  `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
 - [#432 codebase notes](../codebase/432.md) — the third tier sibling
   (`real-claude-permission-modal.spec.ts`); the real-stack liveness net over the permission-modal
   chain, contrasted with the fake-stack twin #426.

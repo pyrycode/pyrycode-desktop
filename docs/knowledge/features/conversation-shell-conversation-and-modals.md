@@ -49,7 +49,7 @@ one continuous thread with no split-brain and no empty second region. See
 [#179 codebase notes](../codebase/179.md) for the full design, the security review, and lessons
 learned.
 
-## Queued backlog + drop affordance (#294, drop since #296)
+## Queued backlog + drop affordance (#294, drop since #296, echo removal since #1213)
 
 The [queue store](queue-store.md)'s held backlog (per-conversation `QueuedItem` rows the daemon has
 accepted but not yet run) renders as `QueuedBacklog`, an exported pure view mounted after
@@ -83,17 +83,38 @@ that cannot answer is a bug" rule) — `ConversationScreen` binds it inline to t
 `dropQueuedMessage` helper (`dropQueuedMessage.ts`), supplying `openConversationId` and
 dereferencing `window.pyry.sendCommand` only inside the click closure, never at render (what keeps
 the empty-backlog container smoke render bridge-free). Activating it dispatches
-`dequeueMessageCommand` (see [Dequeue message envelope](dequeue-message-envelope.md)) and nothing
-else — **no optimistic removal**: the row disappears only when the daemon's next `queue_state`
-snapshot replaces the backlog and this same store subscription re-renders. The button exists only
-inside `QueuedBacklog`; `Timeline` draws every delivered row and is untouched, so "affordance only
-on queued rows" and "delivered rows unaffected" are structural guarantees, not conventions. The
-drop button inherits the region's 50% dimming (a child's own opacity cannot escape a parent opacity
-compositing group) — shipped dimmed by design; see [#296 codebase notes](../codebase/296.md).
+`dequeueMessageCommand` (see [Dequeue message envelope](dequeue-message-envelope.md)) — **the queued
+row itself is still never removed optimistically**; it disappears only when the daemon's next
+`queue_state` snapshot replaces the backlog and this same store subscription re-renders, #296's
+ruling unchanged by anything below. The button exists only inside `QueuedBacklog`; `Timeline` draws
+every delivered row and is untouched, so "affordance only on queued rows" and "delivered rows
+unaffected" are structural guarantees, not conventions. The drop button inherits the region's 50%
+dimming (a child's own opacity cannot escape a parent opacity compositing group) — shipped dimmed by
+design; see [#296 codebase notes](../codebase/296.md).
+
+**[#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) widened what activating the button
+does, without touching the row or the wire frame above.** Before #1213, cancelling a queued message left
+its ordinary delivered-looking `userText` bubble in the thread forever — the daemon parked the message
+instead of running it, but nothing told the composer's optimistic echo that, so the operator's own cancel
+produced a permanent lie in the transcript. `QueuedBacklog`'s `onDrop` now takes the row's `message_id`
+too (`(queuedMsgId: number, messageId: string | undefined) => void`, still only two positional values,
+never the whole `QueuedItem`) and `ConversationScreen` forwards it into `dropQueuedMessage` alongside two
+new deps, `dispatch`/`dispatchFor` — the same pair [composer send](composer-send.md)'s `submitMessage`
+posted the echo through. A drop that actually reaches the daemon (the send did not throw) now also
+removes the correlated echo from both timeline stores; an id-less row — a pre-pyrycode#2092 daemon, or a
+row this window never sent — still drops normally and removes nothing else. The echo's removal *is*
+optimistic (posted at the click, not deferred to a confirming snapshot) — deliberately different from
+the queued row, whose truth the daemon owns; the echo is this window's own record, and `dequeue_message`
+has no reject path to wait for regardless. Full design, including why the removal fires at the click and
+what it leaves the working indicator's `localSendPending` scalar as:
+`docs/specs/architecture/1213-drop-queued-message-removes-echo.md`. See [Thread timeline §
+Types](thread-timeline.md#types) and [Dequeue message
+envelope](dequeue-message-envelope.md#configuration-and-usage) for the store- and command-side detail.
 
 No Figma coverage for either the queued row or its drop control — the same documented gap as
 [#148](../codebase/148.md)'s thread-chrome states: the mobile file draws only the populated,
-delivered thread (node 16-8/16-21). See [#294 codebase notes](../codebase/294.md) and [#296
+delivered thread (node 16-8/16-21). #1213 adds no visual of its own — same N/A, stated again in its
+own spec rather than assumed. See [#294 codebase notes](../codebase/294.md) and [#296
 codebase notes](../codebase/296.md) for full design and patterns established.
 
 ## Screen-snapshot action & display (#324, removed #618)

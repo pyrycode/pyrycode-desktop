@@ -58,7 +58,7 @@ type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
-  | { kind: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
+  | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 type ThreadEvent =
@@ -67,15 +67,16 @@ type ThreadEvent =
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
-  | { type: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
+  | { type: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
   | { type: 'compacting'; active: boolean }
   | { type: 'reset' }
   | { type: 'reconnected' }
+  | { type: 'dropUserText'; messageId: string }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean }
 interface ApiRetryStatus { current: number; total: number }
 ```
 
@@ -95,7 +96,12 @@ is a fourth such scalar**, back to a plain flag like `stalled` — but with `api
 rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit falling edge, so it clears
 only on that edge and survives turn activity. It stays `boolean` rather than `apiRetry`'s `| null`
 record because the wire carries no counter to discard on clear — there is nothing for a `| null` shape
-to make "true by construction."
+to make "true by construction." **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
+scalar** — set by the `userText` arm (the composer's own accept signal, no separate event) and cleared
+only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
+what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
+Thinking / working indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
+not restated here.
 
 **`toolCall.input` / `toolUse.input` ([#643](../codebase/643.md)) is not a sixth scalar** — it's an
 optional field on an existing arm/item pair, the tool's own input fields as name → value
@@ -166,6 +172,26 @@ attachments](composer-attach.md#pending-attachments-1039) for how the composer a
 sends, and [Thread timeline — history](thread-timeline-history.md#configuration-and-usage) for the ticket
 note.
 
+**`messageId` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)) is a fifth field-pair
+widen, on `userText` and its matching event arm only, but for a different reason than the four above** —
+not display, but correlation. It is the id [composer send](composer-send.md)'s `submitMessage` already
+mints for the message's own `send_message` wire frame, retained on the echo unconditionally rather than
+discarded once the frame is sent — one mint, two uses, so the wire and this row can never name different
+messages. It exists so a later `dropUserText` (below) can find the echo again when the operator cancels
+the queued message it stood for: the daemon parks a mid-turn send instead of running it and echoes the
+same id back on the [queue store](queue-store.md)'s `QueuedItem.message_id`
+(pyrycode#2092), and nothing else the two rows share is a key (`text` is not unique, position mis-aligns
+on the first drop). Absent means the producer minted none — test `item.messageId === undefined`, never
+`'messageId' in item`, since the reducer assigns it unconditionally; this is the shape a future history
+backfill producer would take, and an id-less echo correlates with nothing and can never be removed by a
+drop. Untrusted on the read side, on the same terms as `text`: the value it is compared against arrives
+from another client through a content-blind relay, so it is read for strict string equality only — never
+a lookup path, a cache key, a filename, a URL, a `Map` key or a React key (`selectItems`' render key stays
+array index, per § Edge cases below). Field-for-field identical between the item and the event; production
+always carries one (`submitMessage`'s `newMessageId` is required), but it stays optional on both types
+because the union is constructed unstamped in dozens of specs and requiring it would buy nothing an
+id-less, un-droppable row doesn't already give for free.
+
 ### The reducer
 
 `reduceTimeline(state, event): TimelineState` is pure and exported — no mutation, fresh state,
@@ -179,13 +205,14 @@ note.
 | `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
 | `turnState` | set `phase`; same reference if unchanged (no-churn) |
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
-| `userText` | append a fresh `userText` item, carrying the event's `createdAt` and `attachments` unconditionally and by reference (never coalesced, so unlike `assistantDelta` there is no earlier stamp or set to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
+| `userText` | append a fresh `userText` item, carrying the event's `createdAt`, `messageId` and `attachments` unconditionally and by reference (never coalesced, so unlike `assistantDelta` there is no earlier stamp or set to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 | `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
 | `reset` | returns `initialTimelineState` — all five fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
 | `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false` via a hand-written five-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all four are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md) |
+| `dropUserText` | remove the **first** `userText` item whose `messageId` strictly equals `event.messageId` (`removeUserEcho`, below); same `items` reference on no match. The **only** arm that removes an item — everything else appends or coalesces. Every chrome scalar, `localSendPending` included, is carried through unchanged; not a second `userText` producer and not its inverse — see § Edge cases — [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -219,6 +246,15 @@ the only read surface.
   `tail.createdAt` (this function rebuilds the item as a fresh literal on every coalesced delta, so
   carrying the incoming stamp instead would silently re-date a bubble to its most recent fragment); only
   the fresh-append branch reads the parameter.
+- `removeUserEcho(items, messageId)` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213))
+  — `dropUserText`'s helper: removes the **first** `userText` item whose `messageId` strictly equals
+  `messageId`, `fillResult`'s discipline one shape over (a `removed` flag rather than a bare `filter`, so
+  an unmatched drop returns `items` by reference and the reducer's same-reference contract holds).
+  First-match-only rather than filter-everything: ids are unique in production (the composer mints one
+  per send), so the two agree on every real input, and the narrower rule is the one that cannot surprise
+  — a single operator click may never take two rows out of the transcript. The `kind === 'userText'`
+  guard makes "only a user echo can ever be removed" structural: no other item kind carries a
+  `messageId`, so no daemon-authored row has a path to this branch whatever the wire says.
 - `fillResult(items, toolUseId, result)` — the `toolResult` correlate-and-fill. Narrows via a
   `.map` callback whose `item.kind === 'toolCall'` guard narrows `item` so the spread
   (`{ ...item, result }`) type-checks with **no cast** — the codebase bans unchecked `as` in
@@ -345,6 +381,25 @@ with the `attachments` field documented above (§ Types).
   gains no matching field in this slice, so the association is local to this client's timeline only and is
   not sent to the daemon with the message.
 
+- **A `dropUserText` removal is not the `userText` arm's inverse, and must not be read as one**
+  ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)). `userText` opens
+  `localSendPending`'s local window on the grounds that the arm firing and the composer accepting a
+  submit are the same fact; the tempting symmetry — a removal closes what an append opened — is wrong,
+  because the window belongs to whatever message is currently pending, not to the one just dropped.
+  `dropUserText` carries `localSendPending` through unchanged, same as every other chrome scalar, and
+  leaves the daemon's next `turn_state` to close it. **Only `items` changes on this arm** — the sole
+  removal arm in the reducer; every other arm appends or coalesces.
+- **A drop issued by another paired client is out of scope, by construction rather than by a guard.**
+  `queue_state` fans out to every interactive connection, so this window can observe an item leave the
+  backlog because a *different* client dropped it — but this window's timeline holds no `userText` echo
+  for a message it never sent, so `removeUserEcho` simply finds nothing to remove. There is no local
+  concept of "another device's drop" to build a heuristic for; pyrycode#2092's own doc criterion states
+  the daemon-side half of the same rule ("an item whose `message_id` matches no local echo renders as a
+  plain queued row and is never dropped").
+- **An echo with no `messageId` can never be removed by a drop** — the shape a future history-backfill
+  producer would take, on the same "absent correlates with nothing" rule the field's own paragraph
+  states above (§ Types). Nothing in this module manufactures a fallback key for it.
+
 ## Related
 
 - [Thread timeline — history](thread-timeline-history.md) — the ticket-by-ticket build-out of every arm,
@@ -448,3 +503,14 @@ with the `attachments` field documented above (§ Types).
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)
   — the pure-reducer / sealed-union / wire-types-are-a-bridge-concern discipline this ADR extends.
+- [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+  [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — added `messageId` to `userText` and
+  the `dropUserText` removal arm + `removeUserEcho`, covered in full above (§ Types, § The reducer, §
+  Internal helpers, § Edge cases). Producer: [composer send](composer-send.md)'s `submitMessage`, which
+  mints the id once for the wire frame and retains it on the echo. Consumer:
+  [dequeue message envelope § Configuration and usage](dequeue-message-envelope.md#configuration-and-usage)'s
+  `dropQueuedMessage`, which dispatches the removal to both this module's two host stores
+  ([timeline store](conversation-timeline-store.md), [conversation timeline
+  holder](conversation-timeline-holder.md)) on the same `message_id` the [queue
+  store](queue-store.md)'s `QueuedItem` now carries (pyrycode#2092). Full design, including why the
+  removal fires at the click rather than on a confirming snapshot: `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.

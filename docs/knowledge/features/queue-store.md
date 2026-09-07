@@ -24,14 +24,23 @@ pairing itself ends.
 
 ## What it does
 
-Holds each conversation's queued-message backlog — `{ queued_msg_id, text, ts }` rows in enqueue
-order — keyed by `conversationId`, and replaces a key's held backlog wholesale on every
+Holds each conversation's queued-message backlog — `{ queued_msg_id, text, ts, message_id? }` rows in
+enqueue order — keyed by `conversationId`, and replaces a key's held backlog wholesale on every
 `queue_state` snapshot for that conversation: an entry the daemon removed disappears, order follows
 the event, and an empty backlog clears the held list to `[]`. Before any snapshot arrives for a
 conversation, its backlog reads as empty. Deliberately **not** a [session
 store](session-store.md) or [timeline store](conversation-timeline-store.md) facet: `queue_state`
 is daemon *state* (SSOT pyrycode #720), not part of claude's turn stream, so it never folds into
 `reduceTimeline` and gets its own store instead.
+
+`message_id` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213), pyrycode#2092) is the
+newest field on the row — the id of the `send_message` that produced the item, relayed byte-for-byte and
+optional only because a pre-#2092 daemon sends none. It reaches this store, and `QueuedBacklog`, for
+free: the store holds `queued` **verbatim by reference** with no remap (see § How it works), so a wire
+field this store never names is already carried. This store does nothing with the field itself — it is
+read only by the container that binds `QueuedBacklog`'s drop affordance, to correlate the drop against
+the sending window's own [thread timeline](thread-timeline.md) echo. See [Dequeue message
+envelope](dequeue-message-envelope.md#configuration-and-usage) for the consumer.
 
 On every relay (re)handshake the store also resets: the daemon has no session resume, so a
 reconnect brings the client to current truth by re-sending one `queue_state` snapshot per
@@ -339,6 +348,12 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
 - [#296 codebase notes](../codebase/296.md) — the drop affordance (shipped) that dispatches a removal
   against an entry this store holds; the row leaves only when this store's existing subscription
   processes the daemon's next `queue_state` snapshot, never via a direct store mutation.
+- [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+  [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — added the optional `message_id`
+  field this store carries verbatim (§ What it does), and used it to correlate a drop against the
+  sending window's own timeline echo — see [Dequeue message
+  envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
+  timeline](thread-timeline.md#types). This store's own read/write surface is unchanged.
 - [#197 codebase notes](../codebase/197.md) — the reconcile-on-connect reset (originally
   `resetBacklogs`, a nullary whole-map clear + the `connected`-edge branch in `subscribeQueue`),
   shipped; completed the queue family end to end for a single app-wide connection, before

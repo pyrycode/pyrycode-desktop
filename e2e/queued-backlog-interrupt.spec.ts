@@ -7,6 +7,7 @@ import type {
   QueueStatePayload,
   TurnStatePayload,
   DequeueMessagePayload,
+  SendMessagePayload,
   WireTurnState
 } from '../src/shared/wire/types'
 
@@ -79,8 +80,28 @@ const DELIVERED_TEXT = 'A delivered user message'
 // Two queued items with distinct texts + ids. "Keyed by queued_msg_id" is proven behaviorally by the
 // dequeue step (a DOM React key is not an inspectable attribute; correct keying = removing exactly the
 // omitted row while the other stays).
-const QUEUED_A: QueuedItem = { queued_msg_id: 1, text: 'First queued task', ts: FIXED_TS }
-const QUEUED_B: QueuedItem = { queued_msg_id: 2, text: 'Second queued task', ts: FIXED_TS }
+//
+// #1213: each item also carries the `message_id` of the `send_message` that produced it
+// (pyrycode#2092) — the key that lets a drop take the sending window's own timeline echo out too. A's is
+// NOT a literal: it is the id the renderer minted for its real composer send, read off the captured frame
+// at run time (`sentMessageId` below), because a client-minted UUID cannot be known in advance and a
+// fabricated one would correlate with nothing. B's IS a fabricated literal, and deliberately — it is the
+// "an item whose id matches no local echo" case, which must remove nothing.
+//
+// ⭐ NOTHING TYPECHECKS `e2e/` (no tsconfig includes it; Playwright strips types with esbuild), and
+// `message_id` is OPTIONAL, so a fixture that omitted it would compile, run, and simply fail to correlate
+// with no red anywhere. That is why it is spelled out here rather than left to the type to demand.
+const QUEUED_A: Omit<QueuedItem, 'message_id'> = {
+  queued_msg_id: 1,
+  text: 'First queued task',
+  ts: FIXED_TS
+}
+const QUEUED_B: QueuedItem = {
+  queued_msg_id: 2,
+  text: 'Second queued task',
+  ts: FIXED_TS,
+  message_id: 'an-id-no-echo-in-this-window-carries'
+}
 
 // Spec-local frame builders (the seedConversationsFrame idiom): each seals one pushed envelope via the
 // production codec, deterministic id/ts. Both carry conversation_id === SEEDED_ROW.id (fact 1).
@@ -135,6 +156,17 @@ function dequeueFramesMatching(captured: Envelope[], expected: DequeueMessagePay
     .length
 }
 
+// #1213: the `message_id` the renderer minted for the composer send carrying `text`. The correlation key
+// is client-minted (crypto.randomUUID) so the spec cannot know it in advance — it reads it back off the
+// captured outbound frame, which is exactly the value the real daemon would relay into its queue_state.
+// Returns undefined until the frame lands, so it is safe to poll on.
+function sentMessageId(captured: Envelope[], text: string): string | undefined {
+  const frame = captured.find(
+    (e) => e.type === 'send_message' && (e.payload as SendMessagePayload).text === text
+  )
+  return frame === undefined ? undefined : (frame.payload as SendMessagePayload).message_id
+}
+
 // Count captured interrupt frames. The interrupt payload is bare `{}` (no ids to match), so match by
 // `type` only, never a payload deep-equal; `.toBe(1)` proves send-once.
 function interruptFrames(captured: Envelope[]): number {
@@ -159,6 +191,10 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
     queuedRow(text).getByRole('button', { name: 'Drop queued message' })
   const queuedBubbles = page.locator('[data-thread-role="queued"]')
   const deliveredUser = page.locator('[data-thread-role="user"]')
+  // #1213: one delivered echo, addressed by its text. The three texts in this spec share no substring, so
+  // Playwright's case-insensitive SUBSTRING `hasText` cannot select two rows at once.
+  const deliveredEcho = (text: string) =>
+    page.locator('[data-thread-role="user"]', { hasText: text })
   const interruptButton = page.getByRole('button', { name: 'Stop the running turn' })
   const runningIndicator = page.locator('.conversation__thinking')
 
@@ -169,6 +205,20 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(deliveredUser).toHaveCount(1)
 
+  // #1213: a SECOND real composer send, and this one is the message the daemon will report as queued. It
+  // has to go through the composer rather than be fabricated, because only a real send mints the
+  // `message_id` that both the wire frame and the optimistic echo carry — which is the whole correlation
+  // this ticket establishes. The fake no-ops send_message here too, so this row is an echo and nothing else.
+  await page.getByPlaceholder('Message…').fill(QUEUED_A.text)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(deliveredUser).toHaveCount(2)
+  // Read the minted id back off the captured frame. `.poll` because the send crosses IPC → main → Noise →
+  // the loopback fake, so the frame lands a tick or two after the click.
+  await expect
+    .poll(() => sentMessageId(captured, QUEUED_A.text), { timeout: ROUNDTRIP_TIMEOUT_MS })
+    .toEqual(expect.any(String))
+  const queuedMessageId = sentMessageId(captured, QUEUED_A.text)
+
   // #650: close the working-indicator window the accept above opened locally (fact 3). The fake no-ops
   // send_message, so nothing else ever would — and a real daemon ends every turn with this frame anyway,
   // including one it answered with nothing. The zero-count gate is the load-bearing half: it is what makes
@@ -178,12 +228,18 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
 
   // Push the queue snapshot (AFTER launch resolved → past the `connected` backlog reset, fact 2; under
   // SEEDED_ROW.id → selected by the active-conversation backlog, fact 1). The live subscription re-renders.
-  daemon.pushFrame(queueStateFrame([QUEUED_A, QUEUED_B]))
+  // #1213: A carries the id the composer just minted, so it correlates with the echo above — the shape a
+  // real daemon produces for a message THIS window sent mid-turn. B carries an id no echo here holds.
+  daemon.pushFrame(queueStateFrame([{ ...QUEUED_A, message_id: queuedMessageId }, QUEUED_B]))
   await expect(queuedBubbles).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(queuedRow('First queued task')).toBeVisible()
   await expect(queuedRow('Second queued task')).toBeVisible()
-  // The two roles partition: the delivered row is untouched by the queue push (the AC "distinct" seam).
-  await expect(deliveredUser).toHaveCount(1)
+  // The two roles partition: the delivered rows are untouched by the queue push (the AC "distinct" seam).
+  // Both echoes are on screen HERE, which is what makes the post-drop absence below a real mutation check
+  // rather than an assertion that was already true at launch.
+  await expect(deliveredUser).toHaveCount(2)
+  await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(1)
+  await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
 
   // --- AC: dequeue (non-optimistic — send half proven from the captured frame, then reflect) ---
   await dropButton('First queued task').click()
@@ -192,11 +248,25 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
       timeout: ROUNDTRIP_TIMEOUT_MS
     })
     .toBe(1)
-  // Row A is NOT gone yet (non-optimistic). Push the fresh replacement snapshot omitting A → it leaves.
+  // --- #1213: the ECHO goes at the click, unlike the row. ---
+  // The poll above is the positive wait this absence needs: it reads the drop's OWN effect (the captured
+  // dequeue frame), is unreachable from the pre-click state, and only once it has fired can the removal
+  // that rides the same click have run. A bare toHaveCount(0) here would otherwise pass before the click's
+  // async work resolved.
+  await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // ONLY the dropped message's echo goes: the unrelated delivered row is still there, still attributed.
+  await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
+  await expect(deliveredUser).toHaveCount(1)
+
+  // Row A is NOT gone yet (non-optimistic — #296 AC3, unchanged by #1213: the daemon owns the backlog).
+  // Push the fresh replacement snapshot omitting A → it leaves.
   daemon.pushFrame(queueStateFrame([QUEUED_B]))
   await expect(queuedRow('First queued task')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(queuedRow('Second queued task')).toBeVisible()
   await expect(queuedBubbles).toHaveCount(1)
+  // The drain half of AC4, from the other direction: that replacement snapshot also removed B's item from
+  // nothing — no echo left the thread on a snapshot, only on the click above.
+  await expect(deliveredUser).toHaveCount(1)
 
   // --- AC: interrupt (thinking lights both controls; idle retracts both) ---
   daemon.pushFrame(turnStateFrame('thinking'))

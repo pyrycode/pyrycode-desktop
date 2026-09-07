@@ -1383,6 +1383,15 @@ function parseToolResultPayload(payload: unknown): ToolResultPayload {
  * failure mode (the parseSessionTransitionPayload no-cross-validate posture). Returns only the three known
  * fields; unknown server-added keys are tolerated (forward-compat) but not copied. Its message names the
  * category only — `text` is untrusted transit content and `queued_msg_id` correlates a message.
+ *
+ * #1213 adds a FOURTH field on the opposite footing from those three: `message_id` via `optionalString`,
+ * because AC1 requires a pre-pyrycode#2092 daemon's snapshot to still decode. Absence is a VALUE, not a
+ * decode error (the `result_detail` posture) — the fail-closed reading stays for the fields that carry it.
+ * `''` is likewise a value, carried through rather than normalised to absence: the two collapse only at the
+ * consumer, where both mean "correlates with nothing". A NON-STRING still fails the whole snapshot closed,
+ * which is `optionalString`'s own rule and the safe direction. The value is relayed VERBATIM — no trim, no
+ * case fold, no client-side mint when the wire sent none — because it is another client's id and any edit
+ * here would silently break the correlation it exists for.
  */
 function parseQueuedItem(payload: unknown): QueuedItem {
   if (!isRecord(payload)) {
@@ -1391,7 +1400,8 @@ function parseQueuedItem(payload: unknown): QueuedItem {
   const queued_msg_id = requireNumber(payload, 'queued_msg_id')
   const text = requireString(payload, 'text')
   const ts = requireString(payload, 'ts')
-  return { queued_msg_id, text, ts }
+  const message_id = optionalString(payload, 'message_id')
+  return { queued_msg_id, text, ts, message_id }
 }
 
 /**

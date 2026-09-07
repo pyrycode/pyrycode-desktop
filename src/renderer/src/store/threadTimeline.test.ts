@@ -1244,3 +1244,144 @@ describe('reduceTimeline — the unrecognized-message row', () => {
     expect(item).not.toHaveProperty('turnId')
   })
 })
+
+/**
+ * #1213's builders. `userTextWithId` is a FOURTH separate builder rather than a widening of the three
+ * above, for the reason `userTextAt` / `userTextWith` already record: widening would push a
+ * present-but-`undefined` `messageId` into every existing caller's fixture, and `userText(...)` must stay
+ * the builder for the id-less shape a spec that mints nothing produces — which is also the shape a future
+ * history backfill would produce, and which no drop may ever remove.
+ */
+function userTextWithId(text: string, messageId: string): ThreadEvent {
+  return { type: 'userText', text, messageId }
+}
+
+function dropUserText(messageId: string): ThreadEvent {
+  return { type: 'dropUserText', messageId }
+}
+
+describe('reduceTimeline — userText messageId (#1213)', () => {
+  it('carries the composer-minted id onto the item verbatim', () => {
+    const [item] = run([userTextWithId('hello', 'msg-Abc-1')]).items
+    expect(item).toEqual({
+      kind: 'userText',
+      text: 'hello',
+      createdAt: undefined,
+      messageId: 'msg-Abc-1',
+      attachments: undefined
+    })
+  })
+
+  it('leaves the id undefined when the producer minted none — absence is a legal item', () => {
+    const [item] = run([userText('hello')]).items
+    expect(item).toHaveProperty('messageId', undefined)
+  })
+})
+
+describe('reduceTimeline — dropUserText (#1213)', () => {
+  it('removes the echo whose messageId matches, and only that echo (AC2)', () => {
+    const state = run([
+      userTextWithId('first', 'm1'),
+      userTextWithId('second', 'm2'),
+      dropUserText('m1')
+    ])
+    expect(state.items).toEqual([
+      { kind: 'userText', text: 'second', createdAt: undefined, messageId: 'm2', attachments: undefined }
+    ])
+  })
+
+  it('separates two IDENTICAL texts by id — the second stays, correctly attributed (AC3)', () => {
+    const state = run([
+      userTextWithId('same words', 'm1'),
+      userTextWithId('same words', 'm2'),
+      dropUserText('m1')
+    ])
+    expect(state.items).toHaveLength(1)
+    expect(state.items[0]).toMatchObject({ kind: 'userText', text: 'same words', messageId: 'm2' })
+  })
+
+  it('moves no other row: the surrounding items keep their order and identity (AC3)', () => {
+    const state = run([
+      delta('t1', 'before'),
+      userTextWithId('drop me', 'm1'),
+      delta('t2', 'after'),
+      turnEnd('t2'),
+      dropUserText('m1')
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText', 'assistantText', 'turnBoundary'])
+    expect(state.items.map((i) => ('text' in i ? i.text : i.kind))).toEqual([
+      'before',
+      'after',
+      'turnBoundary'
+    ])
+  })
+
+  it('returns the SAME state reference when no echo matches — no selector churn', () => {
+    const before = run([userTextWithId('kept', 'm1'), delta('t1', 'reply')])
+    const after = reduceTimeline(before, dropUserText('m-nothing'))
+    expect(after).toBe(before)
+  })
+
+  it('never removes an id-less echo, including against an empty-string drop (AC1)', () => {
+    const before = run([userText('no id at all')])
+    expect(reduceTimeline(before, dropUserText(''))).toBe(before)
+    expect(reduceTimeline(before, dropUserText('m1'))).toBe(before)
+  })
+
+  it('removes only the FIRST match, never a second row', () => {
+    // Ids are unique in production; first-match-only is the fillToolResult discipline, pinned so a
+    // future filter-everything rewrite reddens rather than ships.
+    const seeded: TimelineState = {
+      ...initialTimelineState,
+      items: [
+        { kind: 'userText', text: 'a', messageId: 'dup' },
+        { kind: 'userText', text: 'b', messageId: 'dup' }
+      ]
+    }
+    const after = reduceTimeline(seeded, dropUserText('dup'))
+    expect(after.items).toEqual([{ kind: 'userText', text: 'b', messageId: 'dup' }])
+  })
+
+  it('is not a candidate filter over other kinds — only userText rows can go', () => {
+    const state = run([
+      toolUse('t1', 'tool-1'),
+      delta('t1', 'text'),
+      sessionBoundary(),
+      dropUserText('tool-1')
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual(['toolCall', 'assistantText', 'sessionBoundary'])
+  })
+
+  it('carries every chrome scalar and the phase unchanged — a drop is not turn activity', () => {
+    const before = run([
+      userTextWithId('drop me', 'm1'),
+      { type: 'turnState', state: 'thinking' },
+      stall(),
+      apiRetry(true, 2, 5),
+      compacting(true)
+    ])
+    const after = reduceTimeline(before, dropUserText('m1'))
+    expect(after.phase).toBe(before.phase)
+    expect(after.stalled).toBe(before.stalled)
+    expect(after.apiRetry).toEqual(before.apiRetry)
+    expect(after.compacting).toBe(before.compacting)
+  })
+
+  it('neither opens nor closes the working indicator local window (#650)', () => {
+    // The userText arm OPENS it; this arm is not a second userText producer, so it must leave the scalar
+    // exactly as it found it — clearing it would hide the indicator for a DIFFERENT pending message.
+    const pending = run([userTextWithId('pending', 'm1'), userTextWithId('other', 'm2')])
+    expect(pending.localSendPending).toBe(true)
+    expect(reduceTimeline(pending, dropUserText('m1')).localSendPending).toBe(true)
+
+    const idle = run([{ type: 'turnState', state: 'idle' }])
+    expect(idle.localSendPending).toBe(false)
+    expect(reduceTimeline(idle, dropUserText('m1')).localSendPending).toBe(false)
+  })
+
+  it('is idempotent — a second drop for the same id finds nothing and returns the same reference', () => {
+    const once = run([userTextWithId('drop me', 'm1'), dropUserText('m1')])
+    expect(once.items).toEqual([])
+    expect(reduceTimeline(once, dropUserText('m1'))).toBe(once)
+  })
+})

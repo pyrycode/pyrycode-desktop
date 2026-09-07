@@ -56,9 +56,13 @@ now also true of the timestamp). It goes the **opposite** way from `dispatchFor`
 for a reason that precedent did not face: `dispatchFor`'s six call sites made *requiring* it cheap (six
 mechanical test edits for a compile error on "forgot to wire it"); requiring `now` here would not merely
 cost edits — this deps object now has thirteen call sites, not `dispatchFor`'s six — it would **redden**
-the three existing `toHaveBeenCalledWith({ type: 'userText', text })` assertions in
-`composerSend.test.ts`, since every deps literal would then supply a clock and every echo would carry a
-defined `createdAt` those assertions name none of. So `now` is optional with **no `Date.now` fallback** —
+every whole-object `toHaveBeenCalledWith` assertion on the echo in `composerSend.test.ts`, since every
+deps literal would then supply a clock and every echo would carry a defined `createdAt` where those
+assertions name none. ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) paid exactly
+that price for `messageId` below, which *is* required in this deps object as `newMessageId` and so is
+always defined: five such assertions gained the field. That cost was accepted because the id is not
+optional at the producer — the wire frame needs it either way — whereas a clock genuinely may be
+absent.) So `now` is optional with **no `Date.now` fallback** —
 absent clock means no stamp, the same rule [conversation timeline store](conversation-timeline-store.md)'s
 `translateTimelineEvent`/`subscribeTimeline` follow for the assistant side. The cost: the wiring at `ConversationScreen.tsx`'s `Composer.sendText` — the one production call site
 that builds a `ComposerSendDeps` literal and now includes `now: Date.now` — is not compile-enforced; a
@@ -67,10 +71,23 @@ behavior with its own spec instead of relying on the type system. See [Thread ti
 Types](thread-timeline.md#types) for the full field-pair contract and why the clock rides the event
 rather than a `reduceTimeline` parameter.
 
+**`message_id` is minted once and used twice — the wire command and the echo**
+([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)). [#179](../codebase/179.md) had
+retired the original "reuse the id so the daemon's re-echo dedupes" rationale, and that stays retired: in
+interactive mode the daemon streams no user-message event, so the echo is the sole source of the user
+message and needs no dedup key. #1213 puts the id back on the echo (`ThreadEvent.userText.messageId`) for
+an unrelated purpose — **correlation** with the queued row the daemon draws when it parks this message
+mid-turn (`QueuedItem.message_id`, pyrycode#2092) — so a later cancel
+([dequeue message envelope](dequeue-message-envelope.md)'s `dropQueuedMessage`) can find this exact echo
+again. It is recorded even when the send threw, unlike `attachments` below: that field is a claim about
+what the daemon was handed, so a frame that never went must claim nothing, while the id is this window's
+own name for its own message and would need to survive a retry regardless. See [Thread timeline §
+Types](thread-timeline.md#types) for the full field-pair contract.
+
 `submitMessage` contract:
 
 1. Trim `text`. If empty (whitespace-only) → return `false`, **no effects**.
-2. Mint `message_id` via `deps.newMessageId()` **once**; reuse it for both the wire payload and the store echo.
+2. Mint `message_id` via `deps.newMessageId()` **once**; reuse it for both the wire payload and the store echo (and, since #1213, the echo's own `messageId` field — the same one mint, two uses).
 3. Build `SendMessagePayload { conversation_id: MILESTONE_CONVERSATION_ID, message_id, text: trimmed }` (**no `role`** — that field is `MessagePayload`-only).
 4. **Guarded send (AC4):** `try { deps.sendCommand(sendMessageCommand(payload)) } catch { console.error(...) }` — a bridge failure is swallowed, never propagated.
 5. Dispatch `{ type: 'messageSent', message: { conversation_id, message_id, role: 'user', text: trimmed } }` — the optimistic echo, a wire `MessagePayload` carrying the **same `message_id`** as step 3.
@@ -417,6 +434,10 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   files the operator attached survive for the next send attempt. An unwired `takeAttachments`, or one that
   answers an empty array, both produce `echo.attachments === undefined` — the store never sees `[]`. See §
   10 above.
+- **A refused submit mints no `message_id` at all** ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213))
+  — unlike `now`/`takeAttachments`, `deps.newMessageId()` was already called only past both early guards
+  before this ticket, so there is nothing new to guard: a whitespace-only or null-conversation submit never
+  reaches step 2, never sends, and never produces an echo for a later drop to find.
 
 ## Related
 
@@ -431,6 +452,12 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   file actually reach claude, closed on the daemon side since `pyrycode#2036`/`pyrycode#2038`. Boundary
   guard: [command channel](command-channel.md)'s `isAttachmentIdList`. Live proof:
   [real-claude liveness e2e](real-claude-liveness-e2e.md)'s `e2e/real-claude-attachment.spec.ts`.
+- [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+  [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — retains the minted `message_id` on
+  the echo as `ThreadEvent.userText.messageId`, covered in full above. Consumer:
+  [dequeue message envelope](dequeue-message-envelope.md)'s `dropQueuedMessage`, which correlates a drop
+  against it via [thread timeline](thread-timeline.md#types)'s `dropUserText` arm. Full design:
+  `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the **main/transport half** this drives: the `sendMessage` command becomes an encrypted `send_message` envelope on the live Noise relay session. Together #65 + #66 are the two halves of sending a message.
 - [Session store](session-store.md) / [#2](../codebase/2.md) — hosts the `messageSent` action and the `appendUnique` dedupe (added #27) this relies on; #66 closes its "No optimistic send" limitation.
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the screen whose inert `Composer` this wires.

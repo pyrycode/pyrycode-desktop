@@ -128,7 +128,27 @@ export type ThreadItem =
   // daemon-supplied content. A file the ASSISTANT produced reaches the window as nothing at all
   // (`MessagePayload` has no attachment field and there is no list verb), so this field can only ever
   // describe attachments this client minted itself until that wire change exists.
-  | { kind: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
+  //
+  // #1213: `messageId` is the id this window minted for the message's OWN `send_message` frame — the same
+  // id, minted once and used twice, so the wire and this row can never name different messages. It exists
+  // for exactly one purpose: correlating this echo with the queued row the daemon draws for the same
+  // message, so `dropUserText` can take the echo out when the operator cancels it. ABSENT means the
+  // producer minted none — test `item.messageId === undefined`, never `'messageId' in item`, since the
+  // reducer assigns it unconditionally. Absence is a LEGAL item and it is the shape a future history
+  // backfill would produce; an id-less echo correlates with NOTHING and can never be removed by a drop,
+  // which is the right answer for a message this window did not send.
+  //
+  // UNTRUSTED ON THE READ SIDE, on the same terms as `text`: the value it is COMPARED against arrives from
+  // another client through a content-blind relay. It is read for strict string equality only — never a
+  // lookup path, a cache key, a filename, a URL, a Map key or a React key — and it is never rendered and
+  // never logged. A consumer that needs any of those must mint its own key rather than widen this one.
+  | {
+      kind: 'userText'
+      text: string
+      createdAt?: number
+      messageId?: string
+      attachments?: readonly MessageAttachment[]
+    }
   // #286: the session-boundary delimiter — a `/clear`, an idle eviction, or a workspace change started a
   // fresh session. A whole marker, never coalesced. Carries the RAW `occurredAt` (formatted at render, the
   // channel-list precedent, so the relative time stays fresh) and the untrusted `workspaceCwd` (rendered as
@@ -219,7 +239,20 @@ export type ThreadEvent =
   // than reaching for some other source. It rides the EVENT rather than arriving as a reducer parameter
   // for `createdAt`'s recorded reason: `reduceTimeline` is called by the two timeline stores, which are
   // production paths, so a parameter there would have to be threaded through every store-level spec.
-  | { type: 'userText'; text: string; createdAt?: number; attachments?: readonly MessageAttachment[] }
+  //
+  // #1213: `messageId` is field-for-field with the item's, and its sole producer reads it from the
+  // REQUIRED `newMessageId` it already calls for the wire frame — so unlike `createdAt` and `attachments`
+  // above, production always carries one. It is optional on the TYPE anyway, and deliberately: the union
+  // is constructed in dozens of specs that mint no id, and requiring it would redden every one of them to
+  // buy nothing (an id-less echo is already a legal, un-droppable row). Absent means the producer minted
+  // none — see the item.
+  | {
+      type: 'userText'
+      text: string
+      createdAt?: number
+      messageId?: string
+      attachments?: readonly MessageAttachment[]
+    }
   // #286: the session boundary. Field-for-field identical to the `sessionBoundary` ThreadItem, so the
   // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
   // discipline), never coalesced.
@@ -265,6 +298,20 @@ export type ThreadEvent =
   // Nullary following `reset`: the `connected` DaemonEvent's `HelloAckPayload` holds no field this
   // arm needs, so there is none to get wrong.
   | { type: 'reconnected' }
+  // #1213: take one optimistic `userText` echo back out — the operator dropped the queued message it
+  // stood for, so the daemon will never run it and a delivered-looking bubble for it is a lie. The THIRD
+  // non-content arm, beside `reset` and `reconnected`: a renderer lifecycle control event, never
+  // translated from a wire frame, so `timelineBridge` never produces it.
+  //
+  // NOT a second `userText` producer and not its inverse in the chrome sense — see the reducer arm, which
+  // states what it leaves `localSendPending` and `stalled` as, and why.
+  //
+  // `messageId` is a plain required field rather than `string | undefined`, and the empty-string rule
+  // lives at the SINGLE producer (`dropQueuedMessage`), which dispatches nothing for an absent or empty
+  // wire id. That is deliberate placement, not an omission: `undefined === ''` is false, so an id-less
+  // echo is already unreachable from here, and a second guard in the reducer would defend a failure mode
+  // the producer makes impossible.
+  | { type: 'dropUserText'; messageId: string }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -381,6 +428,31 @@ function fillResult(
     return item
   })
   return filled ? next : items
+}
+
+/**
+ * #1213: drop the FIRST `userText` item carrying `messageId`, returning `items` UNCHANGED (same reference)
+ * when nothing matches. `fillToolResult`'s discipline above, one shape over: a `removed` flag rather than
+ * a bare `filter`, so an unmatched drop churns no selector and the reducer's same-reference contract holds.
+ *
+ * First-match-only, not filter-everything. Ids are unique in production — the composer mints one per send
+ * — so the two agree on every real input; the narrower rule is the one that CANNOT surprise, since a single
+ * operator click may never take two rows out of the transcript.
+ *
+ * The `kind === 'userText'` guard is what makes "only a user echo can ever be removed" structural rather
+ * than conventional: no other item kind carries a `messageId` at all, so no daemon-authored row — a tool
+ * call, a boundary, an assistant bubble — has a path to this branch whatever the wire says.
+ */
+function removeUserEcho(items: readonly ThreadItem[], messageId: string): readonly ThreadItem[] {
+  let removed = false
+  const next = items.filter((item) => {
+    if (!removed && item.kind === 'userText' && item.messageId === messageId) {
+      removed = true
+      return false
+    }
+    return true
+  })
+  return removed ? next : items
 }
 
 /**
@@ -543,6 +615,10 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             kind: 'userText',
             text: event.text,
             createdAt: event.createdAt,
+            // #1213: carried verbatim and UNCONDITIONALLY — the `createdAt` / `attachments` discipline,
+            // never a conditional spread. This reducer is a CARRIER of the id, never its source: it mints
+            // nothing, compares nothing here, and holds no opinion about what an absent one means.
+            messageId: event.messageId,
             attachments: event.attachments
           }
         ],
@@ -552,6 +628,37 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         compacting: state.compacting,
         localSendPending: true
       }
+    case 'dropUserText': {
+      // #1213: the operator cancelled the queued message this echo stood for, so the echo comes out. The
+      // ONE arm that removes an item; everything else here appends or coalesces.
+      //
+      // `items` is the ONLY thing this arm touches. Every chrome scalar and `phase` are carried unchanged,
+      // and each for its own reason rather than by symmetry:
+      //  - `stalled` follows `userText` / `sessionBoundary`: a renderer-sourced event is not daemon turn
+      //    activity, so it is not in AC2's clear set.
+      //  - `apiRetry` and `compacting` clear only on their own explicit wire falling edge, which this is not.
+      //  - `localSendPending` (#650) is the one worth stating. The `userText` arm OPENS the working
+      //    indicator's local window on the grounds that the arm firing and the composer accepting a submit
+      //    are the same fact. This arm is NOT a second `userText` producer, so that reasoning is untouched
+      //    — but it is also NOT the inverse of it, and must not be written as one: the window belongs to
+      //    whatever message is currently pending, and a drop says nothing about that. Clearing it here
+      //    would hide the indicator for a DIFFERENT message that genuinely is in flight. So it is carried,
+      //    and the daemon's next `turn_state` still owns the close.
+      //
+      // Same-reference on no match, via the helper — so a drop for an id this timeline never held (another
+      // conversation's echo, an item whose wire id matched nothing) churns no selector at all.
+      const items = removeUserEcho(state.items, event.messageId)
+      return items === state.items
+        ? state
+        : {
+            items,
+            phase: state.phase,
+            stalled: state.stalled,
+            apiRetry: state.apiRetry,
+            compacting: state.compacting,
+            localSendPending: state.localSendPending
+          }
+    }
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
       // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1. NOT in

@@ -41,9 +41,13 @@ export interface PendingAttachmentTake {
  * `now` (#1013) is the echo's clock — `Date.now` in the container, a constant in tests. It goes the
  * OPPOSITE way from `dispatchFor` above, and deliberately: requiring it would not merely cost mechanical
  * edits (this object now has thirteen call sites here, not the six that made `dispatchFor`'s trade cheap)
- * — it would REDDEN the three existing `toHaveBeenCalledWith({ type: 'userText', text })` assertions, since
- * every deps literal would then supply a clock and every echo would carry a defined `createdAt` where those
- * assertions name none. So it is optional, with no `Date.now` fallback: **an absent clock means no stamp**,
+ * — it would REDDEN every whole-object `toHaveBeenCalledWith` assertion on the echo, since every deps
+ * literal would then supply a clock and every echo would carry a defined `createdAt` where those assertions
+ * name none. (#1213 paid exactly that price for `messageId`, which is REQUIRED in this deps object as
+ * `newMessageId` and so is always defined: five such assertions gained the field. That cost was accepted
+ * because the id is not optional at the producer — the wire frame needs it either way — whereas a clock
+ * genuinely may be absent.) So `now` is optional, with no `Date.now` fallback: **an absent clock means no
+ * stamp**,
  * the same rule `timelineBridge`'s seams follow, and an unstamped echo is a legal item (#1014 draws it as
  * the empty meta slot). The cost is that a forgotten wiring is silent rather than a compile error;
  * `composerSend.test.ts` pins the wired behaviour instead.
@@ -89,11 +93,13 @@ export interface ComposerSendDeps {
  * no wire command AND no optimistic echo — an echo for a message that cannot be delivered would
  * paint a lie into the timeline.
  *
- * The `message_id` is minted for the WIRE command only. The old "reuse the id for wire + echo so the
- * daemon's re-echo dedupes" rationale is retired (#179): in interactive mode the daemon streams no
- * user-message event (the `DaemonEvent` union has no such arm, and the coarse `message` fan-out is
- * off), so the optimistic `userText` echo is the sole source of the user message and needs no dedup
- * key. The send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is
+ * The `message_id` is minted ONCE and used TWICE — the wire command and the echo. #179 retired the
+ * original "reuse the id so the daemon's re-echo dedupes" rationale and it stays retired: in interactive
+ * mode the daemon streams no user-message event (the `DaemonEvent` union has no such arm, and the coarse
+ * `message` fan-out is off), so the echo is the sole source of the user message and needs no dedup key.
+ * #1213 puts the id back on the echo for an unrelated purpose — CORRELATION with the queued row the daemon
+ * draws when it parks this message mid-turn — and the field's own comment below carries that argument. The
+ * send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is
  * dispatched regardless of the send outcome — "optimistic" means show-immediately, and this
  * milestone has no send-failure UI surface.
  *
@@ -172,6 +178,20 @@ export function submitMessage(
     type: 'userText',
     text: trimmed,
     createdAt: deps.now?.(),
+    // ⭐ #1213: THE ID MINTED ABOVE FOR THE WIRE FRAME, RETAINED. The old rationale on `message_id` — "minted
+    // for the WIRE command only", because the daemon streams no user-message event so the echo needs no
+    // dedup key — was right about dedup and is retired for a different reason. The daemon PARKS a mid-turn
+    // send instead of running it, echoes it back in a `queue_state` snapshot naming this exact id
+    // (pyrycode#2092), and draws a second row for it; dropping that row has to be able to find this echo
+    // again, and nothing else in the two rows is a key (text is not unique, position mis-aligns on the first
+    // drop). So one mint, two uses: assigned unconditionally beside the two fields above, on the single
+    // object both writes share, so the frame and both stores can never name different messages.
+    //
+    // It is recorded EVEN WHEN THE SEND THREW, which is where it parts company with `attachments` below.
+    // That field is a claim about what the daemon was handed, so a frame that did not go must claim
+    // nothing. This is not a claim at all — it is this window's own name for its own message — and an
+    // id-less echo could never be dropped if a retry did enqueue it.
+    messageId: message_id,
     // ⭐ EMPTY NORMALISES TO ABSENT, and this is the ONLY place it happens — which is what lets the
     // timeline item's contract read "absent means none" with no second meaning to explain. A message sent
     // with nothing pending must produce the item today's producer already produces, so `[]` may not reach

@@ -261,6 +261,14 @@ export function ConversationScreen({
     [openConversationId]
   )
   const queuedBacklog = useQueueStore(selectOpenBacklog)
+  // #1213: the two timeline writes the queued-row drop needs, so cancelling a message takes its optimistic
+  // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
+  // through (#756) — the flat store for the open thread, the keyed holder for the conversation it was sent
+  // to — and both identities are stable, so selecting them here adds no re-render churn (the argument
+  // `Composer`'s own reads already make). Read at the container rather than inside `QueuedBacklog`: the
+  // view stays pure props-in/markup-out and store-free, as #1009 left it.
+  const dispatchTimeline = useTimelineStore((s) => s.dispatch)
+  const dispatchTimelineFor = useConversationTimelineStore((s) => s.dispatchFor)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
@@ -353,12 +361,22 @@ export function ConversationScreen({
           window.pyry.sendCommand stays dereferenced INSIDE the click closure (interaction time, never
           render), which is what keeps a container smoke render bridge-free; the null-id guard is
           belt-and-braces, since a populated row implies an active id (the daemon queues under real ids). */}
+      {/* #1213: the drop now also takes the message's TIMELINE ECHO out. `submitMessage` writes that
+          echo optimistically for every send and has no idea whether the daemon ran the message or parked
+          it, so a cancelled message used to leave a delivered-looking bubble claude was never handed —
+          permanently. The row's `message_id` (pyrycode#2092) is the correlation key, forwarded from the
+          view; the two timeline writes below are the same pair the echo was written through (#756), so a
+          removal reaches both the open thread and the keyed holder. Everything else here is unchanged:
+          the queued row itself is still non-optimistic (#296 AC3) and still leaves on the daemon's next
+          queue_state snapshot. */}
       <QueuedBacklog
         items={queuedBacklog}
-        onDrop={(queuedMsgId) => {
+        onDrop={(queuedMsgId, messageId) => {
           if (openConversationId === null) return
-          dropQueuedMessage(openConversationId, queuedMsgId, {
-            sendCommand: window.pyry.sendCommand
+          dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+            sendCommand: window.pyry.sendCommand,
+            dispatch: dispatchTimeline,
+            dispatchFor: dispatchTimelineFor
           })
         }}
       />
@@ -2272,12 +2290,21 @@ const DROP_QUEUED_LABEL = 'Drop queued message'
 // carries none), so the view never sees it. The button appears ONLY here; the delivered rows are drawn by
 // Timeline (untouched), so "affordance only on queued rows" (AC4) and "delivered rows unaffected" (AC5)
 // are structural, not conventions — no code path reaches a delivered row with this button.
+//
+// #1213: `onDrop` gains the row's `message_id` — the id pyrycode#2092 put on every queue_state item,
+// naming the `send_message` that produced it. It is the correlation key the container needs to take this
+// message's TIMELINE ECHO out alongside the queued row; without it a drop leaves a delivered-looking
+// bubble for a message claude was never handed. Two positional values rather than the whole `QueuedItem`,
+// so the container is handed exactly what it needs and never `text` or `ts`, and `string | undefined`
+// rather than `string` because a pre-#2092 daemon sends none (which correlates with nothing — the
+// container decides that, not this view). The conversation-id wall is unchanged: the view still never
+// sees a conversation id and the container still owns it.
 export function QueuedBacklog({
   items,
   onDrop
 }: {
   items: readonly QueuedItem[]
-  onDrop: (queuedMsgId: number) => void
+  onDrop: (queuedMsgId: number, messageId: string | undefined) => void
 }): JSX.Element | null {
   if (items.length === 0) return null
   return (
@@ -2288,7 +2315,7 @@ export function QueuedBacklog({
             type="button"
             className="queued-row__drop"
             aria-label={DROP_QUEUED_LABEL}
-            onClick={() => onDrop(item.queued_msg_id)}
+            onClick={() => onDrop(item.queued_msg_id, item.message_id)}
           >
             <svg
               className="queued-row__drop-icon"

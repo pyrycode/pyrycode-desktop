@@ -72,8 +72,9 @@ describe('submitMessage', () => {
     expect(result).toBe(true)
     expect(newMessageId).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledTimes(1)
-    // The wire payload still mints and carries a message_id (SendMessagePayload), unlike the
-    // timeline echo below, which carries only text.
+    // The wire payload mints and carries a message_id (SendMessagePayload). Since #1213 the echo below
+    // carries the SAME id — one mint, two uses — so this is no longer the contrast it once was; what the
+    // echo still does not carry is a conversation_id or a role.
     expect(sendCommand).toHaveBeenCalledWith(
       sendMessageCommand({
         conversation_id: '130648a8-real-id',
@@ -93,11 +94,11 @@ describe('submitMessage', () => {
       newMessageId: () => 'echo-1'
     })
 
-    // The echo now routes into timelineStore as a userText ThreadEvent — no message_id,
-    // conversation_id, or role (the userText model carries only text). The daemon re-echo dedup
-    // is retired: interactive mode has no user-message DaemonEvent arm, so this is the sole source.
+    // The echo routes into timelineStore as a userText ThreadEvent carrying the trimmed text and — since
+    // #1213 — the id minted for the wire frame, so a drop of the queued row this message may become can
+    // find it again. No conversation_id and no role: those two the model still does not carry.
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'hey there' })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'hey there', messageId: 'echo-1' })
   })
 
   // #756: the echo is the timeline's second row-adding writer, so it routes into the conversation it
@@ -114,7 +115,11 @@ describe('submitMessage', () => {
     })
 
     expect(dispatchFor).toHaveBeenCalledTimes(1)
-    expect(dispatchFor).toHaveBeenCalledWith('conv-b', { type: 'userText', text: 'hey there' })
+    expect(dispatchFor).toHaveBeenCalledWith('conv-b', {
+      type: 'userText',
+      text: 'hey there',
+      messageId: 'echo-2'
+    })
     // Built ONCE and handed to both write paths: the same reference, not two equal literals. Safe
     // because reduceTimeline is pure (conversationTimelineStore.ts:268-270), and asserting identity
     // is what keeps a future "build it again for the keyed store" edit from passing silently.
@@ -140,12 +145,14 @@ describe('submitMessage', () => {
     expect(dispatch).toHaveBeenCalledWith({
       type: 'userText',
       text: 'hey there',
-      createdAt: 1_700_000_000_000
+      createdAt: 1_700_000_000_000,
+      messageId: 'echo-3'
     })
     expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
       type: 'userText',
       text: 'hey there',
-      createdAt: 1_700_000_000_000
+      createdAt: 1_700_000_000_000,
+      messageId: 'echo-3'
     })
     // One echo object, so one read of the clock — the two stores cannot record different instants for
     // the same message. This is the built-ONCE property, asserted at the clock rather than at identity.
@@ -250,7 +257,7 @@ describe('submitMessage', () => {
 
     const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
     expect(echo.attachments).toBe(undefined)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'just text' })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'just text', messageId: 'a3' })
   })
 
   // ⭐ AC4's second half, and the whole reason the take sits below both `false` returns: the hook's take
@@ -425,9 +432,57 @@ describe('submitMessage', () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
     // #756: the guarded-send contract covers sendCommand only, so the keyed write is reached too.
     expect(dispatchFor).toHaveBeenCalledTimes(1)
-    expect(dispatchFor).toHaveBeenCalledWith('conv-1', { type: 'userText', text: 'hello' })
+    expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
+      type: 'userText',
+      text: 'hello',
+      messageId: 'g1'
+    })
     // The swallowed error stays content-free — no conversation id and no message text (ADR 0007).
     expect(errorSpy).toHaveBeenCalledWith('composer send failed', expect.anything())
+    errorSpy.mockRestore()
+  })
+
+  // #1213: the echo now RETAINS the id minted for the wire frame, so a drop of the queued row this
+  // message may become can find the echo again. One mint, two uses — the structural half of the ticket.
+  it('#1213: records on the echo the SAME message_id that rides the wire frame', () => {
+    const sendCommand = vi.fn()
+    const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
+    const newMessageId = vi.fn(() => 'mint-once')
+
+    submitMessage('  queue me  ', 'conv-1', { sendCommand, dispatch, dispatchFor, newMessageId })
+
+    // Minted ONCE. A second call would be two ids for one message, and the correlation would be a
+    // coincidence rather than a guarantee.
+    expect(newMessageId).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith(
+      sendMessageCommand({ conversation_id: 'conv-1', message_id: 'mint-once', text: 'queue me' })
+    )
+    // The identity assertion, not an equality one: the frame and the echo cannot disagree because there
+    // is only one value.
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.messageId).toBe('mint-once')
+    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
+  })
+
+  it('#1213: still records the id on an echo whose SEND failed — the message may still be queued', () => {
+    // The frame threw, so nothing was handed to the daemon and the echo carries no attachments (#1055).
+    // The id is on the opposite footing: it costs nothing, and an id-less echo could never be dropped if
+    // a retry did enqueue it. The echo posts regardless of send outcome, and so does its id.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const dispatch = vi.fn()
+
+    submitMessage('hello', 'conv-1', {
+      sendCommand: vi.fn(() => {
+        throw new Error('bridge down')
+      }),
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 'mint-on-failure'
+    })
+
+    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
+    expect(echo.messageId).toBe('mint-on-failure')
     errorSpy.mockRestore()
   })
 })

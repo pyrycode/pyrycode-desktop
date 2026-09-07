@@ -357,3 +357,48 @@ only; every client obligation (sanitise before render, never a path, never a pri
 survives verbatim. Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no case for
 `'attachment-chunk'` and no catch-all, so the reassembler that concatenates chunks into a file is the
 first intended consumer, not yet started. Architect self-review PASS.
+
+[#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) added a twenty-sixth kind,
+`history_page` → `history-page` — the answer half of conversation scroll-back's transport slice (the
+ask is the new `request_history` outbound envelope; see [Request history send](request-history-send.md)
+for the whole verb pair), decoding one backward step of a walk over the daemon's append-only on-disk
+log (pyrycode#2112/#2113/#2116). Two new parsers plus one new field helper: `requireRecord(payload,
+field)` narrows a required OBJECT field for the first time in this file — the near-miss `optionalStringMap`
+requires string *values* where an entry's `payload` is arbitrary nested JSON, so neither existing
+helper fit. `parseHistoryEntry` (an `isRecord` guard, `requireNumber`/`requireString`/`requireRecord`/
+`requireString` over `id`/`type`/`payload`/`ts`) is a fresh four-field literal, deliberately **not**
+narrowing `type` to `EnvelopeType` or any closed set — it is a stored string nothing re-validates,
+spanning the whole live-lane vocabulary, and a client MUST tolerate one it does not recognise.
+`parseHistoryPagePayload` takes `entries` through `parseQueueStatePayload`'s inline shape
+(`Array.isArray` + `raw.map`, one bad element fails the whole page, `[]` valid and never `null`), then
+`requireString('cursor')` — **not** `requireNonEmptyString`, since the reply's cursor is empty
+whenever `at_start` is true — and `requireBoolean('at_start')`. **No count bound and no size bound**,
+the `parseBackgroundTaskRosterPayload` posture: the frame-level `MAX_PLAINTEXT_BYTES` guard already
+fails an oversized frame before any parse, and the daemon clamps the entry count at construction and
+re-asks a too-large page rather than truncating one, so a bound here would either defend an
+unreachable failure or drop valid pages. `entries`/`cursor`/`at_start` are carried exactly as sent —
+`at_start` is the only termination signal, and nothing here normalises a short or empty page into an
+end-of-log flag.
+
+The kind's `inReplyTo` is **optional**, the `session-settings` posture rather than
+`attachment-chunk`'s required one, because the reply names no conversation at all — the correlation
+handle is the only way to attribute a page, and an absent one is merely uncorrelatable (a fail-closed
+drop one layer up in [daemon connection](daemon-connection.md)), not a malformed frame. The same
+ticket also widens the pre-existing `daemon-error` kind with a **second**, sibling narrower,
+`HistoryRejectReason` — deliberately *not* a widening of `DaemonErrorOutcome`, since that type is
+inherited whole by `AttachmentTransferFailure`/`AttachmentUploadFailure` and a history reject code
+there would land in the attachment-upload failure union with no producing path. It mirrors its
+neighbour's every property (total, never throws, the untrusted `code` string as a comparand only) and
+diverges in one: it returns `undefined` outside its five-member set rather than an `'unclassified'`
+member of its own, because a correlated `message.too_long` (one stored entry too large for any page)
+is a real case `narrowDaemonErrorOutcome` *does* classify and this narrower does not — the field
+carrying it, `historyReject?: HistoryRejectReason`, is optional where `outcome` is required, since
+absence here has exactly one meaning read at exactly one emit. Content-free-logged as
+`inbound-decoded(code: 'history_page')` before the `default` branch, narrowed before logging so a
+malformed page leaves no record; no cursor, entry payload, entry `type`, entry `id`, or reject string
+ever reaches a log line. Ships with a real consumer immediately: [daemon
+connection](daemon-connection.md)'s new `pendingHistoryRequests` correlation map attributes each page
+to the conversation its request named and emits `historyPageReceived`/`historyRequestFailed`, but all
+four exhaustive renderer bridges (`daemonEventBridge`/`timelineBridge`/`modalBridge`/`questionBridge`)
+null both arms — `timelineBridge`'s dormantly, the other three permanently. Architect (builder)
+self-review PASS, no MUST FIX findings.

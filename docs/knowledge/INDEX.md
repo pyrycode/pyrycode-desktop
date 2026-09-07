@@ -1064,6 +1064,30 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   dots](features/channel-list-host-row.md) (moved out of `channel-list.md` to stay under the doc-guard's
   byte cap) and this store's own doc. Architect self-review PASS.
 
+- [Request history send](features/request-history-send.md) — conversation scroll-back's **transport-only**
+  leg: an outbound `request_history` ask (`RequestHistoryPayload{conversation_id,cursor,limit}`, all
+  three keys always on the wire) and the decoded `history_page` reply
+  (`HistoryPagePayload{entries,cursor,at_start}`), over the daemon's append-only on-disk log
+  (pyrycode#2112/#2113/#2116) a conversation opened today can otherwise see nothing of. Nothing asks for
+  a page yet (#1224), nothing renders one (#1223), nothing joins a page to the live stream (#1225) — all
+  four exhaustive renderer bridges take null arms. The one fact shaping every piece: a `history_page`
+  names no conversation, so `daemonConnection`'s new `pendingHistoryRequests` map records each
+  request's envelope id against the conversation it named and resolves the reply's `conversationId`
+  from that memory rather than the wire — the `pendingConfigRequests`/`runConfigReceived` pattern
+  reused verbatim. The one non-obvious design call: the five reject codes get a **sibling** narrower,
+  `HistoryRejectReason`, beside `DaemonErrorOutcome` rather than five new members on it, since that type
+  is inherited whole by the attachment-upload failure union and a history code there would demand
+  composer copy no upload path can produce; it diverges from its neighbour by returning `undefined`
+  outside its five-member set (mapped to a sixth IPC-side `'unclassified'` member) rather than
+  classifying everything, because a correlated `message.too_long` — one stored entry too large for any
+  page — is a real, published outcome of this verb too. No client-invented size or count bound: the
+  frame-level `MAX_PLAINTEXT_BYTES` guard and the daemon's own 4096-entry clamp already cover it, and a
+  narrower client bound would silently drop valid pages. (#1222, security-sensitive, builder self-review
+  PASS, no MUST FIX — two SHOULD FIX, both documentation-only: an entry's `payload` is trusted in shape
+  and untrusted in content despite looking settled, and it crosses by reference with an inert
+  `__proto__` own-data-property a *later* `Object.assign`/`target[k]=v` consumer must not create a
+  hazard from.) Split from #1088.
+
 ## Architecture
 
 _None yet._

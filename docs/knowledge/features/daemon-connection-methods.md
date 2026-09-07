@@ -31,6 +31,7 @@ export interface DaemonConnection {
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   requestModelList(conversationId: string): void  // #1165: encrypt a request_model_list onto the live session; the id is REQUIRED, unlike its bare-optional sibling above
+  requestHistory(payload: RequestHistoryPayload): void  // #1222: encrypt a request_history onto the live session, asking for one backward step of a scroll-back walk; takes the WHOLE payload (three fields), unlike its two neighbours above; answered by history_page → historyPageReceived or error → historyRequestFailed, correlated by envelope id since the reply names no conversation
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
@@ -277,3 +278,29 @@ already-decoded `Envelope.in_reply_to`), short-circuit (no event) when it is `un
 id the client never sent), and otherwise `delete` the entry and emit a **fresh literal carrying
 `sessionId` + `changeId`** — the map's client-minted value, never the wire `in_reply_to` itself, which
 never crosses to the renderer.
+
+**`requestHistory(payload)` was added in [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)**
+— the transport leg of conversation scroll-back: asks the daemon for one backward step of a walk over
+a conversation's daemon-owned, append-only on-disk log (pyrycode#2112), the entries a client that
+connected after they were written can otherwise never see. Faithful `requestModelList` send mechanics
+otherwise (inert no-op when `driver === null`, sharing the one `nextEnvelopeId` counter, advancing the
+id only on a successful build, a content-free `catch {}`). **Unlike every method above, it takes the
+whole payload rather than a scalar** — three fields, `conversation_id`/`cursor`/`limit` — because the
+builder (`requestHistoryEnvelope.ts`) rebuilds a fresh three-key literal from them, so nothing
+renderer-supplied reaches the wire uninspected regardless of what the command guard let through. **It
+is also the only request method that records what it asked**: `history_page` names no conversation at
+all, so this method is the sole place "which conversation does this reply describe" exists — recorded
+in a new `pendingHistoryRequests: Map<number, string>` after a successful send, the `pendingConfigRequests`
+shape and ordering exactly, and matched back by the reply's `Envelope.in_reply_to`. Routed by
+conversation through `router.route` in `src/main/index.ts`'s dispatch case, exactly like
+`requestModelList`, reading `command.payload.conversation_id` once as both the routing key and the
+field the builder consumes. Answered by one `history_page` → `historyPageReceived`, or one `error` →
+`historyRequestFailed` (a **second** narrower, `HistoryRejectReason`, beside `narrowDaemonErrorOutcome`
+rather than five members added to it — see [Request history send § The reject
+path](request-history-send.md) for why); **no retry, ever**, for either outcome, including the one
+retryable refusal — the walk's retry policy belongs to
+[#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224). `connectionRegistry.ts`'s `viewOf`
+gained one delegate line, the same tsc-only break shape as #1165's/#1217's additions. Ships with no
+renderer sender at all and no render consumer — #1223 draws a page through the timeline reducer, #1224
+walks, #1225 joins a page to the live stream; all four exhaustive bridges take null arms. See [Request
+history send](request-history-send.md) for the full contract.

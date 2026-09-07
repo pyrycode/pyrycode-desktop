@@ -40,6 +40,10 @@ export type DaemonEvent =
       ; occurredAt: string; workspaceCwd: string | null }
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
   | { type: 'sessionSettingsRejected'; changeId: string }
+  | { type: 'historyPageReceived'; conversationId: string; entries: readonly HistoryEntry[]
+      ; cursor: string; atStart: boolean }
+  | { type: 'historyRequestFailed'; conversationId: string; reason: HistoryRequestFailure
+      ; retryable: boolean }
 ```
 
 `snapshotReceived` and `screenSnapshotReceived` — the two members that occupied this spot through
@@ -471,6 +475,37 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   yet; #975, #976, #683 and #682 are its queued readers. See [Model-list wire
   types](model-list-wire-types.md) for the wire shape and [Inbound message
   decode](inbound-message-decode.md) for #972's decode.
+- **`historyPageReceived{conversationId,entries,cursor,atStart}` / `historyRequestFailed{conversationId,reason,retryable}`**
+  ([#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)) are conversation scroll-back's
+  transport pair — one backward step of a walk over the daemon's append-only on-disk log, and its
+  refusal. **`conversationId` on both arms is client-owned**, not daemon-asserted like every routing
+  key above it in this file: a `history_page` carries no conversation id at all, so [daemon
+  connection](daemon-connection.md)'s new `pendingHistoryRequests` map resolves it from the envelope
+  id the request itself was sent under (the `runConfigReceived` provenance argument, restated for a
+  second reply that names no conversation). `entries: readonly HistoryEntry[]` is reused **verbatim**
+  — the `queueState`/`conversationsReceived` nested-array precedent — and is this union's most
+  untrusted payload: each entry is replayed content carrying exactly the trust class of the live frame
+  it mirrors (the daemon's § *Security model* threat 1), and nothing about being stored makes it more
+  trusted. `cursor`/`atStart` cross **as sent**, never inferred from each other or from the entry
+  count — `atStart` is the only termination signal, and a short page is not an end-of-log signal.
+  `reason: HistoryRequestFailure` is a **new, six-member sibling** of `DebugBundleFailure`'s
+  information-minimising shape, duplicating `HistoryRejectReason`'s five members by hand (the
+  `AttachmentUploadFailure`/`DaemonErrorOutcome` mirroring precedent, since `inboundMessage.ts` is
+  IPC-free by placement rule) plus one, `'unclassified'` — not a hedge, but where a correlated
+  `message.too_long` lands (§ *Page size*'s over-cap entry case), so a correlated refusal always
+  settles the ask. `retryable` is **computed once, at this emit**, diverging deliberately from
+  `DaemonErrorOutcome`'s documented-not-computed posture: this verb's five codes are published in one
+  section with exactly one retryable member (`history-unavailable`), where the consumer that would
+  otherwise re-derive it is a scroll-back walk driver ([#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224))
+  — precisely where a wrong re-derivation becomes a self-inflicted retry loop against a relay that is
+  merely withholding the frame. Ships dormant/permanent-null across all four exhaustive bridges:
+  `daemonEventBridge`/`modalBridge`/`questionBridge` null both arms **permanently** (a replayed frame
+  is never a `SessionAction`, a modal, or a question — even though a page may *carry* a stored
+  `modal_shown` among its entries without *being* one), while `timelineBridge` nulls them **dormantly**
+  — a page's entries are literally timeline items, and [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)
+  is expected to claim them. See [Request history send](request-history-send.md) for the whole verb
+  pair: the outbound builder, the fail-closed decode, and the correlation map both arms are emitted
+  from.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

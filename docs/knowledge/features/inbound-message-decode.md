@@ -4,7 +4,7 @@ The **untrusted→trusted boundary for a decrypted daemon message**. The [Noise 
 
 Introduced in [#68](../codebase/68.md). It fills the last no-op arm the [daemon connection](daemon-connection.md) left behind — [#62](../codebase/62.md) wired the handshake-status path but left the inbound-message arm a `// TODO`. This ticket produces the `messageReceived` / `messagesReceived` events that feed the already-complete renderer pipeline: the [daemon-event channel](daemon-event-channel.md) ([#18](../codebase/18.md)) carries them, the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md)) translates them into `SessionAction`s, and the [session store](session-store.md) ([#2](../codebase/2.md)) appends them (deduped by `message_id`, arrival order preserved).
 
-Extended additively twenty-five times since, most recently [#998](https://github.com/pyrycode/pyrycode-desktop/issues/998)'s `attachment_chunk` retrieval decode. The full chronological, kind-by-kind account — what each ticket added, which helper it introduced or reused, and what the consumer arm did with the result — lives in [Extension history](inbound-message-decode-history.md), split out 2026-09-02 once that history alone had grown past the size cap.
+Extended additively twenty-six times since, most recently [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)'s `history_page` decode (conversation scroll-back's answer half). The full chronological, kind-by-kind account — what each ticket added, which helper it introduced or reused, and what the consumer arm did with the result — lives in [Extension history](inbound-message-decode-history.md), split out 2026-09-02 once that history alone had grown past the size cap.
 
 See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
@@ -151,3 +151,10 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   docs, true inbound and false outbound (the daemon sanitises/sniffs on the retrieval leg). Ships
   dormant: `daemonConnection.ts`'s inbound switch has no case for `'attachment-chunk'` yet — the
   reassembler is a later slice.
+- [Request history send](request-history-send.md) — the twenty-sixth additive extension: the
+  `history_page` kind, `parseHistoryPagePayload`/`parseHistoryEntry`, the file's first object-field
+  narrower (`requireRecord`), and the sibling `HistoryRejectReason` narrower widening the pre-existing
+  `daemon-error` kind with an optional `historyReject` field. [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)
+  is also this boundary's first ticket with a live consumer at ship time — [daemon
+  connection](daemon-connection.md)'s `pendingHistoryRequests` correlation map — though every renderer
+  bridge still nulls the two `DaemonEvent` arms it feeds.

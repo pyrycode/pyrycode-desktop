@@ -6,16 +6,20 @@ failure. A conversation opened today shows nothing that happened before this cli
 slice teaches the desktop transport to ask the daemon's append-only on-disk log
 (pyrycode#2112/#2113/#2116) for one backward step of a walk over it, and stops there.
 
-Introduced in [#1222](../codebase/1222.md), split from #1088. **Nothing asks for a page yet** (that's
-[#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)), and **nothing joins a page to the
-live stream** (that's [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). #1222 shipped
-the ask and the envelope-level decode with an entry's `type`/`payload` still opaque; [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
+Introduced in [#1222](../codebase/1222.md), split from #1088. #1222 shipped the ask (unsent in production)
+and the envelope-level decode with an entry's `type`/`payload` still opaque; [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
 added the payload decode — see § Payload decode below — so `historyPageReceived.entries` now carries
 typed events, not stored pairs. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) is the
 render consumer: it draws a page through a **fifth** independent channel subscriber ([history page
 bridge](conversation-timeline-store.md)), not by claiming `historyPageReceived` inside this file's four
 exhaustive bridges — `timelineBridge`'s two arms stay dormant here (see § The `DaemonEvent` arms below),
-and `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null.
+and `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null. **[#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
+is the first sender**, firing this ask once per conversation activation and claiming `historyRequestFailed`
+too — see [Conversation timeline store](conversation-timeline-store.md) for the opening-ask design and
+[Internals § The opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the
+mechanics. **Nothing joins a page to the live stream yet** (that's
+[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)), and the scroll-back walk that reads the
+`cursor`/`atStart`/`retryable` #1259 records is [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s.
 
 Nearest shapes in the tree: `ddd9a0b` ([session settings send](session-settings-send.md), request +
 reply decode) is the full request-and-decode analogue; `e199833` (#1165, `requestModelList`) is the
@@ -282,7 +286,7 @@ same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
 - **`decodeHistoryPage`'s loop wraps the call in `try { … } catch { event = null }`, binding no error.**
   A payload that fails to parse and a type outside the eleven both fall out as `null` and are skipped
   the same way; order is preserved among survivors, and a page every entry of which was skipped crosses
-  as `entries: []` rather than as a failure, so #1224's walk can still step past it. Never throws.
+  as `entries: []` rather than as a failure, so #1260's walk can still step past it. Never throws.
 - **`modal_shown`/`question_shown` have no arm at all — the sharpest case, closed by construction.**
   Neither type is in the switch, so neither can produce an event under any payload: nothing answerable
   reaches the window from history, whether a future daemon starts logging one or a hostile one plants
@@ -374,8 +378,9 @@ path any more.
   documented-not-computed posture: that type's retry flags live in two upstream files, so no single
   client-side list could be right, where this verb's five codes are published in one section with
   exactly one retryable member (`history.unavailable`). The consumer that would otherwise re-derive it
-  is the walk driver (#1224) — precisely where a wrong re-derivation becomes a self-inflicted retry
-  loop against a relay merely withholding the frame.
+  is the walk driver (#1260) — precisely where a wrong re-derivation becomes a self-inflicted retry
+  loop against a relay merely withholding the frame. [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
+  records it (`recordHistoryFailure`) and reads it nowhere, keeping this single emit the only computation.
 - **`conversationId` on both arms is client-owned**, carrying `runConfigReceived`'s provenance
   argument verbatim — see § The one fact above. It is a routing key, never rendered text, and reaches
   no log sink. The numeric `in_reply_to` it was resolved from is **not** carried.
@@ -397,11 +402,12 @@ same reason a page may *carry* a stored `modal_shown` among its wire entries wit
 though since #1227 that's true only of the pre-decode wire page: the decode has no `modal_shown` arm at
 all, so one can no longer reach `modalBridge`'s switch in the first place; `questionBridge`'s is
 permanent on the same "not a question event" grounds. `timelineBridge`'s two arms **are still dormant —
-[#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) never claimed them here.** It drew a
-page a different way: a **fifth** independent subscriber ([history page
-bridge](conversation-timeline-store.md)) owns `historyPageReceived` on its own channel subscription and
-folds each entry through `translateTimelineEvent`'s *other* arms instead — the ones keyed by the entry's
-own `type`, `messageReceived` (#1223's actual new case) among them. **Stale comments, still open:** the
+neither #1223 nor [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) ever claimed them
+here.** Both draw a different way: a **fifth** independent subscriber ([history page
+bridge](conversation-timeline-store.md)) owns `historyPageReceived` (#1223) and, since #1259,
+`historyRequestFailed` too, on its own channel subscription — folding each page's entries through
+`translateTimelineEvent`'s *other* arms instead, the ones keyed by the entry's own `type`,
+`messageReceived` (#1223's actual new case) among them. **Stale comments, still open:** the
 `timelineBridge.ts` and `modalBridge.ts` prose at these two arms still describes the pre-decode shape and
 says "the mapping is #1223's" (`timelineBridge`: "that is the whole point of a history entry carrying a
 stored frame's `type` and `payload`"; `modalBridge`: "a page may CARRY a stored `modal_shown` among its
@@ -444,7 +450,7 @@ daemon → error frame (in_reply_to matches a pending history ask)
 | `requestHistory` (connection method) | `void` | Inert no-op when `driver === null`. `try/catch` drops any thrown object silently — never logged, never forwarded, no retry. |
 | `case 'history-page'` (consumer) | `void` | Absent or unmatched `inReplyTo` → dropped silently. A hit → exactly one `historyPageReceived`. |
 | `case 'daemon-error'` (consumer, history tier) | `void` | A correlated refusal always settles the ask, including a code outside the five (`'unclassified'`). A miss falls through unchanged to the pre-existing `daemon-error` consumers. |
-| Window | — | `historyRequestFailed` still dormant/permanent-null across all four bridges (#1224's to claim). `historyPageReceived` is claimed outside them, by #1223's fifth subscriber — see § The `DaemonEvent` arms above. |
+| Window | — | Both arms stay dormant/permanent-null across the four exhaustive bridges. `historyPageReceived` and (since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)) `historyRequestFailed` are claimed outside them, by #1223's/#1259's fifth subscriber, `historyPageBridge.ts` — see § The `DaemonEvent` arms above. |
 
 ## Security properties
 
@@ -606,8 +612,10 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   `isRequestHistoryPayload` guard this channel's union gained.
 - `docs/specs/architecture/1222-request-history-decode.md` — the full architecture spec, including the
   open questions (whether a correlated `message.too_long` is observed in practice; whether an
-  outstanding ask needs a deadline, deferred to #1224) and the full security review this doc
-  summarizes.
+  outstanding ask needs a deadline, deferred to #1224 and its split-siblings) and the full security review
+  this doc summarizes. [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) answers the
+  deadline question in the negative by design: no timer, no backoff, a relay that merely withholds the
+  frame leaves the ask at `requested` forever rather than spinning.
 - `docs/specs/architecture/1227-decode-history-entries-into-typed-events.md` — the #1227 architecture
   spec: the sizing overage measured and accepted (call-site count and line total both exceed a size-S
   ticket's boundaries, with no split surviving the floor rule), the full security review (three MUST
@@ -617,4 +625,7 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
 - [Conversation timeline store](conversation-timeline-store.md) — #1223, the render consumer. Draws a
   page via a fifth independent channel subscriber, `historyPageBridge.ts`, not by claiming
   `historyPageReceived` in `timelineBridge.ts` — see § The `DaemonEvent` arms above for why that arm
-  stays dormant and its stale comment stays open.
+  stays dormant and its stale comment stays open. [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
+  is the first sender, firing this ask once per conversation activation and claiming `historyRequestFailed`
+  on the same subscriber; see [Internals § The opening
+  ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the write paths.

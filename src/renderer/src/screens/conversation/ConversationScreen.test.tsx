@@ -4081,10 +4081,13 @@ describe('selectOpenTimelineFor', () => {
     // The chrome travels with the rows — the whole slice is one value, so the phase and the four
     // scalars can no more come from another conversation than the rows can.
     expect(thread?.localSendPending).toBe(true)
-    // The HELD slice itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
+    // The HELD timeline itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
     // write for another conversation rebuilds the outer map but copies every survivor by reference, so
-    // this screen does not re-render (conversationTimelineStore.ts:214-217).
-    expect(thread).toBe(store.getState().timelines.get('conv-a'))
+    // this screen does not re-render (`withNewSliceAtHead`'s by-reference survivor copy). Since #1259 a
+    // key holds a `ConversationSlice` — the timeline plus the state of the ask that backfilled it — so
+    // the identity to assert is the slice's `timeline` half, which is exactly what `selectTimelineFor`
+    // projects. That indirection is also what keeps a history-request write from waking this screen.
+    expect(thread).toBe(store.getState().timelines.get('conv-a')?.timeline)
   })
 
   it("reads null for an open conversation with nothing retained — never a neighbour's rows (AC3)", () => {

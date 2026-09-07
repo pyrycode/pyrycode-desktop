@@ -3,21 +3,36 @@
 // page transport; #1227 turned each stored `{type, payload}` entry into a typed `HistoryTimelineEvent`.
 // This module is where a page becomes something the operator sees.
 //
+// #1259 MADE IT THE WHOLE OPENING ROUND TRIP: the ask goes out from here too, and BOTH arms are now
+// claimed. #1224 was split after this header was written, and its two successors are #1259 — the
+// opening ask, the failure arm, and the per-conversation state that stops a second ask — and #1260, the
+// scroll-back walk that consumes the `cursor` and `atStart` this module records but does not read.
+//
 // A FIFTH INDEPENDENT SUBSCRIBER on the daemon-event channel, beside the session, timeline, modal and
 // question bridges — not a widening of `subscribeTimeline`'s injected dispatch, which would cascade
 // over its 20 existing call sites to buy nothing (the arithmetic that function's own docblock records).
-// It owns exactly the `historyPageReceived` arm, which is why `translateTimelineEvent`'s case for it
-// stays `null` and needed no edit. `historyRequestFailed` is deliberately NOT claimed here: a refusal
-// drives the walk, and the walk is #1224's.
+// It owns exactly the `historyPageReceived` and `historyRequestFailed` arms, which is why
+// `translateTimelineEvent`'s cases for them stay `null` and needed no edit.
+//
+// WHY THE FAILURE ARM COULD NOT WAIT FOR THE WALK, which is what the pre-split header assumed. An ask
+// that neither draws a page nor settles leaves its conversation permanently asking, so the arm belongs
+// to whichever ticket first sends a request — this one. All six refusals settle IDENTICALLY here: the
+// conversation stops asking and nothing is drawn. There is no banner, no unrecognized row, no timer and
+// no automatic re-ask; `history.unavailable`'s `retryable` flag is recorded for #1260 and read nowhere.
 //
 // Nothing here touches keys, sockets, ipcRenderer or raw frames — it subscribes through the preload
-// bridge and writes typed rows, like every other bridge in this directory.
+// bridge, writes typed rows, and hands one three-scalar payload to `sendCommand`.
 import { useEffect } from 'react'
-import type { DaemonEvent, HistoryTimelineEntry } from '@shared/ipc/events'
+import type { RendererCommand } from '@shared/ipc/commands'
+import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
 import { translateTimelineEvent } from './timelineBridge'
 import { reduceTimeline, initialTimelineState } from './threadTimeline'
 import type { ThreadItem } from './threadTimeline'
-import { conversationTimelineStore } from './conversationTimelineStore'
+import {
+  conversationTimelineStore,
+  selectHistoryRequestFor,
+  type HistoryRequestState
+} from './conversationTimelineStore'
 
 /**
  * Fold one served page into the rows it draws (#1223) — a pure function of the page, so it stays
@@ -75,16 +90,131 @@ export function reduceHistoryPage(entries: readonly HistoryTimelineEntry[]): rea
  * drive the walk (#1224), not the drawing.
  *
  * An EMPTY page is forwarded rather than filtered. The store owns the no-op, and a subscriber that
- * swallowed it here would hide "a page arrived and drew nothing" from a consumer that needs the fact.
+ * swallowed it here would hide "a page arrived and drew nothing" from a consumer that needs the fact —
+ * which since #1259 is exactly how a conversation predating the log SETTLES rather than staying
+ * permanently in flight.
+ *
+ * TWO CALLBACKS, TWO ARMS (#1259). `applyPage` carries the page's `cursor` and `atStart` alongside its
+ * rows; `settleFailure` carries the refusal's `reason` and `retryable`. Both are copied off the event
+ * and NEITHER is interpreted here: nothing parses the cursor, nothing branches on the reason, and
+ * nothing re-derives retryability from the reason — that flag is computed at the single emit precisely
+ * so a walk driver cannot get it wrong into a retry loop against a relay that is merely withholding a
+ * frame.
+ *
+ * A CROSS-WIRE SWAP OF THE TWO IS A COMPILE ERROR, and that is worth stating because the pair is the
+ * exact shape `subscribeSystemPrompt`'s docblock warns about. Under `strictFunctionTypes` the second
+ * parameter slots are checked contravariantly and `readonly ThreadItem[]` and `HistoryRequestFailure`
+ * are mutually unassignable, so neither direction compiles. Re-run that check before adding a third
+ * callback — the property is about this pair, not about either slot alone.
  */
 export function subscribeHistoryPage(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  applyPage: (conversationId: string, items: readonly ThreadItem[]) => void
+  applyPage: (
+    conversationId: string,
+    items: readonly ThreadItem[],
+    cursor: string,
+    atStart: boolean
+  ) => void,
+  settleFailure: (
+    conversationId: string,
+    reason: HistoryRequestFailure,
+    retryable: boolean
+  ) => void
 ): () => void {
   return onDaemonEvent((event) => {
-    if (event.type !== 'historyPageReceived') return
-    applyPage(event.conversationId, reduceHistoryPage(event.entries))
+    if (event.type === 'historyPageReceived') {
+      applyPage(
+        event.conversationId,
+        reduceHistoryPage(event.entries),
+        event.cursor,
+        event.atStart
+      )
+      return
+    }
+    if (event.type === 'historyRequestFailed') {
+      settleFailure(event.conversationId, event.reason, event.retryable)
+    }
   })
+}
+
+/**
+ * The effects `requestOpeningHistory` performs, injected so the decision is a pure, deterministic
+ * function tested with plain spies — which it has to be, because `vitest.config.ts` is
+ * `environment: 'node'`, no renderer spec in this repo runs an effect, and the activation seam's own
+ * wiring is therefore structurally uncoverable.
+ *
+ * `getHeld` is a GETTER called per invocation, never a value threaded in by the caller: the production
+ * deps object below is module-scope and app-lifetime, so a reading captured once would freeze at
+ * whatever the store held when the module loaded.
+ */
+export interface OpeningHistoryDeps {
+  sendCommand: (command: RendererCommand) => void
+  getHeld: (conversationId: string) => HistoryRequestState | null
+  markRequested: (conversationId: string) => void
+}
+
+/**
+ * Ask for a conversation's NEWEST page of history, exactly once per opening (#1259).
+ *
+ * ONE ASK PER OPENING IS THIS FUNCTION'S JOB, NOT THE SEAM'S, and that is the one place this diverges
+ * from its `requestSystemPrompt` / `requestModelList` / `requestRunConfigSnapshot` neighbours.
+ * `requestConversationConfig` fires on EVERY activation including a re-click of the row already open,
+ * and all three neighbours are whole-value replaces for which a duplicate costs nothing. A duplicate
+ * page does not replace anything — it PREPENDS its rows a second time (`prependHistoryFor` is
+ * documented as deliberately non-idempotent, since only `userText` rows carry a key to dedup on), so
+ * the gate has to live here, where a spy can reach it.
+ *
+ * THE GATE IS "NOTHING IS HELD", and every terminal reading is non-null, which is what makes a retry
+ * loop structurally unreachable rather than merely absent. `requested` means an ask is already on the
+ * wire; `loaded` means the page is drawn (AC2); `failed` means the daemon refused and the conversation
+ * stops asking (AC4) — including for `history-unavailable`, whose `retryable` flag is recorded and not
+ * acted on. The one reading that asks is `null`, which an EVICTED slice produces exactly as a
+ * never-opened one does, and that is AC3: re-opening a conversation whose timeline was evicted refills
+ * it from history instead of starting empty.
+ *
+ * MARK BEFORE SEND. The invariant that matters is "never ask twice", so the mark must be in place
+ * before anything can re-enter; a mark left standing over a send that threw costs that one conversation
+ * its backfill until the next eviction, where a double ask duplicates rows the operator can see. Both
+ * calls are synchronous with no `await` between the read and the write, so on the renderer's single
+ * thread there is no gap for a concurrent handler to interleave into.
+ *
+ * The falsy-id guard is `requestSystemPrompt`'s verbatim and for the same reason: an unaddressable id
+ * must not reach the wire, and `''` is the same failure spelled differently rather than a second case.
+ * It returns BEFORE consulting the store, so an unusable id cannot mint or read a reading either.
+ *
+ * A FRESH THREE-KEY LITERAL, never a spread — the bound `buildRequestHistory` keeps on the wire side,
+ * held here too so nothing can widen the payload from the renderer. `cursor: ''` is the published
+ * OPENING position of a walk, not a missing value; `limit: 0` is the published "you choose", which
+ * `buildRequestHistory` normalises any non-positive ask to anyway. The id is a client-held conversation
+ * id used as a payload VALUE only — never a key, a path, a filename, a cache lookup or a log field, and
+ * nothing on this branch logs at all. Fire-and-forget: `sendCommand` is `void`, so there is no promise,
+ * no timer and nothing to cancel.
+ */
+export function requestOpeningHistory(
+  deps: OpeningHistoryDeps,
+  conversationId: string | null
+): void {
+  if (!conversationId) return
+  if (deps.getHeld(conversationId) !== null) return
+  deps.markRequested(conversationId)
+  deps.sendCommand({
+    type: 'requestHistory',
+    payload: { conversation_id: conversationId, cursor: '', limit: 0 }
+  })
+}
+
+/**
+ * The production wiring — module scope, the `conversationLastReadDeps` shape, so `PairedShell` gains
+ * ONE line inside `requestConversationConfig` rather than a fourth `getState()` arrow with a branch in
+ * it. Every member reaches its singleton inside the arrow BODY, so nothing is dereferenced at module
+ * load and `window.pyry` is never touched during render.
+ */
+export const openingHistoryDeps: OpeningHistoryDeps = {
+  sendCommand: (command) => window.pyry.sendCommand(command),
+  getHeld: (conversationId) =>
+    selectHistoryRequestFor(conversationId)(conversationTimelineStore.getState()),
+  markRequested: (conversationId) =>
+    conversationTimelineStore.getState().markHistoryRequested(conversationId)
 }
 
 /**
@@ -98,15 +228,35 @@ export function subscribeHistoryPage(
  * per-conversation key, so a page — which always names one — has nowhere correct to land in it, and no
  * screen reads that store's `items` anyway.
  *
- * Ships with no producer: nothing asks for a page until #1224 walks one, so this listener is live and
- * idle in production today. That is the same posture every bridge in this directory shipped in.
+ * SINCE #1259 IT HAS A PRODUCER: `requestOpeningHistory`, fired from the conversation-activation path
+ * in `PairedShell`. The header's old "live and idle" posture is gone.
+ *
+ * DRAW FIRST, THEN SETTLE, and the order is load-bearing rather than stylistic. `prependHistoryFor`'s
+ * absent-key branch CREATES the slice, and all three of the store's request-state paths are absent-key
+ * no-ops, so a page for a conversation whose slice was evicted mid-flight lands its rows and then finds
+ * a key to record against. Reversed, the record would no-op and the conversation would re-ask on its
+ * next opening for a page it has already drawn. Two writes rather than one store method: they are two
+ * independent operations on two halves of a slice, React batches them into one commit, and folding
+ * them together would have meant rewriting #1223's `prependHistoryFor` contract for no gain.
+ *
+ * `getState()` is called afresh per write — the bridge idiom — rather than a snapshot reused across
+ * both, so neither call can read a stale action set.
  */
 export function useHistoryPageBridge(): void {
   useEffect(
     () =>
-      subscribeHistoryPage(window.pyry.onDaemonEvent, (conversationId, items) => {
-        conversationTimelineStore.getState().prependHistoryFor(conversationId, items)
-      }),
+      subscribeHistoryPage(
+        window.pyry.onDaemonEvent,
+        (conversationId, items, cursor, atStart) => {
+          conversationTimelineStore.getState().prependHistoryFor(conversationId, items)
+          conversationTimelineStore.getState().recordHistoryPage(conversationId, cursor, atStart)
+        },
+        (conversationId, reason, retryable) => {
+          conversationTimelineStore
+            .getState()
+            .recordHistoryFailure(conversationId, reason, retryable)
+        }
+      ),
     []
   )
 }

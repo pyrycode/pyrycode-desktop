@@ -37,11 +37,15 @@
 // because their per-fact clear semantics span 28 renderer references. Unpicking them is its own piece of
 // work and nothing needs it yet (CLAUDE.md: don't refactor adjacent code while you are there).
 //
-// HARD IMPORT CONSTRAINT, checkable by grep: this module's only imports are the three below. It imports
-// nothing from `activeConversationStore`, nothing from `./timelineStore`, and nothing from
-// `src/renderer/src/screens/`. With no reference to the open conversation in scope, the
+// HARD IMPORT CONSTRAINT, checkable by grep: this module's only imports are the four below, one of them
+// type-only. It imports nothing from `activeConversationStore`, nothing from `./timelineStore`, and
+// nothing from `src/renderer/src/screens/`. With no reference to the open conversation in scope, the
 // `?? activeConversation` fallback that #751-#754's REQUIRED `conversationId` was designed to prevent is
-// not something a developer must remember to avoid — it is unavailable.
+// not something a developer must remember to avoid — it is unavailable. #1259's fourth import is a
+// TYPE-ONLY `HistoryRequestFailure` from `@shared/ipc/events`, needed because this slice now holds the
+// refusal that settled a conversation's opening ask; a string union carries no value into scope and
+// leaves the property above exactly as strong as it was. The rule to re-run when widening this list is
+// that one, not the count: nothing that puts the OPEN CONVERSATION in scope may be importable here.
 //
 // And the read-site counterpart, which this module cannot make unavailable and therefore states
 // outright: `selectTimelineFor(id) ?? initialTimelineState` is BANNED at every read site. It collapses
@@ -73,6 +77,7 @@
 // the pairing boundary #757 exists to enforce.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
+import type { HistoryRequestFailure } from '@shared/ipc/events'
 import {
   reduceTimeline,
   initialTimelineState,
@@ -115,6 +120,62 @@ import {
  */
 export const MAX_RETAINED_TIMELINES = 10
 
+/**
+ * Where one conversation's OPENING HISTORY ASK stands (#1259) — held beside the timeline it describes,
+ * inside the same slice, so it dies with it. Four readings, and the fourth is the absence of this value:
+ *
+ *   `null` / absent key  never asked — or asked, drawn, and then EVICTED. Those two are deliberately the
+ *                        same reading, and that identity is the whole of #1259's AC3: a re-opened
+ *                        conversation whose slice was evicted asks again and refills, where one that
+ *                        still holds its page does not.
+ *   `requested`          an ask is on the wire and has not been answered. Terminal against a relay that
+ *                        withholds the frame, and that is deliberate — see `markHistoryRequested`.
+ *   `loaded`             a page was served. `cursor` and `atStart` are carried AS SENT for the
+ *                        scroll-back walk (#1260) and are read by nothing today.
+ *   `failed`             the ask was refused. All six members of `HistoryRequestFailure` settle here
+ *                        identically; nothing branches on `reason` in this file or in its consumer.
+ *
+ * `retryable` IS RECORDED AND NEVER READ HERE. Its docblock on `historyRequestFailed` is explicit that
+ * the flag is computed at the single emit so a walk driver cannot re-derive it wrong into a retry loop
+ * against a relay that is merely withholding a frame. Storing it keeps that one computation
+ * authoritative; acting on it is #1260's, and there is no timer, no backoff and no automatic re-ask
+ * anywhere in this slice.
+ *
+ * `cursor` IS OPAQUE AND IS NOT A CAPABILITY. It is stored verbatim and never parsed, never compared,
+ * never concatenated, never a `Map` key, a lookup path, a filename or a log field — and never reused
+ * across conversations, which holding it per-slice makes structural rather than a rule to remember. The
+ * daemon merges its three cursor failure causes into one indistinguishable answer on purpose; the
+ * repair for all three is restarting with an empty cursor, so there is nothing here to tell apart.
+ */
+export type HistoryRequestState =
+  | { status: 'requested' }
+  | { status: 'loaded'; cursor: string; atStart: boolean }
+  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean }
+
+/**
+ * What one key holds: the thread, and the state of the ask that backfilled it (#1259).
+ *
+ * ONE OBJECT UNDER ONE KEY, rather than a second `ReadonlyMap` beside `timelines`. The request state
+ * must die with the timeline it describes, and a satellite map would need the key dropped in four
+ * separate places — both eviction helpers and both clears — to keep that true, where a missed one is a
+ * per-id leak keyed by daemon-supplied strings. Wrapping makes the property structural: one keyspace,
+ * one eviction order, nothing to keep in step.
+ *
+ * `selectTimelineFor`'S SIGNATURE DID NOT MOVE for this — it projects `.timeline` and still returns
+ * `TimelineState | null` — so every read site, the banned `?? initialTimelineState` rule and the
+ * three-reading table below stand unedited, and the by-reference survivor copy in the two rebuild
+ * helpers still hands back the identical slice object and therefore the identical `TimelineState`.
+ */
+export interface ConversationSlice {
+  timeline: TimelineState
+  history: HistoryRequestState | null
+}
+
+/** A slice for a conversation nothing is yet held for: an empty thread and no ask. Sharing one frozen
+ *  reference is safe for the reason the seeding note below gives — `reduceTimeline` is pure and every
+ *  write path here replaces rather than mutates. */
+const emptySlice: ConversationSlice = { timeline: initialTimelineState, history: null }
+
 /** The whole state. A key ABSENT from the map means "nothing is held for that conversation" — no event
  *  has ever arrived and it was never opened, or it was evicted — and is a DISTINCT state from a present
  *  empty slice ("observed; nothing in the thread"). See `selectTimelineFor`, which preserves that
@@ -122,7 +183,7 @@ export const MAX_RETAINED_TIMELINES = 10
  *  mutate it in place, is what makes the hostile-key property hold (see the header), and is also what
  *  makes the bound enforceable, since `size` is a real count. */
 export interface ConversationTimelineState {
-  timelines: ReadonlyMap<string, TimelineState>
+  timelines: ReadonlyMap<string, ConversationSlice>
 }
 
 /** Store shape = state + the four write paths.
@@ -158,10 +219,23 @@ export interface ConversationTimelineState {
  *  already there — backwards. The page is folded to rows first (`historyPageBridge.reduceHistoryPage`,
  *  against a scratch state) and this path puts them at the HEAD. Splitting it that way is also what
  *  makes AC3 structural: rows are all that crosses, so no stored `turn_state`, `stall`, `api_retry` or
- *  `compacting` entry can move the five chrome scalars the live lane owns. */
+ *  `compacting` entry can move the five chrome scalars the live lane owns.
+ *
+ *  #1259 adds THREE MORE, and they are the first that write the slice's second half rather than its
+ *  timeline. `markHistoryRequested` is the ask going out, `recordHistoryPage` the page coming back and
+ *  `recordHistoryFailure` the refusal that settles it instead. They are three rather than one keyed
+ *  reducer for the reason the four above are: they are independent operations, and a discriminated
+ *  action set would be ceremony. All three are ABSENT-KEY NO-OPS — see their implementations. */
 export type ConversationTimelineStore = ConversationTimelineState & {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
+  markHistoryRequested: (conversationId: string) => void
+  recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
+  recordHistoryFailure: (
+    conversationId: string,
+    reason: HistoryRequestFailure,
+    retryable: boolean
+  ) => void
   markViewed: (conversationId: string) => void
   clearAllTimelines: () => void
   clearTimelineFor: (conversationId: string) => void
@@ -226,11 +300,11 @@ export const initialConversationTimelineState: ConversationTimelineState = { tim
  *  another conversation does not re-render (backgroundTaskRosterStore.ts:415-417 states exactly this
  *  property). That is the whole of AC3, and it must survive this rebuild as well as the plain clone. */
 function withNewSliceAtHead(
-  timelines: ReadonlyMap<string, TimelineState>,
+  timelines: ReadonlyMap<string, ConversationSlice>,
   conversationId: string,
-  slice: TimelineState
-): ReadonlyMap<string, TimelineState> {
-  const next = new Map<string, TimelineState>([[conversationId, slice]])
+  slice: ConversationSlice
+): ReadonlyMap<string, ConversationSlice> {
+  const next = new Map<string, ConversationSlice>([[conversationId, slice]])
   let evicting = timelines.size >= MAX_RETAINED_TIMELINES
   for (const [id, held] of timelines) {
     // The head, and only the head, is dropped — `evicting` falls on the first iteration either way.
@@ -247,14 +321,14 @@ function withNewSliceAtHead(
  *  CREATE, which evicts the head first when at the bound). Same rebuild discipline and same
  *  by-reference copy of every survivor as `withNewSliceAtHead`. */
 function withSliceAtTail(
-  timelines: ReadonlyMap<string, TimelineState>,
+  timelines: ReadonlyMap<string, ConversationSlice>,
   conversationId: string,
-  slice: TimelineState
-): ReadonlyMap<string, TimelineState> {
+  slice: ConversationSlice
+): ReadonlyMap<string, ConversationSlice> {
   // Only a write that CREATES a key can exceed the bound; a move re-orders and does not grow. The
   // guard reads `has`, so the head being dropped is never the key being moved.
   let evicting = !timelines.has(conversationId) && timelines.size >= MAX_RETAINED_TIMELINES
-  const next = new Map<string, TimelineState>()
+  const next = new Map<string, ConversationSlice>()
   for (const [id, held] of timelines) {
     if (evicting) {
       evicting = false
@@ -309,9 +383,26 @@ function withoutHeldEchoes(
   return next.length === page.length ? page : next
 }
 
+/** #1259 — the body all three request-state paths share: replace the `history` half of a HELD slice,
+ *  leaving its `timeline` half and the map's order untouched, or hand back the state object when the
+ *  key is absent. One helper rather than three copies of the same six lines, and one place for the
+ *  absent-key rule to be read. It takes and returns the whole state so each caller stays a one-liner
+ *  whose name is the entire difference between them. */
+function withHistory(
+  state: ConversationTimelineState,
+  conversationId: string,
+  history: HistoryRequestState
+): ConversationTimelineState {
+  const held = state.timelines.get(conversationId)
+  if (held === undefined) return state
+  const next = new Map(state.timelines)
+  next.set(conversationId, { ...held, history })
+  return { timelines: next }
+}
+
 /** The tail key, or `undefined` for an empty map — "who was viewed most recently". `undefined` is never
  *  `===` a string, so `''` compares correctly rather than aliasing the empty-map reading. */
-function tailKey(timelines: ReadonlyMap<string, TimelineState>): string | undefined {
+function tailKey(timelines: ReadonlyMap<string, ConversationSlice>): string | undefined {
   let tail: string | undefined
   for (const id of timelines.keys()) tail = id
   return tail
@@ -366,17 +457,16 @@ export function createConversationTimelineStore(
         const held = s.timelines.get(conversationId)
         if (held === undefined) {
           return {
-            timelines: withNewSliceAtHead(
-              s.timelines,
-              conversationId,
-              reduceTimeline(initialTimelineState, event)
-            )
+            timelines: withNewSliceAtHead(s.timelines, conversationId, {
+              timeline: reduceTimeline(initialTimelineState, event),
+              history: null
+            })
           }
         }
-        const folded = reduceTimeline(held, event)
-        if (folded === held) return s
+        const folded = reduceTimeline(held.timeline, event)
+        if (folded === held.timeline) return s
         const next = new Map(s.timelines)
-        next.set(conversationId, folded)
+        next.set(conversationId, { ...held, timeline: folded })
         return { timelines: next }
       }),
     // #1223 — a page's rows land AHEAD of the rows already held. Three branches, mirroring
@@ -409,17 +499,49 @@ export function createConversationTimelineStore(
         if (held === undefined) {
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
-              ...initialTimelineState,
-              items
+              timeline: { ...initialTimelineState, items },
+              history: null
             })
           }
         }
-        const fresh = withoutHeldEchoes(items, held.items)
+        const fresh = withoutHeldEchoes(items, held.timeline.items)
         if (fresh.length === 0) return s
         const next = new Map(s.timelines)
-        next.set(conversationId, { ...held, items: [...fresh, ...held.items] })
+        next.set(conversationId, {
+          ...held,
+          timeline: { ...held.timeline, items: [...fresh, ...held.timeline.items] }
+        })
         return { timelines: next }
       }),
+    // #1259 — the three request-state paths. Each replaces the slice's `history` half and touches its
+    // `timeline` half NOT AT ALL: the spread carries the held `TimelineState` across by reference, so a
+    // component reading this conversation's rows is not woken by an ask being marked or settled.
+    //
+    // ALL THREE ARE ABSENT-KEY NO-OPS, and that is a design decision rather than defensiveness. The
+    // reading has to die with the timeline it describes, so a slice minted by a history write alone
+    // would be a timeline-less holder outliving the thing it describes — and it would enter at the
+    // HEAD, making a conversation the daemon merely answered about the next eviction victim. It is also
+    // unreachable on the ask path (`activateConversation` calls `markViewed`, which creates the slice,
+    // before `requestConversationConfig`), and for a reply landing after an eviction the correct
+    // outcome is exactly "nothing is held, ask again on the next opening" (AC3). The guard returns the
+    // state OBJECT, so zustand's `Object.is` short-circuit fires and no subscriber wakes.
+    //
+    // NONE OF THE THREE RE-ORDERS THE MAP. They take `dispatchFor`'s key-present shape — clone the
+    // outer map, `set` the key, position preserved by rule 1 of the eviction invariant — because a
+    // history write is not a view: promoting on one would let the daemon's reply, rather than the
+    // operator's attention, decide which thread survives the bound.
+    markHistoryRequested: (conversationId) =>
+      set((s) => withHistory(s, conversationId, { status: 'requested' })),
+    // The page came back. `cursor` and `atStart` are carried AS SENT and never derived from each other:
+    // an empty cursor with `atStart` true is the terminal page's published shape, and a short page says
+    // nothing at all. Neither is read by this ticket — #1260's walk is their only future consumer.
+    recordHistoryPage: (conversationId, cursor, atStart) =>
+      set((s) => withHistory(s, conversationId, { status: 'loaded', cursor, atStart })),
+    // The refusal. `reason` and `retryable` are COPIED, never branched on: all six members of
+    // `HistoryRequestFailure` settle a conversation identically — it stops asking and nothing is drawn
+    // — and `history-unavailable`'s retryability is recorded for #1260 rather than acted on here.
+    recordHistoryFailure: (conversationId, reason, retryable) =>
+      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable })),
     markViewed: (conversationId) =>
       set((s) => {
         if (tailKey(s.timelines) === conversationId) return s
@@ -427,7 +549,7 @@ export function createConversationTimelineStore(
           timelines: withSliceAtTail(
             s.timelines,
             conversationId,
-            s.timelines.get(conversationId) ?? initialTimelineState
+            s.timelines.get(conversationId) ?? emptySlice
           )
         }
       }),
@@ -503,4 +625,26 @@ export function useConversationTimelineStore<T>(selector: (s: ConversationTimeli
 export const selectTimelineFor =
   (conversationId: string) =>
   (s: ConversationTimelineState): TimelineState | null =>
-    s.timelines.get(conversationId) ?? null
+    s.timelines.get(conversationId)?.timeline ?? null
+
+/**
+ * #1259's read surface — where one conversation's OPENING ASK stands, or `null` when nothing is held.
+ *
+ * The `?? null` here carries MORE than `selectTimelineFor`'s, because the two `null`s the `?.` and the
+ * `??` produce are the same reading on purpose: "no slice at all" and "a slice that has never asked"
+ * both mean ASK NOW. That collapse is deliberate and is the whole of AC3 — an evicted conversation is
+ * indistinguishable from one never opened, so re-opening it refills from history instead of reading a
+ * stale `loaded` and staying empty forever. Do not split the two.
+ *
+ * A bare `Map.get` again, so an unknown id is an EXPLICIT no-match that can never resolve onto a
+ * neighbour's reading, and the hostile-key property of the keyspace carries over untouched.
+ *
+ * `HistoryRequestState` is handed back BY REFERENCE and must be treated as frozen: it is replaced,
+ * never mutated. There is deliberately no `selectHistoryCursorFor` and no boolean
+ * `selectIsAwaitingPage` — a caller branches on `status`, which keeps every reading in view at each
+ * call site instead of collapsing four into two and losing the one the next consumer needs.
+ */
+export const selectHistoryRequestFor =
+  (conversationId: string) =>
+  (s: ConversationTimelineState): HistoryRequestState | null =>
+    s.timelines.get(conversationId)?.history ?? null

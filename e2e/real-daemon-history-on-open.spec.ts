@@ -1,3 +1,4 @@
+import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -34,6 +35,19 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // interpolated into an assertion message or a test title. The `history_page`'s cursor is never observed
 // at all — it is opaque, it is not a capability, and this spec has no business reading it.
 
+// THE SEED MUST BE PROMOTED, and the first gate run is what bought this line: without it the fixture's
+// `seedPromoted` default of `false` seeds a Recent discussion, which renders `.channel-list__save` in the
+// Chats section and NEVER the Rename pencil — so the readiness gate below timed out at 45s before a
+// single step of the drive ran. Two later steps depend on it too: the Archive view sorts a promoted row
+// into the Channels tab (`partitionArchived` splits by `is_promoted`), which is the tab this spec counts
+// 1→0 across the restore. Every sibling real-* spec that opens the seed declares the same option
+// (`real-daemon-conversation-lifecycle.spec.ts`, `real-daemon-session-settings.spec.ts`,
+// `real-claude-effort-default.spec.ts`), and nothing in this repo typechecks or lints a missing one:
+// `test.use` is additive, so its ABSENCE is silently the default, and the whole tier is gated out of the
+// fake Playwright config. The detector is the gate run itself, which is why the affordance the gate keys
+// on is named in the comment beside it rather than left implicit.
+test.use({ seedPromoted: true })
+
 // Generous, to absorb real daemon startup latency plus a handshake re-dial or two.
 const HANDSHAKE_TIMEOUT_MS = 45_000
 // One cold claude turn: spawn, model load, first reply.
@@ -45,6 +59,29 @@ const SPEC_TIMEOUT_MS = 300_000
 
 // turn_end appends a turn boundary that drops the streaming cursor — its absence is the quiesce signal.
 const CURSOR_SELECTOR = '.bubble__cursor'
+const CURSOR_CHAR = '▎'
+const ASSISTANT_ROW = '[data-thread-role="assistant"]'
+const META_SELECTOR = '.bubble__meta'
+
+/**
+ * Count assistant rows whose text is non-empty once the streaming cursor ▎ and the meta row are stripped
+ * — `real-claude.spec.ts`'s content-agnostic liveness read, transcribed rather than shared, as every
+ * real-* spec that needs it transcribes it. A naive "row exists" check would pass on an empty streaming
+ * bubble, because both the cursor span and the timestamp live INSIDE the row. The strip runs on a
+ * detached copy, so the live DOM the other assertions read is untouched.
+ */
+function nonEmptyAssistantCount(page: Page): Promise<number> {
+  return page.locator(ASSISTANT_ROW).evaluateAll(
+    (els, { cursor, meta }) =>
+      els.filter((el) => {
+        const content = document.createElement('div')
+        content.append(el.cloneNode(true))
+        content.querySelectorAll(meta).forEach((node) => node.remove())
+        return (content.textContent ?? '').split(cursor).join('').trim().length > 0
+      }).length,
+    { cursor: CURSOR_CHAR, meta: META_SELECTOR }
+  )
+}
 
 test('a real daemon answers the opening history ask and the thread reopens holding it', async ({
   relay,
@@ -70,8 +107,10 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   const row = page.locator('.channel-list__row-open')
   const composer = page.getByPlaceholder('Message…')
   const sendButton = page.getByRole('button', { name: 'Send' })
-  // The marker as the operator's own row. Scoped to the chat pane so the sidebar's last-message preview
-  // — which also carries this text once the daemon has the message — can never satisfy it.
+  // The marker as the operator's own REPLAYED row, and the closing proof — read once, after the re-open.
+  // Scoped to the chat pane so the sidebar's last-message preview — which also carries this text once the
+  // daemon has the message — can never satisfy it, and to `.bubble` so a queued backlog row (which
+  // renders this same text beside a Drop control, outside the thread) cannot either.
   const markerBubble = conversation.locator('.bubble[data-thread-role="user"]', { hasText: marker })
 
   await pairFromUnpairedLaunch(page, payload)
@@ -88,13 +127,31 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- Put the marker in the daemon's log. The bubble that appears here is the composer's OPTIMISTIC
-  // echo, not a replay — it proves only that the send left. ---
+  // --- Put the marker in the daemon's log, and wait the turn OUT rather than reading the composer's own
+  // optimistic echo. The first gate run's claude-less rehearsal is what bought this shape: a send issued
+  // while the bound session already reports a running turn is QUEUED, so it renders as a backlog row with
+  // a Drop control and never becomes a `.bubble` at all — an optimistic-echo assertion is therefore a
+  // statement about the session's turn state at click time, which this spec neither controls nor cares
+  // about. The completed ASSISTANT TURN is the barrier that holds either way: a reply exists only if the
+  // message reached claude, and it reached claude only through the log this spec is about to re-read.
+  //
+  // AND IT IS BASE-RELATIVE, never a bare `>= 1`. This is the pre-existing seeded row, not a FAB-minted
+  // empty chat, and the opening ask above may itself have drawn assistant rows out of history — so a
+  // count polled against zero is satisfiable by state this send did not cause, and the drive would sail
+  // past a send that produced no turn. Only a count that MOVED proves the turn happened. The cursor then
+  // comes back down: positive first, absence second, the sibling real-* idiom.
+  const baseBeforeTurn = await nonEmptyAssistantCount(page)
   await composer.fill(marker)
   await sendButton.click()
-  await expect(markerBubble).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  // Wait the turn out. The operator message is appended on receipt rather than on completion, so this is
-  // a barrier and not a dependency: once the turn has quiesced the daemon has certainly finished with it.
+  await expect
+    .poll(() => nonEmptyAssistantCount(page), {
+      timeout: TURN_TIMEOUT_MS,
+      message:
+        'no ADDITIONAL non-empty assistant reply streamed within the timeout — the marker send produced ' +
+        'no turn, so nothing was appended to the log this spec re-reads. Check the daemon and the ' +
+        'credential before reading it as a defect in the history ask.'
+    })
+    .toBeGreaterThan(baseBeforeTurn)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- Empty the client's retained timeline WITHOUT ending the pairing. Archiving the active

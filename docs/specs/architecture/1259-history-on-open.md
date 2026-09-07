@@ -423,3 +423,43 @@ have an answer, and the only route by which this client writes to a conversation
 out purely as a barrier; nothing asserts on the reply. The `real-daemon-` prefix names the subject — the
 daemon's history verb — and both prefixes run in the same credentialed tier, since each Playwright config
 keys on `real-` alone.
+
+### 2026-09-07 — rework: the real-tier spec's fixture options and its send barrier
+
+The first real-claude gate run reddened `e2e/real-daemon-history-on-open.spec.ts` at its very first
+assertion — `.channel-list__rename`, not found in 45s — so no step of the drive ran. Two corrections, both
+in the spec; **no production code changed, and the design in § Design is untouched.**
+
+**1. The seed was never promoted.** The spec's prose called the seed promoted throughout and its drive
+depended on that in two places, but it never declared `test.use({ seedPromoted: true })`, and the
+fixture's default is `false`. An unpromoted seed renders `.channel-list__save` in the Chats section and no
+Rename pencil at all, and it would sort into the Archive view's *Discussions* tab rather than the
+*Channels* tab the restore step counts across. `test.use` is additive, so a missing option is silently the
+default; the whole `real-*` tier is gated out of the fake Playwright config; and nothing typechecks or
+lints `e2e/`. **The gate run is the only detector**, which is the same shape as the fixture-option trap
+`real-daemon-session-settings.spec.ts` and the effort spec each pay a `test.use` line to avoid.
+
+**2. The send barrier was the optimistic echo, and it proved the wrong thing.** A claude-less rehearsal of
+the drive against a real `pyry` (`spawnClaude: false`, scratch spec, not committed) showed the marker
+landing as a **queued backlog row** — a Drop control beside the text, outside the thread — rather than as
+a `.bubble`, because the bound session already reported a running turn. So the assertion was a statement
+about turn state at click time, which this spec neither controls nor cares about.
+
+The correction is not merely a sturdier locator. Reading the daemon settles what the barrier has to be:
+`newOperatorMessageHistory` in the daemon's `cmd/pyry` is wired as the queue's **`OnDelivered`** callback,
+so the operator's turn is appended to the on-disk log **when the queue delivers it to claude**, not when
+the daemon receives it. The plan's own earlier wording here — "the operator message is appended on receipt
+rather than on completion" — was wrong, and an echo-based barrier would have let the drive proceed to the
+refill with nothing in the log. A **completed assistant turn** is exactly the precondition: a reply exists
+only if the message was delivered, and delivery is what fires the append. The barrier is therefore
+`real-claude.spec.ts`'s `nonEmptyAssistantCount` polled **base-relative** — transcribed, as every real-*
+spec that needs it transcribes it — then the streaming cursor back down. Base-relative rather than `>= 1`
+because this is the pre-existing seeded row and the opening ask may itself have drawn assistant rows out
+of history, so a count polled against zero is satisfiable by state the send did not cause.
+
+**What was verified locally, and what was not.** Every structural step — pair, readiness gate, open,
+Channel-info → Archive, the `.conversation` 1→0 exit, the Archive view's Channels 1→0 restore, and the
+re-open — was rehearsed against a real `pyry` with `spawnClaude: false` and passes. The send, the turn and
+the history refill need a credential this run does not hold and remain for the gate. The daemon-side half
+of the refill was read rather than run: the append writes `protocol.TypeMessage` with `Role: "user"`,
+which is the entry shape the fake-tier twin models and the client already decodes into a user bubble.

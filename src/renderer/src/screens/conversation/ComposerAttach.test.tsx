@@ -548,11 +548,36 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     // Neither shipped run of the sentence beneath the footer is reachable from this markup.
     expect(markup).not.toContain('class="composer__attach-outcome"')
     expect(markup).not.toContain('class="composer__attach-progress"')
-    // An image draws the file tile too in this slice — #1263 replaces the picture-bearing case and needs
-    // this tile as its own undecodable fallback, so there is no branch here to get wrong.
-    const image = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('shot.png')]} />)
-    expect(tileCount(image)).toBe(1)
-    expect(image).toContain('>PNG</span>')
+  })
+
+  // ⭐ #1263 — THE BRANCH, and the one assertion this ticket re-aimed rather than added. #1262 asserted here
+  // that an image name draws the file tile too; that was the picture-bearing case this slice replaces, and the
+  // file tile survives as its undecodable FALLBACK rather than as its shipped state. What must not change is
+  // that both drawings wear the same frame in the same box, so the strip's tile count and each tile's position
+  // are a property of the SET and not of what any picture is doing.
+  it('draws the picture-bearing tile for an image name and the file tile for every other', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[tile('shot.png'), tile('notes.pdf'), tile('grab.JPEG')]}
+      />
+    )
+    expect(tileCount(markup)).toBe(3)
+    // The two image tiles are in flight (a static render never runs their effect), so they are empty frames —
+    // and the ONLY extension label in the strip is the one non-image tile's.
+    expect(markup.match(/composer__attachment-ext/g)?.length ?? 0).toBe(1)
+    expect(markup).toContain('>PDF</span>')
+    expect(markup).not.toContain('>PNG</span>')
+    expect(markup).not.toContain('>JPEG</span>')
+    // Order is the set's own, unchanged by the branch: image, file, image. Asserted at the two ENDS, where an
+    // empty frame is unambiguous — the file tile's own frame is never empty, so a branch that drew the wrong
+    // drawing at either end fails here rather than being absorbed by a substring match somewhere in the middle.
+    expect(
+      markup.startsWith('<div class="composer__attachments"><span class="composer__attachment"></span>')
+    ).toBe(true)
+    expect(markup.endsWith('<span class="composer__attachment"></span></div>')).toBe(true)
+    expect(markup.indexOf('composer__attachment-glyph')).toBeGreaterThan(
+      '<div class="composer__attachments"><span class="composer__attachment"></span>'.length - 1
+    )
   })
 
   // ⭐ AC5, AND THE ELEMENT THE SHIPPED e2e NEGATIVES ARE RE-AIMED AT. Against an outcome line that no

@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { COMPOSER_ATTACH_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
-import { attachmentExtensionLabel } from '../src/renderer/src/screens/conversation/attachmentExtensionLabel'
 
 // #1055 — the live proof that an attached file actually REACHES claude. Every other tier in this repo can
 // only prove client state: the fake tier stubs the upload's outcome and uploads nothing, and the unit tier
@@ -199,10 +198,35 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       // ⭐ #1262 MOVED THE COMPLETION'S REPORT FROM A SENTENCE TO A TILE, so this gate reads the tile. It
       // is the stronger gate of the two and not merely the surviving one: a drawn tile is the composer's
       // PENDING SET rendered, and that set is precisely what the send below has to carry — where the old
-      // sentence was only a report that an event had arrived. The label is DERIVED by calling the
-      // production module rather than typed out, this spec's standing rule for the copy it replaces.
+      // sentence was only a report that an event had arrived.
       await expect(tiles).toHaveCount(1, { timeout: UPLOAD_TIMEOUT_MS })
-      await expect(tiles.first()).toHaveText(attachmentExtensionLabel(IMAGE_FILENAME))
+
+      // ⭐ #1263 AC4 — THE ONE CRITERION NO FAKE TIER CAN REACH, and the reason this ticket carries
+      // `needs-real-claude`. `IMAGE_FILENAME` is a `.png`, so the tile is now the PICTURE rather than the
+      // extension label this gate used to read, and drawing it costs a round trip: the upload leg keeps no
+      // local copy of what it streams, so the window must ask the host for the bytes back over
+      // `request_attachment`. Nothing had ever asked for an attachment NO MESSAGE REFERENCES before — every
+      // shipped retrieval names one already recorded on a timeline item — and this conversation has had no
+      // turn at all (asserted above). The client half is not in doubt and e2e/composer-attachment-image.spec.ts
+      // proves it against a fake daemon that answers by construction; what only a REAL pyry can settle is
+      // whether it answers at all. A picture that never resolves leaves an empty 45x60 frame, so the failure
+      // reads as a timeout here rather than as a wrong value.
+      //
+      // `naturalWidth` is the assertion rather than the element's presence: an <img> whose source the host
+      // refused raises `error` and unmounts into the file tile, so a bare count could pass on a tile that
+      // drew no picture. A decoded width is the host's answer having arrived AND been drawable.
+      const picture = tiles.first().locator('img.composer__attachment-image')
+      await expect(picture).toHaveCount(1, { timeout: UPLOAD_TIMEOUT_MS })
+      await expect
+        .poll(
+          () => picture.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+          {
+            timeout: UPLOAD_TIMEOUT_MS,
+            message:
+              'the real daemon never answered request_attachment for an attachment no message references yet, so the composer tile stayed an empty frame (#1263 AC4)'
+          }
+        )
+        .toBeGreaterThan(0)
       // And the line beneath the footer stays absent for a completion. It is the surface a REFUSAL or a
       // FAILURE still speaks through, so a sentence appearing here is the diagnosis when the tile does
       // not: "The host rejected part of the upload." means the chunk named no conversation the daemon

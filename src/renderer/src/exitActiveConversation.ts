@@ -13,7 +13,8 @@ import type { ThreadEvent } from './store/threadTimeline'
  *  - `clearTimelineFor`        — conversationTimelineStore's #757 single-key clear.
  *  - `clearActiveConversation` — activeConversationStore's #529 clear.
  *  - `clearSessionId`          — sessionIdStore's #529 clear.
- *  - `clearRunConfig`          — #1167's drop of this chat's run configuration, both stores.
+ *  - `clearRunConfig`          — #1167's drop of this chat's run configuration, all three stores
+ *                                since #1231.
  *  - `navigateToList`          — the container's return-to-the-Channel-List nav.
  *
  * `getActiveConversation` is a GETTER, not a value threaded in by the caller, for the reason
@@ -35,10 +36,15 @@ export interface ExitActiveConversationDeps {
   clearSessionId: () => void
   /**
    * #1167: drop the run configuration of the conversation being left — `runConfigStore`'s held snapshot
-   * and `runSettingsWriteStore`'s pending changes, confirmed overrides and standing rejection. ONE
-   * member for two stores, the same act stated once, for the reason `ActivateConversationDeps`'
-   * counterpart documents at length: the snapshot half self-heals in a round trip while the write half
-   * never heals at all, so clearing either alone leaves the durable half standing.
+   * and `runSettingsWriteStore`'s pending changes, confirmed overrides and standing rejection — and
+   * since #1231 `systemPromptStore`'s held system-prompt reading. ONE member for three stores, the same
+   * act stated once, for the reason `ActivateConversationDeps`' counterpart documents at length: the
+   * snapshot half self-heals in a round trip while the write half never heals at all, so clearing
+   * either alone leaves the durable half standing. The third re-asserts only on the next activation,
+   * since `system_prompt` is reply-only and nothing pushes a correction unsolicited.
+   *
+   * THE SIGNATURE DID NOT CHANGE for #1231: this member is still `() => void`, and the three production
+   * bodies each gained a third `getState()` arrow. The member names the ACT, not the store list.
    *
    * CROSS-WIRE NOTE for a reviewer: this makes FOUR nullary `() => void` members on this interface, so
    * any two can be swapped and still compile, and a bare `toHaveBeenCalledTimes(1)` passes for both

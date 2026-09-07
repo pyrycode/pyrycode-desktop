@@ -413,3 +413,26 @@ re-asking) are idempotent, since the write is a whole-value replace.
   is preserved here precisely so that write remains possible without changing the value.
 - **A `connected`-edge or turn-end refresh** — deliberately out of scope per the ticket. The ask fires
   on activation and nowhere else.
+
+## Revisions
+
+**2026-09-07 — implementation leg.** No design departure: the store, the bridge, the twelfth-leaf
+mount, the third call in `requestConversationConfig` and the third arrow in each of the three
+`clearRunConfig` bodies all landed as specified, and `ActivateConversationDeps` /
+`ExitActiveConversationDeps` gained no signature change. Three things worth recording:
+
+- **Open question 3 resolved — nothing needs a `connected` edge.** Confirmed against the implemented
+  design rather than assumed: the store's only ingress is the activation ask, and a reconnect to the
+  same daemon does not invalidate a stored prompt. A daemon-wide edge has no one conversation to name,
+  which is `modelListBridge`'s standing argument, sharpened here because this arm is reply-only. Open
+  questions 1 and 2 were resolved in the plan body and are unchanged.
+- **Non-vacuity, mutation-checked and reverted.** Deleting the attribution gate's early return in
+  `subscribeSystemPrompt` reddened **3** tests; collapsing the tri-state with `event.systemPrompt ?? ''`
+  at `translateSystemPrompt` reddened **3**. Both were reverted and the suite is green, so the two
+  load-bearing guards are proven rather than merely present.
+- **One test fixture corrected during the build gate**, not a design change: the "unrelated events"
+  case had a `sessionTransition` sample written from memory with a `sessionId` field the arm does not
+  carry. `tsc` caught it (the renderer typecheck, not any test run). It now uses that arm's real six
+  fields and gained a `turnState` sample, so the case asserts across three structurally different
+  unrelated shapes — two of which carry a `conversationId` — which is what makes "the filter switches
+  on the discriminant, never on field names" actually tested.

@@ -42,6 +42,18 @@
 // rule and states where it does and does not reach; AttachmentPasteRequest amends its own "and nothing
 // else" paragraph, since that ask's emptiness was its central security property.
 //
+// EVERY ASK NOW NAMES A CONVERSATION, AND THE PICKER'S ASK EXISTS (#1205). pyrycode #2143 made the
+// daemon file an upload under the conversation the chunk names and refuse a chunk naming none, so the
+// destination has to travel from the window, which is the only side that knows which chat is open.
+// `conversationId` is REQUIRED on all three asks and checked by one rule, `hasValidConversationId`: a
+// non-empty string within a bound. Unlike `serverId` it is a value main ACTS on — it rides every chunk
+// as the daemon's lookup key — but like every other id this window sends it is a CLAIM, never a
+// capability: the daemon validates it against its own registry before it becomes a path component, and
+// naming a conversation the operator has not opened buys a refusal, not a file. The argument-free
+// picker intent is RETIRED by this: an ask has to carry the id, so the picker names itself with a
+// second client-owned literal the way the paste does, and a bare send now matches no guard and is
+// dropped. See `AttachmentPickRequest`.
+//
 // THE TWO GUARDS ARE TRIED PATH-FIRST in the main listener, and that ordering is load-bearing rather
 // than stylistic: an ask carrying a valid `path` reaches the drop arm exactly as it does today, extra
 // keys included, so nothing an operator can produce changes arm. See src/main/index.ts.
@@ -108,8 +120,11 @@ export interface AttachmentUploadRequest {
    *  regular file, and drops the errno unexamined because it carries this same path. */
   path: string
   /** Which paired server this file is for (#1129). See `hasValidServerId` in this module — one field,
-   *  one rule, two asks. */
+   *  one rule, three asks. */
   serverId?: string
+  /** The conversation the file is for (#1205). See `hasValidConversationId` — one field, one rule,
+   *  three asks, and REQUIRED on each. */
+  conversationId: string
 }
 
 /**
@@ -141,7 +156,35 @@ export function isAttachmentUploadRequest(value: unknown): value is AttachmentUp
   if (typeof path !== 'string' || path.length === 0 || path.length > MAX_UPLOAD_PATH_LENGTH) {
     return false
   }
-  return hasValidServerId(value)
+  return hasValidServerId(value) && hasValidConversationId(value)
+}
+
+/**
+ * Upper bound on `conversationId`, in UTF-16 code units — MAX_RETRIEVAL_IDENTIFIER_LENGTH's figure
+ * (src/shared/ipc/attachmentRetrieval.ts), restated rather than imported for the no-sibling-import rule
+ * `hasValidServerId` records. A daemon-minted id is a 36-character UUID; this bound is boundary hygiene
+ * against a hostile window, and the daemon's own 64-byte budget is the one that decides.
+ */
+export const MAX_UPLOAD_CONVERSATION_ID_LENGTH = 256
+
+/**
+ * The REQUIRED destination on every ask (#1205), and the one rule all three guards check it against.
+ * Required rather than optional because there is no unnamed path for it: `serverId` falls back to the
+ * sole connection, but the daemon has no fallback for a chunk's conversation since pyrycode #2143 — an
+ * absent id is refused on the first chunk, so accepting one here would only move the refusal from a
+ * dropped ask to the operator's composer. A non-empty string within the bound; shape and canonicity are
+ * the daemon's, which validates the id against its registry and answers a foreign or unknown one with
+ * the same `attachment.invalid_chunk` a malformed one gets. `in`-guarded like its sibling, so a
+ * `__proto__`-carrying ask with no OWN key is refused on its own merits.
+ */
+function hasValidConversationId(value: object): boolean {
+  if (!('conversationId' in value)) return false
+  const { conversationId } = value as Record<string, unknown>
+  return (
+    typeof conversationId === 'string' &&
+    conversationId.length > 0 &&
+    conversationId.length <= MAX_UPLOAD_CONVERSATION_ID_LENGTH
+  )
 }
 
 /**
@@ -258,8 +301,10 @@ export const ATTACHMENT_PASTE_SOURCE = 'clipboard-image' as const
 export interface AttachmentPasteRequest {
   source: typeof ATTACHMENT_PASTE_SOURCE
   /** Which paired server this image is for (#1129). See `hasValidServerId` in this module — one field,
-   *  one rule, two asks. */
+   *  one rule, three asks. */
   serverId?: string
+  /** The conversation the image is for (#1205). See `hasValidConversationId`. */
+  conversationId: string
 }
 
 /**
@@ -281,7 +326,36 @@ export function isAttachmentPasteRequest(value: unknown): value is AttachmentPas
   if (!('source' in value)) return false
   const { source } = value as Record<string, unknown>
   if (source !== ATTACHMENT_PASTE_SOURCE) return false
-  return hasValidServerId(value)
+  return hasValidServerId(value) && hasValidConversationId(value)
+}
+
+/** The literal a PICKER ask names itself with (#1205) — `ATTACHMENT_PASTE_SOURCE`'s shape and reason. */
+export const ATTACHMENT_PICK_SOURCE = 'file-picker' as const
+
+/**
+ * What the PICKER asks for (#1205): its own name, the destination, and optionally a server. Until #1205
+ * this entry sent NO ARGUMENT — presence told the picker from the drop — and that was the channel's
+ * original security property: no request field at all. The destination has to ride the ask now, so the
+ * picker takes the paste's shape: a client-owned literal selects the arm, and the two ids are the only
+ * other fields. Nothing about a FILE is here or can be — the picker still opens in the background
+ * process and main still reads the operator's choice itself, so the drop stays the only ask that names
+ * a path.
+ */
+export interface AttachmentPickRequest {
+  source: typeof ATTACHMENT_PICK_SOURCE
+  /** See `hasValidServerId`. */
+  serverId?: string
+  /** See `hasValidConversationId`. */
+  conversationId: string
+}
+
+/** The picker ask's guard — `isAttachmentPasteRequest` verbatim, against the other literal. */
+export function isAttachmentPickRequest(value: unknown): value is AttachmentPickRequest {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('source' in value)) return false
+  const { source } = value as Record<string, unknown>
+  if (source !== ATTACHMENT_PICK_SOURCE) return false
+  return hasValidServerId(value) && hasValidConversationId(value)
 }
 
 /**

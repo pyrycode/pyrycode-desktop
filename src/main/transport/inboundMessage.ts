@@ -192,7 +192,11 @@ export type DaemonErrorOutcome =
  * it into a path or a filesystem name, and never dispatch on `mime_type` in a way that grants the
  * content privileges.
  */
-export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, 'data'> {
+export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, 'data' | 'conversation_id'> {
+  // NO `conversation_id`, deliberately, after #1205 made it required on the UPLOAD frame. On retrieval the
+  // daemon emits the field EMPTY and a receiver ignores it (pyrycode #2142): a retrieval chunk is
+  // correlated by `in_reply_to` to a request that already named the conversation, so there is nothing
+  // to read here and the decoder keeps returning a fresh eight-key literal, dropping the empty key.
   /** This chunk's RAW bytes, base64-decoded at the untrusted boundary so the reassembler (#995) stays
    *  byte-pure — parseDebugBundleChunkPayload's posture. Content-bearing: a user's own private file
    *  bytes, never logged, and never written to a path derived from `filename`. */

@@ -18,6 +18,7 @@ describe('buildAttachmentChunk', () => {
   const FIXED_TS = '2026-09-01T12:00:00.000Z'
   const SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
   const PAYLOAD: AttachmentChunkPayload = {
+    conversation_id: 'conv-1',
     attachment_id: 'att-1',
     index: 0,
     total_chunks: 2,
@@ -38,15 +39,18 @@ describe('buildAttachmentChunk', () => {
     expect(envelope.payload).toEqual(PAYLOAD)
   })
 
-  it('carries all eight fields and no conversation_id — the omission is a security property', () => {
-    // There is no conversation_id on this frame: the daemon places an upload in the conversation the
-    // authenticated session is already on, so a client cannot steer bytes into another
-    // conversation's directory by naming one. A ninth field here would reopen exactly that.
+  it('carries all nine fields, conversation_id among them — the daemon requires it (#1205)', () => {
+    // The frame USED to carry no conversation_id, and this test pinned the omission as a security
+    // property: the daemon filed an upload under its follow-active cursor, so a client could not
+    // steer bytes by naming a conversation. pyrycode #2143 retired that cursor and now REFUSES a chunk
+    // without the field, validating the one it gets against the daemon's registry instead. Pinned so a
+    // "tidy" removal of the field reddens here rather than in the operator's composer.
     const envelope = decodeEnvelope(buildAttachmentChunk({ id: 1, ts: FIXED_TS, payload: PAYLOAD }))
     const payload = envelope.payload as Record<string, unknown>
 
     expect(Object.keys(payload).sort()).toEqual([
       'attachment_id',
+      'conversation_id',
       'data',
       'filename',
       'index',
@@ -62,6 +66,7 @@ describe('buildAttachmentChunk', () => {
     // exactly 60000 characters (45000 divides by 3, so no padding), leaving room for every metadata
     // field at its byte ceiling. Measured against the imported constant, never a literal 65519.
     const maximal: AttachmentChunkPayload = {
+      conversation_id: 'c'.repeat(ATTACHMENT_ID_MAX_BYTES),
       attachment_id: 'a'.repeat(ATTACHMENT_ID_MAX_BYTES),
       index: 0,
       total_chunks: 1000,
@@ -89,6 +94,7 @@ describe('buildAttachmentChunk', () => {
     expect(Buffer.byteLength(fourByte, 'utf8')).toBe(ATTACHMENT_MIME_TYPE_MAX_BYTES)
 
     const maximal: AttachmentChunkPayload = {
+      conversation_id: 'ö'.repeat(ATTACHMENT_ID_MAX_BYTES / 2),
       attachment_id: 'ä'.repeat(ATTACHMENT_ID_MAX_BYTES / 2),
       index: 999,
       total_chunks: 1000,

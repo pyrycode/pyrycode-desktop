@@ -441,7 +441,7 @@ export function drainPendingAttachments(holder: {
  * per-mount — and it resets on a conversation switch for the held outcome's free reason: `PairedShellView`
  * keys the chat pane on the conversation id, so a switch rebuilds this component with an empty set.
  */
-export function useAttachmentUpload(): {
+export function useAttachmentUpload({ conversationId }: { conversationId: string | null }): {
   outcome: AttachmentUploadEvent | null
   requestAttach: () => void
   dropFile: (file: File) => void
@@ -470,6 +470,11 @@ export function useAttachmentUpload(): {
   }, [])
 
   const requestAttach = (): void => {
+    // #1205: no open conversation, no upload. `submitMessage`'s rule for a null id, applied to the
+    // three entries here: the ask has to name the conversation the bytes are for, and there is no
+    // conversation to name, so nothing is asked and nothing on screen changes. The daemon would refuse
+    // the chunk anyway (pyrycode #2143); refusing here costs no picker and no bytes.
+    if (conversationId === null) return
     // THE CLEAR HAPPENS ON THE CLICK, and it has to. A cancelled picker reports NOTHING at all, so a
     // clear driven by an arriving event would leave the previous refusal or failure on screen for an
     // attach the operator abandoned. Clearing first also means the line that appears next is unambiguously
@@ -477,9 +482,11 @@ export function useAttachmentUpload(): {
     setOutcome(null)
     // `window.pyry` is dereferenced only here and in the effect above — never during render — so every
     // static render of the composer still touches no bridge (Composer.handleSubmit's standing rule).
-    // Fire-and-forget with no argument: this window names an INTENT, never a file. Nothing that could
-    // name one exists here to send.
-    window.pyry.requestAttachmentUpload()
+    // Fire-and-forget: this window names an INTENT and a DESTINATION, never a file. Nothing that could
+    // name one exists here to send. The id is the open chat's daemon-minted one, read at the click —
+    // the ask carries it once and the background process spreads it onto every chunk, so a chat switch
+    // after this line cannot re-point the transfer (pyrycode #2146 would refuse it if it could).
+    window.pyry.requestAttachmentUpload({ conversationId })
   }
 
   /**
@@ -496,8 +503,9 @@ export function useAttachmentUpload(): {
    * render of the composer still touches no bridge.
    */
   const dropFile = (file: File): void => {
+    if (conversationId === null) return // #1205, `requestAttach`'s reason
     setOutcome(null)
-    window.pyry.dropAttachmentFile(file)
+    window.pyry.dropAttachmentFile(file, { conversationId })
   }
 
   /**
@@ -528,8 +536,9 @@ export function useAttachmentUpload(): {
    * is the call that names it.
    */
   const pasteImage = (): void => {
+    if (conversationId === null) return // #1205, `requestAttach`'s reason
     setOutcome(null)
-    window.pyry.pasteAttachmentImage()
+    window.pyry.pasteAttachmentImage({ conversationId })
   }
 
   /**

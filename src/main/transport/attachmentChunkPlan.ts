@@ -30,6 +30,10 @@ import type { AttachmentChunkPayload } from '../../shared/wire/types'
  * random generator to buy.
  */
 export interface AttachmentChunkPlanInput {
+  /** The conversation the upload is filed under — the open chat's daemon-minted id (#1205). Copied
+   *  verbatim onto every chunk, which is what makes pyrycode #2146's "same destination on every chunk
+   *  of one transfer" structural rather than caller discipline. */
+  conversation_id: string
   /** The transfer id, caller-minted. Copied verbatim onto every chunk. */
   attachment_id: string
   /** The client's own name for the file — a display string, never a path. Copied verbatim. */
@@ -49,8 +53,9 @@ export interface AttachmentChunkPlanInput {
  * loop emits a spurious trailing empty chunk (or drops a full one) precisely when `size % stride`
  * is 0.
  *
- * `attachment_id`, `total_chunks`, `size` and `sha256` are computed once and spread onto every
- * chunk, so "identical on every chunk of one transfer" is structural rather than caller discipline.
+ * `conversation_id`, `attachment_id`, `total_chunks`, `size` and `sha256` are computed once and
+ * spread onto every chunk, so "identical on every chunk of one transfer" is structural rather than
+ * caller discipline.
  *
  * Never throws. The whole plan is materialised: for an N-byte file this holds N bytes of input plus
  * ~1.33N bytes of base64 at once. #861 owns that profile; converting this to a generator is a
@@ -74,6 +79,7 @@ export function planAttachmentChunks(input: AttachmentChunkPlanInput): Attachmen
     // bytes and honours byteOffset/length, while Buffer.from(view.buffer) copies the whole backing
     // store — silently base64-ing the entire file into every chunk.
     chunks.push({
+      conversation_id: input.conversation_id,
       attachment_id: input.attachment_id,
       index,
       total_chunks: totalChunks,

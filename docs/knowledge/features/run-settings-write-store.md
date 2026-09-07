@@ -199,6 +199,50 @@ snake_case `permission_mode` — the value crosses **verbatim**, no allowlist, n
 no mapping onto the `yolo` bit (see [session settings send](session-settings-send.md) for why an allowlist
 here would be a false boundary).
 
+### Remembering the confirmed level (#1169)
+
+`runSettingsWriteBridge.ts` folds one more thing into the same event as it dispatches: an effort confirm
+also writes the level into [Last-effort store](last-effort-store.md), the renderer preference a newly
+opened chat with no effort of its own defaults to (see [Composer effort menu § The default
+apply](composer-effort-menu.md#the-default-apply-1169)). This section is that fold, not a new store.
+
+```ts
+confirmedEffortLevel(pending: ReadonlyMap<string, SettingsChange>, event: RunSettingsWriteEvent): string | null
+// non-null only for a settingsConfirmed whose changeId matches a pending 'effort' record with a
+// non-empty value. Everything else — a model/yolo/permissionMode confirm, a rejection, an unmatched
+// changeId, reconnected, conversationSwitched — is null.
+
+foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void
+// deps = { getPending: () => pending map, dispatch, rememberEffort: (level) => void }
+// resolves confirmedEffortLevel(deps.getPending(), event), THEN dispatches, THEN remembers if non-null.
+```
+
+**Remember on confirm, not on pick.** A rejected level is not a level that was used, and the confirm is
+the *only* seam where the confirmed value is recoverable at all: `sessionSettingsUpdated` carries only
+the correlation key (the daemon's ack names no field), and the `settingsConfirmed` arm above deletes the
+pending record in the same step it commits — so after the dispatch there is nothing left to read. That is
+why `confirmedEffortLevel` takes the pending map as a parameter rather than reading it off the store
+itself, and why the read **must precede** the dispatch: reading after would find an already-emptied map
+and remember nothing, silently — a change that dispatches the same events the same number of times,
+passes every count assertion, and never persists anything. `foldWriteEvent`'s ordering is pinned by a
+named test asserting `getPending` was called before `dispatch`.
+
+The no-match arm reuses this store's own fail-closed rule rather than restating it: an uncorrelated
+confirm commits nothing in the reducer, so it remembers nothing here either — which is also what closes a
+confirm **replayed** by the content-blind relay, since the second copy matches no pending record.
+
+**Why this is not a loop, twice over.** Applying a remembered level is itself an ordinary change that
+confirms and re-remembers the same value — idempotent, not a self-reinforcing write. And the *harder*
+hazard this closes is a genuine self-inflicted write loop: the obvious no-retry guard for "apply the
+remembered level to a chat reporting none" is this store's own `error` field, and it is wrong, because
+`changeDispatched` clears `error` on every fresh attempt — so an operator picking a *model* after the
+default effort was refused would clear the guard while the chat's effort is still `''`, and the refused
+level would go out again, once per unrelated setting change thereafter. [#1169](../codebase/1169.md)'s
+security review caught this; the shipped guard lives in the *reader* instead
+(`EffortDefaultData`'s own `appliedFor` marker, nothing on this write path can clear it) rather than here,
+because nothing added to this reducer could distinguish "refused, don't retry" from "confirmed, now
+stale" without becoming per-field state this store has no other reason to hold.
+
 ### The React binding — `RunSettingsWriteData` (same file)
 
 A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at App level**
@@ -206,10 +250,13 @@ A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at Ap
 sheet-scoped. A confirm/reject reply can arrive **after** the Run config sheet closes, so the listener
 must outlive the sheet; a sheet-scoped subscription would strand the pending marker. That same rationale
 now covers the `reconnected` clear ([#539](../codebase/539.md)) for free — the edge fires whether or not
-the sheet is open. One
-`useEffect(() => subscribeRunSettingsWrite(window.pyry.onDaemonEvent, e => runSettingsWriteStore.getState().dispatch(e)), [])`;
-`window.pyry` is dereferenced only inside the effect (the `SessionIdData` server-render invariant). The
-returned off-handle is the effect cleanup, so a StrictMode double-mount nets exactly one live listener.
+the sheet is open. Since #1169, one
+`useEffect(() => subscribeRunSettingsWrite(window.pyry.onDaemonEvent, e => foldWriteEvent({ getPending: () => runSettingsWriteStore.getState().pending, dispatch: runSettingsWriteStore.getState().dispatch, rememberEffort: lastEffortStore.getState().setLastEffort }, e)), [])`
+— every reply still reaches the store exactly as before; the one addition is the fold above. `getState()`
+is read **per event**, never captured at subscription, because this listener is app-lifetime: a `pending`
+snapshot taken at mount would freeze at whatever was in flight when App mounted. `window.pyry` is
+dereferenced only inside the effect (the `SessionIdData` server-render invariant). The returned off-handle
+is the effect cleanup, so a StrictMode double-mount nets exactly one live listener.
 
 ### Data flow
 
@@ -329,6 +376,11 @@ reply arrived.
   [#538 codebase notes](../codebase/538.md) ([thread timeline](conversation-timeline-store.md)'s twin
   arm), [#415](../codebase/415.md) (`modalStore`'s), and [#197](../codebase/197.md) (`queueStore`'s) —
   four stores now reconcile on the same edge.
+- **[#1169](../codebase/1169.md)** — added `confirmedEffortLevel`/`foldWriteEvent`: an effort confirm
+  also writes the level into [Last-effort store](last-effort-store.md), read back by
+  [Composer effort menu § The default apply](composer-effort-menu.md#the-default-apply-1169) to default a
+  newly opened chat's effort control instead of leaving it blank. No reducer arm changed. See §
+  Remembering the confirmed level above.
 - **[#1167](https://github.com/pyrycode/pyrycode-desktop/issues/1167)** — added `conversationSwitched`,
   the deliberate contrast arm to `reconnected`: it clears `confirmed` and `error` too, because a switch
   changes which session is being described rather than merely abandoning correlations for the one still

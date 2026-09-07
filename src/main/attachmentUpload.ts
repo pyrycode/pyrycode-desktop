@@ -135,6 +135,20 @@ export interface AttachmentUploadDeps {
   ) => Promise<AttachmentTransferResult>
   /** The one path to the window: a `sender`-closed push on ATTACHMENT_UPLOAD_EVENT_CHANNEL. */
   emit: (event: AttachmentUploadEvent) => void
+  /**
+   * The conversation the upload is filed under (#1205) — the open chat's daemon-minted id, as the ask
+   * carried it. REQUIRED, unlike the routing key the ask also carries: the daemon refuses a chunk
+   * without one (pyrycode #2143), so there is no unnamed path for this value the way there is for a
+   * server. It is READ ONCE, when `driveUpload` builds the plan input, and the plan spreads it onto
+   * every chunk — which is what keeps a transfer's destination fixed for its whole life. The daemon
+   * fixes it on the first chunk and refuses a later chunk naming another conversation (pyrycode #2146),
+   * so an upload that read the id live from a store the operator can switch mid-transfer would be
+   * killed by the switch. Per ask rather than per file, so all three entries name the same one.
+   *
+   * WHERE IT REACHES: the wire, on every chunk, as the daemon's lookup key. Nowhere else — not a
+   * filename, not a path, not a log line (`DiagnosticEvent` has no identifier-shaped field).
+   */
+  conversationId: string
   /** The one content-free logger (#126). Optional: the flow is correct without it. */
   diagnosticLog?: DiagnosticLog
 }
@@ -288,6 +302,8 @@ async function driveUpload(
   try {
     result = await deps.upload(
       {
+        // Read ONCE, here, and spread onto every chunk by the plan — see `AttachmentUploadDeps`.
+        conversation_id: deps.conversationId,
         attachment_id: uploadId,
         filename: declaredFilename,
         mime_type: file.mimeType,

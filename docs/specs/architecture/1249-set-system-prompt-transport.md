@@ -458,3 +458,46 @@ instead of `Buffer.byteLength` must redden a test.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — implementation
+
+**The three Open Questions, resolved.**
+
+1. **`prompt-too-long` kept its own member**, as planned. Nothing in #1250's body contradicts it, and
+   `commands.test.ts`'s over-length case pins the reason it is not a guard rejection: a guard drop
+   produces no outcome, so folding the bound into `isSetSystemPromptPayload` would have made the
+   refusal silent.
+2. **The ack correlation sits after the broadcast emit**, as planned, and the emit is unconditional.
+   The mutation check below confirms the ordering is load-bearing rather than incidental.
+3. **`conversationListBridge` needed no change** — confirmed. The broadcast emit is byte-identical to
+   what it was; `inReplyTo` is a second reading of the same frame and never a gate on the first.
+
+**Two collateral test edits in `inboundMessage.test.ts`, and the reason they were not optional.**
+`toEqual` ignores an `undefined` property but fails on a *defined* one, so the moment
+`narrowSystemPromptRejectReason` started classifying `protocol.malformed`, two pre-existing
+whole-object assertions on the `daemon-error` kind went red — *"carries the Envelope in_reply_to onto
+the daemon-error kind"* and *"lands an unrecognised code on the one catch-all outcome"*. Both now name
+the sibling field explicitly rather than being loosened to `toMatchObject`, which would have retired
+the strictness that surfaced them: the point of a whole-object assertion there is that a silently-added
+narrowed field reddens rather than passes.
+
+**Non-vacuity, mutation-checked and reverted.** Five mutations, each reverted after measuring:
+
+| Mutation | Reddened |
+|---|---|
+| The ack arm consumes the frame on a match (the ticket's named trap) | 5 tests |
+| `system_prompt: payload.system_prompt ?? ''` in the connection method's fresh literal | 1 test |
+| `prompt.length` instead of `Buffer.byteLength(prompt, 'utf8')` | 1 test |
+| The confirmation reads `inbound.conversationUpdated.id` instead of the map's value | 3 tests |
+| The byte bound as `>=` rather than `>` (fail-closing a prompt the daemon accepts) | 1 test |
+
+**Design unchanged otherwise.** No interface in the Design section was revised during implementation;
+the plan's contracts shipped as written.
+
+**Process note for the record.** A mutation-check loop that reverted with `git checkout --` while the
+implementation was still uncommitted discarded the whole of `daemonConnection.ts`'s work in one step.
+It was reconstructed and the checks re-run after committing. The plan-then-code commit discipline is
+what made that a reconstruction rather than a loss; the rule that follows is to commit before running
+any revert-based experiment, not merely before opening a PR.

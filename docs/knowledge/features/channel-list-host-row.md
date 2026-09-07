@@ -39,32 +39,42 @@ worth keeping straight, none of them a type error if reversed:
   whole; truncation is CSS (`.channel-list__host-label`'s ellipsize rule, see the parent page's CSS
   section), so the accessible text stays complete.
 
-**Which server the row names, since #1199.** `HostRowControl` resolves it once —
-`useServerInfoStore((s) => s.servers[0]?.serverId ?? null)`, the `openConversationId` primitive-read idiom
-already in this file — and reads that server's label through
-`selectHostLabelFor(serverId)` (see [host-label window store](host-label-window-store.md)). `servers[0]` is
-the **first** paired server: `serverInfoStore` holds the list in `pairedServerStore.list()` order,
-oldest-paired first, so this is a stable, user-determined choice rather than whichever connection last
-spoke — the exact defect #1199 exists to remove (the old single-slot `selectHostLabel` named whichever
-machine was paired or re-paired **last**). The row stays **single** here; [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
-turns this read into the loop that draws one row per paired server. `serverId` is client-held, taken from
-this client's own `serverInfoStore` list and never from the wire — the rule
-`conversationListStore`'s `selectConversationsFor` header states for its own read, applied here because a
-daemon-supplied lookup key would let a confused or hostile server put one machine's name and connection
-onto another machine's row.
+**Which server each row names, since [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).**
+`HostRowControl` no longer resolves a server itself — it takes `serverId: string` as a **prop**, one per
+call. `renderServerTrees` (`ChannelList.tsx`, see [Channel List § Server
+grouping](channel-list.md#server-grouping-channellistviewmodelts--channellisttsx-added-by-1070)) is what
+loops: it reads the client's paired-server list (`selectServers`, `pairedServerStore.list()` order —
+oldest-paired first, so pairing order rather than whichever connection last spoke) once in the
+`ChannelList` **container** and mounts one keyed `<Fragment>` per server, each holding one
+`<HostRowControl serverId={…} />` and that server's own workspace groups. Before #1070,
+`HostRowControl` read `useServerInfoStore((s) => s.servers[0]?.serverId ?? null)` and rendered only the
+**first** paired server — #1199 had already made that single row name a *specific* machine rather than
+whichever was named or moved last, but it took this ticket to draw a second one. `serverId` stays
+client-held throughout, taken from this client's own `serverInfoStore` list and never from the wire — the
+rule `conversationListStore`'s `selectConversationsFor` header states for its own read, and which
+`groupByServer` (§ linked above) keeps intact one level up: it iterates the client's ids and only ever
+*tests* a row's stamp against them, so a stamp can select among existing keys and never mint one.
 
-`HostRow` gained `serverId: string | null` as a new prop — pure pass-through to `HostConnectionDotsControl`
-below, rendered nowhere on `HostRow` itself. It exists as a prop rather than a second store read inside the
-dot subtree so the row's identity is single-sourced from one place, and because it is the shape #1070's
-loop needs when this becomes one row per server. `null` means "the paired-server list has not resolved
-yet" — every launch's first frame, and the value the unit tier's `renderHostRow` helper pins (see
-`ChannelList.test.tsx`).
+**`HostRow`'s `serverId` narrowed from `string | null` to `string` in #1070.** The `null` arm meant "the
+paired-server list has not resolved yet," reachable while the row rendered unconditionally from a single
+global; it stopped being reachable once a host row's existence became *conditional on* an id being in
+that list (an empty `serverIds` array is now what "not yet resolved" looks like — the row simply doesn't
+exist yet, rather than existing with a placeholder id). The branch and its collapse were deleted rather
+than left as a dead arm describing a frame that can no longer occur; `tsc` confirmed no reachable caller
+still passed `null`.
 
-**The id gets the label's four-sink treatment, plus the fifth a keyed store invites.** `HostRow`'s header
-already declines four sinks for the label (no `title`, no `aria-label`, no derived id/key/lookup path, no
-log line); #1199 states the parallel rule for the id it now carries: **the key is the server id, the value
-is the label, and neither ever becomes an attribute, a class name, a React key, a title, a URL, a lookup
-path or a log line.** The id's only use anywhere in this subtree is as an argument to selector factories.
+**The id gets the label's four-sink treatment, plus a fifth sink amended rather than kept absolute.**
+`HostRow`'s header already declines four sinks for the label (no `title`, no `aria-label`, no derived
+id/key/lookup path, no log line); #1199 stated the parallel rule for the id: **the key is the server id,
+the value is the label, and neither becomes an attribute, a class name, a title, a URL, a lookup path or a
+log line.** #1070 needed the one sink that rule also banned — a React key, for `renderServerTrees`'s
+`<Fragment key={serverId}>` — and amended the ban rather than quietly breaking it: the other six sinks all
+either reach the DOM or reach persistence, where a React key is reconciliation identity alone, never
+serialised and never emitted by `renderToStaticMarkup`. An index key would have been strictly worse,
+cross-wiring fold state and per-row component instances between machines whenever the paired list
+reorders. `ChannelList.test.tsx` pins the amendment with a sentinel server id asserted to appear nowhere
+in the rendered markup. The id's only other use anywhere in this subtree is as an argument to selector
+factories.
 
 **Mount site.** `<HostLabelData />` (the [host-label window store](host-label-window-store.md)'s headless
 loader) mounts in the `ChannelList` **container**, a sibling of `<ChannelListView />` — the `SettingsScreen`
@@ -102,17 +112,24 @@ reflex AC3 exists to guard: the standard companion to ellipsized text is `title=
 CLAUDE.md's "never into an attribute" case), no `aria-label`, no `id`/`key`/lookup path, no log line. Same
 four declined sinks `WorkspaceRow`'s comment block already enumerates for daemon-derived text.
 
-`renderBody` mounts one `<HostRowControl />` inside *each* of the two existing `channels.length > 0` /
-`discussions.length > 0` gates, directly after the `<header className="channel-list__section-header">` and
-before that tree's rows. Because the row lives inside the same gate that already decides whether the
-section header renders, "a tree with zero rows renders neither a header nor a host row" holds by
-construction — no new condition was added, and the promote specs' "a zero-row section renders no header"
-proxy still holds for a second element under it.
+`renderBody` mounts each section's header unconditionally, immediately followed by `renderServerTrees`
+(§ [Channel List — Server grouping](channel-list.md#server-grouping-channellistviewmodelts--channellisttsx-added-by-1070)),
+which draws one `<HostRowControl serverId={…} />` per paired server in pairing order, each followed by
+that machine's own workspace groups. **This inverted the header's own comment until #1070**: the row used
+to live inside the section's `length > 0` gate, so a zero-row tree rendered neither a header nor a host
+row — which is also what the two promote specs used as their "a zero-row section renders no header"
+proxy. Operator ruling, 2026-09-06: every paired machine now gets a row in both sections regardless of
+whether it has conversations there, because the row carries the plus that starts a chat in a new
+workspace (#1185, #1189), and a freshly paired machine has no conversations — under the old gate it had
+no row and so no route to its first chat from the desktop at all (the floating button refuses to create
+while more than one server is paired, #1120). The promote specs moved to the row's own Save/Rename
+affordance as their section proxy instead (see [Channel List § Edge cases](channel-list.md)).
 
-The row repeats once per tree deliberately — the operator confirmed the repetition (2026-08-21); the two
-trees are not merged under one shared host heading. There is exactly one host row per tree this milestone
-— #1199 makes it name a *specific* machine rather than whichever was named or moved last, but it does not
-draw a second row; that is [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)'s loop.
+The row repeats once per **server per section** deliberately — the operator confirmed the original
+per-section repetition (2026-08-21), and #1070 did not change that: the two sections are not merged under
+one shared host heading, and neither are two machines merged under one row. A row whose stamp names no
+paired machine renders with **no host row above it** at all (§ [Channel List — Server
+grouping](channel-list.md#server-grouping-channellistviewmodelts--channellisttsx-added-by-1070)).
 
 **Selector-safety by construction.** `channel-list__host`/`__host-icon`/`__host-label` share no class token
 *and no substring* with any existing selector in the file (`channel-list__row`, `__row-open`,
@@ -134,10 +151,12 @@ verbatim rather than growing a second copy of it. The exported pure view `HostCo
 })` renders `<span className="channel-list__host-status">` holding two `<span
 className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label} />`.
 
-**Per-server since #1199.** `HostConnectionDotsControl({ serverId }: { serverId: string | null })` mounts
-as `HostRow`'s last child, taking `serverId` as a prop (pass-through from `HostRowControl`, § above) rather
-than resolving it itself, so a relay flap re-renders only the four dots, not the row or the conversation
-list beneath it. Before #1199 it read `useSessionStore(selectStatus)` and
+**Per-server since #1199; `serverId` narrowed to `string` in #1070** for the same reason `HostRow`'s did
+(§ above) — a `null` id meant "the paired-server list has not resolved yet," unreachable once a host row
+only exists because its id was already in that list. `HostConnectionDotsControl({ serverId }: { serverId:
+string })` mounts as `HostRow`'s last child, taking `serverId` as a prop (pass-through from
+`HostRowControl`, § above) rather than resolving it itself, so a relay flap re-renders only the four dots,
+not the row or the conversation list beneath it. Before #1199 it read `useSessionStore(selectStatus)` and
 `useRelayLinkStore(selectRelayLinkStatus)` — both "the most recently written status, across every
 connection" cells — so with two machines paired the row reported whichever connection last moved,
 including the **other** machine's flap. It now reads each leg through its own per-server selector,
@@ -157,12 +176,15 @@ launch frame since #718, back when both reads were app-wide and both stores were
 Reading the constants rather than restating those two values here is what keeps this collapse correct if
 either store's initial cell ever changes — one edit there, no edit here.
 
-**A `null` `serverId` never reaches a keyed selector.** `StatusOrigin` and the relay store's equivalent
-origin type both admit `null` as a **real slot key** (an unstamped write lands there), so passing a `null`
-id through to `selectStatusFor`/`selectRelayLinkStatusFor` would read someone else's cell rather than
-answering "not known." `HostConnectionDotsControl` branches before the read: a `null` id resolves both legs
-to `undefined`, which the collapse above then turns into the same initial-cell pair a silent server gets —
-so the no-server-named launch frame and a named-but-silent server land on identical dots, by construction.
+**The `null`-guard this control used to branch on is gone since [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).**
+It existed because `StatusOrigin` and the relay store's equivalent origin type both admit `null` as a
+**real slot key** (an unstamped write lands there), so a `null` id reaching `selectStatusFor`/
+`selectRelayLinkStatusFor` would read someone else's cell rather than answering "not known" — the frame
+that needed guarding against was the one before the paired-server one-shot resolved. That frame no longer
+reaches this control: a host row (and so its `HostConnectionDotsControl`) is drawn *because* an id was
+already in the paired list, so the id is always a real one, and `serverId` narrowed from `string | null`
+to `string` with the branch deleted. The silent-server collapse above is a different, still-reachable
+case — a paired server that has reported nothing yet — and is untouched.
 
 Two reuse decisions survive #1199 unchanged, at the two levels the contract exists on:
 
@@ -219,6 +241,9 @@ server this row names, not any other paired machine.
   screen's dots via the shared mapping with no edit at the time.
 - [#1199 spec](../../specs/architecture/1199-host-row-names-one-server.md) — the per-server re-keying of
   both the label read and the two connection-dot reads.
-- Deferred: [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) draws one host row (and one
-  dot pair) per paired server, looping over the same `serverInfoStore` list this page's `HostRowControl`
-  already reads `servers[0]` off.
+- [Channel List § Server grouping](channel-list.md#server-grouping-channellistviewmodelts--channellisttsx-added-by-1070) /
+  [#1070 spec](../../specs/architecture/1070-sidebar-grouped-by-server.md) — draws one host row (and one
+  dot pair) per paired server, in pairing order, by looping `renderServerTrees` over the same
+  `serverInfoStore` list this page's `HostRowControl` used to read only `servers[0]` off; narrowed both
+  `HostRow.serverId` and `HostConnectionDotsControl`'s to `string`, and amended the id's ban list to allow
+  its one remaining use as a React key.

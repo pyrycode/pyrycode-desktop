@@ -17,12 +17,17 @@ transport, or new store/wire code, so not security-sensitive.
 
 ## What it does
 
-- Reads `useConversationListStore(selectConversations)` and renders three states: **not-yet-loaded**
-  (`null`) → the neutral wrapper only; **loaded-zero** (`[]`) → an empty state ("No conversations
-  yet"); **non-empty** → the two sections.
+- Reads `useConversationListStore(selectConversations)` and renders: **not-yet-loaded** (`null`) →
+  the neutral wrapper only, no headers, no rows; **nothing to draw** (no paired server *and* no
+  active row) → the wrapper only; otherwise both section headers and the divider, unconditionally.
+  The `"No conversations yet"` empty state was retired by
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — a paired app always has at
+  least a host row to draw (§ below).
 - Splits rows by `is_promoted`, preserving the store's array order within each section (the daemon's
-  order is authoritative — no client-side sort). A section with zero rows renders no header; a
-  divider appears only between two present sections.
+  order is authoritative — no client-side sort), then within each section by **server, then
+  workspace** (§ Server grouping below, [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)).
+  Both headers and the divider render whenever anything is paired; a paired machine with nothing in
+  a section shows its host row there with nothing under it, rather than the section disappearing.
 - Each row shows only a title (`name`, or `'Untitled'` when `name` is `null`/blank — never a blank
   row) — a trailing last-activity time until
   [#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) deleted it; `formatLastActivity`
@@ -43,22 +48,29 @@ transport, or new store/wire code, so not security-sensitive.
 - Each saved (promoted) Channel row carries a trailing [Rename](rename-conversation-dialog.md)
   affordance; Recent rows carry none — the exact symmetric counterpart, so no row ever carries two
   trailing buttons. Added by [#360](../codebase/360.md).
-- Each present tree (Channels, Chats) is now headed by a **host row** directly below its section
-  label and above its conversation rows, naming the machine the tree's conversations live on
-  (Figma `106:3094`). The row repeats in both trees on purpose — the two trees are not
-  deduplicated into a shared heading. It renders a 12px server-rack glyph beside the operator's
-  stored host label, falling back to the client-owned word `'Server'` with no usable label (never
-  stored, unreadable, or settling), and ends with two trailing connection dots reporting the named
-  server's own daemon and relay legs. Added by [#710](../codebase/710.md); the operator-typed label
-  shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834); both the label and the
-  dots read by server id since [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) (§
-  below). The row itself stays single per tree — one row per paired server is
-  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).
-- Below each host row, rows now group by **workspace** — one group per distinct `cwd`, each headed
-  by a 28px workspace row one indent deeper than the host row (Figma `106:3098`). A workspace is a
-  conversation's `cwd`; there is no separate wire concept for it. Both trees group independently,
-  so a workspace with rows in both appears in both. Groups render expanded (collapse is #704).
-  Added by [#703](../codebase/703.md).
+- Each section now draws **one host row per paired server**, in pairing order, directly below the
+  section label and above that machine's own conversation rows (Figma `106:3094` repeated per
+  machine in `103:2959`). Both the row and its subtree repeat once per section on purpose — the two
+  sections are not deduplicated into a shared tree. It renders a 12px server-rack glyph beside the
+  operator's stored host label, falling back to the client-owned word `'Server'` with no usable
+  label (never stored, unreadable, or settling), and ends with two trailing connection dots
+  reporting that named server's own daemon and relay legs. Added by [#710](../codebase/710.md); the
+  operator-typed label shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834);
+  both the label and the dots read by server id since
+  [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); the loop drawing one row per
+  paired server, rather than only the first, shipped in
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) (§ Server grouping below). Per
+  the 2026-09-06 operator ruling, every paired machine's row renders in both sections whether or not
+  it has conversations there — the row carries the plus that starts a chat in a new workspace
+  (#1185/#1189), so a freshly paired machine still needs a route to its first chat. See [the host row
+  and its connection dots](channel-list-host-row.md) for the full detail.
+- Below each host row, that machine's own rows group by **workspace** — one group per distinct
+  `cwd`, each headed by a 28px workspace row one indent deeper than the host row (Figma `106:3098`).
+  A workspace is a conversation's `cwd`; there is no separate wire concept for it. Both sections
+  group independently, so a workspace with rows in both appears in both; since #1070 this is also
+  true across servers — two machines sharing an identical `cwd` render as two separate groups, never
+  merged (§ Server grouping below). Groups render expanded (collapse is #704). Added by
+  [#703](../codebase/703.md).
 - Every row in both trees now leads with a [status dot](conversation-status-dot.md), resolved from
   that row's **own** conversation id — a chat that has never been opened still shows its working or
   unread state, not just the currently-open one. Added by
@@ -108,7 +120,13 @@ the store:
   wrap, each pre-filtering on `is_archived` from opposite ends before delegating to it.
 - `partitionActive(rows)` — filters `!r.is_archived` first, then delegates to `partitionByPromotion`.
   The active list's row source since [#469](../codebase/469.md); the exact dual of
-  `archiveViewModel.partitionArchived`.
+  `archiveViewModel.partitionArchived`. Both partitions went generic
+  (`<T extends ConversationSummary>`) in [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
+  so a filter never erases the server stamp the sidebar's rows carry — both bodies are `filter`
+  calls, runtime-identical either way, and every existing caller still infers
+  `T = ConversationSummary`.
+- `groupByServer(serverIds, rows)` — the level [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070)
+  added above `groupByWorkspace` (§ Server grouping below).
 - `formatLastActivity(iso: string, now: number): string` — `now` is **injected**, not `Date.now()`
   inside, so the function stays pure and deterministic under test. Bucket contract:
 
@@ -170,6 +188,67 @@ naming the paired machine a tree's conversations live on, and the two trailing d
 machine's daemon and relay legs. #1199 moved both off app-wide "most recently written" singleton reads
 onto reads keyed by the row's own `serverId`, taken from this client's `serverInfoStore` list and never
 from the wire, so a second paired machine's status can no longer steer this row's dots.
+
+### Server grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070))
+
+The level Figma `103:2959` has always drawn — section, then server, then workspace — but the app
+never rendered, because the host row was drawn from a single global (`servers[0]`) rather than a
+loop. Two things make the server level load-bearing rather than cosmetic: `groupByWorkspace`'s key
+is the raw `cwd`, and a path is unique only *within* one machine, so two servers both holding
+`/home/user/project` would silently merge into one workspace group holding both machines'
+conversations unless the server level sits above it; and the 2026-09-06 operator ruling gives every
+paired machine a host row in both sections whether or not it has conversations there.
+
+`groupByServer(serverIds, rows): { servers, unattributed }` is a new pure export, generic and
+**structurally** constrained (`{ readonly serverId?: string | null }`) rather than importing
+`conversationListStore`'s `ServerConversationSummary` — this module stays framework- and store-free
+so every derivation unit-tests without React or zustand. `serverIds` is the client's own
+`serverInfoStore` list (`selectServers`, in `pairedServerStore.list()` order — oldest-paired first),
+read in the `ChannelList` **container** and passed down as a prop rather than read inside a row:
+the same `openConversationId` ruling applies — zustand v5 serves `getInitialState()` under
+`renderToStaticMarkup`, so a row reading the list itself could only ever render the empty launch
+frame, and the whole of "one row per server" would fall to e2e. `renderServerTrees` (`ChannelList.tsx`)
+splits a section's rows by server *before* handing each machine's rows to `groupByWorkspace`
+unchanged, rather than re-keying that grouper on a composite `serverId + cwd` — the smaller change,
+and the correct one: React scopes keys per sibling list, so wrapping each server's subtree in its
+own keyed `<Fragment key={serverId}>` already makes the raw-`cwd` group keys collision-free across
+servers, and it buys per-server workspace-fold independence for free (a `cwd` shared by two machines
+gets two `CollapsibleWorkspaceGroup` instances, two separate booleans).
+
+**The join direction is the security property.** `groupByServer` iterates the client's own
+`serverIds` and only ever *tests* a row's stamp against those buckets — a stamp can select among
+existing keys and can never mint one, so the worst a confused or hostile daemon reaches is its own
+rows under its own host row. This is the read-side twin of the rule
+[`selectConversationsFor`](conversation-list-store.md)'s docblock states as a condition of its
+signature: a wire-sourced lookup key would let one server's conversations appear under another
+server's name.
+
+**A `Map`, never a `Record<string, T[]>`** — load-bearing, not stylistic, and written down at the
+declaration for that reason: on a plain object a `__proto__` stamp resolves `Object.prototype`, a
+truthy non-array whose `.push` corrupts or throws. Client-set stamps make this unreachable today
+(the free second fabric), which is exactly why it must not be "simplified" away. A `__proto__`
+regression test pins it.
+
+**Where an unstamped or unpaired-server row goes.** `ConversationListOrigin` admits `null` and
+`undefined`, and a stamp naming a machine that isn't paired is a third shape; #1068 stamps every
+daemon event main-side so none of the three is reachable in production, but the type allows them and
+a server-keyed tree has to answer. Such a row lands in `unattributed` and renders last in its
+section, grouped by workspace like any other row, with **no host row above it**. Dropping the row
+was rejected (it hides a real conversation); filing it under the first paired server was rejected
+too (it would put the row under a machine's name on no evidence — the same misattribution the join
+direction above exists to prevent, arrived at by omission instead of by a hostile stamp). Rendering
+it unattributed is the only outcome that names no machine while keeping the row reachable.
+
+**The React-key exception.** `HostRow`'s header bans the server id from seven sinks — attribute,
+class name, React key, title, URL, lookup path, log line. The keyed fragment above needs exactly the
+one it bans, so the ban list is amended rather than quietly broken: the other six all reach the DOM
+or reach persistence, where a React key is reconciliation identity alone — never serialised, never
+emitted by `renderToStaticMarkup`, unobservable to the page. An index key would have been strictly
+worse, cross-wiring fold state and per-row component instances between machines whenever the paired
+list reorders. A unit test pins a sentinel server id appearing nowhere in the rendered markup.
+
+No log line is added for the `unattributed` bucket: any useful form of one carries the row's `cwd`,
+name, or stamp, which ADR 0007's content-free rule and CLAUDE.md both forbid.
 
 ### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
 
@@ -268,9 +347,17 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   `is_archived` rows before the promotion split — archived conversations render only in the
   [Archive screen](archive-screen.md), never here. Fixed by [#469](../codebase/469.md); before that fix,
   every row the store held rendered here regardless of `is_archived` (a latent #366 regression, "Gap B"
-  in [#440](../codebase/440.md)/[#452](../codebase/452.md)). The empty-state guard
-  (`channels.length === 0 && discussions.length === 0`) is evaluated on the *active* partition, so a
-  store holding only archived rows shows "No conversations yet" rather than a blank body.
+  in [#440](../codebase/440.md)/[#452](../codebase/452.md)). Since
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) the "nothing to draw" guard is
+  `serverIds.length === 0 && channels.length === 0 && discussions.length === 0` — both halves matter:
+  a store holding only archived rows still contributes zero to the row half, but a paired server with
+  literally nothing in either partition still draws its host rows, because the server half of the
+  guard is what a paired app answers on now (§ Server grouping above). The old loaded-zero
+  `"No conversations yet"` paragraph and its `.channel-list__empty` rule are deleted, not hidden — a
+  paired app is never truly empty any more.
+- **A row whose server stamp names no paired machine renders unattributed** — last in its section,
+  grouped by workspace, with no host row above it (§ Server grouping above). Unreachable in
+  production since #1068 stamps every daemon event main-side; the type still admits it.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
   (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (The
   new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md) — see [its feature
@@ -280,6 +367,15 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
+- **Both section headers and the divider render unconditionally whenever anything is paired**, since
+  [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — they no longer track whether
+  their section holds a row. This retired the two mutually-exclusive-header proxy `save-as-channel-promote.spec.ts`
+  and `real-daemon-promote.spec.ts` used to prove "the row moved sections" (a zero-row section used
+  to render no header). Both re-proxy on the row's own affordance instead — `.channel-list__save`
+  present and `.channel-list__rename` absent before a promote, the reverse after — which is disjoint
+  by construction (`Row` is passed one or the other, never both) and still reddens on a promote that
+  never lands. Worth the general habit: when a gate becomes unconditional, grep for what was reading
+  its absence.
 - **The host row shows the label and connection state of the specific server it names**, not a
   singleton — closed by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); see
   [the host row and its connection dots](channel-list-host-row.md) for the full detail, including the
@@ -341,8 +437,9 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   time, the shrunk affordances, and the settled status-dot centring.
   [#1098](https://github.com/pyrycode/pyrycode-desktop/issues/1098) then filled the open row. See
   [the row's desktop geometry](channel-list-desktop-row-geometry.md).
+- [#1070 spec](../../specs/architecture/1070-sidebar-grouped-by-server.md) — the server-then-workspace
+  grouping design: `groupByServer`'s join-direction security property, the `Map`-not-`Record`
+  reasoning, the unattributed-row decision, and the 2026-09-06 always-render-both-sections ruling.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), one host row per paired server ([#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070),
-  see [the host row and its connection dots](channel-list-host-row.md)), #716 (same-last-segment
-  workspace label ambiguity), a possible follow-up to suppress the idle dot's announced label (see
-  [the row's status dot](channel-list-status-dot.md)).
+  (per-row open), #716 (same-last-segment workspace label ambiguity), a possible follow-up to
+  suppress the idle dot's announced label (see [the row's status dot](channel-list-status-dot.md)).

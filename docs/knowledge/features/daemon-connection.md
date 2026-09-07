@@ -55,6 +55,12 @@ send mechanics and required-id posture, but with no reply of any kind.
 - [New session envelope](new-session-envelope.md) — the `newSession(conversationId)` method's wire
   frame, builder, and command path (#1217): kills claude in the named conversation and spawns a fresh
   one, distinct from the `/clear` the Actions menu's Reset session already sends as message text.
+- [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) —
+  the `requestHistory(payload)` method added to this factory (a `requestModelList` send-mechanics twin
+  that takes the whole three-field payload rather than a scalar), the `pendingHistoryRequests`
+  envelope-id → conversation-id correlation map + `dial()` reset it added, and the `history-page` /
+  history leg of `daemon-error` inbound arms — the transport-only slice of conversation scroll-back,
+  shipped dormant with all four exhaustive bridges nulling `historyPageReceived`/`historyRequestFailed`.
 - [The connection registry](daemon-connection-registry.md#the-connection-registry-1117) / #1117 — the composition root's actual caller since this module stopped being constructed directly at the root: one registry, one connection per stored paired record, reconciled against the store on every pairing/unpair signal.
 - [Live window](live-window.md) / [#519](../codebase/519.md) — the composition root's `sink: live.sink`
   and the `openWindow()` load handler's `live.replayStatus()` call, which converges a dock-reopened

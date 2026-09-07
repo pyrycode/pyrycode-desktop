@@ -4,6 +4,8 @@ import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
 import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
 import {
   MAX_PLAINTEXT_BYTES,
+  type HistoryEntry,
+  type HistoryPagePayload,
   type MessagePayload,
   type ToolUsePayload,
   type ToolResultPayload
@@ -7429,5 +7431,339 @@ describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
     for (const payload of [null, 42, 'nope', []]) {
       expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
     }
+  })
+})
+
+/** A `history_page` envelope's plaintext bytes, wrapping an arbitrary payload (#1222). */
+function encodeHistoryPage(payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 812,
+    type: 'history_page',
+    ts: FIXED_TS,
+    payload,
+    ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo })
+  })
+}
+
+/** One well-formed history entry — the daemon's committed example, shape for shape (#1222). */
+const HISTORY_ENTRY: HistoryEntry = {
+  id: 412,
+  type: 'assistant_delta',
+  payload: { turn_id: 't1', seq: 3, text: 'hello' },
+  ts: FIXED_TS
+}
+
+/** A populated, well-formed history_page — a mid-walk page with a usable cursor (#1222). */
+const HISTORY_PAGE: HistoryPagePayload = {
+  entries: [HISTORY_ENTRY],
+  cursor: 'MS4zZjhiMWMwNC05ZDI3LTRlNWEtYjZjMS0yZTlmNzBkOGE0MTMuNy40MDk2',
+  at_start: false
+}
+
+describe('parseInboundMessage — history_page recognition (#1222, additive)', () => {
+  it('narrows a full history_page into { kind: history-page }', () => {
+    expect(parseInboundMessage(encodeHistoryPage(HISTORY_PAGE))).toEqual({
+      kind: 'history-page',
+      historyPage: HISTORY_PAGE
+    })
+  })
+
+  it('carries the Envelope in_reply_to onto the kind as inReplyTo (the ONLY correlation handle)', () => {
+    // The page names no conversation, so which one it describes is knowable ONLY from which envelope
+    // it answers. Losing this field would make every page unattributable.
+    expect(parseInboundMessage(encodeHistoryPage(HISTORY_PAGE, 140))).toEqual({
+      kind: 'history-page',
+      historyPage: HISTORY_PAGE,
+      inReplyTo: 140
+    })
+  })
+
+  it('leaves inReplyTo undefined when the frame omits in_reply_to (correlation fails closed)', () => {
+    const result = parseInboundMessage(encodeHistoryPage(HISTORY_PAGE))
+    expect(result?.kind === 'history-page' && result.inReplyTo).toBeUndefined()
+  })
+
+  it('decodes the terminal page: empty entries, EMPTY cursor, at_start true', () => {
+    // THE FIRST ASK OF EVERY WALK AND THE LAST BOTH CARRY AN EMPTY CURSOR — the reply's is empty
+    // whenever at_start is true. A decoder reaching for requireNonEmptyString here would fail-close
+    // every terminal page, which is why this case is pinned separately from the populated one.
+    const terminal: HistoryPagePayload = { entries: [], cursor: '', at_start: true }
+    expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
+      kind: 'history-page',
+      historyPage: terminal
+    })
+  })
+
+  it('decodes a terminal page that still carries entries', () => {
+    // The daemon's own documented shape: the last page of a walk may be populated OR empty, and
+    // at_start is what says it is the last one either way.
+    const terminal: HistoryPagePayload = { entries: [HISTORY_ENTRY], cursor: '', at_start: true }
+    expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
+      kind: 'history-page',
+      historyPage: terminal
+    })
+  })
+
+  it('carries an entry whose type this client does not recognise, never rejecting it', () => {
+    // `type` is a STORED STRING NOTHING RE-VALIDATES, so a client MUST tolerate one it does not know
+    // rather than treating it as a protocol violation. A closed-set check here would fail-close a
+    // valid future frame — and the set spans the whole live-lane vocabulary plus session_transition
+    // plus the operator's own message.
+    const exotic: HistoryPagePayload = {
+      entries: [{ ...HISTORY_ENTRY, type: 'a_frame_type_from_a_later_daemon' }],
+      cursor: 'c',
+      at_start: false
+    }
+    expect(parseInboundMessage(encodeHistoryPage(exotic))).toEqual({
+      kind: 'history-page',
+      historyPage: exotic
+    })
+  })
+
+  it('carries an entry payload verbatim, including nesting, arrays and an empty object', () => {
+    // The payload is OPAQUE here: #1222 interprets it nowhere and #1223 owns the reduction. Anything
+    // that narrowed, flattened or key-filtered it would redden this.
+    const nested: HistoryPagePayload = {
+      entries: [
+        { ...HISTORY_ENTRY, payload: { a: { b: [1, 2, { c: null }] }, d: '' } },
+        { ...HISTORY_ENTRY, id: 411, payload: {} }
+      ],
+      cursor: 'c',
+      at_start: false
+    }
+    expect(parseInboundMessage(encodeHistoryPage(nested))).toEqual({
+      kind: 'history-page',
+      historyPage: nested
+    })
+  })
+
+  it('drops unknown server keys on the page and on an entry', () => {
+    // Fresh literals at both levels, so a decoder that grew a field cannot smuggle one across and a
+    // page-borne extra property cannot ride along.
+    const withExtras = {
+      ...HISTORY_PAGE,
+      entries: [{ ...HISTORY_ENTRY, event_id: 99, conversation_id: 'other' }],
+      conversation_id: 'not-a-field-of-this-frame'
+    }
+    expect(parseInboundMessage(encodeHistoryPage(withExtras))).toEqual({
+      kind: 'history-page',
+      historyPage: HISTORY_PAGE
+    })
+  })
+
+  it('accepts a page far larger than any client-invented count bound would admit', () => {
+    // NO CLIENT-INVENTED COUNT BOUND (AC5). MAX_PLAINTEXT_BYTES already fails an oversized frame
+    // before any parse, and the daemon clamps at history.MaxPageEntries and re-asks a too-large page
+    // at a smaller size rather than truncating one — so a second bound here would defend a failure
+    // that cannot reach this code, and one below 4096 would drop valid pages.
+    // Entries are kept minimal so the COUNT can go as high as MAX_PLAINTEXT_BYTES allows — that byte
+    // ceiling is the bound which actually applies, and it is the reason a count bound would be
+    // redundant as well as wrong. The daemon's own two narrowings (4096 entries, and ~1365 for what
+    // can serialise inside the cap) both sit above any client-side number anyone would have invented.
+    const many = Array.from({ length: 1200 }, (_, i) => ({ id: i, type: 'm', payload: {}, ts: 't' }))
+    const result = parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: many }))
+    expect(result?.kind === 'history-page' && result.historyPage.entries).toHaveLength(1200)
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — history_page fail-closed (#1222)', () => {
+  it('throws when the payload is not an object', () => {
+    for (const payload of [null, 42, 'nope', []]) {
+      expect(() => parseInboundMessage(encodeHistoryPage(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when entries is absent, null or not an array', () => {
+    // `entries` is ALWAYS PRESENT on the wire — an empty page carries [] and never null or an omitted
+    // key — so all three of these are malformed rather than an empty page.
+    for (const entries of [undefined, null, 'nope', 42, {}]) {
+      expect(() =>
+        parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws the WHOLE page closed on one bad element, never a partial page', () => {
+    const oneBad = [HISTORY_ENTRY, { ...HISTORY_ENTRY, id: 'not-a-number' }, HISTORY_ENTRY]
+    expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: oneBad }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('throws when an entry is not an object', () => {
+    for (const entry of [null, 42, 'nope', []]) {
+      expect(() =>
+        parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: [entry] }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any entry field is absent or mistyped', () => {
+    const bad: Record<string, unknown>[] = [
+      { ...HISTORY_ENTRY, id: undefined },
+      { ...HISTORY_ENTRY, id: '412' },
+      { ...HISTORY_ENTRY, type: undefined },
+      { ...HISTORY_ENTRY, type: 7 },
+      { ...HISTORY_ENTRY, ts: undefined },
+      { ...HISTORY_ENTRY, ts: 0 }
+    ]
+    for (const entry of bad) {
+      expect(() =>
+        parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: [entry] }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when an entry payload is absent, null, an array or a scalar', () => {
+    // The daemon publishes `payload` as an object. A `null` or an array reaching a consumer that
+    // expects a record is the shape this gate exists to stop; an EMPTY object is valid and is pinned
+    // green above.
+    for (const payload of [undefined, null, [], 'nope', 42]) {
+      expect(() =>
+        parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: [{ ...HISTORY_ENTRY, payload }] }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when cursor is absent or not a string, but NOT when it is empty', () => {
+    for (const cursor of [undefined, null, 42, {}]) {
+      expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, cursor }))).toThrow(
+        WireDecodeError
+      )
+    }
+    expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, cursor: '' }))).not.toThrow()
+  })
+
+  it('throws when at_start is absent or not a boolean, but NOT when it is false', () => {
+    // The check is on the TYPE, never truthiness — `false` is the value every mid-walk page carries.
+    for (const at_start of [undefined, null, 'false', 0]) {
+      expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, at_start }))).toThrow(
+        WireDecodeError
+      )
+    }
+    expect(() =>
+      parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, at_start: false }))
+    ).not.toThrow()
+  })
+
+  it('throws on an oversized history_page plaintext even when the JSON is valid', () => {
+    // Hand-encoded rather than built with encodeEnvelope, which refuses to emit an over-cap frame —
+    // this is the hostile-daemon case, where nothing on this side got to refuse. The size guard at the
+    // top of parseInboundMessage is what makes it fail closed BEFORE any parse, and it is the only
+    // bound this decode relies on: no client-invented entry-count or payload-length ceiling exists,
+    // deliberately (AC5).
+    const oversized = new TextEncoder().encode(
+      JSON.stringify({
+        id: 812,
+        type: 'history_page',
+        ts: FIXED_TS,
+        payload: {
+          entries: [{ ...HISTORY_ENTRY, payload: { text: 'x'.repeat(MAX_PLAINTEXT_BYTES) } }],
+          cursor: '',
+          at_start: false
+        }
+      })
+    )
+    expect(oversized.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(oversized)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — history reject narrowing (#1222)', () => {
+  /** An `error` envelope's plaintext bytes carrying an arbitrary code (#1222). */
+  function encodeErrorCode(code: unknown, inReplyTo = 140): Uint8Array {
+    return encodeEnvelope({
+      id: 900,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { code, message: 'static daemon text that must never cross' },
+      in_reply_to: inReplyTo
+    })
+  }
+
+  it.each([
+    ['conversation.not_found', 'conversation-not-found'],
+    ['history.invalid_request', 'history-invalid-request'],
+    ['history.invalid_page_size', 'history-invalid-page-size'],
+    ['history.invalid_cursor', 'history-invalid-cursor'],
+    ['history.unavailable', 'history-unavailable']
+  ])('narrows %s onto the client-owned %s', (code, expected) => {
+    const result = parseInboundMessage(encodeErrorCode(code))
+    expect(result?.kind === 'daemon-error' && result.historyReject).toBe(expected)
+  })
+
+  it('leaves historyReject undefined for a code outside the published five', () => {
+    // `message.too_long` is the real case, not a hypothetical: when one stored entry cannot fit in any
+    // page the daemon emits it anyway and its own transport answers with that code, correlated to
+    // this client's request_history. It must not narrow to a history reason — it settles the ask as
+    // unclassified one layer up — and it must keep narrowing to its EXISTING DaemonErrorOutcome.
+    const result = parseInboundMessage(encodeErrorCode('message.too_long'))
+    expect(result?.kind === 'daemon-error' && result.historyReject).toBeUndefined()
+    expect(result?.kind === 'daemon-error' && result.outcome).toBe('message-too-long')
+  })
+
+  it('leaves historyReject undefined for an absent, non-string or unknown code', () => {
+    for (const code of [undefined, null, 42, {}, 'history.something_later', 'attachment.not_found']) {
+      const result = parseInboundMessage(encodeErrorCode(code))
+      expect(result?.kind === 'daemon-error' && result.historyReject).toBeUndefined()
+    }
+  })
+
+  it('never throws on a mangled error payload — the four existing consumers must still fire', () => {
+    // AN ERROR FRAME IS TERMINAL BECAUSE IT ARRIVED, NOT BECAUSE ITS PAYLOAD PARSED. A throw here
+    // would hand a hostile daemon a one-frame kill switch for every correlation this file feeds.
+    for (const payload of [null, 42, 'nope', [], {}]) {
+      const result = parseInboundMessage(
+        encodeEnvelope({ id: 900, type: 'error', ts: FIXED_TS, payload, in_reply_to: 140 })
+      )
+      expect(result?.kind).toBe('daemon-error')
+    }
+  })
+
+  it('does NOT narrow a history code on a frame that is not an error', () => {
+    // The narrowing belongs to the `error` arm alone; a page is never a reject.
+    const result = parseInboundMessage(encodeHistoryPage(HISTORY_PAGE, 140))
+    expect(result?.kind === 'history-page' && 'historyReject' in result).toBe(false)
+  })
+})
+
+describe('parseInboundMessage — history_page diagnostics (#1222)', () => {
+  it('logs a history_page content-free, never a cursor, entry payload, type or id', () => {
+    // Four planted sentinels, one per field a leak could travel through. The record's exact key set
+    // is asserted so a new field carrying wire content would redden here rather than ship.
+    const { log, lines } = captureLog()
+    const SECRET_CURSOR = 'secret-cursor-value'
+    const SECRET_TEXT = 'secret-entry-payload-value'
+    const SECRET_TYPE = 'secret-entry-type-value'
+    const plaintext = encodeHistoryPage({
+      entries: [{ id: 412, type: SECRET_TYPE, payload: { text: SECRET_TEXT }, ts: FIXED_TS }],
+      cursor: SECRET_CURSOR,
+      at_start: false
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('history_page')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CURSOR, SECRET_TEXT, SECRET_TYPE, '412']) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed history_page throw path (narrow before logging)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, cursor: 42 }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
   })
 })

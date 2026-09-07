@@ -171,6 +171,8 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modalAnswerRejected':
     case 'slashCommandList':
     case 'modelList':
+    case 'historyPageReceived':
+    case 'historyRequestFailed':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store.
@@ -194,6 +196,13 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // claude will accept where its sibling publishes the VERBS. The one difference is the disposition:
       // its no-op here is PERMANENT, because #974 commits to a dedicated subscriber rather than leaving
       // the choice open.
+      //
+      // The two HISTORY arms (#1222) are the least ask-like members of the group, and no store consumes
+      // either yet. A page is a REPLAY of what already happened — entries this app asked for, answering
+      // its own request — where a question batch is claude asking the operator to choose next; a page
+      // can even CARRY a stored question frame among its entries without being one, which is exactly
+      // the confusion to avoid. Their consumers are #1223's timeline reduction and #1224's walk, so the
+      // no-op is PERMANENT here: nothing in the question family will ever claim them.
       return null
     default:
       return assertNever(event)

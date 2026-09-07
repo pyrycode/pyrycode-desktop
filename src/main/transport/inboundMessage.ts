@@ -43,6 +43,8 @@ import type {
   SessionTransitionPayload,
   SessionSettingsPayload,
   SessionSettingsUpdatedPayload,
+  HistoryEntry,
+  HistoryPagePayload,
   ToolUsePayload,
   ToolResultPayload,
   QueuedItem,
@@ -167,6 +169,65 @@ export type DaemonErrorOutcome =
    *  all — absent, non-object, or `code` missing / not a string. Both mean the same thing to a consumer,
    *  "this client declined to classify the failure", and neither is a reason to drop a terminal frame. */
   | 'unclassified'
+
+/**
+ * How the daemon refused one `request_history` (#1222), as CLIENT-OWNED values — the closed set from
+ * the daemon's § Conversation history (v2) → Rejects, mapped off its untrusted `code` string here.
+ *
+ * IT IS A SECOND TYPE BESIDE DaemonErrorOutcome RATHER THAN FIVE MEMBERS ADDED TO IT, and that is a
+ * decision worth reading before "unifying" the two. DaemonErrorOutcome is not a free-standing
+ * vocabulary: `AttachmentTransferFailure` (attachmentTransfer.ts) inherits it WHOLE,
+ * `AttachmentUploadFailure` (shared/ipc/attachmentUpload.ts) mirrors that mechanically across IPC, and
+ * a renderer copy table is keyed on the mirror. So a `history-invalid-cursor` added there would land in
+ * the attachment-upload failure union and demand composer copy for a failure no upload can produce.
+ * The two unions describe different verbs and stay separate; what they SHARE is every property below.
+ *
+ * The `switch` IS the trust boundary, exactly as narrowDaemonErrorOutcome's is: it COMPARES the
+ * untrusted string against client-owned constants and RETURNS a client-owned constant, so the daemon's
+ * string is never the operand of an index, a join or a resolve, and nothing is retained from the
+ * payload. A `Record`-keyed table is the shape to avoid for that reason — it would make untrusted text
+ * a lookup path, the thing CLAUDE.md forbids.
+ *
+ * RETRYABILITY IS NOT ON THIS TYPE. `history.unavailable` is the group's one retryable member — a
+ * corrupt segment, an I/O failure, or a log that is wired but not open, none of them a fault in the
+ * request — and the flag is computed once at the single emit in daemonConnection rather than here, so
+ * the walk driver (#1224) cannot re-derive it wrong into a retry loop. This differs from
+ * DaemonErrorOutcome's documented-not-computed posture on purpose: those flags live in two upstream
+ * files, where these are one verb's, published in one section.
+ *
+ * THE SET IS NOT EXHAUSTIVE OVER WHAT A REQUEST_HISTORY CAN DRAW, which is why the narrower below
+ * returns `undefined` rather than an `unclassified` member. § Page size publishes a real case: when one
+ * stored entry cannot fit in any page the daemon emits it anyway and its own transport answers
+ * `message.too_long`, which narrows to a DaemonErrorOutcome and not to any member here.
+ */
+export type HistoryRejectReason =
+  /** The `conversation_id` is not of canonical shape, or names no conversation in the daemon's
+   *  registry. NOT retryable. One condition, one gate — the registry holds canonical ids only, so a
+   *  malformed id fails membership. Deliberately DISTINGUISHABLE from the cursor's answer below, unlike
+   *  `attachment.not_found`'s merge, because there is no second id here to build a path-existence
+   *  oracle over. Also the permanent answer for a conversation the daemon no longer hosts: deleting one
+   *  and the idle sweep both drop it from the registry while its log stays on disk. */
+  | 'conversation-not-found'
+  /** The payload did not decode. NOT retryable. A DECODE FAILURE IS A REJECTED FRAME, NEVER AN
+   *  EMPTY-BUT-SUCCESSFUL REQUEST: every key is optional to Go's decoder, so a truncated or hostile
+   *  payload would otherwise decode to an empty conversation id, which names nothing and must never be
+   *  joined into a path where an empty component resolves to the log root. The daemon's message is
+   *  static and echoes nothing from the payload; nothing crosses from it here either. */
+  | 'history-invalid-request'
+  /** The `limit` was NEGATIVE. NOT retryable. `0` is not a reject — it asks the daemon to choose — and
+   *  an ask ABOVE the ceiling is not one either; it is clamped. `buildRequestHistory` normalises an
+   *  absent or non-positive ask to `0`, so a conforming send of this client's cannot draw this. */
+  | 'history-invalid-page-size'
+  /** The `cursor` did not decode, was minted for another conversation, or names a position no longer in
+   *  the log. NOT retryable. ONE MERGED ANSWER for all three, and the merge is a disclosure decision
+   *  rather than an imprecision: the distinctions are exactly what a probe would want, so a client that
+   *  cannot tell them apart cannot leak them. The refusal never echoes the cursor back, and nothing
+   *  here undoes that. */
+  | 'history-invalid-cursor'
+  /** The daemon could not read the log — a corrupt segment, an I/O failure, or a log that is wired but
+   *  not open. THE GROUP'S ONE RETRYABLE MEMBER, and the only one that is not a fault in the request:
+   *  it can clear without the client changing anything. Nothing retries it here; see the type header. */
+  | 'history-unavailable'
 
 /**
  * One decoded `attachment_chunk` frame from the RETRIEVAL leg (#998) — the client-owned form of
@@ -480,7 +541,22 @@ export type InboundDaemonMessage =
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
-  | { kind: 'daemon-error'; inReplyTo?: number; outcome: DaemonErrorOutcome }
+  | {
+      kind: 'daemon-error'
+      inReplyTo?: number
+      outcome: DaemonErrorOutcome
+      // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` string `outcome` is
+      // and by the same comparand idiom — see HistoryRejectReason for why it is a second field rather
+      // than five members added to that union.
+      //
+      // OPTIONAL, where `outcome` is deliberately required, and the divergence is the point. That one
+      // is required so no consumer has a field-missing state to mishandle across four correlations;
+      // here absence has exactly ONE meaning — "this code is outside the published history set" — read
+      // at exactly ONE emit, which maps it to the `'unclassified'` member of the IPC-side failure. That
+      // member is not a hedge: a `message.too_long` correlated to a `request_history` is a published
+      // case (§ Page size), and a walk that dropped it would stall with no terminal.
+      historyReject?: HistoryRejectReason
+    }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
@@ -519,6 +595,19 @@ export type InboundDaemonMessage =
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
   | { kind: 'model-list'; modelList: ModelListPayload }
   | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
+  | {
+      kind: 'history-page'
+      historyPage: HistoryPagePayload
+      // OPTIONAL, like `session-settings`' and unlike `attachment-chunk`'s required one — and for the
+      // opposite reason to that neighbour's. A retrieval chunk cannot legitimately arrive unsolicited,
+      // so one without a correlation handle is MALFORMED; a page without one is merely uncorrelatable,
+      // and the fail-closed drop one layer up is the behaviour wanted rather than a decode failure.
+      //
+      // IT IS THE ONLY HANDLE THERE IS. The page carries no `conversation_id` — a decision, not an
+      // omission — so which conversation it describes is knowable only from which envelope it answers.
+      // The consumer keeps its outstanding asks keyed by envelope id and this is what it matches on.
+      inReplyTo?: number
+    }
   | {
       kind: 'attachment-chunk'
       attachmentChunk: RetrievedAttachmentChunk
@@ -670,6 +759,35 @@ function requireStringArray(payload: Record<string, unknown>, field: string): st
     }
     return element
   })
+}
+
+/** Narrow one required OBJECT field off the payload — `isRecord`'s structural minimum applied to a
+ *  named field — or fail closed with a category-only message. The sibling of requireString /
+ *  requireNumber / requireBoolean for a `history_page` entry's `payload` (#1222), the first field on
+ *  this wire that is an object whose SHAPE this client deliberately does not know.
+ *
+ *  It exists because no other helper fits. `optionalStringMap` is the near miss and is wrong twice
+ *  over: it requires every value to be a string, where an entry payload is arbitrary nested JSON, and
+ *  it is an optional-field parse, where this key is always on the wire and an absent one is malformed.
+ *
+ *  THE RESULT IS THE SAME OBJECT, NOT A FRESH ONE, which is the deliberate divergence from every other
+ *  narrower in this file. A fresh container is cheap for a flat map and unbounded for arbitrary nesting
+ *  — a recursive copy would be attacker-driven work on a hostile frame — so this validates the shape
+ *  and carries the value. Nothing is stripped, `RESERVED_MAP_KEYS` included: a `__proto__` key off
+ *  JSON.parse is an ordinary own data property, inert to read, to spread and to structuredClone, and
+ *  the reachable hazard is `Object.assign(target, payload)` or a `target[k] = v` copy loop in a LATER
+ *  consumer, which HistoryEntry's docblock forbids at the field. Do not swap this in where the daemon
+ *  chooses the keys of a map this client then indexes — that is optionalStringMap's case, and its
+ *  reserved-key drop is not a style the two share. */
+function requireRecord(
+  payload: Record<string, unknown>,
+  field: string
+): Record<string, unknown> {
+  const value = payload[field]
+  if (!isRecord(value)) {
+    throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value
 }
 
 /** The three keys that reach Object.prototype's own members. Dropped from any daemon-keyed map, never
@@ -872,6 +990,82 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
   return { session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens }
+}
+
+/**
+ * Narrow ONE element of a `history_page`'s `entries` into a HistoryEntry (#1222). Fail-closed: all four
+ * fields are required-present, and every zero value is a real VALUE rather than an absence — `id: 0`
+ * is a log's first entry, `ts: ''` and `type: ''` would be malformed rather than empty, and
+ * `payload: {}` is an entry whose stored frame had a bare body. Returns a FRESH four-key literal, so a
+ * page-borne extra property (an `event_id`, a `conversation_id` the daemon never promised) cannot ride
+ * along. Its messages name the failure category only — a value here is replayed content.
+ *
+ * `type` IS NOT NARROWED to `EnvelopeType` or to any closed set, and reaching for one is the reflex to
+ * resist. It is a stored string nothing re-validates, spanning the whole live-lane vocabulary plus
+ * `session_transition` plus the operator's own `message`, so a client MUST tolerate one it does not
+ * recognise; an allowlist here would fail-close a valid future frame. That is the same
+ * no-cross-validate posture parseQueuedItem states, applied to a type name rather than to a bound.
+ *
+ * `payload` goes through requireRecord and is then CARRIED BY REFERENCE, unparsed and uninterpreted —
+ * #1222 reads nothing out of it and #1223 owns the reduction. Validating its shape is all this boundary
+ * can do: what is IN it is replayed content carrying exactly the trust class of the live frame it
+ * mirrors, and nothing about it is more trusted for having been stored. See HistoryEntry for the two
+ * rules a consumer inherits.
+ */
+function parseHistoryEntry(raw: unknown): HistoryEntry {
+  if (!isRecord(raw)) {
+    throw new WireDecodeError('malformed history_page entry')
+  }
+  const id = requireNumber(raw, 'id')
+  const type = requireString(raw, 'type')
+  const payload = requireRecord(raw, 'payload')
+  const ts = requireString(raw, 'ts')
+  return { id, type, payload, ts }
+}
+
+/**
+ * Narrow an opaque payload into a HistoryPagePayload (#1222). Fail-closed on every field.
+ *
+ * `entries` takes parseQueueStatePayload's inline shape — `Array.isArray` then `.map` through the row
+ * narrower — so ONE BAD ELEMENT THROWS THE WHOLE PAGE CLOSED rather than yielding a page with the bad
+ * entries skipped, and the result is a FRESH array. An EMPTY array is VALID and is not an absence: the
+ * daemon always writes the key and an empty page carries `[]`, never `null` and never an omitted key,
+ * so `null` fails closed here.
+ *
+ * `cursor` is read with requireString and NOT requireNonEmptyString, and that choice is load-bearing
+ * rather than incidental: the reply's cursor is EMPTY whenever `at_start` is true, so the sibling
+ * helper would fail-close the terminal page of every walk. `''` is a VALUE here — the same reading its
+ * outbound twin gives it — and it is carried, never parsed and never rewritten.
+ *
+ * `at_start` is checked for TYPE, never truthiness — `false` is what every mid-walk page carries.
+ *
+ * NO COUNT BOUND AND NO SIZE BOUND, deliberately (the parseBackgroundTaskRosterPayload posture, ADR
+ * 0002). The frame-level MAX_PLAINTEXT_BYTES guard at the top of parseInboundMessage already fails an
+ * oversized frame before this runs, and the daemon clamps the entry count at construction, re-asking a
+ * too-large page at a smaller size rather than truncating one — so a second bound here would defend a
+ * failure that cannot reach this code, and one below the daemon's 4096 would silently drop valid pages.
+ * Nothing is allocated from a daemon-supplied count either: the array is built by mapping an
+ * already-materialised one, never `new Array(claimed)`.
+ *
+ * BOTH `cursor` AND `at_start` ARE CARRIED AS SENT and neither is inferred from the other or from the
+ * entry count. `at_start` is the ONLY termination signal — a page that fills exactly at the log's first
+ * entry reports it false with a usable cursor, and a short page says nothing at all, because the daemon
+ * may serve fewer entries than asked to fit the envelope cap. Normalising either into an end-of-log
+ * flag here would break the walk at exactly the boundary it exists to find. #1224 walks; nothing here
+ * acts on them.
+ */
+function parseHistoryPagePayload(payload: unknown): HistoryPagePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed history_page payload')
+  }
+  const raw = payload.entries
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('missing required field: entries')
+  }
+  const entries = raw.map(parseHistoryEntry)
+  const cursor = requireString(payload, 'cursor')
+  const at_start = requireBoolean(payload, 'at_start')
+  return { entries, cursor, at_start }
 }
 
 /**
@@ -2150,6 +2344,52 @@ function narrowDaemonErrorOutcome(payload: unknown): DaemonErrorOutcome {
 }
 
 /**
+ * Map a daemon `error` frame's payload onto a client-owned HistoryRejectReason (#1222), or `undefined`
+ * when the code is outside the history verb's published set.
+ *
+ * narrowDaemonErrorOutcome's twin, sharing every property that matters and diverging in exactly one:
+ * it returns `undefined` rather than an `unclassified` member. That is not a weaker contract — it is
+ * the honest one. This narrower answers "is this ONE VERB's refusal, and which", where its neighbour
+ * answers "what class of failure is this" over every frame; a code outside this set is not an
+ * unclassified history reject, it is not a history reject at all. § Page size publishes the case that
+ * makes this reachable rather than theoretical: an entry too large for any page is emitted anyway and
+ * the daemon's own transport answers `message.too_long`, which its neighbour DOES classify. The single
+ * consumer maps the absence to a terminal, so a correlated refusal always settles the ask.
+ *
+ * TOTAL BY CONSTRUCTION: it never throws and has no failure return, for the reason its neighbour's
+ * docblock states in full — an error frame is terminal because it ARRIVED, not because its payload
+ * parsed, and a throw here would silently kill every consumer of the `daemon-error` kind and hand a
+ * hostile daemon a one-frame kill switch.
+ *
+ * The `switch` IS the trust boundary: the untrusted string is a COMPARAND against client-owned literals
+ * and is then dropped, never an index, a join or a resolve, and nothing is retained from the payload —
+ * so `code` needs no length bound, and the frame-level MAX_PLAINTEXT_BYTES guard already bounds a
+ * hostile oversized frame before this runs.
+ */
+function narrowHistoryRejectReason(payload: unknown): HistoryRejectReason | undefined {
+  // isRecord rejects null and arrays; a string / number / absent payload lands here too. Reading
+  // `payload.code` off a JSON.parse result is prototype-safe — a `__proto__` key round-trips as an
+  // ordinary OWN data property, and this never ASSIGNS, which is the only real hazard.
+  if (!isRecord(payload)) return undefined
+  const code = payload.code
+  if (typeof code !== 'string') return undefined
+  switch (code) {
+    case 'conversation.not_found':
+      return 'conversation-not-found'
+    case 'history.invalid_request':
+      return 'history-invalid-request'
+    case 'history.invalid_page_size':
+      return 'history-invalid-page-size'
+    case 'history.invalid_cursor':
+      return 'history-invalid-cursor'
+    case 'history.unavailable':
+      return 'history-unavailable'
+    default:
+      return undefined
+  }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -2231,6 +2471,25 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
+    }
+    case 'history_page': {
+      // Narrow BEFORE logging so a malformed page throws first and leaves no record. NO decoded field
+      // is ever logged — not the cursor, not an entry's `type`, `id`, `ts` or `payload` — only the
+      // frame's byte length + one-way hash, reusing the existing content-free field set. The cursor is
+      // the one worth naming: the daemon's own reject messages are static and echo nothing from the
+      // request, and logging what came back would undo that from this side. Mirrors the
+      // session_settings arm above.
+      const historyPage = parseHistoryPagePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'history_page',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      // Propagate the ALREADY-decoded Envelope.in_reply_to — the page's ONLY correlation handle, since
+      // it names no conversation. `undefined` when the frame omits it, which makes the consumer's
+      // lookup fail closed and drop the page rather than attribute it to a guess.
+      return { kind: 'history-page', historyPage, inReplyTo: envelope.in_reply_to }
     }
     case 'assistant_delta': {
       // Narrow BEFORE logging so a malformed delta throws first and leaves no record. The decoded
@@ -2797,6 +3056,12 @@ export function parseInboundMessage(
       // daemon-controlled text into a JSON-lines log an operator can send off-box in a debug bundle.
       // The unit test asserting the record omits the wire code is the deterministic guard for this.
       const outcome = narrowDaemonErrorOutcome(envelope.payload)
+      // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` by the same
+      // comparand idiom and into a SEPARATE client-owned union — see HistoryRejectReason for why the
+      // two do not merge. Like `outcome` it cannot throw, so both consumers of this frame still fire
+      // however mangled its payload; and like `outcome` the daemon's string is dropped, so the logged
+      // `code` below stays the client-owned literal it must be.
+      const historyReject = narrowHistoryRejectReason(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'error',
@@ -2809,7 +3074,7 @@ export function parseInboundMessage(
       // client-owned outcome, never daemon text. `outcome` is REQUIRED rather than optional so a
       // mangled payload yields 'unclassified' instead of absence: a consumer has no "field missing"
       // state to mishandle, and no `if (outcome)` branch that behaves differently for a hostile frame.
-      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to, outcome }
+      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to, outcome, historyReject }
     }
     default:
       // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it

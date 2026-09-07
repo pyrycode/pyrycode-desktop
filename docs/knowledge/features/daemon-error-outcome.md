@@ -366,3 +366,13 @@ unreachability as an invariant to build on.
   `message.too_long`; `'unclassified'` kept over `'unknown'`).
 - [Attachment transfer](attachment-transfer.md) — [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861),
   landed: the attachment upload send driver, and the first consumer of `outcome`.
+- [Request history send](request-history-send.md) — [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)
+  adds a **sibling** narrower, `HistoryRejectReason`, beside this type rather than widening it: the
+  `request_history`/`history_page` verb's five reject codes are deliberately *not* added as
+  `DaemonErrorOutcome` members, since `AttachmentTransferFailure` inherits this union whole and a
+  `history-invalid-cursor` member would land in the attachment-upload failure union with no upload path
+  that can produce it. `HistoryRejectReason` mirrors every property that matters here (total by
+  construction, never throws, the untrusted `code` string used only as a comparand, nothing retained)
+  and diverges in one: it returns `undefined` outside its five-member set rather than an
+  `'unclassified'` member of its own, since a correlated `message.too_long` — the case this type
+  already classifies — is a real, published outcome of that verb too.

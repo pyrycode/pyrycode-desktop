@@ -7956,3 +7956,284 @@ describe('daemonConnection — server origin (#1068)', () => {
     expect([...ids]).toEqual(['srv-a'])
   })
 })
+
+describe('createDaemonConnection — requestHistory (history page request/reply, #1222)', () => {
+  /** The conversation the request names, and therefore the one the reply describes. */
+  const CONV = 'conv-hist'
+  /** A daemon-minted opaque cursor — the committed example, kept intact so a "tidying" rewrite shows. */
+  const CURSOR = 'MS4zZjhiMWMwNC05ZDI3LTRlNWEtYjZjMS0yZTlmNzBkOGE0MTMuNy40MDk2'
+
+  const ENTRY = {
+    id: 412,
+    type: 'assistant_delta',
+    payload: { turn_id: 't1', seq: 3, text: 'stored assistant text' },
+    ts: FIXED_TS
+  }
+  const PAGE = { entries: [ENTRY], cursor: CURSOR, at_start: false }
+
+  /** A `history_page` envelope's plaintext. Correlation-gated like its session_settings sibling, so
+   *  `inReplyTo` is spelled `number | undefined` rather than optional — omitting it is the deliberate
+   *  no-correlation branch and should read as a choice at the call site. */
+  function historyPagePlaintext(payload: unknown, inReplyTo: number | undefined): Uint8Array {
+    return encodeEnvelope({ id: 812, type: 'history_page', ts: FIXED_TS, in_reply_to: inReplyTo, payload })
+  }
+
+  /** An `error` envelope's plaintext carrying one reject code. */
+  function rejectPlaintext(code: string, inReplyTo: number | undefined): Uint8Array {
+    return encodeEnvelope({
+      id: 900,
+      type: 'error',
+      ts: FIXED_TS,
+      in_reply_to: inReplyTo,
+      payload: { code, message: 'static daemon text that must never cross', retryable: true }
+    })
+  }
+
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The envelope id of the LAST request_history this connection put on the wire. */
+  function lastRequestId(ctx: ReturnType<typeof build>): number {
+    const requests = ctx.drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((e) => e.type === 'request_history')
+    return requests[requests.length - 1].id
+  }
+
+  /**
+   * Connected, with one outstanding request_history naming `conversationId` — the correlation every
+   * reply below must match. Its envelope id is read off the frame ACTUALLY SENT rather than assumed,
+   * so a change to the client's numbering cannot silently make every reply here
+   * uncorrelatable-and-therefore-dropped while the assertions still read as if the gate were exercised.
+   */
+  async function requested(
+    conversationId: string = CONV
+  ): Promise<ReturnType<typeof build> & { replyTo: number }> {
+    const ctx = await connected()
+    ctx.connection.requestHistory({ conversation_id: conversationId, cursor: '', limit: 50 })
+    return { ...ctx, replyTo: lastRequestId(ctx) }
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
+    const { connection, drivers } = build()
+    expect(() =>
+      connection.requestHistory({ conversation_id: CONV, cursor: '', limit: 50 })
+    ).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends a request_history frame carrying all three fields', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestHistory({ conversation_id: CONV, cursor: CURSOR, limit: 50 })
+
+    const request = drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .find((e) => e.type === 'request_history')
+    // Asserted as an exact payload against values distinct from every other string on the envelope, so
+    // forwarding the wrong field cannot pass — and the cursor crosses byte for byte.
+    expect(request?.payload).toEqual({ conversation_id: CONV, cursor: CURSOR, limit: 50 })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.requestHistory({ conversation_id: CONV, cursor: '', limit: 0 })
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('decodes a correlated history_page into historyPageReceived, attributed to the ASKED conversation', async () => {
+    // The page names no conversation. What crosses is the id THIS CLIENT put in its own outbound
+    // frame, resolved from the envelope the page answers — the only place that fact exists.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
+      {
+        type: 'historyPageReceived',
+        conversationId: CONV,
+        entries: [ENTRY],
+        cursor: CURSOR,
+        atStart: false
+      }
+    ])
+  })
+
+  it('carries at_start across as camelCase atStart, and no snake key', async () => {
+    // Asserting the ABSENCE of the snake key is what proves the emit is a named copy rather than a
+    // spread of the decoded payload — a spread would carry both spellings.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: historyPagePlaintext({ entries: [], cursor: '', at_start: true }, replyTo)
+    })
+
+    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
+    expect(event).toBeDefined()
+    expect(event).not.toHaveProperty('at_start')
+    expect(event && 'atStart' in event && event.atStart).toBe(true)
+  })
+
+  it('never places the wire routing id on the event', async () => {
+    // The window receives the id it supplied, never the numeric in_reply_to the match was made on.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+
+    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
+    expect(event).not.toHaveProperty('inReplyTo')
+    expect(event).not.toHaveProperty('in_reply_to')
+  })
+
+  it('carries a terminal page as sent, normalising nothing into an end-of-log flag', async () => {
+    // at_start is the ONLY termination signal, and a short or empty page says nothing on its own. A
+    // decoder or consumer that inferred one from the other would break the walk exactly at the
+    // boundary it exists to find.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: historyPagePlaintext({ entries: [ENTRY], cursor: '', at_start: true }, replyTo)
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
+      { type: 'historyPageReceived', conversationId: CONV, entries: [ENTRY], cursor: '', atStart: true }
+    ])
+  })
+
+  it('drops a page whose in_reply_to matches no outstanding ask', async () => {
+    // A stale reply from a cleared connection, a duplicate, or a hostile daemon forging a page for a
+    // request this client never sent. The drop is TOTAL rather than "emit without the id": the window
+    // would otherwise have to guess a conversation, and a guess writes someone else's transcript into
+    // the open one.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo + 999) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
+  })
+
+  it('drops a page carrying no in_reply_to at all', async () => {
+    const { sink, drivers } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, undefined) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
+  })
+
+  it('drops a SECOND page replayed under an id already matched', async () => {
+    // The entry is deleted on the match, so a replayed page has nothing to correlate against. This is
+    // the assertion that would redden if the delete were dropped.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toHaveLength(1)
+  })
+
+  it('attributes two interleaved asks to their OWN conversations', async () => {
+    // The whole point of keying by envelope id rather than by a single slot: a walk may have more than
+    // one ask outstanding, and a page must never land on the wrong conversation.
+    const ctx = await connected()
+    ctx.connection.requestHistory({ conversation_id: 'conv-first', cursor: '', limit: 10 })
+    const firstId = lastRequestId(ctx)
+    ctx.connection.requestHistory({ conversation_id: 'conv-second', cursor: '', limit: 10 })
+    const secondId = lastRequestId(ctx)
+
+    // Answered out of order, which is the case a FIFO would get wrong.
+    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, secondId) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, firstId) })
+
+    expect(
+      emitted(ctx.sink)
+        .filter((e) => e.type === 'historyPageReceived')
+        .map((e) => (e.type === 'historyPageReceived' ? e.conversationId : null))
+    ).toEqual(['conv-second', 'conv-first'])
+  })
+
+  it.each([
+    ['conversation.not_found', 'conversation-not-found', false],
+    ['history.invalid_request', 'history-invalid-request', false],
+    ['history.invalid_page_size', 'history-invalid-page-size', false],
+    ['history.invalid_cursor', 'history-invalid-cursor', false],
+    ['history.unavailable', 'history-unavailable', true]
+  ])('surfaces %s as a typed failure (retryable: %s)', async (code, reason, retryable) => {
+    // The daemon's own `retryable: true` rides EVERY fixture above, so a passthrough of the wire flag
+    // would make all five retryable and this table is what catches it. The flag is computed from the
+    // closed set at the single emit instead.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext(code, replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([
+      { type: 'historyRequestFailed', conversationId: CONV, reason, retryable }
+    ])
+  })
+
+  it('surfaces a correlated code outside the five as unclassified, still settling the ask', async () => {
+    // `message.too_long` is the published case: an entry too large to fit in any page is emitted
+    // anyway and the daemon's own transport answers with it. A walk that dropped it would stall with
+    // no terminal and no cursor to step past the entry.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('message.too_long', replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([
+      { type: 'historyRequestFailed', conversationId: CONV, reason: 'unclassified', retryable: false }
+    ])
+  })
+
+  it('carries no daemon text on the failure — only client-owned values', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.invalid_cursor', replyTo) })
+
+    const event = emitted(sink).find((e) => e.type === 'historyRequestFailed')
+    expect(Object.keys(event ?? {}).sort()).toEqual(['conversationId', 'reason', 'retryable', 'type'])
+    expect(JSON.stringify(event)).not.toContain('static daemon text')
+    // Nor the cursor, which the daemon's own rejects deliberately never echo.
+    expect(JSON.stringify(event)).not.toContain(CURSOR)
+  })
+
+  it('drops a reject whose in_reply_to matches no outstanding ask', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.unavailable', replyTo + 999) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([])
+  })
+
+  it('settles the ask on a reject, so a later page under the same id is dropped', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.unavailable', replyTo) })
+    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
+
+    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
+  })
+
+  it('clears outstanding asks on reconnect, so a stale id cannot correlate on the new connection', async () => {
+    // The fresh connection recycles envelope ids from 2, so a surviving entry would attribute the new
+    // connection's first page to the dead one's conversation — a live misdelivery, not a theoretical one.
+    const ctx = await requested()
+    const staleId = ctx.replyTo
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, staleId) })
+
+    expect(emitted(ctx.sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
+  })
+})

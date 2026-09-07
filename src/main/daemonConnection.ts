@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
+import { buildRequestHistory } from './transport/requestHistoryEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
@@ -73,6 +74,7 @@ import {
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, bindServerOrigin, type DaemonEventSink } from './emitDaemonEvent'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
+import type { HistoryRequestFailure } from '../shared/ipc/events'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
@@ -96,7 +98,8 @@ import {
   type DequeueMessagePayload,
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
-  type AttachmentChunkPayload
+  type AttachmentChunkPayload,
+  type RequestHistoryPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -262,6 +265,20 @@ export interface DaemonConnection {
    * one `error` frame, which nothing here retries. Inert no-op when not connected, like send.
    */
   requestModelList(conversationId: string): void
+  /**
+   * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
+   * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
+   * carries three fields, and the builder rebuilds a fresh literal from them so nothing
+   * renderer-supplied reaches the wire uninspected.
+   *
+   * IT IS THE ONLY REQUEST METHOD THAT RECORDS WHAT IT ASKED. The `history_page` reply names no
+   * conversation, so this connection keeps the envelope id it just spent against the conversation the
+   * request named, and matches the reply back by `Envelope.in_reply_to` — the `requestSessionSettings`
+   * arrangement, and for the same reason. Answered by one `history_page` → `historyPageReceived`, or by
+   * one `error` → `historyRequestFailed`; nothing here retries either, including the one retryable
+   * refusal. Inert no-op when not connected, like send.
+   */
+  requestHistory(payload: RequestHistoryPayload): void
   /**
    * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
    * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
@@ -683,6 +700,30 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // onDriverEvent body, no await between a read and a write (the nextEnvelopeId / outstandingAnswers /
   // pendingSettings single-writer rationale).
   const pendingConfigRequests = new Map<number, string>()
+  // envelopeId → the conversation id that request_history named, for a history page's attribution
+  // (#1222). THE SAME PROBLEM pendingConfigRequests solves, on a second reply that names no
+  // conversation of its own and cannot grow one (correlation rides `in_reply_to` and nothing in a page
+  // is echoed from the request), so this map is again the ONLY place that fact exists.
+  //
+  // A MAP for pendingConfigRequests' reasons exactly: a value to carry per entry, a lookup by one key
+  // as the whole query, and a key this client MINTED (nextEnvelopeId) rather than a daemon-supplied
+  // string — so no prototype setter is reachable through it under any inbound frame, and a later
+  // widening that keys this by anything daemon-supplied must keep the Map.
+  //
+  // It differs from that sibling in ONE way and it is worth stating: a run-config read is one ask at a
+  // time in practice, where a walk is a SEQUENCE — #1224 may have an ask outstanding while the operator
+  // keeps scrolling. Nothing here bounds the map's size, deliberately: an entry costs one number and
+  // one string, entries are deleted on every match, and every one is cleared on dial(), so the only way
+  // to accumulate them is for this client to send asks a daemon never answers — a rate this client
+  // controls, not a remote one.
+  //
+  // Set after a SUCCESSFUL send in requestHistory, matched by the reply's Envelope.in_reply_to and
+  // deleted in onDriverEvent, and cleared on each dial(). The ordering is load-bearing for the reason
+  // pendingConfigRequests states: a build or send that throws advances no envelope id, so an entry left
+  // under an unspent id would answer whichever request re-mints it — here handing a page of one
+  // conversation's history to another. Single-writer — every mutation runs to completion inside a
+  // synchronous requestHistory / onDriverEvent body, no await between a read and a write.
+  const pendingHistoryRequests = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
   // files can be attached in one session, and a lone slot would have to abandon the first to admit the
   // second. Membership plus a scan is the whole query — the success reply is looked up by
@@ -928,6 +969,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 rejected.fail(inbound.outcome)
                 return
               }
+              // History-request rejection correlation (#1222), the fourth member of the same
+              // unique-per-request-envelope-id tier. Order among them is immaterial for the reason the
+              // siblings state — an envelope id is minted once, so at most one store can hold it — and
+              // a match consumes the frame ENTIRELY, skipping both the reassembler.fail and the
+              // modal-FIFO shift below exactly as they do.
+              //
+              // A CORRELATED REFUSAL ALWAYS SETTLES THE ASK, including one whose code is outside the
+              // verb's five published rejects. That case is real rather than defensive: an entry too
+              // large for any page draws `message.too_long` from the daemon's own transport, and a walk
+              // that dropped it would stall with no terminal and no cursor to step past the entry.
+              // `'unclassified'` is where those land.
+              //
+              // What crosses is the CLIENT-OWNED reason narrowed at the decode boundary plus the
+              // conversation id this app itself named — never the daemon's `code` string, never its
+              // static message, and never the numeric in_reply_to the match was made on. `retryable` is
+              // computed HERE, at the single emit, so the walk driver cannot re-derive it wrong.
+              const failedHistory = pendingHistoryRequests.get(inReplyTo)
+              if (failedHistory !== undefined) {
+                pendingHistoryRequests.delete(inReplyTo)
+                const reason: HistoryRequestFailure = inbound.historyReject ?? 'unclassified'
+                emitDaemonEvent(sink, {
+                  type: 'historyRequestFailed',
+                  conversationId: failedHistory,
+                  reason,
+                  retryable: reason === 'history-unavailable'
+                })
+                return
+              }
               // Attachment-RETRIEVAL rejection correlation (#996), the fourth member of the same
               // unique-per-request-envelope-id tier, and the ONLY correlation this reject can have:
               // it is a plain `error` envelope carrying no attachment id at all, so a design routing
@@ -1024,6 +1093,44 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens
+            })
+            return
+          }
+          case 'history-page': {
+            // CORRELATION-GATED, fail-closed, in the shape the session-settings arm above uses and for
+            // the identical reason: the reply names no conversation, so the one it describes is the one
+            // this client asked about under the envelope id it answers. An absent in_reply_to
+            // short-circuits BEFORE the lookup; a page matching no outstanding entry — a stale reply
+            // from a connection whose ids were cleared, a duplicate of one already matched, or a
+            // hostile daemon forging a page for a request this client never sent — is ignored entirely,
+            // with no coercion and no partial event. Both branches are SILENT: the only values a
+            // diagnostic could carry are the conversation id and the wire routing id.
+            //
+            // The drop is deliberately total rather than "emit without the id". A page this client
+            // cannot attribute is exactly the input the window must not accept: it would have to guess
+            // a conversation, and a guess writes someone else's transcript into the open one.
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo === undefined) return
+            const conversationId = pendingHistoryRequests.get(inReplyTo)
+            if (conversationId === undefined) return
+            pendingHistoryRequests.delete(inReplyTo)
+            // A fresh literal with named fields, never a spread of inbound.historyPage — so a future
+            // decoder that grew a field cannot smuggle it across. snake→camel for `at_start` per this
+            // channel's convention; `entries` and `cursor` keep their names and their values.
+            //
+            // Both are carried AS SENT: nothing normalises a short or empty page into an end-of-log
+            // flag, because `atStart` is the only termination signal and a page filling exactly at the
+            // log's first entry reports it false. `entries` is the decoded array by reference — the
+            // entry payloads are REPLAYED CONTENT and stay opaque here, interpreted by nothing in this
+            // slice. `conversationId` is the map's value, never a field of the payload (there is none),
+            // and the numeric in_reply_to it was resolved from is NOT placed on the event: the window
+            // receives the id it supplied, not the wire routing id.
+            emitDaemonEvent(sink, {
+              type: 'historyPageReceived',
+              conversationId,
+              entries: inbound.historyPage.entries,
+              cursor: inbound.historyPage.cursor,
+              atStart: inbound.historyPage.at_start
             })
             return
           }
@@ -1996,6 +2103,45 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestHistory(payload: RequestHistoryPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A history request has no consumer to fail; one sent while
+    // disconnected simply produces no reply, and the walk re-asks on its next scroll.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestSessionSettings — no second counter
+      // — so ids stay unique across interleaved calls, which is what makes them usable as the
+      // correlation key below (the daemon correlates the history_page reply by in_reply_to).
+      //
+      // ONE local for the envelope id, read three times (the #1176 rule), so the id sent, the id
+      // counted and the id recorded can never be three different expressions. The three payload fields
+      // are forwarded to the builder, which rebuilds a fresh literal, so no renderer-supplied key
+      // reaches the wire. Nothing is logged: not the cursor, not the conversation id, and the catch
+      // below drops its caught object without adding a line.
+      const envelopeId = nextEnvelopeId
+      const bytes = buildRequestHistory({
+        id: envelopeId,
+        ts: now(),
+        conversationId: payload.conversation_id,
+        cursor: payload.cursor,
+        limit: payload.limit
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+      // Record AFTER the send, so a build or send that throws leaves no entry under an id the next
+      // request will re-mint. The value is the conversation this app named, held here and handed back
+      // when the reply lands — the page itself names none, so this is where that fact lives.
+      pendingHistoryRequests.set(envelopeId, payload.conversation_id)
+    } catch {
+      // Never throw out of the module (parity #490): a daemon-minted cursor is of unpublished length,
+      // so unlike the fixed-shape neighbours an over-cap envelope here is conceivable rather than
+      // merely theoretical, and driver.sendMessage can throw regardless. The caught object is DROPPED
+      // — it could echo the cursor (classify-don't-forward, inherited #62). NO RETRY, here or above:
+      // a retry against a relay withholding the reply is the self-inflicted spin requestModelList's
+      // catch forbids, and the walk's policy is #1224's to own.
+    }
+  }
+
   function requestRecentWorkspaces(): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
@@ -2674,6 +2820,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
     // rationale, applied to the read leg.
     pendingConfigRequests.clear()
+    // Reset the history request correlation map (#1222): the pendingConfigRequests rationale applied to
+    // the walk. Without it the fresh connection's first page — which names no conversation of its own —
+    // would inherit the dead connection's, and the recycled envelope ids make that a live misdelivery
+    // rather than a theoretical one.
+    pendingHistoryRequests.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
@@ -2717,6 +2868,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSessionSettings,
     requestModelList,
+    requestHistory,
     requestConversations,
     requestRecentWorkspaces,
     createConversation,

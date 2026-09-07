@@ -235,7 +235,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
    *
    * THE MEMBER LIST IS WRITTEN EXACTLY ONCE, here, and that is the point of the helper rather than a
    * tidiness preference. `active` and `connectionFor` both hand a caller an object that must carry the
-   * 24 members and NOT the three lifecycle ones; a second hand-copied literal could drift, and
+   * every non-lifecycle member and NOT the three lifecycle ones; a second hand-copied literal could drift, and
    * returning a bare `DaemonConnection` typed as `ActiveConnection` would satisfy the type while
    * leaving `start` / `stop` / `reconnect` reachable at runtime by a cast. A fresh object with only
    * these members makes the `Omit` true of the value, not just of its type.
@@ -244,6 +244,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     send: (payload) => resolve().send(payload),
     requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
     requestModelList: (conversationId) => resolve().requestModelList(conversationId),
+    requestHistory: (payload) => resolve().requestHistory(payload),
     requestConversations: () => resolve().requestConversations(),
     requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),
     createConversation: (payload) => resolve().createConversation(payload),

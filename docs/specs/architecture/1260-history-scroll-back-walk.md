@@ -330,3 +330,44 @@ one. Every other line of the boundary holds: 4 production source files, 0 new ex
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — the walk CASCADES while the reader stays in the band, and that shaped the drive's barriers
+
+Not a design change; a behaviour the design implies that the plan had not named, found by the fake-tier
+drive reddening twice. A page that does not push the reader out of `HISTORY_ASK_BAND_PX` leaves them still
+near the top, and Chromium's anchoring adjustment after a prepend **is itself a scroll event** — so a small
+page carries the walk one step further with no second scroll from the operator. The empty page (no growth,
+no event) and the one-entry short page (≈40px of growth, still inside the band) both did this.
+
+That is the correct product behaviour — keep loading until there is enough above the reader, bounded by
+`atStart` — and no production code changed for it. What it invalidates is a whole class of *assertion*:
+anything that encodes a MOMENT. Two shapes were replaced in `e2e/history-walk.spec.ts`:
+
+- an ask-**count** barrier (`expect.poll(...).toBe(3)`) raced the cascade and read 4;
+- an intermediate row-**count** and a `userBubbles.first()` read raced it the same way, because the next
+  page had already landed.
+
+Both are now facts rather than moments: barriers wait for a specific **cursor** to appear among the asks,
+rows are addressed by their own **text**, and the sequence is pinned once at the end by an equality on the
+ordered cursor list — which is a strictly stronger claim, since it also proves no page was asked for twice
+across dozens of real scroll events.
+
+### 2026-09-07 — both open questions resolved as the design predicted
+
+1. **The park inside the band is well clear of the bottom.** The primer's twenty turns put the reader a
+   full viewport-plus above it, so the pin's `following` flag is clear and the pin writes nothing during the
+   prepend — asserted as a precondition (`distanceFromBottom(before) > before.clientHeight`) rather than
+   assumed, so anchoring is provably the only mechanism in play.
+2. **`prependedRows` counts `fresh.length`, not the page's size.** Confirmed as written: the key-present
+   branch is the one that runs, and a page whose rows are all held echoes moves the count by the number
+   actually inserted. Covered by *rises by the rows a page actually inserted, never by the rows it asked to*.
+
+### 2026-09-07 — § Design 3 verified by mutation, not by argument
+
+The row key is invisible to every gate but this one, so the claim was proved rather than reasoned about.
+With `key={firstRowKey + index}` reverted to `key={index}` and the app rebuilt, the AC2 case fails with the
+reference row's viewport top moving from **112 to 848** — the reader's row pushed clean off the bottom of
+the viewport by a page prepended above them. Restored, it holds at 112. That number is the measurement
+behind § Design 3 and behind the `⭐` note on the row map.

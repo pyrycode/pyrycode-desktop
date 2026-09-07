@@ -62,3 +62,47 @@ export function isAtBottom(metrics: ThreadScrollMetrics): boolean {
 
   return distanceFromBottom <= AT_BOTTOM_TOLERANCE_PX
 }
+
+/**
+ * How close to the top fires the history walk's next ask, in CSS pixels (#1260).
+ *
+ * ⭐ THIS IS NOT A TOLERANCE, and reading it as `AT_BOTTOM_TOLERANCE_PX`'s twin is the one way to get it
+ * wrong. That constant is a rounding allowance around an exact position; this one is a deliberate RIM the
+ * ask fires from BEFORE the reader reaches the wall, and the reason is a browser behaviour rather than a
+ * preference. Chromium suppresses scroll anchoring when a scroller's offset is exactly zero — measured in
+ * `thread-scroll-pin.spec.ts`'s #1046 section, which parks at 40% rather than at the top for precisely
+ * this reason — and anchoring is the whole mechanism that holds the reader's place when a served page is
+ * prepended above them. An ask fired only at the top would therefore fire at the one offset where the
+ * mechanism it depends on is off. Do not shrink this to a tolerance.
+ *
+ * Fenced on three sides rather than chosen freely:
+ *
+ * - Two of Chromium's ~100px wheel notches, so a reader scrolling back with the wheel enters the band a
+ *   frame or more before reaching zero.
+ * - An order of magnitude above `AT_BOTTOM_TOLERANCE_PX`, so it reads as proximity rather than as
+ *   accumulated sub-pixel error.
+ * - A quarter of the app's 800px minimum window height, so it stays a rim rather than a viewport.
+ *
+ * A reader who lands on exactly zero anyway — a fling, `Home`, a programmatic jump — still asks, and that
+ * one page arrives without their place held. That is a KNOWN, stated bound rather than an oversight:
+ * closing it needs production code that measures the growth and writes `scrollTop` itself, which is a
+ * second mechanism competing with anchoring for the same job.
+ */
+export const HISTORY_ASK_BAND_PX = 200
+
+/**
+ * Is the thread scrolled back to within `HISTORY_ASK_BAND_PX` of its top?
+ *
+ * ONE comparison against the offset alone, in the shape `isAtBottom` argues for: the elastic overshoot
+ * past the top (a negative offset) and the thread too short to scroll (an offset pinned at zero) are both
+ * consequences of the same expression rather than branches, so there is no clamp, no `Math.max` and no
+ * "can it scroll at all" guard. `<=`, not `<`, so the boundary belongs to the band.
+ *
+ * It reads NEITHER of the other two metrics, and takes the whole `ThreadScrollMetrics` anyway: the call
+ * site measures all three off one node for `isAtBottom` in the same breath, and a second parameter shape
+ * would invite a bare number at exactly the site whose named fields exist to make the mapping correct by
+ * inspection.
+ */
+export function isNearTop(metrics: ThreadScrollMetrics): boolean {
+  return metrics.scrollOffset <= HISTORY_ASK_BAND_PX
+}

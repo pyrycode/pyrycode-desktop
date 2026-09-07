@@ -24,9 +24,11 @@ import { useSessionStore, selectStatus, type ConnectionStatus } from '../../stor
 import { useTimelineStore } from '../../store/timelineStore'
 import {
   useConversationTimelineStore,
+  selectPrependedRowsFor,
   selectTimelineFor,
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
+import { historyAskDeps, requestOlderHistory } from '../../store/historyPageBridge'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   activeConversationStore,
@@ -70,7 +72,7 @@ import {
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
-import { isAtBottom } from './threadScrollPosition'
+import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair, serverIdForOpenConversation } from './unpairAction'
@@ -131,6 +133,11 @@ import type { RendererCommand } from '@shared/ipc/commands'
 // #758: "no conversation is open" as a SELECTOR rather than as a sentinel id. Module-level, so its
 // identity is stable and the memoised binding below does not churn its subscription.
 const selectNothingHeld = (): null => null
+
+// #1260: the same treatment for the prepended-row count, and for `selectOpenTimelineFor`'s reason rather
+// than for symmetry — `''` is an ordinary key in the timeline holder, so `?? ''` could read another
+// conversation's count as the open one's. Module-level so the memoised binding's identity is stable.
+const selectNoPrependedRows = (): number => 0
 
 /**
  * #758: the selector that binds the chat pane to the OPEN conversation's own retained timeline — the
@@ -311,7 +318,18 @@ export function ConversationScreen({
   // nothing outside this screen reads it and it must not survive a remount (ADR 0006), so a re-entered
   // thread starts pinned again, which is the correct reading. The two handles go to Timeline as one prop.
   // #602: `followBottom` re-arms that pin and goes to the Composer, the thread's sibling under this body.
-  const { scrollPin, followBottom } = useThreadScrollPin()
+  // #1260: the count behind the thread's row keys. A second, narrow subscription rather than a field on
+  // the slice above, because it changes only when a served page lands and is `Object.is`-stable on every
+  // other write — so it wakes this screen strictly less often than the timeline read already does.
+  const selectOpenPrependedRows = useMemo(
+    () =>
+      openConversationId === null
+        ? selectNoPrependedRows
+        : selectPrependedRowsFor(openConversationId),
+    [openConversationId]
+  )
+  const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
+  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId)
   return (
     <div className="conversation">
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
@@ -361,6 +379,10 @@ export function ConversationScreen({
       <Timeline
         items={items}
         scrollPin={scrollPin}
+        // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
+        // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
+        // which is what leaves their keys — and therefore React's identity for them — unmoved.
+        firstRowKey={-prependedRows}
         queued={queuedBacklog}
         onDropQueued={(queuedMsgId, messageId) => {
           if (openConversationId === null) return
@@ -611,7 +633,7 @@ function reassertPinnedToBottom(
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(): ThreadPin {
+function useThreadScrollPin(conversationId: string | null): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
@@ -750,14 +772,28 @@ function useThreadScrollPin(): ThreadPin {
         // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
         // the write produced, so an event the operator caused in the same frame — a different offset —
         // re-measures normally. See `reassertPinnedToBottom` for the drift this was measured to fix.
+        //
+        // #1260 HANGS THE HISTORY WALK'S DETECTOR ON THIS SAME EARLY RETURN, and that is not incidental:
+        // a write the pin made moved the view to the BOTTOM, so re-reading it as the operator scrolling
+        // back would be wrong for both readings, not just for the flag.
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
-        following.current = isAtBottom({
+        // Measured once, into the named fields, and handed to both readings. The mapping is the one thing
+        // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
+        // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
+        const metrics = {
           scrollOffset: el.scrollTop,
           viewportHeight: el.clientHeight,
           contentHeight: el.scrollHeight
-        })
+        }
+        following.current = isAtBottom(metrics)
+        // #1260: the walk's ask. NO BRANCH HERE — every reading that declines does so inside
+        // `requestOlderHistory`, where a spy can reach it, and this handler stays a measurement plus two
+        // total functions of it. The deps object dereferences `window.pyry` inside its own arrow bodies,
+        // so nothing is touched during render and the static renderer tier — where no handler ever fires
+        // — is unaffected.
+        requestOlderHistory(historyAskDeps, conversationId, isNearTop(metrics))
       }
     },
     // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate
@@ -836,12 +872,17 @@ export function Timeline({
   items,
   scrollPin,
   queued,
-  onDropQueued
+  onDropQueued,
+  firstRowKey = 0
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
   queued?: readonly QueuedItem[]
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+  /** #1260: the key the FIRST item row gets; each row after it counts up from there. Optional and
+   *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
+   *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
+  firstRowKey?: number
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   // #1214: the empty branch tests the FOLDED rows, not `items`. Before the fold, a window holding no
@@ -854,10 +895,22 @@ export function Timeline({
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
       {rows.map((row, index) => (
-        // Array index as key for the ITEM rows. The list is append-only with tail-mutation and never
-        // inserts or reorders mid-list (threadTimeline.ts: appendDelta grows the tail assistantText in
-        // place; every other arm appends a new tail; fillResult replaces a toolCall at its own index), so
-        // index identity is stable per logical item — the usual index-key hazard is absent here.
+        // Index-derived key for the ITEM rows, counting from `firstRowKey` rather than from zero. The
+        // LIVE list is append-only with tail-mutation and never inserts or reorders mid-list
+        // (threadTimeline.ts: appendDelta grows the tail assistantText in place; every other arm appends
+        // a new tail; fillResult replaces a toolCall at its own index), so index identity is stable per
+        // logical item there and the usual index-key hazard is absent.
+        //
+        // ⭐ #1260: A HISTORY PREPEND IS EXACTLY THE INSERTION THAT PREMISE EXCLUDES, and a bare index
+        // does not survive it. Prepending N rows makes React match key 0 to key 0, so every already-drawn
+        // row is UPDATED IN PLACE with a different item's content while N fresh nodes appear at the END —
+        // after which Chromium's scroll anchoring compensates by the wrong delta, because its anchor node
+        // never moved, it merely started rendering a different message. The reader is left at their
+        // offset looking at a page earlier in the log. Offsetting by the conversation's prepended-row
+        // count names a row's position from the CONVERSATION'S ORIGIN instead, which is stable under both
+        // mutations: an append leaves the offset alone so the streaming bubble is not remounted, and a
+        // prepend of N lowers it by N while every surviving row's index rises by N. Keys go NEGATIVE as a
+        // thread is walked back, which is fine — a React key is a string namespace, not an ordinal.
         // turnId alone is not collision-safe (a tool can split one turn into two assistantText items,
         // post-#205), and any text-bearing key would change every delta and remount the growing bubble.
         //
@@ -868,7 +921,7 @@ export function Timeline({
         // numeric index. NEVER `message_id`: that field is compared and never used as an identifier,
         // which is its contract (#1213 § Security review 1).
         <TimelineRow
-          key={index < items.length ? index : `q${row.queued?.queuedMsgId ?? index}`}
+          key={index < items.length ? firstRowKey + index : `q${row.queued?.queuedMsgId ?? index}`}
           item={row.item}
           queued={row.queued}
           onDropQueued={onDropQueued}

@@ -5,6 +5,7 @@ import {
   createConversationTimelineStore,
   initialConversationTimelineState,
   selectHistoryRequestFor,
+  selectPrependedRowsFor,
   selectTimelineFor,
   type HistoryRequestState
 } from './conversationTimelineStore'
@@ -750,7 +751,12 @@ describe('conversationTimelineStore', () => {
     expect(initialConversationTimelineState.timelines.size).toBe(0)
 
     const seeded = createConversationTimelineStore({
-      timelines: new Map([['c1', { timeline: { ...emptyTimeline, compacting: true }, history: null }]])
+      timelines: new Map([
+        [
+          'c1',
+          { timeline: { ...emptyTimeline, compacting: true }, history: null, prependedRows: 0 }
+        ]
+      ])
     })
     expect(timelineFor(seeded, 'c1')).toEqual({ ...emptyTimeline, compacting: true })
   })
@@ -758,6 +764,88 @@ describe('conversationTimelineStore', () => {
   // #1259 — the opening ask's per-conversation state, held BESIDE the timeline in the same slice so it
   // dies with it. Four readings: `null` (never asked, or evicted — the two are deliberately the same
   // reading, and that identity is AC3), `requested`, `loaded`, `failed`.
+  // #1260 — the prepended-row count behind `Timeline`'s row key. Nothing in the renderer tier can see a
+  // React key (keys are not markup, and these specs render to a static string), so the count itself is
+  // where the property is provable and `e2e/thread-scroll-pin.spec.ts` is where its effect is.
+  describe('prependedRows', () => {
+    const userRow = (text: string, messageId?: string): ThreadItem => ({
+      kind: 'userText',
+      text,
+      createdAt: undefined,
+      messageId,
+      attachments: undefined
+    })
+
+    it('starts at zero and is left alone by the live lane', () => {
+      const store = createConversationTimelineStore()
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(0)
+
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+      store.getState().dispatchFor('c1', delta('t1', ' more'))
+
+      // An APPEND must not move it, and that is the half of the contract the key depends on most: a
+      // moving count on every delta would re-key every drawn row and remount the streaming bubble.
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(0)
+    })
+
+    it('is still zero after a page that CREATES the slice', () => {
+      const store = createConversationTimelineStore()
+      store.getState().prependHistoryFor('c1', [userRow('a'), userRow('b')])
+
+      // Those rows are the conversation's first, so their keys count from zero exactly as appended rows
+      // would; counting them would offset a list they are the whole of.
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(0)
+    })
+
+    it('rises by the rows a page actually inserted, never by the rows it asked to', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', { type: 'userText', text: 'why?', messageId: 'm1' })
+
+      store.getState().prependHistoryFor('c1', [userRow('why?', 'm1'), userRow('earlier', 'm0')])
+
+      // Two rows served, ONE inserted — the held echo dedups its replayed twin away. Counting the ask
+      // rather than the insertion would shift every drawn row's key by the number of duplicate echoes
+      // the page happened to carry.
+      expect(timelineFor(store, 'c1')?.items).toHaveLength(2)
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(1)
+
+      store.getState().prependHistoryFor('c1', [userRow('older still')])
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(2)
+    })
+
+    it('does not move for a page that inserts nothing', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+
+      store.getState().prependHistoryFor('c1', [])
+
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(0)
+    })
+
+    it('dies with the slice it counts', () => {
+      // The walk's state must not outlive the timeline it walks: a conversation whose slice was cleared
+      // restarts from the newest page on reopen, and its rows restart their keys with it.
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+      store.getState().prependHistoryFor('c1', [userRow('older')])
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(1)
+
+      store.getState().clearTimelineFor('c1')
+      expect(selectPrependedRowsFor('c1')(store.getState())).toBe(0)
+    })
+
+    it('reads as zero for a conversation nothing is held for', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+
+      // A bare `Map.get`, so an unknown id — hostile keys included — is an explicit no-match rather than
+      // a resolution onto a neighbour's count.
+      for (const key of ['c2', '', '__proto__', 'constructor']) {
+        expect(selectPrependedRowsFor(key)(store.getState())).toBe(0)
+      }
+    })
+  })
+
   describe('the opening history request state', () => {
     const historyFor = (store: Store, conversationId: string): HistoryRequestState | null =>
       selectHistoryRequestFor(conversationId)(store.getState())

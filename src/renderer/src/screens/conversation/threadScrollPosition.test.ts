@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { AT_BOTTOM_TOLERANCE_PX, isAtBottom } from './threadScrollPosition'
+import {
+  AT_BOTTOM_TOLERANCE_PX,
+  HISTORY_ASK_BAND_PX,
+  isAtBottom,
+  isNearTop
+} from './threadScrollPosition'
 
 // The arithmetic is isolated in threadScrollPosition.ts precisely so it can be tested here: vitest runs
 // in the `node` environment (vitest.config.ts:27) with no DOM, no jsdom and no layout engine, so the DOM
@@ -69,5 +74,49 @@ describe('isAtBottom', () => {
     expect(
       isAtBottom({ scrollOffset: 120.25, viewportHeight: 726, contentHeight: 1974.5 })
     ).toBe(false)
+  })
+})
+
+// #1260 — the walk's detector. Its own arithmetic is one comparison; what these cases pin is the BAND,
+// because the band is not a rounding allowance like `AT_BOTTOM_TOLERANCE_PX` above it. Chromium suppresses
+// scroll anchoring at a scroll offset of exactly zero (measured in thread-scroll-pin.spec.ts's #1046
+// section), so a walk that only fired at the wall would fire at the one position where the mechanism that
+// holds the reader's place is off. The band is what keeps the ask above zero.
+describe('isNearTop', () => {
+  it('reads a thread parked at the very top as near the top', () => {
+    expect(isNearTop({ scrollOffset: 0, viewportHeight: 726, contentHeight: 1974.5 })).toBe(true)
+  })
+
+  it('reads an offset inside the band as near the top', () => {
+    expect(isNearTop({ scrollOffset: 120.25, viewportHeight: 726, contentHeight: 1974.5 })).toBe(true)
+  })
+
+  it('reads an offset exactly at the band as near the top', () => {
+    // `<=`, not `<` — the boundary belongs to the band, matching `isAtBottom`'s own tolerance comparison.
+    expect(
+      isNearTop({ scrollOffset: HISTORY_ASK_BAND_PX, viewportHeight: 726, contentHeight: 1974.5 })
+    ).toBe(true)
+  })
+
+  it('reads one pixel past the band as not near the top', () => {
+    // The sanity anchor: without it a helper returning true unconditionally passes every case above.
+    expect(
+      isNearTop({ scrollOffset: HISTORY_ASK_BAND_PX + 1, viewportHeight: 726, contentHeight: 1974.5 })
+    ).toBe(false)
+  })
+
+  it('reads an elastic overshoot past the top as near the top', () => {
+    // A negative offset is the momentum bounce at the other end of the thread. No clamp and no
+    // `Math.max`: the single comparison already answers, which is `isAtBottom`'s argument verbatim.
+    expect(isNearTop({ scrollOffset: -38.5, viewportHeight: 726, contentHeight: 1974.5 })).toBe(true)
+  })
+
+  it('answers from the offset alone, whatever the other two metrics say', () => {
+    // The band is a distance from the TOP, so neither the viewport nor the content height is read. Stated
+    // as a case because the transposition `isAtBottom`'s named fields exist to prevent would be invisible
+    // here otherwise — a helper that accidentally compared the viewport height would pass every case
+    // above and fail this one.
+    expect(isNearTop({ scrollOffset: 10, viewportHeight: 1, contentHeight: 1 })).toBe(true)
+    expect(isNearTop({ scrollOffset: 900, viewportHeight: 100000, contentHeight: 100000 })).toBe(false)
   })
 })

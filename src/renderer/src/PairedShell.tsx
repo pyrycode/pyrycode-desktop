@@ -30,7 +30,7 @@ import {
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
 import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
-import { openingHistoryDeps, requestOpeningHistory } from './store/historyPageBridge'
+import { historyAskDeps, requestOpeningHistory } from './store/historyPageBridge'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
@@ -127,13 +127,13 @@ const activateDeps: ActivateConversationDeps = {
   // including a re-click of the row already open. A duplicate history page replaces nothing — it
   // PREPENDS its rows a second time — so that ask carries its own per-conversation gate, which lives
   // inside `requestOpeningHistory` where a spy can reach it rather than as a branch in this arrow. It
-  // reaches its store through `openingHistoryDeps` (the `stampLastRead` shape) rather than a fourth
+  // reaches its store through `historyAskDeps` (the `stampLastRead` shape) rather than a fourth
   // `getState()` arrow here, so the read-then-mark decision stays in one tested place.
   requestConversationConfig: (conversationId) => {
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
     requestSystemPrompt(window.pyry.sendCommand, conversationId)
-    requestOpeningHistory(openingHistoryDeps, conversationId)
+    requestOpeningHistory(historyAskDeps, conversationId)
   }
 }
 

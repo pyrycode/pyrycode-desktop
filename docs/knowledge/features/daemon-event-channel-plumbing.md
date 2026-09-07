@@ -91,6 +91,45 @@ plain-text-only rule every daemon-adjacent string on this channel carries — ne
 never an attribute or a URL, never a filename or a lookup path (a `Map`, not a bare object, if a
 consumer ever indexes by it).
 
+### `DaemonEventTimestamp` — the per-frame comparand (#1225)
+
+```ts
+interface DaemonEventTimestamp { daemonTs?: string }
+type WithDaemonTs<E> = E extends unknown ? E & DaemonEventTimestamp : never
+export type DaemonEvent = WithDaemonTs<BaseDaemonEvent>
+```
+
+`WithOrigin`'s mechanism, reused a second time for a different reason. `bindServerOrigin` stamps
+`serverId` once, at BIND time, for every event a producer emits — the per-frame `ts` this ticket carries
+cannot ride that value, because it differs on every event and is only known at the decode
+(`parseInboundMessage`, see [Inbound message decode — public
+contract](inbound-message-decode-contract.md)). So `daemonTs` is added at the ten `daemonConnection.ts`
+emit sites that construct a timeline-bearing arm (`assistant-delta`, `turn-end`, `turn-state`, `stall`,
+`api-retry`, `compacting`, `tool-use`, `tool-result`, `session-transition`, `unrecognized-message`), each
+copying `daemonTs: inbound.ts` by name onto its existing fresh literal — never a spread. `connected` has
+no envelope behind it and gains nothing; `messageReceived` stays unstamped too, since the daemon pushes
+no live `message` frame on the interactive lane for the operator's own message (its duplicate is the
+optimistic echo `removeUserEcho` dedups on `messageId` — see [Thread timeline §
+Types](thread-timeline.md#types)).
+
+The **same two reasons** `StampedDaemonEvent` took this shape apply again: the field stays optional, so
+the 33 test files building bare `DaemonEvent` literals as bridge inputs keep compiling, and it resolves
+on the bare union with no per-arm switch, so a renderer consumer needs no second enumeration of the ten
+stamped arms to drift from the emit's own set. The type does not say WHICH arms carry it — that set is
+enforced once, at the ten emit sites, and pinned by `daemonConnection.test.ts` asserting the untouched
+arms carry none. **A wrongly-stamped arm's failure direction is a key that matches no entry, never a
+suppression** — the same fail-open posture the field's own security section states.
+
+**A comparand, and nothing else.** `daemonTs` is remote-supplied text, already fail-closed to a `string`
+by `decodeEnvelope` before it ever reaches an emit, and its one reader — `liveJoinKeyFor`
+(`timelineBridge.ts`) — composes it with `event.type` into a join key and discards it. It is never parsed
+into a date, never sorted on to decide row order, never rendered, and never a filename, a lookup path, a
+cache key, a React key or a log field. It rides beside `createdAt` (#1013) without being confused with
+it: `createdAt` is a LOCAL clock stamp taken from `Date.now` at the bridge and is the only thing any
+display reads; `daemonTs` is the daemon's own value and reaches no render path at all. See [Conversation
+timeline store — internals § The history/live
+join](conversation-timeline-store-internals.md#the-historylive-join-1225) for the join this field feeds.
+
 ## 3. The preload subscription (`src/preload/index.ts`)
 
 ```ts

@@ -1348,7 +1348,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
               text: inbound.delta.text,
-              conversationId: inbound.delta.conversation_id
+              conversationId: inbound.delta.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'turn-end':
@@ -1368,7 +1369,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'turnEnd',
               turnId: inbound.turnEnd.turn_id,
               stopReason: inbound.turnEnd.stop_reason,
-              conversationId: inbound.turnEnd.conversation_id
+              conversationId: inbound.turnEnd.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'turn-state':
@@ -1384,7 +1386,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             emitDaemonEvent(sink, {
               type: 'turnState',
               state: inbound.turnState.state,
-              conversationId: inbound.turnState.conversation_id
+              conversationId: inbound.turnState.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'stall':
@@ -1402,7 +1405,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // inner switch has no assertNever) — the round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'stallDetected',
-              conversationId: inbound.stall.conversation_id
+              conversationId: inbound.stall.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'api-retry':
@@ -1425,7 +1429,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               active: inbound.apiRetry.active,
               current: inbound.apiRetry.current,
               total: inbound.apiRetry.total,
-              conversationId: inbound.apiRetry.conversation_id
+              conversationId: inbound.apiRetry.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'compacting':
@@ -1446,7 +1451,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             emitDaemonEvent(sink, {
               type: 'compacting',
               active: inbound.compacting.active,
-              conversationId: inbound.compacting.conversation_id
+              conversationId: inbound.compacting.conversation_id,
+              daemonTs: inbound.ts
             })
             return
           case 'model-announced':
@@ -1592,7 +1598,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               site: inbound.unrecognized.site,
               messageType: inbound.unrecognized.message_type,
               raw: inbound.unrecognized.raw,
-              truncated: inbound.unrecognized.truncated
+              truncated: inbound.unrecognized.truncated,
+              daemonTs: inbound.ts
             })
             return
           case 'session-transition':
@@ -1620,7 +1627,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               newSessionId: inbound.sessionTransition.new_session_id,
               reason: inbound.sessionTransition.reason,
               occurredAt: inbound.sessionTransition.occurred_at,
-              workspaceCwd: inbound.sessionTransition.workspace_cwd
+              workspaceCwd: inbound.sessionTransition.workspace_cwd,
+              daemonTs: inbound.ts
             })
             return
           case 'session-settings-updated': {
@@ -1668,7 +1676,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               toolUseId: inbound.toolUse.tool_use_id,
               name: inbound.toolUse.name,
               inputSummary: inbound.toolUse.input_summary,
-              input: inbound.toolUse.input
+              input: inbound.toolUse.input,
+              daemonTs: inbound.ts
             })
             return
           case 'tool-result':
@@ -1696,7 +1705,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               toolUseId: inbound.toolResult.tool_use_id,
               isError: inbound.toolResult.is_error,
               resultSummary: inbound.toolResult.result_summary,
-              resultDetail: inbound.toolResult.result_detail
+              resultDetail: inbound.toolResult.result_detail,
+              daemonTs: inbound.ts
             })
             return
           case 'queue-state':

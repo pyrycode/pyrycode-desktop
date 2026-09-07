@@ -1271,7 +1271,8 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
   it('narrows a full assistant_delta into { kind: assistant-delta } with all four fields', () => {
     expect(parseInboundMessage(encodeAssistantDelta(DELTA))).toEqual({
       kind: 'assistant-delta',
-      delta: DELTA
+      delta: DELTA,
+      ts: FIXED_TS
     })
   })
 
@@ -1279,7 +1280,8 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
     const first = { ...DELTA, seq: 0 }
     expect(parseInboundMessage(encodeAssistantDelta(first))).toEqual({
       kind: 'assistant-delta',
-      delta: first
+      delta: first,
+      ts: FIXED_TS
     })
   })
 
@@ -1287,7 +1289,8 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
     const empty = { ...DELTA, text: '' }
     expect(parseInboundMessage(encodeAssistantDelta(empty))).toEqual({
       kind: 'assistant-delta',
-      delta: empty
+      delta: empty,
+      ts: FIXED_TS
     })
   })
 
@@ -1295,14 +1298,16 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
     const withExtras = { ...DELTA, model: 'claude', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeAssistantDelta(withExtras))).toEqual({
       kind: 'assistant-delta',
-      delta: DELTA
+      delta: DELTA,
+      ts: FIXED_TS
     })
   })
 
   it('narrows a full turn_end into { kind: turn-end } with all three fields', () => {
     expect(parseInboundMessage(encodeTurnEnd(TURN_END))).toEqual({
       kind: 'turn-end',
-      turnEnd: TURN_END
+      turnEnd: TURN_END,
+      ts: FIXED_TS
     })
   })
 
@@ -1310,7 +1315,8 @@ describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, 
     const withExtras = { ...TURN_END, usage: 42, extra: 'ignore-me' }
     expect(parseInboundMessage(encodeTurnEnd(withExtras))).toEqual({
       kind: 'turn-end',
-      turnEnd: TURN_END
+      turnEnd: TURN_END,
+      ts: FIXED_TS
     })
   })
 
@@ -1894,14 +1900,15 @@ describe('parseInboundMessage — session_transition recognition (#254, additive
     for (const payload of cases) {
       expect(parseInboundMessage(encodeSessionTransition(payload))).toEqual({
         kind: 'session-transition',
-        sessionTransition: payload
+        sessionTransition: payload,
+        ts: FIXED_TS
       })
     }
   })
 
   it('decodes workspace_cwd:null as null (a valid clear/idle_evict value, never absent — AC2)', () => {
     const result = parseInboundMessage(encodeSessionTransition(SESSION_TRANSITION))
-    expect(result).toEqual({ kind: 'session-transition', sessionTransition: SESSION_TRANSITION })
+    expect(result).toEqual({ kind: 'session-transition', sessionTransition: SESSION_TRANSITION, ts: FIXED_TS })
     // Pin the null specifically — a clear/idle_evict frame stays distinguishable from workspace_change.
     if (result?.kind === 'session-transition') {
       expect(result.sessionTransition.workspace_cwd).toBeNull()
@@ -1915,7 +1922,8 @@ describe('parseInboundMessage — session_transition recognition (#254, additive
     const withExtras = { ...SESSION_TRANSITION, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeSessionTransition(withExtras))).toEqual({
       kind: 'session-transition',
-      sessionTransition: SESSION_TRANSITION
+      sessionTransition: SESSION_TRANSITION,
+      ts: FIXED_TS
     })
   })
 
@@ -1979,7 +1987,8 @@ describe('parseInboundMessage — session_transition fail-closed (#254)', () => 
       parseInboundMessage(encodeSessionTransition({ ...SESSION_TRANSITION, conversation_id: '' }))
     ).toEqual({
       kind: 'session-transition',
-      sessionTransition: { ...SESSION_TRANSITION, conversation_id: '' }
+      sessionTransition: { ...SESSION_TRANSITION, conversation_id: '' },
+      ts: FIXED_TS
     })
   })
 
@@ -2126,7 +2135,8 @@ describe('parseInboundMessage — turn_state recognition (#214, additive)', () =
       const payload = { conversation_id: 'conv-1', state }
       expect(parseInboundMessage(encodeTurnState(payload))).toEqual({
         kind: 'turn-state',
-        turnState: payload
+        turnState: payload,
+        ts: FIXED_TS
       })
     }
   })
@@ -2135,7 +2145,8 @@ describe('parseInboundMessage — turn_state recognition (#214, additive)', () =
     const withExtras = { ...TURN_STATE, phase: 'legacy', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeTurnState(withExtras))).toEqual({
       kind: 'turn-state',
-      turnState: TURN_STATE
+      turnState: TURN_STATE,
+      ts: FIXED_TS
     })
   })
 
@@ -2180,7 +2191,8 @@ describe('parseInboundMessage — stall recognition (#315, additive)', () => {
   it('narrows a full stall into { kind: stall } carrying only conversation_id', () => {
     expect(parseInboundMessage(encodeStall(STALL))).toEqual({
       kind: 'stall',
-      stall: STALL
+      stall: STALL,
+      ts: FIXED_TS
     })
   })
 
@@ -2188,7 +2200,8 @@ describe('parseInboundMessage — stall recognition (#315, additive)', () => {
     const withExtras = { ...STALL, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeStall(withExtras))).toEqual({
       kind: 'stall',
-      stall: STALL
+      stall: STALL,
+      ts: FIXED_TS
     })
   })
 
@@ -2224,7 +2237,8 @@ describe('parseInboundMessage — api_retry recognition (#492, additive)', () =>
   it('narrows a full rising-edge api_retry into { kind: api-retry } carrying all four fields', () => {
     expect(parseInboundMessage(encodeApiRetry(API_RETRY))).toEqual({
       kind: 'api-retry',
-      apiRetry: API_RETRY
+      apiRetry: API_RETRY,
+      ts: FIXED_TS
     })
   })
 
@@ -2232,21 +2246,23 @@ describe('parseInboundMessage — api_retry recognition (#492, additive)', () =>
     const unknownCount = { ...API_RETRY, current: 0, total: 0 }
     expect(parseInboundMessage(encodeApiRetry(unknownCount))).toEqual({
       kind: 'api-retry',
-      apiRetry: unknownCount
+      apiRetry: unknownCount,
+      ts: FIXED_TS
     })
   })
 
   it('decodes the falling edge — active false is a VALUE, not an absence (counter repeated)', () => {
     const falling = { ...API_RETRY, active: false }
     const decoded = parseInboundMessage(encodeApiRetry(falling))
-    expect(decoded).toEqual({ kind: 'api-retry', apiRetry: falling })
+    expect(decoded).toEqual({ kind: 'api-retry', apiRetry: falling, ts: FIXED_TS })
   })
 
   it('drops unknown server keys, keeping exactly the four known fields (forward-compat)', () => {
     const withExtras = { ...API_RETRY, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeApiRetry(withExtras))).toEqual({
       kind: 'api-retry',
-      apiRetry: API_RETRY
+      apiRetry: API_RETRY,
+      ts: FIXED_TS
     })
   })
 
@@ -2313,7 +2329,8 @@ describe('parseInboundMessage — compacting recognition (#495, additive)', () =
   it('narrows a rising-edge compacting into { kind: compacting } carrying both fields', () => {
     expect(parseInboundMessage(encodeCompacting(COMPACTING))).toEqual({
       kind: 'compacting',
-      compacting: COMPACTING
+      compacting: COMPACTING,
+      ts: FIXED_TS
     })
   })
 
@@ -2321,7 +2338,8 @@ describe('parseInboundMessage — compacting recognition (#495, additive)', () =
     const falling = { ...COMPACTING, active: false }
     expect(parseInboundMessage(encodeCompacting(falling))).toEqual({
       kind: 'compacting',
-      compacting: falling
+      compacting: falling,
+      ts: FIXED_TS
     })
   })
 
@@ -2329,7 +2347,8 @@ describe('parseInboundMessage — compacting recognition (#495, additive)', () =
     const withExtras = { ...COMPACTING, turn_id: 'turn-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeCompacting(withExtras))).toEqual({
       kind: 'compacting',
-      compacting: COMPACTING
+      compacting: COMPACTING,
+      ts: FIXED_TS
     })
   })
 
@@ -3100,13 +3119,13 @@ describe('parseInboundMessage — background_task_roster fail-closed (#566)', ()
 describe('parseInboundMessage — unrecognized_message recognition', () => {
   it('narrows a full unrecognized_message into { kind: unrecognized-message } carrying all five fields', () => {
     const result = parseInboundMessage(encodeUnrecognized(UNRECOGNIZED))
-    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED })
+    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED, ts: FIXED_TS })
   })
 
   it('accepts every one of the four drop sites', () => {
     for (const site of ['line_type', 'assistant_block', 'user_block', 'undecodable']) {
       const result = parseInboundMessage(encodeUnrecognized({ ...UNRECOGNIZED, site }))
-      expect(result).toMatchObject({ kind: 'unrecognized-message', unrecognized: { site } })
+      expect(result).toMatchObject({ kind: 'unrecognized-message', unrecognized: { site }, ts: FIXED_TS })
     }
   })
 
@@ -3134,7 +3153,7 @@ describe('parseInboundMessage — unrecognized_message recognition', () => {
     const result = parseInboundMessage(
       encodeUnrecognized({ ...UNRECOGNIZED, turn_id: 'must-not-cross' })
     )
-    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED })
+    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED, ts: FIXED_TS })
     expect(JSON.stringify(result)).not.toContain('must-not-cross')
   })
 })
@@ -3211,7 +3230,8 @@ describe('parseInboundMessage — tool_use recognition (#217, additive)', () => 
   it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
       kind: 'tool-use',
-      toolUse: TOOL_USE
+      toolUse: TOOL_USE,
+      ts: FIXED_TS
     })
   })
 
@@ -3219,7 +3239,8 @@ describe('parseInboundMessage — tool_use recognition (#217, additive)', () => 
     const withExtras = { ...TOOL_USE, raw_input: '{"path":"/etc/hosts"}', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeToolUse(withExtras))).toEqual({
       kind: 'tool-use',
-      toolUse: TOOL_USE
+      toolUse: TOOL_USE,
+      ts: FIXED_TS
     })
   })
 
@@ -3269,7 +3290,8 @@ describe('parseInboundMessage — tool_use input (#642)', () => {
   it('narrows a populated input map through with its entries unchanged', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE_WITH_INPUT))).toEqual({
       kind: 'tool-use',
-      toolUse: TOOL_USE_WITH_INPUT
+      toolUse: TOOL_USE_WITH_INPUT,
+      ts: FIXED_TS
     })
   })
 
@@ -3374,7 +3396,8 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
   it('narrows a full tool_result into { kind: tool-result } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolResult(TOOL_RESULT))).toEqual({
       kind: 'tool-result',
-      toolResult: TOOL_RESULT
+      toolResult: TOOL_RESULT,
+      ts: FIXED_TS
     })
   })
 
@@ -3382,7 +3405,8 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
     const success = { ...TOOL_RESULT, is_error: false }
     expect(parseInboundMessage(encodeToolResult(success))).toEqual({
       kind: 'tool-result',
-      toolResult: success
+      toolResult: success,
+      ts: FIXED_TS
     })
   })
 
@@ -3390,7 +3414,8 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
     const failed = { ...TOOL_RESULT, is_error: true, result_summary: 'permission denied' }
     expect(parseInboundMessage(encodeToolResult(failed))).toEqual({
       kind: 'tool-result',
-      toolResult: failed
+      toolResult: failed,
+      ts: FIXED_TS
     })
   })
 
@@ -3398,7 +3423,8 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
     const empty = { ...TOOL_RESULT, result_summary: '' }
     expect(parseInboundMessage(encodeToolResult(empty))).toEqual({
       kind: 'tool-result',
-      toolResult: empty
+      toolResult: empty,
+      ts: FIXED_TS
     })
   })
 
@@ -3406,7 +3432,8 @@ describe('parseInboundMessage — tool_result recognition (#229, additive)', () 
     const withExtras = { ...TOOL_RESULT, raw_output: '{"lines":12}', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeToolResult(withExtras))).toEqual({
       kind: 'tool-result',
-      toolResult: TOOL_RESULT
+      toolResult: TOOL_RESULT,
+      ts: FIXED_TS
     })
   })
 
@@ -8580,5 +8607,37 @@ describe('parseInboundMessage — set_system_prompt correlation + reject narrowi
     // Neither the daemon's code nor its static message crosses into the record.
     expect(lines[0]).not.toContain('protocol.malformed')
     expect(lines[0]).not.toContain('static daemon text')
+  })
+})
+
+// #1225 — the envelope's `ts` reaches the decode result on the timeline-bearing arms, so the window can
+// join a served history page to what the live stream already drew. The value is per-FRAME, which is why
+// it cannot ride #1068's bind-time `serverId` stamp and has to come from the decode.
+describe('parseInboundMessage — the envelope ts on the timeline-bearing arms (#1225)', () => {
+  /** Deliberately NOT FIXED_TS: every assertion below must fail if the decoder invents a timestamp,
+   *  reads the wrong envelope's, or defaults one from a clock. */
+  const OTHER_TS = '2026-08-19T04:05:06.789Z'
+
+  function decodeWithTs(type: string, payload: unknown, ts = OTHER_TS): unknown {
+    return parseInboundMessage(encodeEnvelope({ id: 77, type, ts, payload }))
+  }
+
+  it.each([
+    ['assistant_delta', DELTA],
+    ['turn_end', TURN_END],
+    ['turn_state', TURN_STATE],
+    ['stall', STALL],
+    ['api_retry', API_RETRY],
+    ['compacting', COMPACTING],
+    ['tool_use', TOOL_USE],
+    ['tool_result', TOOL_RESULT],
+    ['session_transition', SESSION_TRANSITION],
+    ['unrecognized_message', UNRECOGNIZED]
+  ])('carries the envelope ts VERBATIM on the %s arm', (type, payload) => {
+    expect(decodeWithTs(type, payload)).toMatchObject({ ts: OTHER_TS })
+  })
+
+  it('does NOT stamp an arm that is not timeline-bearing (session_settings)', () => {
+    expect(decodeWithTs('session_settings', RUN_CONFIG)).not.toHaveProperty('ts')
   })
 })

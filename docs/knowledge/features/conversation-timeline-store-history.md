@@ -325,3 +325,32 @@ collide with a negative numeric key. See [Edge cases and
 limitations](conversation-timeline-store.md#edge-cases-and-limitations) on the parent page for the current
 state of this fix, and [Thread timeline § Edge cases](thread-timeline.md#edge-cases-and-limitations) for
 why the original premise still holds for the reducer's own array.
+
+[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) is the last slice of the #1088 family:
+joining a served page to the live stream so an entry present on both lanes draws once. The general fix
+this ticket-by-ticket log promised at #1223 above — "the general fix still needs the entry-level join key
+\#1225 owns" — is this one, and the key is **(`type`, `ts`)**, never the entry's `id`, `event_id`,
+`turn_id` + `seq`, or text (the daemon's own reasoning for ruling each out is in the ticket and in
+[Internals § The history/live
+join](conversation-timeline-store-internals.md#the-historylive-join-1225), not restated here).
+
+Two production halves, threaded end to end: the envelope's `ts` did not reach the window at all before
+this ticket (`createdAt` on a `ThreadItem` is a *local* clock stamp #1013 introduced, unrelated in
+provenance) — [inbound message decode](inbound-message-decode-contract.md) and [daemon event channel §
+`DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)
+carry it down as `daemonTs`, an optional field on ten of the arms this store's bridge translates, added by
+the same intersection-over-the-union shape #1068's `StampedDaemonEvent` established rather than a member on
+each arm. The join itself is a new `liveKeys: ReadonlySet<string>` field on `ConversationSlice`
+(`conversationTimelineStore.ts`) recording the live half of the key, and a `withoutLiveEntries` pre-filter
+in `historyPageBridge.ts`'s `reduceHistoryPage` dropping the page's matching entries ahead of its existing
+fold — both covered in full in Internals, including the two verifier MUST FIXes the rework leg closed: the
+create branch of `dispatchFor` minting a key without checking whether its own fold changed anything, and
+the page-side filter scattering its drops across the page instead of confining them to a contiguous run at
+the newest end (a scatter can strand a `tool_result` with no `tool_use` row to resolve, or fold a turn's
+text out of order — both fail-**closed**, the one direction this whole ticket exists to refuse). Every
+degradation this design can produce instead draws a duplicate row, never drops one — a `Session reset`
+divider from a `sessionTransition` whose live key was withheld because its slice was resolved from the
+conversation on screen rather than the event's own id, an overlap shaped like a gap in the page, an
+evicted key past `MAX_LIVE_JOIN_KEYS` (512), or two page entries sharing one ambiguous key. Spec, including
+the full security review and both MUST FIX Revisions:
+`docs/specs/architecture/1225-history-live-join.md`.

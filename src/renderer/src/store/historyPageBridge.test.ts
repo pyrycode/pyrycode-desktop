@@ -6,8 +6,10 @@ import {
   reduceHistoryPage,
   requestOlderHistory,
   requestOpeningHistory,
-  subscribeHistoryPage
+  subscribeHistoryPage,
+  withoutLiveEntries
 } from './historyPageBridge'
+import { joinKeyFor } from './timelineBridge'
 import { reduceTimeline, initialTimelineState } from './threadTimeline'
 import type { ThreadEvent, ThreadItem } from './threadTimeline'
 
@@ -23,6 +25,16 @@ import type { ThreadEvent, ThreadItem } from './threadTimeline'
 /** One entry, newest-first position implied by its index in the array the tests build. */
 function entry(id: number, event: HistoryTimelineEntry['event']): HistoryTimelineEntry {
   return { id, ts: `2026-09-07T10:00:0${id}Z`, event }
+}
+
+/** The live half of the key for each entry, as `subscribeTimeline` would have minted it (#1225). */
+function liveKeysFor(...entries: HistoryTimelineEntry[]): ReadonlySet<string> {
+  const keys = new Set<string>()
+  for (const e of entries) {
+    const key = joinKeyFor(e.event.type, e.ts)
+    if (key !== undefined) keys.add(key)
+  }
+  return keys
 }
 
 describe('reduceHistoryPage', () => {
@@ -435,5 +447,230 @@ describe('requestOlderHistory', () => {
       expect(d.markRequested).not.toHaveBeenCalled()
       expect(d.getHeld).not.toHaveBeenCalled()
     }
+  })
+})
+
+// #1225 — the join. A page entry and a live row describing the SAME logical event must draw once, and
+// anything the key cannot resolve must draw twice rather than not at all: a duplicated row is a cosmetic
+// fault, a silently dropped one is a lost message. Every case below is a pure function of state.
+describe('withoutLiveEntries — joining a served page to what the live stream already drew (#1225)', () => {
+  const DELTA_1 = { type: 'assistantDelta', turnId: 't', seq: 1, text: 'a' } as const
+  const DELTA_2 = { type: 'assistantDelta', turnId: 't', seq: 2, text: 'b' } as const
+
+  it('drops an entry the live stream already drew, keyed on (type, ts)', () => {
+    // Newest-first, so the entry the live lane drew is the page's FIRST element — the seam the two lanes
+    // meet at. `older` is the page-only remainder.
+    const drawn = entry(2, DELTA_2)
+    const older = entry(1, DELTA_1)
+
+    expect(withoutLiveEntries([drawn, older], liveKeysFor(drawn))).toEqual([older])
+  })
+
+  it('drops the whole run of drawn entries at the page\'s newest end', () => {
+    const newest = entry(3, { type: 'turnEnd', turnId: 't', stopReason: 'end_turn' })
+    const drawn = entry(2, DELTA_2)
+    const older = entry(1, DELTA_1)
+
+    expect(withoutLiveEntries([newest, drawn, older], liveKeysFor(newest, drawn))).toEqual([older])
+  })
+
+  it('⭐ STOPS at the newest entry the live lane did NOT draw, keeping every older one', () => {
+    // The run rule, asserted directly. `older` IS held live, but a newer entry is not, so suppressing it
+    // would cut a hole in the middle of a page the fold reads as a sequence. Nothing is dropped; both
+    // lanes draw `older` — a duplicate, which is the fail-open side.
+    const undrawn = entry(3, { type: 'turnEnd', turnId: 't', stopReason: 'end_turn' })
+    const older = entry(1, DELTA_1)
+    const page = [undrawn, older]
+
+    expect(withoutLiveEntries(page, liveKeysFor(older))).toBe(page)
+  })
+
+  it('keeps an entry the live stream never drew', () => {
+    const fresh = entry(2, DELTA_2)
+    expect(withoutLiveEntries([fresh], liveKeysFor(entry(1, DELTA_1)))).toEqual([fresh])
+  })
+
+  it('does NOT join on the type alone — a same-type entry at a different ts stays', () => {
+    const drawn = entry(1, DELTA_1)
+    const other = { ...entry(9, DELTA_2), ts: '2026-09-07T11:11:11Z' }
+    expect(withoutLiveEntries([other], liveKeysFor(drawn))).toEqual([other])
+  })
+
+  it('does NOT join on the ts alone — a same-ts entry of a different type stays', () => {
+    const drawn = entry(1, DELTA_1)
+    const other: HistoryTimelineEntry = {
+      id: 1,
+      ts: drawn.ts,
+      event: { type: 'turnEnd', turnId: 't', stopReason: 'end_turn' }
+    }
+    expect(withoutLiveEntries([other], liveKeysFor(drawn))).toEqual([other])
+  })
+
+  it('draws BOTH when two page entries share one key — a comparison that cannot separate two entries drops neither (AC4)', () => {
+    // Two genuinely distinct entries the daemon happened to stamp identically. The key cannot say which
+    // of them the live row was, so neither is suppressed.
+    const a: HistoryTimelineEntry = { id: 1, ts: 'T', event: DELTA_1 }
+    const b: HistoryTimelineEntry = { id: 2, ts: 'T', event: DELTA_2 }
+    expect(withoutLiveEntries([a, b], liveKeysFor(a))).toEqual([a, b])
+  })
+
+  it('suppresses nothing when no live key is held', () => {
+    const page = [entry(2, DELTA_2), entry(1, DELTA_1)]
+    expect(withoutLiveEntries(page, new Set())).toBe(page)
+  })
+
+  it('hands back the SAME array reference when nothing was dropped', () => {
+    const page = [entry(2, DELTA_2)]
+    expect(withoutLiveEntries(page, liveKeysFor(entry(1, DELTA_1)))).toBe(page)
+  })
+
+  it('never suppresses the operator\'s own message row — the live lane mints no key of that type (AC5)', () => {
+    // WHERE THE GUARANTEE LIVES: at the EMIT, not here. The daemon writes the operator's message to its
+    // log and pushes no `message` frame on the interactive lane, so `daemonConnection.ts` never stamps
+    // `messageReceived` and no live key of that type can exist — asserted there, in
+    // `daemonConnection.test.ts`. `withoutLiveEntries` has no type-level exclusion and would drop the
+    // entry if handed a key spelled for it; what this asserts is the consequence of that emit-side
+    // guarantee against a REALISTIC key set — one holding keys only for the two arms the live lane does
+    // stamp. The entry survives, and since no live key can exist for it, it also STOPS the run, so the
+    // older delta beneath it survives too. This is the structural reason
+    // `e2e/real-daemon-history-on-open.spec.ts`'s closing toHaveCount(1) survives the join.
+    const drawn = entry(3, DELTA_2)
+    const own: HistoryTimelineEntry = {
+      id: 2,
+      ts: '2026-09-07T10:00:02Z',
+      event: {
+        type: 'messageReceived',
+        message: { message_id: 'm-1', role: 'user', text: 'history marker' }
+      }
+    }
+    const older = entry(1, DELTA_1)
+
+    expect(withoutLiveEntries([drawn, own, older], liveKeysFor(drawn, older))).toEqual([own, older])
+  })
+
+  it('refuses to key an over-length ts, so a hostile timestamp suppresses nothing', () => {
+    const hostile: HistoryTimelineEntry = { id: 1, ts: 'x'.repeat(4096), event: DELTA_1 }
+    expect(joinKeyFor(hostile.event.type, hostile.ts)).toBeUndefined()
+    expect(withoutLiveEntries([hostile], new Set(['assistantDelta ' + hostile.ts]))).toEqual([hostile])
+  })
+})
+
+describe('reduceHistoryPage — the join runs ahead of the fold (#1225)', () => {
+  it('folds only what survived the join, and in the live stream\'s own position (AC3)', () => {
+    // An entry appended between the ask and the answer: the live lane already drew `seq: 2`, so the
+    // page's copy must not draw a second bubble at the head.
+    const drawn = entry(2, { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' })
+    const older = entry(1, { type: 'assistantDelta', turnId: 't', seq: 1, text: 'hello ' })
+    const liveKeys = new Set([joinKeyFor(drawn.event.type, drawn.ts) as string])
+
+    expect(reduceHistoryPage([drawn, older], liveKeys)).toEqual([
+      { kind: 'assistantText', turnId: 't', text: 'hello ', createdAt: undefined }
+    ])
+  })
+
+  it('⭐ keeps a served tool_result whose tool_use the live lane drew, and draws the row filled', () => {
+    // The fold is NOT entry-independent: `fillResult` writes into a `toolCall` row an EARLIER entry
+    // created. Suppressing the `toolUse` while keeping the `toolResult` would fold the result against a
+    // page that has no row to fill, `reduceTimeline` would discard it, and the live row — pending, its
+    // result frame lost to the reconnect this scenario models — would never be refilled by anything.
+    // Under the run rule the undrawn newest entry stops the walk, so the page draws the pair complete.
+    const use: ThreadEvent = {
+      type: 'toolUse',
+      turnId: 't',
+      toolUseId: 'u1',
+      name: 'read',
+      inputSummary: 'f.ts',
+      input: undefined
+    }
+    const result: ThreadEvent = {
+      type: 'toolResult',
+      turnId: 't',
+      toolUseId: 'u1',
+      isError: false,
+      resultSummary: '3 lines',
+      resultDetail: undefined
+    }
+    const drawnUse = entry(1, use as HistoryTimelineEntry['event'])
+    const undrawnResult = entry(2, result as HistoryTimelineEntry['event'])
+
+    // The whole pair, exactly as the live stream would have drawn it — result filled, nothing lost.
+    expect(reduceHistoryPage([undrawnResult, drawnUse], liveKeysFor(drawnUse))).toEqual(
+      [use, result].reduce(reduceTimeline, initialTimelineState).items
+    )
+  })
+
+  it('⭐ keeps a turn\'s older deltas when its newer ones were not drawn, so the text reads in order', () => {
+    // The second loss the run rule closes. Dropping the older deltas would leave the newer ones folding
+    // into a bubble `prependHistoryFor` puts at the HEAD — above the live bubble holding the older text —
+    // and the reply would read back-to-front. Nothing is dropped, so the page's bubble reads in order.
+    const older = entry(1, { type: 'assistantDelta', turnId: 't', seq: 1, text: 'hello ' })
+    const newer = entry(2, { type: 'assistantDelta', turnId: 't', seq: 2, text: 'world' })
+
+    expect(reduceHistoryPage([newer, older], liveKeysFor(older))).toEqual([
+      { kind: 'assistantText', turnId: 't', text: 'hello world', createdAt: undefined }
+    ])
+  })
+
+  it('suppresses nothing when no keys are passed — the fail-open default every existing call site keeps', () => {
+    const page = [entry(1, { type: 'assistantDelta', turnId: 't', seq: 1, text: 'hello' })]
+    expect(reduceHistoryPage(page)).toEqual(reduceHistoryPage(page, new Set()))
+  })
+})
+
+describe('subscribeHistoryPage — the live keys reach the join (#1225)', () => {
+  it('asks the injected getter for the page\'s own conversation and folds against what it returns', () => {
+    const drawn = entry(1, { type: 'assistantDelta', turnId: 't', seq: 1, text: 'a' })
+    const applyPage = vi.fn()
+    const getLiveKeys = vi.fn(() => new Set([joinKeyFor(drawn.event.type, drawn.ts) as string]))
+    let listener: ((event: DaemonEvent) => void) | undefined
+    subscribeHistoryPage(
+      (l) => {
+        listener = l
+        return () => {}
+      },
+      applyPage,
+      vi.fn(),
+      getLiveKeys
+    )
+
+    listener?.({
+      type: 'historyPageReceived',
+      conversationId: 'c-1',
+      entries: [drawn],
+      cursor: 'cur',
+      atStart: false
+    })
+
+    expect(getLiveKeys).toHaveBeenCalledWith('c-1')
+    expect(applyPage).toHaveBeenCalledWith('c-1', [], 'cur', false)
+  })
+
+  it('suppresses nothing when no getter is injected', () => {
+    const drawn = entry(1, { type: 'assistantDelta', turnId: 't', seq: 1, text: 'a' })
+    const applyPage = vi.fn()
+    let listener: ((event: DaemonEvent) => void) | undefined
+    subscribeHistoryPage(
+      (l) => {
+        listener = l
+        return () => {}
+      },
+      applyPage,
+      vi.fn()
+    )
+
+    listener?.({
+      type: 'historyPageReceived',
+      conversationId: 'c-1',
+      entries: [drawn],
+      cursor: 'cur',
+      atStart: false
+    })
+
+    expect(applyPage).toHaveBeenCalledWith(
+      'c-1',
+      [{ kind: 'assistantText', turnId: 't', text: 'a', createdAt: undefined }],
+      'cur',
+      false
+    )
   })
 })

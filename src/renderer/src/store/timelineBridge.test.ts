@@ -5,7 +5,9 @@ import {
   translateTimelineEvent,
   timelineTargetFor,
   timelineWriteTarget,
-  subscribeTimeline
+  subscribeTimeline,
+  joinKeyFor,
+  liveJoinKeyFor
 } from './timelineBridge'
 import {
   createTimelineStore,
@@ -823,9 +825,14 @@ describe('subscribeTimeline', () => {
 
     bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
     expect(dispatch).toHaveBeenCalledTimes(1)
+    // #1225 widened the arity again; `toHaveBeenCalledWith` pins the WHOLE list, so the three
+    // argument-pinning assertions in this block name the join key too. The seventeen other call sites
+    // here pass a 1- or 2-arity spy and are untouched, for the reason #756's note above gives. The event
+    // carries no `daemonTs`, so the key is `undefined` — an absent stamp mints no key.
     expect(dispatch).toHaveBeenCalledWith(
       { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' },
-      'conv-1'
+      'conv-1',
+      undefined
     )
   })
 
@@ -847,7 +854,7 @@ describe('subscribeTimeline', () => {
 
     bridge.emit({ type: 'connected', ack })
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' }, null)
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' }, null, undefined)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup (one-listener guarantee)', () => {
@@ -869,7 +876,8 @@ describe('subscribeTimeline', () => {
     bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
     expect(dispatch).toHaveBeenCalledWith(
       { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', createdAt: 1_700_000_000_000 },
-      'conv-1'
+      'conv-1',
+      undefined
     )
   })
 
@@ -1646,5 +1654,111 @@ describe('subscribeTimeline', () => {
         'unrecognizedMessage'
       ])
     })
+  })
+})
+
+// #1225 — the live half of the history join. `subscribeTimeline` hands its dispatch the (`type`, `ts`)
+// key the event contributes, so the slice can remember what the live lane already drew and a served page
+// can drop its copy of it.
+describe('liveJoinKeyFor / joinKeyFor (#1225)', () => {
+  it('keys a stamped arm on its type and the daemon ts', () => {
+    expect(
+      liveJoinKeyFor({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'hi',
+        conversationId: 'c-1',
+        daemonTs: '2026-09-07T10:00:00Z'
+      })
+    ).toBe(joinKeyFor('assistantDelta', '2026-09-07T10:00:00Z'))
+  })
+
+  it('keys an UNSTAMPED arm not at all — no clock invents one', () => {
+    expect(
+      liveJoinKeyFor({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'c-1' })
+    ).toBeUndefined()
+    expect(liveJoinKeyFor({ type: 'connecting' })).toBeUndefined()
+  })
+
+  it('separates two events that differ in only one half of the key', () => {
+    expect(joinKeyFor('assistantDelta', 'T')).not.toBe(joinKeyFor('turnEnd', 'T'))
+    expect(joinKeyFor('assistantDelta', 'T1')).not.toBe(joinKeyFor('assistantDelta', 'T2'))
+  })
+
+  it('refuses an over-length or empty ts, so neither can key anything', () => {
+    expect(joinKeyFor('assistantDelta', 'x'.repeat(65))).toBeUndefined()
+    expect(joinKeyFor('assistantDelta', '')).toBeUndefined()
+    expect(joinKeyFor('assistantDelta', 'x'.repeat(64))).toBeDefined()
+  })
+})
+
+describe('subscribeTimeline — the join key reaches the dispatch (#1225)', () => {
+  /** The `subscribeTimeline` harness one describe block up, local to this one. */
+  function fakeBridge(): {
+    onDaemonEvent: (l: (e: DaemonEvent) => void) => () => void
+    emit: (e: DaemonEvent) => void
+  } {
+    let listener: ((e: DaemonEvent) => void) | undefined
+    return {
+      onDaemonEvent: (l) => {
+        listener = l
+        return () => {}
+      },
+      emit: (e) => listener?.(e)
+    }
+  }
+
+  const stampedDelta = (daemonTs: string): DaemonEvent => ({
+    type: 'assistantDelta',
+    turnId: 'A',
+    seq: 0,
+    text: 'hi',
+    conversationId: 'conv-1',
+    daemonTs
+  })
+
+  it('passes the key as a third argument for an attributed, stamped arm', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit(stampedDelta('2026-09-07T10:00:00Z'))
+    expect(dispatch).toHaveBeenCalledWith(
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', createdAt: undefined },
+      'conv-1',
+      joinKeyFor('assistantDelta', '2026-09-07T10:00:00Z')
+    )
+  })
+
+  it('passes undefined for an attributed arm the emit did not stamp', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({ type: 'stallDetected', conversationId: 'conv-1' })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'stallDetected' }, 'conv-1', undefined)
+  })
+
+  it('⭐ mints NO key for an arm the event did not attribute, however it is stamped', () => {
+    // `timelineTargetFor` returns null for `sessionTransition`, and the fan-out then files it into the
+    // conversation ON SCREEN (#785). That slice may not be the one the event belongs to, so a key
+    // recorded against it could suppress THAT conversation's own page entry — a dropped row, the one
+    // direction this join refuses. A key whose conversation was inferred rather than asserted is never
+    // minted; the cost is a duplicate `Session reset` divider, which is the fail-open side.
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({
+      type: 'sessionTransition',
+      conversationId: 'conv-1',
+      newSessionId: 's2',
+      reason: 'clear',
+      occurredAt: '2026-09-07T10:00:00Z',
+      workspaceCwd: null,
+      daemonTs: '2026-09-07T10:00:00Z'
+    })
+    expect(dispatch).toHaveBeenCalledWith(expect.anything(), null, undefined)
   })
 })

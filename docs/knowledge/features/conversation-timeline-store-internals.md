@@ -209,6 +209,166 @@ unassignable under `strictFunctionTypes`, so swapping them is a compile error, n
 of the six `HistoryRequestFailure` members reaches the same `recordHistoryFailure` call with no branch on
 `reason`.
 
+## The history/live join (#1225)
+
+The last slice of the #1088 family: an entry present both in a served page and in what the live stream
+already drew for that conversation must draw once, joined on **(`type`, `ts`)** — never the entry's `id`
+(the durable on-disk log id; the live lane has no such field), never `event_id` (the in-memory replay
+ring's, per-process and reset by a restart), never `turn_id` + `seq` (only turn-scoped payloads carry a
+`turn_id`, and `session_transition` — the one type the log is the sole retention for — carries none), and
+never text. The daemon mints one timestamp per logical event above the per-connection fan-out and hands
+that same value to the log entry and to every outbound envelope, which is what makes the pair a real key
+rather than a heuristic.
+
+**A dedup on entirely remote-supplied input is a suppression primitive**, so every piece below is built to
+fail OPEN — a duplicated row, never a dropped one — on anything it cannot resolve.
+
+### The key
+
+```ts
+// timelineBridge.ts
+export function joinKeyFor(type: string, ts: string): string | undefined   // `${type} ${ts}`, or
+  // undefined when ts.length is 0 or exceeds MAX_JOIN_TS_CHARS (64 — an RFC3339 timestamp with
+  // nanoseconds and a numeric offset is under 40)
+export function liveJoinKeyFor(event: DaemonEvent): string | undefined
+  // event.daemonTs === undefined ? undefined : joinKeyFor(event.type, event.daemonTs)
+```
+
+One composer for the whole join. The separator is unambiguous because the TYPE half is a client-owned
+literal from a closed union and provably contains no NUL, so no hostile `ts` can spell a different
+`(type, ts)` pair. An over-length `ts` yields no key rather than a truncated one — truncation would MERGE
+distinct timestamps onto one key, and a key matching more than it should is a suppressor, not a safer
+fallback.
+
+### The live half — where the keys are held
+
+`ConversationSlice` (§ The opening ask above) gains a third field:
+
+```ts
+export interface ConversationSlice {
+  timeline: TimelineState
+  history: HistoryRequestState | null
+  liveKeys: ReadonlySet<string>
+}
+export const MAX_LIVE_JOIN_KEYS = 512
+```
+
+Beside `history` and `prependedRows`, for the same reason both live there: the set must die with the
+timeline it describes, which membership on the slice makes structural rather than a fourth thing to clear
+in the existing eviction and both wipes. A `Set`, never a bare object — the keys are daemon-supplied
+strings, and a `Set` cannot be prototype-polluted the way a bare-object map could. `withJoinKey(held,
+joinKey)` adds one key, evicting the OLDEST first once the set exceeds `MAX_LIVE_JOIN_KEYS` (a `Set`
+preserves insertion order) — oldest-first because the newest page overlaps the newest live keys, so an
+eviction should cost coverage on the entries least likely to still be in flight. `undefined` or an
+already-held key is a no-op, returning the same reference.
+
+`dispatchFor` gains an **optional trailing** third parameter, `joinKey?: string` — `subscribeTimeline`'s
+own #756/#1013 arity-widening idiom a third time: a required parameter cascades over every call site, an
+optional one over none. **The key is recorded only when the fold actually changed the timeline** — both
+of `dispatchFor`'s branches (the slice-exists update AND the slice-doesn't-exist create) compare their
+`reduceTimeline` result against what they started from before deciding to record. This is the load-bearing
+safety property: a live key exists only where the live lane actually changed what the operator sees, so an
+orphan or duplicate `toolResult` that drew nothing can never suppress the page entry that would have drawn
+it. **A verifier MUST FIX caught the create branch stamping unconditionally on the first pass** — `toolResult`
+against a fresh `initialTimelineState` no-ops by reference (`reduceTimeline`'s orphan/duplicate guard,
+\#121), so an orphan result as a conversation's first live frame minted a key for a row nobody was shown,
+and the served page's own copy of that result would then have been suppressed by it. Both branches now ask
+the same question.
+
+**⭐ Only an event's own attribution may mint a key.** `useTimelineBridge`'s fan-out calls
+`subscribeTimeline`, which now computes the key via a module-private `joinKeyToRecord(event,
+conversationId)`:
+
+```ts
+function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): string | undefined {
+  return conversationId === null ? undefined : liveJoinKeyFor(event)
+}
+```
+
+`timelineTargetFor` (above) returns `null` for `sessionTransition` and `connected` — the two owned arms
+with no wire id of their own — and `timelineWriteTarget` then routes those into whichever conversation is
+ON SCREEN. A live `session_transition` belonging to conversation B would, absent this guard, mint a key on
+conversation A's slice purely because A happened to be open; a same-millisecond same-type collision could
+then suppress A's OWN page entry — a dropped row, the one direction this whole design refuses. So the key
+is passed only when the event's own `conversationId` resolved non-null; an inferred write target never
+mints one. The cost, stated rather than hidden: `sessionTransition` contributes no live key at all, so its
+page twin always draws — a duplicate `Session reset` divider, the fail-open side. (This guard was planned
+as a conditional inside `useTimelineBridge`'s callback and implemented one layer down, in
+`subscribeTimeline`, instead — see `docs/specs/architecture/1225-history-live-join.md`'s Revisions for why:
+`useTimelineBridge` mounts as a React effect and nothing in this repo can exercise one under
+`environment: 'node'`, so a guard living there could only be asserted by reading the source.
+`subscribeTimeline` already computes `timelineTargetFor(event)` for its second argument, so the same
+decision is available one call earlier, at a seam plain spies reach.)
+
+### The page half — the join
+
+```ts
+// historyPageBridge.ts
+export function withoutLiveEntries(
+  entries: readonly HistoryTimelineEntry[],
+  liveKeys: ReadonlySet<string>
+): readonly HistoryTimelineEntry[]
+
+export function reduceHistoryPage(
+  entries: readonly HistoryTimelineEntry[],
+  liveKeys?: ReadonlySet<string>
+): readonly ThreadItem[]
+```
+
+`reduceHistoryPage` runs `withoutLiveEntries` ahead of its existing reverse-and-fold; absent `liveKeys`
+(the optional-trailing idiom again) suppresses nothing, which is both the pre-#1225 behaviour and the
+fail-open default. Dropping happens on the PAGE side, never the live side — AC3: the live row stays
+exactly where the live stream put it, and the page's copy — which `prependHistoryFor` would otherwise put
+at the HEAD, above rows that came before it — never becomes a row at all.
+
+**The suppressed set is a contiguous RUN at the page's newest end, not a scatter — a verifier MUST FIX on
+the rework leg.** The first cut walked every entry independently: matching, unique-within-the-page, and
+resolvable meant drop, wherever it sat. That is wrong, because `reduceHistoryPage`'s fold is not
+entry-independent — `fillResult` writes a result into a `toolCall` row an earlier entry created, and a
+turn's deltas coalesce in the order they fold. Two content-losing failures followed, both reproduced as
+failing tests before the fix:
+
+- **An orphaned result.** The live lane drew a `tool_use` and lost the `tool_result` to a reconnect (this
+  client advertises no `last_event_id`, so a dropped live frame is gone and the served page is the only
+  repair path). Dropping the page's `toolUse` while keeping its `toolResult` left `fillResult` with no row
+  to write into — the result was discarded, and the live row stayed pending forever.
+- **A turn read backwards.** The live lane drew a turn's older deltas but not its newer ones. Dropping the
+  older while keeping the newer folded the surviving text into a bubble `prependHistoryFor` places ABOVE
+  the live bubble holding the earlier half — `reduceHistoryPage` returned `'world'` where the turn read
+  `'hello world'`.
+
+Both are fail-**CLOSED** — content lost or corrupted — in exactly the reconnect scenario the served page
+exists to repair, the one direction this whole ticket refuses. The fix: walk `entries` from its newest end
+(the wire serves newest-first) and drop while an entry's key is defined, held, and unique among the page's
+own entries; **stop at the first entry that fails any of the three**, and keep it and everything older.
+Because the survivors are a chronological PREFIX of a newest-first page, no survivor can depend on an
+entry the filter dropped — the run rule closes both failures structurally rather than by special-casing
+either. **What it costs, stated rather than hidden:** an overlap shaped like a GAP — live drew something in
+the middle of the page but not the newest entry — now suppresses nothing, and those entries draw twice,
+exactly what they did before this ticket. The strongest available statement about this function: its
+output is either the joined page or the un-joined one, never a page with new content lost or reordered.
+
+`subscribeHistoryPage` gains a fourth, **optional trailing** parameter, `getLiveKeys?: (conversationId:
+string) => ReadonlySet<string>` — the same idiom a third time, deliberately not a third callback
+alongside `applyPage`/`settleFailure`. `useHistoryPageBridge` supplies it from a new
+`selectLiveJoinKeysFor(conversationId)` selector, read AFRESH per page rather than captured at subscribe
+time — the existing bridge idiom, since one app-lifetime subscription must see every conversation's
+current keys, not whichever were live when it mounted.
+
+### Error handling — every row fails open
+
+| Condition | Result |
+|---|---|
+| Event carries no `daemonTs` (no envelope behind it, or an arm outside the ten) | No live key. |
+| `ts` over `MAX_JOIN_TS_CHARS` on either lane | No key composed. |
+| Live key set at its bound, oldest evicted | Nothing suppressed for the evicted key. |
+| Two page entries share one key | Neither suppressed (AC4). |
+| Live fold changed nothing, in either `dispatchFor` branch | No key recorded. |
+| Slice resolved from the screen, not the event's own attribution | No key recorded (the ⭐ guard). |
+| The overlap is a GAP rather than the page's newest run | The run stops there; the gap and everything older draw twice. |
+
+Every row draws a duplicate rather than dropping a message — a cosmetic fault, never a lost one.
+
 ## Data flow
 
 ```
@@ -260,9 +420,10 @@ served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→
    conversationId, entries: HistoryTimelineEntry[], cursor, atStart}
    → window.pyry.onDaemonEvent (SAME channel, a FIFTH independent listener — historyPageBridge.ts, not
                                  subscribeTimeline)
-   → subscribeHistoryPage → reduceHistoryPage(entries):
-        [...entries].reverse()                              // wire serves newest-first
-        .map(entry => translateTimelineEvent(entry.event))   // SAME function as the live lane, no clock
+   → subscribeHistoryPage → reduceHistoryPage(entries, getLiveKeys?.(conversationId)):
+        withoutLiveEntries(entries, liveKeys)                 // #1225 — drops the page's newest RUN of
+        [...drawable].reverse()                              //   entries already drawn live; a GAP-shaped
+        .map(entry => translateTimelineEvent(entry.event))   //   overlap or an absent liveKeys drops nothing
         .reduce(reduceTimeline, initialTimelineState)         // against a SCRATCH state, discarded
         → .items                                              // only the rows survive the fold
    → conversationTimelineStore.getState().prependHistoryFor(conversationId, items)        [draw, #1223]

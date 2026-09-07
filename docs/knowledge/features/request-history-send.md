@@ -17,8 +17,10 @@ and `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null. 
 is the first sender**, firing this ask once per conversation activation and claiming `historyRequestFailed`
 too — see [Conversation timeline store](conversation-timeline-store.md) for the opening-ask design and
 [Internals § The opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the
-mechanics. **Nothing joins a page to the live stream yet** (that's
-[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). The scroll-back walk that reads the
+mechanics. **A page now joins the live stream** ([#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225),
+shipped) — see [Internals § The history/live
+join](conversation-timeline-store-internals.md#the-historylive-join-1225) for the (`type`, `ts`) key and
+the page-side filter. The scroll-back walk that reads the
 `cursor`/`atStart` #1259 records is [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s,
 shipped: a second asker, `requestOlderHistory`, sends the same `RequestHistoryPayload` shape from a second
 renderer call site once the reader scrolls back near the top of a thread that hasn't reached `at_start` —

@@ -317,8 +317,10 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   (`historyPageBridge.ts`) and fifth store write path (`prependHistoryFor`) covered in full above.
   Blocked-by [#1222](request-history-send.md) (the ask + transport decode) and
   [#1227](request-history-send.md) (the per-entry payload decode); [#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)
-  (the walk) and [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) (joining a page to the
-  live stream) are still open. Spec:
+  split into [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) (the opening ask) and
+  [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) (the walk), both shipped — see below —
+  and [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) (joining a page to the live
+  stream) has since shipped too. Spec:
   `docs/specs/architecture/1223-draw-a-history-page-through-the-timeline-reducer.md`.
 - [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) — the opening ask, covered above; split
   from #1224 alongside [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) (the walk). Spec:
@@ -329,3 +331,16 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   full in [History](conversation-timeline-store-history.md). See [Conversation shell § Thread scroll
   pin](conversation-shell-scroll-pin.md) for the trigger band and `thread-scroll-pin.spec.ts` for the
   anchoring proof. Spec: `docs/specs/architecture/1260-history-scroll-back-walk.md`.
+- [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) — the last slice of the #1088 family:
+  joins a served page to the live stream on (`type`, `ts`) so an entry present on both draws once. Adds
+  `daemonTs` (an optional field on ten `DaemonEvent` arms, carried down from the envelope's own `ts` —
+  see [Daemon event channel — emit and subscribe §
+  `DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)),
+  a `liveKeys` set on `ConversationSlice`, and a page-side `withoutLiveEntries` pre-filter in
+  `historyPageBridge.ts` that suppresses only a contiguous run at the page's newest end — never a scatter,
+  which the rework leg found could strand a `tool_result` or fold a turn's text out of order. Every
+  unresolvable case fails open (a duplicate row), never closed (a dropped one). Covered in full in
+  [Internals § The history/live
+  join](conversation-timeline-store-internals.md#the-historylive-join-1225) and in
+  [History](conversation-timeline-store-history.md). Spec, including the full security review and both
+  MUST FIX Revisions: `docs/specs/architecture/1225-history-live-join.md`.

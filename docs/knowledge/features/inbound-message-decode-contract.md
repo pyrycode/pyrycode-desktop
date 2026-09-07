@@ -298,6 +298,34 @@ absence. Full account — the six-code table, the `payload:null`-vs-no-`payload`
 daemon's reject-answer counterpart, and a docblock-placement lesson from the first attempt — in
 [Daemon error outcome](daemon-error-outcome.md).
 
+**[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) widens ten existing arms with a
+mixed-in `FrameTimestamp`, not a new kind** — the #642/#773 shape (a widen, not an extension) applied to
+a set of arms rather than one. `parseInboundMessage` already has the envelope's `ts` in scope by the time
+it builds any of these arms; nothing upstream carried it onward before this ticket.
+
+```ts
+interface FrameTimestamp { ts: string }
+```
+
+applied inline as `& FrameTimestamp` to exactly the ten arms the timeline draws:
+`assistant-delta`/`turn-end`/`turn-state`/`stall`/`api-retry`/`compacting`/`tool-use`/`tool-result`/
+`session-transition`/`unrecognized-message`. **Ten, not all twenty-plus** — `history-page` does NOT gain
+it, because a page's `ts` is per-**entry** and already carried on `HistoryTimelineEntry` (see [Request
+history send](request-history-send.md)); stamping the envelope that carried the page would put the
+answer's own clock where the entries' belong. `session-settings`, `conversations`, and every other kind
+stay untouched — there is no live/history join for any of them to feed.
+
+**Mixed in per arm, not carried as a bare top-level field on `InboundDaemonMessage`.** Each arm opts in at
+its own union member, so the declaration's order and its ticket-by-ticket narrative above stay intact,
+and a reader can see which ten carry it without cross-referencing a second list. The value is copied
+verbatim from the decoded envelope's own `ts` — required there, since every envelope carries one — and
+crosses to `daemonConnection.ts`'s ten emit sites as `daemonTs: inbound.ts`, one field, copied by name.
+See [Daemon event channel — emit and subscribe §
+`DaemonEventTimestamp`](daemon-event-channel-plumbing.md#daemoneventtimestamp--the-per-frame-comparand-1225)
+for the IPC-side shape this feeds and why it is an intersection distributed over `DaemonEvent` rather than
+a member added to each arm, and [Conversation timeline store — internals § The history/live
+join](conversation-timeline-store-internals.md#the-historylive-join-1225) for what reads it.
+
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 
 A **single throw type** (`WireDecodeError`) covers every failure, so the consumer's one `catch` handles oversized, malformed, unparseable, and mistyped alike — exactly the shape `parseHelloAck` uses for the `hello_ack` boundary.

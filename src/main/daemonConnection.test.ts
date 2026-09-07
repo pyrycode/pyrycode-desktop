@@ -1440,7 +1440,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([
-      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice', conversationId: 'conv-1' }
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice', conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
     // The frame's conversation_id rides the arm as the routing key (#751): it must reach the renderer
     // verbatim, never dropped and never defaulted to a placeholder.
@@ -1457,7 +1457,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: '', conversationId: 'conv-1' }
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: '', conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
@@ -1469,7 +1469,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([
-      { type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn', conversationId: 'conv-1' }
+      { type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn', conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
     // The frame's conversation_id rides the arm as the routing key (#752): it must reach the renderer
     // verbatim, never dropped and never defaulted to a placeholder.
@@ -1569,7 +1569,7 @@ describe('createDaemonConnection — turn_state stream (#214)', () => {
       })
 
       const events = emitted(sink).slice(before)
-      expect(events).toEqual([{ type: 'turnState', state, conversationId: 'conv-1' }])
+      expect(events).toEqual([{ type: 'turnState', state, conversationId: 'conv-1', daemonTs: FIXED_TS }])
       // conversation_id now CROSSES the choke point (#724) — it is the routing key the sidebar's
       // per-conversation phase needs (#674). Copied by name at the emit, so this is the verbatim value.
       expect(JSON.stringify(events)).toContain('conv-1')
@@ -1610,7 +1610,7 @@ describe('createDaemonConnection — stall stream (#315)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'stallDetected', conversationId: 'conv-1' }])
+    expect(events).toEqual([{ type: 'stallDetected', conversationId: 'conv-1', daemonTs: FIXED_TS }])
     // #732: the frame's conversation_id reaches the emitted event VERBATIM — the routing key #674
     // attributes a stall by. The toEqual above also pins the arm to exactly these two fields, so a
     // spread of the decoded payload would fail it.
@@ -1657,7 +1657,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([
-      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' }
+      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
     // The frame's conversation_id reaches the emitted event VERBATIM (#737): per-conversation retry is
     // daemon state, so the sidebar can say a chat is stuck retrying while the operator looks at another
@@ -1680,7 +1680,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: true, current: 0, total: 0, conversationId: 'conv-1' }
+      { type: 'apiRetry', active: true, current: 0, total: 0, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
@@ -1699,7 +1699,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: false, current: 4, total: 10, conversationId: 'conv-1' }
+      { type: 'apiRetry', active: false, current: 4, total: 10, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
@@ -1722,13 +1722,13 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     // Three frames, three events, in wire order — no coalescing, no suppression of the repeat. This
     // pins the "no dedup" wire contract against a future optimiser adding edge-tracking state here.
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' },
-      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1' },
-      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1' }
+      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1', daemonTs: FIXED_TS },
+      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1', daemonTs: FIXED_TS },
+      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
-  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the six modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1748,6 +1748,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
       'active',
       'conversationId',
       'current',
+      'daemonTs',
       'total',
       'type'
     ])
@@ -1793,7 +1794,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'compacting', active: true, conversationId: 'conv-1' }])
+    expect(events).toEqual([{ type: 'compacting', active: true, conversationId: 'conv-1', daemonTs: FIXED_TS }])
     // The frame's conversation_id reaches the emitted event VERBATIM (#742) — the routing key #674
     // keys by. The inverse of this assertion held while the arm dropped it; it is inverted, not
     // deleted, so the leak guard keeps watching the same string.
@@ -1810,7 +1811,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'compacting', active: false, conversationId: 'conv-1' }
+      { type: 'compacting', active: false, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
@@ -1828,12 +1829,12 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     // Two frames, two events, in wire order — no coalescing, no suppression of the repeat. This pins
     // the "no dedup" contract against a future optimiser adding edge-tracking state to this leg.
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'compacting', active: true, conversationId: 'conv-1' },
-      { type: 'compacting', active: true, conversationId: 'conv-1' }
+      { type: 'compacting', active: true, conversationId: 'conv-1', daemonTs: FIXED_TS },
+      { type: 'compacting', active: true, conversationId: 'conv-1', daemonTs: FIXED_TS }
     ])
   })
 
-  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1847,7 +1848,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(Object.keys(events[0]).sort()).toEqual(['active', 'conversationId', 'type'])
+    expect(Object.keys(events[0]).sort()).toEqual(['active', 'conversationId', 'daemonTs', 'type'])
     expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 
@@ -2573,7 +2574,8 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
         site: 'line_type',
         messageType: 'some_future_event',
         raw: '{"type":"some_future_event","detail":"something new"}',
-        truncated: false
+        truncated: false,
+        daemonTs: FIXED_TS
       }
     ])
     // conversation_id crosses as the routing key (#784), read BARE off the already-validated payload.
@@ -2601,7 +2603,8 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
         site: 'undecodable',
         messageType: '',
         raw: '{"type":"assist',
-        truncated: false
+        truncated: false,
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -2620,7 +2623,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     expect(emitted(sink).slice(before)).toHaveLength(2)
   })
 
-  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the six modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -2632,6 +2635,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     const events = emitted(sink).slice(before)
     expect(Object.keys(events[0]).sort()).toEqual([
       'conversationId',
+      'daemonTs',
       'messageType',
       'raw',
       'site',
@@ -2688,7 +2692,8 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
-        workspaceCwd: null
+        workspaceCwd: null,
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -2716,7 +2721,8 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
         newSessionId: 'sess-2',
         reason: 'clear',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
-        workspaceCwd: null
+        workspaceCwd: null,
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -2769,11 +2775,13 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
         newSessionId: 'sess-new',
         reason: 'workspace_change',
         occurredAt: '2026-07-10T00:00:00.000000000Z',
-        workspaceCwd: '/home/user/secret-workspace'
+        workspaceCwd: '/home/user/secret-workspace',
+        daemonTs: FIXED_TS
       }
     ])
     expect(Object.keys(events[0]).sort()).toEqual([
       'conversationId',
+      'daemonTs',
       'newSessionId',
       'occurredAt',
       'reason',
@@ -3035,7 +3043,8 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',
-        inputSummary: 'reads /etc/hosts'
+        inputSummary: 'reads /etc/hosts',
+        daemonTs: FIXED_TS
       }
     ])
     // The frame's conversation_id rides the arm as the routing key (#763): it must reach the renderer
@@ -3067,7 +3076,8 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
         toolUseId: 'tu-1',
         name: 'Read',
         inputSummary: 'reads /etc/hosts',
-        input: { file_path: '/etc/hosts', limit: '20' }
+        input: { file_path: '/etc/hosts', limit: '20' },
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -3095,7 +3105,8 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',
-        inputSummary: 'reads /etc/hosts'
+        inputSummary: 'reads /etc/hosts',
+        daemonTs: FIXED_TS
       }
     ])
     // The deterministic reading of "absent": the emit assigns unconditionally, so the property
@@ -3157,7 +3168,8 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         isError: false,
-        resultSummary: 'read 12 lines'
+        resultSummary: 'read 12 lines',
+        daemonTs: FIXED_TS
       }
     ])
     // The frame's conversation_id rides the arm as the routing key (#766): it must reach the renderer
@@ -3187,7 +3199,8 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         isError: true,
-        resultSummary: 'permission denied'
+        resultSummary: 'permission denied',
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -3216,7 +3229,8 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
         toolUseId: 'tu-1',
         isError: false,
         resultSummary: 'read 12 lines',
-        resultDetail: '110 of 1676 lines'
+        resultDetail: '110 of 1676 lines',
+        daemonTs: FIXED_TS
       }
     ])
   })
@@ -8950,5 +8964,88 @@ describe('createDaemonConnection — setSystemPrompt + its correlated ack and re
     ctx.drivers[0].emit({ type: 'message', plaintext: ackPlaintext(3) })
 
     expect(confirmations(ctx.sink)).toEqual([])
+  })
+})
+
+// #1225 — the envelope's `ts` reaches the window on the ten timeline-bearing arms, as `daemonTs`. It is
+// the live half of the (`type`, `ts`) key the window joins a served history page on; the page half has
+// ridden `HistoryTimelineEntry.ts` since #1227.
+describe('createDaemonConnection — the envelope ts on the timeline-bearing emits (#1225)', () => {
+  /** Deliberately NOT FIXED_TS, which every plaintext helper in this file uses: an emit that read the
+   *  wrong envelope, invented a value, or defaulted one from a clock passes against that constant and
+   *  fails against this one. */
+  const FRAME_TS = '2026-08-19T04:05:06.789Z'
+
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** Push one frame of `type` carrying `payload`, stamped FRAME_TS, and return what it emitted. */
+  async function emitFor(type: string, payload: unknown): Promise<DaemonEvent[]> {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: encodeEnvelope({ id: 3, type, ts: FRAME_TS, payload })
+    })
+    return emitted(sink).slice(before)
+  }
+
+  const CONV = 'conv-1'
+
+  it.each([
+    ['assistant_delta', { conversation_id: CONV, turn_id: 't1', seq: 1, text: 'x' }],
+    ['turn_end', { conversation_id: CONV, turn_id: 't1', stop_reason: 'end_turn' }],
+    ['turn_state', { conversation_id: CONV, state: 'thinking' }],
+    ['stall', { conversation_id: CONV }],
+    ['api_retry', { conversation_id: CONV, active: true, current: 1, total: 3 }],
+    ['compacting', { conversation_id: CONV, active: true }],
+    ['tool_use', {
+      conversation_id: CONV, turn_id: 't1', tool_use_id: 'tu-1', name: 'Read', input_summary: 's'
+    }],
+    ['tool_result', {
+      conversation_id: CONV, turn_id: 't1', tool_use_id: 'tu-1', is_error: false, result_summary: 'ok'
+    }],
+    ['session_transition', {
+      conversation_id: CONV,
+      previous_session_id: 'sess-1',
+      new_session_id: 'sess-2',
+      reason: 'clear',
+      occurred_at: '2026-08-19T04:00:00Z',
+      workspace_cwd: null
+    }],
+    ['unrecognized_message', {
+      conversation_id: CONV, site: 'line_type', message_type: 'future', raw: '{}', truncated: false
+    }]
+  ])('carries the frame ts to the window as daemonTs on the %s arm', async (type, payload) => {
+    const events = await emitFor(type, payload)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ daemonTs: FRAME_TS })
+  })
+
+  it('leaves `connected` unstamped — a handshake stands behind no timeline envelope', async () => {
+    const { sink } = await connected()
+    const handshake = emitted(sink).filter((event) => event.type === 'connected')
+    expect(handshake).toHaveLength(1)
+    expect(handshake[0]).not.toHaveProperty('daemonTs')
+  })
+
+  it('leaves `messageReceived` unstamped — the operator\'s own row has no live twin to join', async () => {
+    // A live `message` frame maps onto this arm, but the daemon pushes none on the interactive lane:
+    // the operator's message is written to the log only, so its page entry has nothing to be joined to
+    // and its duplicate is the optimistic echo `removeUserEcho` dedups on `message_id`. Stamping it
+    // would mint a key that suppresses a row the live stream never drew.
+    const events = await emitFor('message', {
+      conversation_id: CONV,
+      message_id: 'm-1',
+      role: 'user',
+      text: 'hello'
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]).not.toHaveProperty('daemonTs')
   })
 })

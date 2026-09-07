@@ -116,11 +116,13 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   container's own scroll events and re-asserted in a dependency-free layout effect, decides — never a
   measurement taken after the new content is already in the layout. `Timeline` gained one optional
   `scrollPin` prop bundling the ref and the scroll handler so the ~30 pre-existing render sites needed no
-  edits. Every chrome sibling below the thread that can still mount or unmount there (`__queued`/
-  `__interrupt`) does so with no risk of un-pinning a thread the operator never scrolled — a chrome mount
-  only shrinks the thread's viewport, which cannot fire a scroll event. (Through #967 that list also
-  included `__stall`/`__api-retry`/`__compacting`; all three retired along with the views that mounted
-  them — see below.) **`.conversation__thinking` left this list in
+  edits. Every chrome sibling below the thread that can still mount or unmount there (`__interrupt`) does
+  so with no risk of un-pinning a thread the operator never scrolled — a chrome mount only shrinks the
+  thread's viewport, which cannot fire a scroll event. (Through #967 that list also included
+  `__stall`/`__api-retry`/`__compacting`; all three retired along with the views that mounted them — see
+  below. `__queued` left the list too, but not by retiring: [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214)
+  folded its rows into the thread itself, so what used to be a mounting sibling is now the thread's own
+  content growth — see below.) **`.conversation__thinking` left this list in
   [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796):** its markup now lives inside the
   composer status row, a fixed-height element that is mounted at all times, so `turn_state{thinking}` no
   longer shrinks anything — it only swaps a label inside an already-present row.
@@ -136,11 +138,10 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   composer status row too** (see [Conversation shell — turn status § Retired by
   #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)),
   which took the criterion's subject away a second time — the same swap #796 made, for the same reason,
-  now needed again. The criterion moved onto the [queued
-  backlog](conversation-shell-conversation-and-modals.md#queued-backlog--drop-affordance-294-drop-since-296)
-  (`.conversation__queued`), a region of dimmed rows large enough to shrink the viewport by tens of pixels
-  (116px measured with a two-item backlog at the time) — deliberately not #963's 8px row-growth, which
-  needs a terminal connection error the spec has no reason to stage. **The repoint exposed a real gap**:
+  now needed again. The criterion moved onto the queued backlog (`.conversation__queued`, since deleted —
+  see below), a region of dimmed rows large enough to shrink the viewport by tens of pixels (116px measured
+  with a two-item backlog at the time) — deliberately not #963's 8px row-growth, which needs a terminal
+  connection error the spec has no reason to stage. **The repoint exposed a real gap**:
   `useThreadScrollPin`'s re-assert is a dep-free layout effect that runs on **screen** renders, and
   `QueuedBacklogControl` (the region's container at the time) held its own queue-store subscription, so a
   `queue_state` push re-rendered that control alone and the pin never ran — the thread rested short of the
@@ -166,6 +167,28 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   not the geometry, still governs whether anything scrolls. The measured gap was **132px** at fix time (not
   #967's 116px — the quantity is the mounted region's height, and #969 had redrawn the message bubble in
   between; the order of magnitude, and the criterion's point, is unchanged).
+
+  **[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) removed the region this criterion's
+  subject lived in, and left the chrome-shrink category uncovered rather than re-pointing onto a fourth
+  subject.** The queued backlog is no longer a region between the thread and the composer — its rows fold
+  directly into `.conversation__thread` (see [Conversation shell — conversation surfaces and modals §
+  Queued rows folded into the
+  thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)),
+  so a `queue_state` push now **grows the thread's own content** below the reader instead of shrinking its
+  viewport. That is #1049's case (below), not this strip's, and of what remains in the strip the status row
+  is fixed-height/always-mounted (moot) and #963's error slot needs a terminal connection error this spec
+  has no reason to stage — so `thread-scroll-pin.spec.ts`'s fourth criterion has no remaining subject to
+  move to. Rather than point it at nothing and pass vacuously, it now asserts what the same push actually
+  does: `scrollHeight` grows past a measured floor (`QUEUED_GROWTH_FLOOR_PX = 50`, well under two rows and
+  well over the zero a fold that silently drew nothing would produce) while `clientHeight` is unchanged,
+  plus `.conversation__queued`'s continued absence — a self-evidencing, non-vacuous gate rather than an
+  experiment, per the ticket's `## Revisions`. The chrome-shrink category itself is left uncovered,
+  recorded on the record rather than quietly dropped; a ticket that wants it back should stage #963's
+  8px error slot instead of reusing these lines.
+
+  The container's own backlog read is unaffected — see [Queue
+  store](queue-store.md#configuration-and-usage) and the section linked above for what changed about what
+  the read now feeds.
 
   This is also why the two leaves the docblock now names as deliberately un-hoisted —
   `ComposerErrorSlotControl`'s own `sessionStore` read and `ComposerSlot`'s own question-batch read — stay
@@ -257,7 +280,7 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
-- [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `ConversationScreen` reads via `selectBacklogFor(openConversationId ?? '')` (#293, consumed in #294, rekeyed off the active conversation id by #448, hoisted out of the retired `QueuedBacklogControl` and into the screen itself by [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) so the region's mount and growth re-pin the thread), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
+- [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `ConversationScreen` reads via `selectBacklogFor(openConversationId ?? '')` (#293, consumed in #294, rekeyed off the active conversation id by #448, hoisted out of the retired `QueuedBacklogControl` and into the screen itself by [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) so the read's re-render re-pins the thread), folded from its own `.conversation__queued` region into `Timeline`'s rows by [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) (the read itself unchanged; see [Conversation shell — conversation surfaces and modals § Queued rows folded into the thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582 and `latestUpdate` in #583, see [Background-task panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) above)

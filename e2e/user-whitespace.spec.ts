@@ -359,8 +359,9 @@ test('a user message draws the line breaks, blank lines, space runs and indents 
   expect(stack.childWhiteSpaces).toEqual(stack.childWhiteSpaces.map(() => 'normal'))
 
   // --- AC4, the queued row: the same treatment, reached by the same one declaration (.bubble--user is
-  // worn by the queued row unchanged — #294 draws it as the user's own pending send, dimmed by the
-  // region). Pushed AFTER launch resolved, so it is past the `connected` backlog reset. ---
+  // worn by the queued row unchanged — #294 draws it as the user's own pending send, dimmed by
+  // .message-row--queued since #1214 folded the backlog into the thread). Pushed AFTER launch resolved, so
+  // it is past the `connected` backlog reset. ---
   daemon.pushFrame(queueStateFrame(QUEUED_ITEMS))
   await expect(page.locator('.bubble[data-thread-role="queued"]')).toHaveCount(QUEUED_ITEMS.length, {
     timeout: ROUNDTRIP_TIMEOUT_MS

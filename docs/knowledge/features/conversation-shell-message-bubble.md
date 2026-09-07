@@ -97,7 +97,10 @@ reachable input.
 **The render slot: `createdAt === undefined ? null : formatMessageTime(createdAt)`, never `'createdAt' in
 item`.** `BubbleMeta` gained one optional prop, `createdAt?: number`, threaded from the `assistantText` and
 `userText` arms of `TimelineRow` only — no other row kind gained a call (the tool rows aren't bubbles, the
-session-reset separator draws its own timestamp, `QueuedBacklog` still renders no `BubbleMeta` at all).
+session-reset separator draws its own timestamp, and the `userText` arm still renders no `BubbleMeta` at
+all while a row is queued — see [Conversation shell — conversation surfaces and modals § Queued rows
+folded into the
+thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)).
 React renders a `null` child as no children, so the absent case is byte-identical to what #969 always
 emitted (`<span class="bubble__meta-time"></span>`) — #1013's contract fixes the read as `=== undefined`
 because the reducer assigns the field unconditionally on every arm that carries it, so the key is always
@@ -139,10 +142,11 @@ reply is exactly as copyable as a finished one.
 
 **No prop threading.** The copy source is the row's own `item.text`, so the click handler is a closure
 over that one value calling `copyMessageText` directly — no conversation id, no store read, no
-`onDrop`-style injected effect. That is deliberately *not* `QueuedBacklog`'s shape: that injection
+`onDropQueued`-style injected effect (`Timeline`'s optional drop prop, formerly the deleted
+`QueuedBacklog`'s required `onDrop`). That is deliberately not the drop control's shape: that injection
 exists because a queued row cannot see the conversation id its send needs, which is not this control's
-situation. `Timeline`'s prop surface is unchanged, so the ~30 existing `<Timeline` render sites needed
-no edits.
+situation. `Timeline`'s prop surface for this control is unchanged, so the ~30 existing `<Timeline`
+render sites needed no edits for it.
 
 **The accessible name is a client-owned constant, `COPY_MESSAGE_LABEL = 'Copy message'`, never
 interpolated with the message text.** `aria-label={`Copy: ${text}`}` would put relay-peer-authored text
@@ -218,12 +222,13 @@ rather than a list of today's two filename classes, so a child added to the bubb
 reset without anyone remembering to add it.
 
 `.bubble--user` reaches every site that draws the user's own words in one declaration — the delivered
-`userText` row, `QueuedBacklog` (dimmed but otherwise the same markup), and the retired
-`MessageBubble`'s user branch — so all three keep whitespace with no markup change and no unit-tier
-edit. The queued row's text is daemon-supplied (`QueuedItem.text` over `queue_state`, not the local
-echo), so this preserves whitespace a hostile daemon chose; two existing bounds already cover it —
-`pre-wrap` hangs a trailing run past the line's end rather than widening the box, and `.bubble`'s
-`max-width` caps it regardless.
+`userText` row, the same row while queued (`.message-row--queued`, dimmed via that modifier since
+[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) folded the once-separate `QueuedBacklog`
+into it, but otherwise the same markup), and the retired `MessageBubble`'s user branch — so all three keep
+whitespace with no markup change and no unit-tier edit. An unmatched queued row's text is daemon-supplied
+(`QueuedItem.text` over `queue_state`, not a local echo), so this preserves whitespace a hostile daemon
+chose; two existing bounds already cover it — `pre-wrap` hangs a trailing run past the line's end rather
+than widening the box, and `.bubble`'s `max-width` caps it regardless.
 
 Proven in `e2e/user-whitespace.spec.ts`, a new sibling to `assistant-whitespace.spec.ts` rather than an
 extension of it (that file's harness is the assistant delta/turn-end frame builder, unneeded here, and
@@ -265,7 +270,8 @@ share it — where the FAB's M3 level-3 shadow stays an inlined literal with a s
 different value. `.bubble` takes it as `box-shadow`: the design draws the effect on the message
 *container* frame, which has no fill and hugs the bubble, so the container's shadow is the bubble's, and
 a box-shadow follows the 6px corner. The queued row inherits it through `.bubble--user`, dimmed with the
-rest of the row by the region's 50% opacity.
+rest of the row by `.message-row--queued`'s 50% opacity (the region's, before
+[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) moved it onto the row).
 
 **The blur is 5, not 2.5.** The design's export prints this one effect two ways:
 `shadow-[0px_4px_5px_0px_…]` on the filled tool row and `drop-shadow-[0px_4px_2.5px_…]` on the unfilled
@@ -283,8 +289,10 @@ is byte-identical, so no unit test changed.
 
 ## What stays untouched
 
-- **The queued row** (`QueuedBacklog`, [queued backlog + drop
-  affordance](conversation-shell-conversation-and-modals.md#queued-backlog--drop-affordance-294-drop-since-296))
+- **The queued row** (a `userText` `TimelineRow` while `queued !== null`, folded off the deleted
+  `QueuedBacklog` view since [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) — see
+  [Conversation shell — conversation surfaces and modals § Queued rows folded into the
+  thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213))
   reuses `.bubble--user` with no CSS of its own, so it inherits the new geometry, fill and type, and
   (#1057) the whitespace treatment too — but it renders no `BubbleMeta`: a queued message has no
   timestamp and nothing sent yet to copy. Its `data-thread-role="queued"` distinguishes it from a

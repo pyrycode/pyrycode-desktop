@@ -35,12 +35,18 @@ is daemon *state* (SSOT pyrycode #720), not part of claude's turn stream, so it 
 
 `message_id` ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213), pyrycode#2092) is the
 newest field on the row — the id of the `send_message` that produced the item, relayed byte-for-byte and
-optional only because a pre-#2092 daemon sends none. It reaches this store, and `QueuedBacklog`, for
-free: the store holds `queued` **verbatim by reference** with no remap (see § How it works), so a wire
-field this store never names is already carried. This store does nothing with the field itself — it is
-read only by the container that binds `QueuedBacklog`'s drop affordance, to correlate the drop against
-the sending window's own [thread timeline](thread-timeline.md) echo. See [Dequeue message
-envelope](dequeue-message-envelope.md#configuration-and-usage) for the consumer.
+optional only because a pre-#2092 daemon sends none. It reaches this store, and every reader of its held
+`queued` array, for free: the store holds `queued` **verbatim by reference** with no remap (see § How it
+works), so a wire field this store never names is already carried. This store does nothing with the field
+itself — it is read by `dropQueuedMessage` (via the container's drop closure) to correlate a drop against
+the sending window's own [thread timeline](thread-timeline.md) echo, and, since
+[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214), by `foldQueuedRows` to correlate a
+queued row against that same echo for rendering — the two consumers use the field for the same
+correlation, one to remove a row and one to draw it as one. See [Dequeue message
+envelope](dequeue-message-envelope.md#configuration-and-usage) and [Conversation shell — conversation
+surfaces and modals § Queued rows folded into the
+thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213)
+for the two consumers.
 
 On every relay (re)handshake the store also resets: the daemon has no session resume, so a
 reconnect brings the client to current truth by re-sending one `queue_state` snapshot per
@@ -267,8 +273,14 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   deleted that container and hoisted the read into `ConversationScreen` itself (`useMemo`-stable
   `selectBacklogFor(openConversationId ?? '')`) — the region's mount and growth needed to be a
   render of the screen, not of an independent leaf, for the thread scroll pin's re-assert to see
-  them. See [Conversation shell § Thread scroll
-  pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600).
+  them. [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) kept this read exactly
+  where #1009 put it and deleted the region it used to feed (`QueuedBacklog`, a standalone view) in
+  favour of folding its rows into `Timeline` itself — the read's re-render still drives the pin's
+  re-assert, only the reason moved from "the region's height" to "the fold's input". See
+  [Conversation shell § Thread scroll
+  pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)
+  and [Conversation shell — conversation surfaces and modals § Queued rows folded into the
+  thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - [#197](../codebase/197.md) (shipped, reconcile-on-connect) does **not** use `selectBacklogs` as
   #293 anticipated — it clears via `resetBacklogsFor` instead of iterating it, so `selectBacklogs`
   still shipped with no production caller (see Edge cases, below).
@@ -354,6 +366,12 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   sending window's own timeline echo — see [Dequeue message
   envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
   timeline](thread-timeline.md#types). This store's own read/write surface is unchanged.
+- [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) — deleted `QueuedBacklog` and its
+  `.conversation__queued` region and folded this store's held `queued` array directly into `Timeline`'s
+  rows via the pure `foldQueuedRows`, using `message_id` for the same correlation #1213 used for the
+  drop. This store's own read/write surface is unchanged; see [Conversation shell — conversation
+  surfaces and modals § Queued rows folded into the
+  thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - [#197 codebase notes](../codebase/197.md) — the reconcile-on-connect reset (originally
   `resetBacklogs`, a nullary whole-map clear + the `connected`-edge branch in `subscribeQueue`),
   shipped; completed the queue family end to end for a single app-wide connection, before

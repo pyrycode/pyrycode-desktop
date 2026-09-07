@@ -42,9 +42,11 @@ test.use({ interactiveRunner: 'stream-json' })
 // fake-stack twin (#427 queued-backlog-interrupt.spec.ts, over the #145/#292..#296 chain) proves the client
 // WIRING — the composer's send gate is connection-only (composerAvailability returns canSend:true on the
 // `connected` arm and NOWHERE else, no turn-phase gate), so a send issued mid-turn goes to the daemon and
-// enqueues; `queue_state` renders into QueuedBacklog rows (data-thread-role="queued" inside
-// .conversation__queued), each with a drop control (aria-label "Drop queued message" → dropQueuedMessage,
-// firing the ungated dequeueMessage command). But in #427 that queue_state / turn_state is driven by
+// enqueues; `queue_state` marks the message's own timeline row as queued (data-thread-role="queued" on a
+// .message-row--queued inside .conversation__thread — #1214 folded the backlog into the thread, so the
+// message draws ONE row rather than an echo plus a copy of it in a region of its own), and that row carries
+// the drop control (aria-label "Drop queued message" → dropQueuedMessage, firing the ungated
+// dequeueMessage command). But in #427 that queue_state / turn_state is driven by
 // `daemon.pushFrame` — a scripted state, not claude actually running a turn. This spec is the liveness
 // proof: on the real stack the enqueue-then-dequeue must come from the REAL daemon holding a REAL turn's
 // second send and then removing it on the drop.
@@ -175,12 +177,13 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // variant at idle — the "turn 1 still running" gate. `sendButton` and this are the SAME element in two
   // states, which is exactly why msg2 below goes in by Enter.
   const interruptButton = page.getByRole('button', { name: 'Stop the running turn' })
-  // Queued-flow selectors (verbatim from the #427 fake twin): queued rows live in .conversation__queued and
-  // carry data-thread-role="queued"; the drop control is an icon button named "Drop queued message". Scoping
-  // by container keeps them distinct from msg2's optimistic .message-row--user timeline echo (see below).
+  // Queued-flow selectors (verbatim from the #427 fake twin). #1214 folded the backlog into the thread, so
+  // `.conversation__queued` no longer exists: a queued row is a `.message-row--queued` inside
+  // `.conversation__thread`, and its bubble carries data-thread-role="queued" while a delivered echo's
+  // carries "user". The modifier is what keeps the two distinct now that they share a container.
   const queuedBubbles = page.locator('[data-thread-role="queued"]')
   const queuedRow = (text: string) =>
-    page.locator('.conversation__queued .message-row--user', { hasText: text })
+    page.locator('.conversation__thread .message-row--queued', { hasText: text })
   const dropButton = (text: string) =>
     queuedRow(text).getByRole('button', { name: 'Drop queued message' })
   // #1213: one DELIVERED timeline echo, addressed by its text. `data-thread-role="user"` is the delivered
@@ -189,6 +192,10 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // neither text is a substring of the other.
   const deliveredEcho = (text: string) =>
     page.locator('[data-thread-role="user"]', { hasText: text })
+  // #1214: EVERY row one message draws, in whichever state — the locator "exactly one row" is stated
+  // against, and the one this spec's post-drop absence has to use now that a message can leave from either.
+  const rowsFor = (text: string) =>
+    page.locator('[data-thread-role="user"], [data-thread-role="queued"]', { hasText: text })
 
   await pairFromUnpairedLaunch(page, payload)
 
@@ -221,27 +228,37 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // affordance is on screen here at all; clicking it would hang until timeout. Enter deliberately keeps its
   // send behaviour mid-turn (that asymmetry is #678's AC4) and the composer's own gate is unchanged (canSend
   // on `connected`, no turn-phase gate), so the frame still goes to the daemon while turn 1 runs.
-  // submitMessage ALSO dispatches an unconditional optimistic userText echo, so msg2 renders a
-  // data-thread-role="user" timeline row TOO. Every queued-flow assertion below scopes to
-  // data-thread-role="queued" / .conversation__queued, distinct from the `user` echo, so there is no
-  // collision — but that duplicate is NO LONGER harmless once the message is dropped, which is what #1213
-  // fixed and what this spec now asserts. This comment used to read "expected and harmless" and scope every
-  // assertion away from the echo; a drop that left the echo behind was a delivered-looking bubble for a
-  // message claude was never handed, standing in the transcript forever. ---
+  // submitMessage ALSO dispatches an unconditional optimistic userText echo, so msg2 first renders a
+  // data-thread-role="user" timeline row. #1214 FOLDED THAT ECHO AND THE QUEUED ROW INTO ONE: when the real
+  // daemon's queue_state names the message_id this window minted, the echo already on screen CONVERTS to
+  // the queued role rather than a second row appearing beside it. This comment used to read "expected and
+  // harmless" about that duplicate (a drop that left the echo behind was a delivered-looking bubble for a
+  // message claude was never handed, standing in the transcript forever — #1213's fix); the duplicate does
+  // not exist at all now, which is what the assertions below check against a REAL daemon. ---
   await composer.fill(msg2)
   await composer.press('Enter')
 
-  // --- #1213 baseline: msg2's delivered echo IS on screen before the drop. ---
+  // --- #1213/#1214 baseline: msg2 IS on screen before the drop, as exactly ONE row. ---
   // The positive half of the post-drop absence below. Without it that absence could pass against a thread
-  // where the echo never rendered at all, which is precisely the failure it is meant to catch.
-  await expect(deliveredEcho(msg2)).toHaveCount(1, { timeout: TURN_TIMEOUT_MS })
+  // where msg2 never rendered at all, which is precisely the failure it is meant to catch. Stated over both
+  // roles because which one it wears depends on whether the daemon's snapshot has landed yet — the count is
+  // the invariant, and it is #1214's whole subject.
+  await expect(rowsFor(msg2)).toHaveCount(1, { timeout: TURN_TIMEOUT_MS })
 
   // --- Assert msg2 enqueues (AC2) — the ENQUEUE liveness proof: the real daemon held msg2 mid-turn and
-  // pushed queue_state, rendering exactly one queued row. A timeout here means the "a mid-turn send enqueues"
-  // premise is broken (a daemon-side queue regression, or the client send-gate drifted to turn-phase); a
-  // genuine failure — do NOT soften it, file separately. ---
+  // pushed queue_state, converting that one row to the queued role. A timeout here means the "a mid-turn
+  // send enqueues" premise is broken (a daemon-side queue regression, or the client send-gate drifted to
+  // turn-phase); a genuine failure — do NOT soften it, file separately. ---
   await expect(queuedBubbles).toHaveCount(1, { timeout: TURN_TIMEOUT_MS })
   await expect(queuedRow(msg2)).toBeVisible()
+  // #1214, and the only tier that can prove it against a real daemon's own message_id: the conversion is a
+  // CONVERSION, not an addition. msg2 still draws one row, and it is no longer the delivered one — so the
+  // real daemon relayed the id byte-for-byte (pyrycode#2092) and the client correlated on it. A drift in
+  // that field would show up here as two rows, one in each role.
+  await expect(rowsFor(msg2)).toHaveCount(1)
+  await expect(deliveredEcho(msg2)).toHaveCount(0)
+  // msg1 RAN, so its row is delivered and stays that way — a queued snapshot converts only its own message.
+  await expect(deliveredEcho(msg1)).toHaveCount(1)
 
   // --- Drop-before-drain tightening, pre-drop (AC4 support). ---
   // Turn 1 is still running at the moment we drop → the drop is issued within turn 1's lifetime.
@@ -256,13 +273,14 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // the daemon ignored the drop) — file separately. ---
   await expect(queuedBubbles).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
-  // --- #1213: the drop takes msg2's delivered ECHO too, against a REAL daemon's message_id. ---
+  // --- #1213/#1214: the drop takes msg2's row entirely, against a REAL daemon's message_id. ---
   // The queued-row assertion directly above is the positive wait this absence needs: it is a real 1 → 0
   // mutation driven by the daemon's own fresh queue_state, so it cannot have been true before the click.
-  // This is also the only tier that proves the correlation key survives the real round trip — the fake tier
-  // reads the id back off its own captured frame, while here the real daemon relays it byte-for-byte
-  // (pyrycode#2092) and a drift in that field would show up as an echo that stubbornly stays.
-  await expect(deliveredEcho(msg2)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  // Asserted over BOTH roles because #1214 gave msg2 one row that can be in either: #1213's echo removal
+  // fires at the click and the daemon's snapshot clears the backlog, and only when both have happened is
+  // there no row left. A `deliveredEcho`-only absence here would now be vacuous — msg2 wore the queued role
+  // from the moment the snapshot landed, so the delivered count was already 0 before the click.
+  await expect(rowsFor(msg2)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
   // Only the dropped message's echo goes: msg1 RAN, so its delivered row must survive untouched (AC4).
   await expect(deliveredEcho(msg1)).toHaveCount(1)
 

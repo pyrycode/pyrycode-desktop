@@ -292,9 +292,10 @@
    casts --shadow-thread, and the bubble takes it as a box-shadow because it is a filled box with the 6px
    corner a box-shadow follows. The design draws the effect on the message CONTAINER frame (114:3558 /
    114:3559), which has no fill and hugs the bubble, so the container's shadow is the bubble's. It reaches
-   the queued row too, which reuses .bubble--user, where the region's 50% opacity dims the shadow with the
-   rest of the row — the design draws no queued state, and a shadow that dims with its box is the same
-   compositing the Figma effect renders. e2e/thread-shadow.spec.ts reads the computed value on both sides. */
+   the queued row too, which reuses .bubble--user, where the 50% opacity dims the shadow with the rest of
+   the row — the design draws no queued state, and a shadow that dims with its box is the same compositing
+   the Figma effect renders. (#1214 moved that opacity off the deleted .conversation__queued region onto
+   .message-row--queued; the compositing, and therefore this sentence, is unchanged.) e2e/thread-shadow.spec.ts reads the computed value on both sides. */
 .bubble {
   max-width: min(680px, 75%);
   padding: var(--space-4) var(--space-5);
@@ -332,10 +333,11 @@
 
      ON .bubble--user RATHER THAN A NEW MODIFIER: this class reaches every element that draws the user's
      own words and nothing else — the delivered timeline row, the queued row (#294 draws a pending send in
-     the same treatment, dimmed by the region), and the retired MessageBubble's user branch. That set is
-     exactly the defect. A modifier applied at the two live call sites would buy a delivered/queued
-     distinction nothing needs today and would cost a markup change at both, putting the unit tier's
-     exact-byte assertions in play; CSS-only is what keeps them untouched by construction.
+     the same treatment, dimmed by .message-row--queued since #1214 folded it into the thread), and the
+     retired MessageBubble's user branch. That set is exactly the defect. A modifier scoped to the
+     delivered form alone would buy a delivered/queued distinction this rule does not need — #1214 added
+     .message-row--queued for the DIMMING, and deliberately left the whitespace treatment on the shared
+     class, because a queued message's text wraps the way the same text will wrap once it runs.
 
      NO STRAY BLANK CAN RENDER BETWEEN THE BUBBLE'S CHILDREN: the JSX transform drops a whitespace-only
      run containing a newline, so the source's line breaks between siblings emit no text node at all
@@ -1680,33 +1682,37 @@
   background: var(--color-error-container);
 }
 
-/* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as
-   the not-yet-run tail below the delivered thread. flex: 0 0 auto (like .conversation__thinking, NOT
-   the thread's 1 1 auto) so it never competes with the timeline's flex region; column + --space-3 gap
-   + --space-4 inset mirror .conversation__thread so the rows sit thread-consistent. The mobile Figma
-   file draws only the delivered thread (no queued/pending component — the documented #148 gap), so the
-   "waiting / not yet run" treatment is within-token: the whole region sits at 50% opacity, the
-   .tool-row pending-dimming precedent (opacity as a de-emphasis device, not a color literal). The rows
-   themselves reuse .message-row--user / .bubble--user unchanged (queued messages are the user's own
-   pending sends) — the dimming is the entire "queued" modifier. */
-.conversation__queued {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+/* #294, relocated by #1214 — the "waiting / not yet run" treatment on a message the daemon has queued.
+   The mobile Figma file draws only the delivered thread (no queued/pending component — the documented
+   #148 gap), so the treatment is within-token: 50% opacity, the .tool-row pending-dimming precedent
+   (opacity as a de-emphasis device, not a color literal). The row is otherwise the delivered user row
+   unchanged — .message-row--user / .bubble--user, because a queued message is the user's own pending
+   send — so this dimming is the entire "queued" modifier, exactly as it was when it sat on the region.
+
+   IT IS ON THE ROW, NOT ON THE BUBBLE, and that is what the deleted region's own comment already implied:
+   opacity establishes a compositing group, and the group has to contain BOTH things that were dimmed —
+   the bubble and the .queued-row__drop button beside it. #294 sketched "moving opacity onto a future
+   bubble--queued modifier is a one-line relocation", which predates #296 making the drop control a
+   SIBLING of the bubble; a bubble-level opacity would leave that button at full brightness. The row is
+   the smallest element containing both, so the rendered result is identical to the region's.
+
+   NOTHING ELSE FROM THE REGION NEEDED A HOME. Its flex/column/gap/padding existed to make a standalone
+   strip sit thread-consistent, and .conversation__thread already declares the same gap: var(--space-3)
+   and padding: var(--space-2) var(--space-4) — so a merged row inherits the rhythm with no rule at all. */
+.message-row--queued {
   opacity: 0.5;
 }
 
-/* #296 — the drop / cancel affordance on each queued row (an icon-only button). A LEADING sibling of the
+/* #296 — the drop / cancel affordance on a queued row (an icon-only button). A LEADING sibling of the
    queued bubble: because .message-row--user is right-aligned (justify-content: flex-end), placing it
    before the bubble sits it at the row's inner (left) edge, next to the bubble. The compact icon-button
    treatment — the .channel-list__save / .status-sheet__close idiom: de-emphasized on-surface-variant
    content, a round hover surface, a focus-visible outline. The 18px icon + --space-2 padding makes a
    compact ~34px touch target (no bare width literal — the file convention). align-self centers it against
-   the bubble regardless of bubble height. It inherits the region's 50% dimming (the parent .conversation
-   __queued opacity is a compositing group a child opacity cannot escape) — consistent with the "waiting /
-   not yet run" treatment; the hover-surface + focus outline carry the affordance, not full brightness. */
+   the bubble regardless of bubble height. It inherits the row's 50% dimming (#1214: .message-row--queued's
+   opacity is a compositing group a child opacity cannot escape — it was the region's until the queued rows
+   moved into the thread) — consistent with the "waiting / not yet run" treatment; the hover-surface +
+   focus outline carry the affordance, not full brightness. */
 .queued-row__drop {
   flex: 0 0 auto;
   align-self: center;

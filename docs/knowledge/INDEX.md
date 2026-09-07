@@ -47,7 +47,7 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
     - [Conversation shell — seams](features/conversation-shell-seams.md) — The seams this screen exposes, both the ones a later ticket bound and the ones still open.
     - [Conversation shell — tool row layout](features/conversation-shell-tool-row-layout.md) — Map only. **Split 2026-09-05** into the six documents below.
     - [Conversation shell — tool row code block](features/conversation-shell-tool-row-code-block.md) — #780 promotes a `Bash` call's `command` into a `.code-block` leading the expanded body, carved out of #706's field list on an exact tool-name test.
-    - [Conversation shell — tool row box](features/conversation-shell-tool-row-box.md) — #722 restyles the chip from the mobile mock's hug-width pill to the desktop design's full-width bordered box.
+    - [Conversation shell — tool row box](features/conversation-shell-tool-row-box.md) — #722 restyles the chip into a full-width bordered box; #1073 joins consecutive rows into one bordered stack.
     - [Conversation shell — tool row header groups](features/conversation-shell-tool-row-header-groups.md) — #854 splits the chip into `.tool-row__left`/`.tool-row__right` and draws the chevron.
     - [Conversation shell — tool row run routing](features/conversation-shell-tool-row-run-routing.md) — #855 makes the header's lead and subject runs independently switchable per call.
     - [Conversation shell — tool row result count](features/conversation-shell-tool-row-result-count.md) — #856 draws the daemon's short result précis in the header's right group, bounded against a hostile string.

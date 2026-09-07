@@ -101,8 +101,70 @@ See PR #846 for the full record; there is no `docs/knowledge/codebase/722.md` �
 message area casts (Figma "Tool use" 134:4939; X 0, Y 4, blur 5, spread 0, black at 20% — the token and
 the blur-doubling trap are described under
 [message bubble § The shadow](conversation-shell-message-bubble.md#the-shadow-the-2026-09-05-shadow-fix)).
-The design puts it on each single row and once on the grouped stack (384:7103); the app draws no group
-yet (#1073), so every row casts its own, and the thread's 12px gap outreaches the shadow's 9px, so no
-row's shadow lands on the next. The row's own `overflow: hidden` does not clip it — an element's overflow
-clips descendants, never its own outer shadow — and the pending row's 50% opacity dims the shadow with the
-box. `e2e/thread-shadow.spec.ts` reads the computed value on a pending row.
+The design puts it on each single row and once on the grouped stack (384:7103).
+[#1073](#consecutive-tool-rows-join-into-one-stack-1073) draws that group: a row with a tool-row successor
+now computes `box-shadow: none` and only a run's last row keeps it, so a run of any length still casts
+exactly one, cast by its last row rather than its first (the design's group shadow visually belongs to the
+bottom of the stack, and an outer shadow starting 1.5px below its own border box cannot reach back up
+across the join above it). A lone row, with no successor to suppress it, is untouched by that rule and
+keeps casting its own — which is what `e2e/thread-shadow.spec.ts` reads on a pending row. The row's own
+`overflow: hidden` does not clip it — an element's overflow clips descendants, never its own outer shadow —
+and the pending row's 50% opacity dims the shadow with the box.
+
+## Consecutive tool rows join into one stack (#1073)
+
+A run of tool rows now draws as one stack with exactly one border line at each join, rather than as
+separate boxes 12px apart on `.conversation__thread`'s flex gap. Two selectors carry all of it, each naming
+one half of a join — `.tool-row + .tool-row` the lower row, `.tool-row:has(+ .tool-row)` the upper — so a
+lone row, or a tool row beside a message bubble, matches neither and is byte-identical to what #1102 already
+shipped. The markup does not change: every tool row is already a direct child of the thread's flex column
+with no wrapper, so the adjacent-sibling selectors reach exactly the internal joins of a run. `:has()`
+shipped in Chromium 105; this app runs Electron 33 (Chromium 130) with no other renderer, so no fallback was
+needed.
+
+**The join is a negative margin, not a gap change** — `gap` cannot be varied per pair.
+`margin-top: calc(-1 * var(--space-3) - 1px)` on the lower row cancels the column's 12px gap and overlaps
+the pair by the border's own 1px, landing both borders on the same pixel band. Tokenised against
+`--space-3` rather than written as `-13px`, since the gap must follow that token if it ever moves; the
+`1px` stays a literal because it is the border width, not a spacing step.
+
+**A run's internal corners are square; only its outer corners keep the 6px** — Juhana ruled this
+2026-09-04. The Figma node for the run (384:7103) is *not* the answer here: it is literally two `Tool use`
+instances overlapped, so both keep all four corners and the node's own render shows the resulting artefact,
+a notch of thread background where two `--radius-xs` curves face each other across a join. The fix zeroes
+the two corners each half of a join shares with the seam (`border-top-left/right-radius: 0` on the lower
+row, `border-bottom-left/right-radius: 0` on the upper) — written as the absence of the row's own
+`--radius-xs`, not a `--radius-none` token, since a square corner isn't a value in the radius scale.
+
+**The join's border colour is stated as a rule, not left to paint order**, because paint order does not
+reliably favour either row. A later sibling paints over an earlier one by default, which would erase a
+failed row's red bottom edge against the row below it — but `.tool-row`'s pending `opacity: 0.5` makes a
+pending row an atomic paint group that paints above every non-dimmed sibling regardless of DOM order,
+which reverses that direction the moment a pending row is one side of the pair. `.tool-row--error +
+.tool-row` and `.tool-row:has(+ .tool-row--error)` retint exactly the one edge each neighbour shares with a
+failed row to `--color-error`, so the two coincident borders are always the same colour and the drawn line
+stops depending on which row happens to paint last. A pending/resolved join needs no such rule: a 50%
+border painted over a 100% border of the same colour at the same pixels composites back to full strength,
+and a failed row is always `--resolved` too (`tool-row--error` layers only on top of `tool-row--resolved`),
+so a dimmed row and a red border are never the same element.
+
+**A run is DOM adjacency, not item adjacency.** `TimelineRow`'s `turnBoundary` arm renders as `null` and
+emits no element, so two tool calls either side of a closed turn are still DOM-adjacent siblings and still
+join — confirmed by the e2e drive, which closes a turn between the user bubble and the run without
+breaking the bubble-to-first-row 12px gap. `sessionBoundary`, by contrast, draws a real element and
+correctly breaks a run in two. Anything that should interrupt a run needs to render an element for this
+reason; anything structural-only will not.
+
+**Testing.** All four rendered properties here — adjacency, the corner radii, the computed shadow, the
+border colour at a join — are invisible to the `renderToStaticMarkup` unit tier, so `e2e/tool-row-toggle.spec.ts`
+gained a seventh sibling test (its own `launchPairedApp`, following the file's one-test-one-page idiom): a
+run of four resolved as pending / resolved / failed / resolved reaches every join case in one drive — a
+pending/resolved join, a join with the failed row below it, and one with the failed row above it — plus a
+non-tool neighbour on the run's leading edge. Expanding a row inside a run (AC5) re-measures the same joins
+after toggling the second row open; the three width equalities that guard a resolving row's shape stay in
+this file's first, pre-existing test. `e2e/thread-shadow.spec.ts` and `e2e/thread-scroll-pin.spec.ts` each
+drive exactly one tool row, so neither forms a run and both keep covering the lone-row case unchanged.
+
+Code review: PASS, one non-blocking NIT (a specificity-accounting typo in the shipped CSS comment — both
+join selectors are `(0,2,0)`, not the mixed triple the comment states; the conclusion drawn from it was
+already correct). See PR #1211 for the full record; the design is `docs/specs/architecture/1073-consecutive-tool-rows-share-one-border.md`, committed before the code.

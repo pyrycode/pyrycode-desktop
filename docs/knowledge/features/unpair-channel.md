@@ -183,7 +183,7 @@ app.on('will-quit', () => unregisterUnpairServer())
 ```
 
 The same `pairedServerStore` and `hostLabelStore` instances built once at the composition root — no
-second store constructed. [#1117](daemon-connection-routing.md#the-connection-registry-1117) targets
+second store constructed. [#1117](daemon-connection-registry.md#the-connection-registry-1117) targets
 `onUnpaired` at `registry.reconcile()`, which re-reads the store and drops exactly the one connection
 whose record went, leaving every other one live and un-handshaken. Registering late (below
 `createDaemonConnection`, beside the pairing handler) is safe for the reason the pairing handler's own
@@ -393,7 +393,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   the named record, report `ok`/`error`) is unaffected by any of it.
 - **Live-session teardown, closed by [#504](../codebase/504.md).** A successful erase fires an optional
   `onUnpaired?: () => void` dep, wired at the composition root to `registry.reconcile()` since
-  [#1117](daemon-connection-routing.md#the-connection-registry-1117) — drops exactly the connection whose
+  [#1117](daemon-connection-registry.md#the-connection-registry-1117) — drops exactly the connection whose
   record went. The callback sits outside the fail-closed `catch` and swallows its own throw, so a
   teardown failure can never downgrade an already-completed erase to `{ result: 'error' }`.
 - **No error sub-reason.** The `error` arm deliberately carries no detail beyond the discriminant. Both
@@ -441,7 +441,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
 - [#504 codebase notes](../codebase/504.md) — the `onUnpaired` teardown trigger, the registration move
   below `connection`, and why the callback deliberately deviates from `onPaired`'s inside-the-try
   placement.
-- [Daemon connection — per-server routing](daemon-connection-routing.md#the-connection-registry-1117) —
+- [Daemon connection — per-server routing](daemon-connection-registry.md#the-connection-registry-1117) —
   `registry.reconcile()`, which lets this channel drop exactly one connection instead of every
   connection.
 - [Paired-server store](paired-server-store.md) / [#172 codebase notes](../codebase/172.md) —

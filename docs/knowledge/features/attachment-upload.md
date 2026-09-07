@@ -151,7 +151,7 @@ imported (no production module under `src/shared/ipc/` imports a sibling). It is
 capability: resolved against the connection registry's held entry set by `servers.route`/`servers.resolve`
 and then discarded, reaching no filename, byte, path, wire field or log line. See [Daemon connection —
 per-server routing § The attachment upload names its
-server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+server](daemon-connection-attachment-upload-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
 for the full routing design, including why the refusal for an unresolvable id is surfaced as
 `not-connected` rather than a dedicated failure literal.
 
@@ -246,7 +246,7 @@ restatements above and `attachmentUpload.test.ts`'s extra-keys acceptance, which
 "nothing downstream reads *any* field off this ask", now false as written. Six sites in total, not
 three. Neither shipped sender emits the field yet — see [Daemon connection — per-server routing § The
 attachment upload names its
-server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+server](daemon-connection-attachment-upload-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
 for why, and for the picker arm, which has no ask object at all and so never carries one.
 
 **`refused` splits into two members sharing one `type`, forced by measurement rather than chosen for
@@ -350,7 +350,7 @@ body rather than one object makes it structurally impossible for two arms to be 
 it before the guards discriminate would hand a looping renderer the exact lever the neither-guard-matched
 return above exists to deny. See [Daemon connection — per-server routing § The attachment upload names
 its
-server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+server](daemon-connection-attachment-upload-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
 for the routing decision `buildDeps`'s `upload` arrow makes, including why an unresolvable route reports
 `not-connected` rather than a dedicated failure literal.
 
@@ -546,7 +546,7 @@ on the same grounds #1118 and #1120 already accepted the same choice for every c
 server-scoped command. `serverId` reaches no path segment, no filename, no map key and no log field —
 `DiagnosticEvent` stays `{ event, code? }`, so a server id is structurally unrepresentable there. Full
 findings: [Daemon connection — per-server routing § The attachment upload names its
-server](daemon-connection-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
+server](daemon-connection-attachment-upload-routing.md#the-attachment-upload-names-its-server-and-the-stand-in-retires-1129)
 and `docs/specs/architecture/1129-attachment-upload-server-routing.md` § Security review.
 
 ## Testing

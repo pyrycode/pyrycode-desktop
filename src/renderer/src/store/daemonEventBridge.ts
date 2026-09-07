@@ -231,6 +231,18 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // configuration and the session id (#491), not the session store. Present only because the
       // assertNever guard below makes a new arm a compile error.
       return null
+    case 'historyPageReceived':
+    case 'historyRequestFailed':
+      // No session-store action (#1222). A page's entries are timeline items, so its consumer is the
+      // timeline reduction (#1223) and the walk that drives the asks (#1224) — not this store, which
+      // holds the live session's messages and status and has no scroll-back state at all. The reading
+      // to resist is that a page of stored `message` frames belongs in the message list: it does not,
+      // because this store dedupes and orders the LIVE lane and #1225 owns joining the two.
+      //
+      // Present for the assertNever guard below, and that guard is NOT a formality here — it stringifies
+      // the WHOLE event into an Error message, so a missing case would put a whole page of replayed
+      // operator- and claude-authored payloads on the frame there. These cases are what keep them out.
+      return null
     case 'slashCommandList':
       // No session-store action: the #938 store holds the menu of verbs claude will accept, not the
       // session store — which holds no slash-command state at all. Ships DORMANT rather than

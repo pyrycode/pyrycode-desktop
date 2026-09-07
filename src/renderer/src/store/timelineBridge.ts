@@ -261,6 +261,20 @@ export function translateTimelineEvent(
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
       return null
+    case 'historyPageReceived':
+    case 'historyRequestFailed':
+      // Not timeline events YET, and the reason is scope rather than kind (#1222). A page's entries ARE
+      // timeline items — that is the whole point of a history entry carrying a stored frame's `type` and
+      // `payload`, so a client can re-reduce a loaded page oldest-first through THIS reducer — but the
+      // mapping is #1223's and the join to the live stream is #1225's. This slice lands the transport
+      // only. So these arms are DORMANT rather than permanently no-op, and the page arm in particular is
+      // expected to flip; nothing else in this file is waiting to claim them.
+      //
+      // Present for the assertNever guard, which stringifies the WHOLE event into an Error message — and
+      // that guard matters more here than on any neighbouring arm: an entry's `payload` is replayed
+      // content, so a missing case would put a whole page of operator- and claude-authored text on the
+      // frame there. This case is what keeps it out.
+      return null
     case 'slashCommandList':
       // Not a timeline event (#937). The frame carries no turn_id and opens and closes no turn, so a
       // menu of verbs is daemon STATE by the queueState rule (#720): a published vocabulary is not

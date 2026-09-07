@@ -201,6 +201,18 @@ export function translateModalEvent(
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
       return null
+    case 'historyPageReceived':
+    case 'historyRequestFailed':
+      // Not modal events (#1222), and PERMANENTLY so: nothing is waiting on an answer. A page is a
+      // replay of what already happened, answering this app's own ask, where a modal is a permission
+      // prompt gating an action claude wants to take, resolved by `modal_answer` against `modal_id`. A
+      // page may CARRY a stored `modal_shown` among its entries without being one — re-raising a
+      // long-since-resolved prompt from a replay is exactly what this arm's absence would risk, and
+      // #1223 owns whatever a stored modal frame renders as.
+      //
+      // Present for the assertNever guard, which stringifies the WHOLE event into an Error message; an
+      // entry's payload is replayed content, so this case is what keeps it off that frame.
+      return null
     case 'slashCommandList':
       // Not a modal event (#937): nothing is waiting on an answer. The frame publishes the vocabulary
       // of verbs claude will accept — text the operator MAY choose to type, unsolicited and

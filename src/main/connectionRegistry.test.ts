@@ -130,6 +130,7 @@ function createFactoryFake() {
       send: noop,
       requestSessionSettings: noop,
       requestModelList: noop,
+      requestHistory: noop,
       requestConversations: noop,
       requestRecentWorkspaces: noop,
       createConversation: noop,

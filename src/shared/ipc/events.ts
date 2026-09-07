@@ -29,7 +29,8 @@ import type {
   WireModalOption,
   WireQuestion,
   WireSlashCommand,
-  WireModelOption
+  WireModelOption,
+  HistoryEntry
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -44,6 +45,32 @@ export const DAEMON_EVENT_CHANNEL = 'pyry:daemon-event' as const
  * transport internals. Carries no message, stack, or secret — just a category.
  */
 export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-failed'
+
+/**
+ * The closed set of ways one `request_history` can be refused (#1222) — `DebugBundleFailure`'s shape
+ * applied to a correlated round trip, and information-minimising in the same way: a category, never a
+ * message, a stack, an echoed cursor or a daemon string.
+ *
+ * IT DUPLICATES `HistoryRejectReason`'s MEMBERS BY HAND rather than importing them, and that is the
+ * placement rule rather than an oversight. `inboundMessage.ts` is IPC-free by construction — the
+ * `transport/` directory holds the wire boundary and never imports this module — so the narrowed type
+ * cannot be shared across the boundary it exists to cross. `AttachmentUploadFailure` already mirrors
+ * `DaemonErrorOutcome` the same way, for the same reason, and the two lists are kept in agreement by
+ * the single mapping in `daemonConnection`'s emit. Each member's meaning is documented at its source.
+ *
+ * THE SIXTH MEMBER IS NOT A HEDGE. The daemon publishes five refusals for this verb, and a sixth
+ * outcome is reachable anyway: when one stored entry is too large to fit in ANY page the daemon emits
+ * it regardless and its own transport answers `message.too_long`, correlated to this client's ask. A
+ * correlated refusal must always settle the outstanding request — a walk that dropped one would stall
+ * with no terminal and no way to step past the entry — so anything outside the five arrives here.
+ */
+export type HistoryRequestFailure =
+  | 'conversation-not-found'
+  | 'history-invalid-request'
+  | 'history-invalid-page-size'
+  | 'history-invalid-cursor'
+  | 'history-unavailable'
+  | 'unclassified'
 
 /**
  * The relay-socket leg's state category (#328), mirroring mobile's RelayLinkStatus where it maps
@@ -1024,6 +1051,64 @@ export type DaemonEvent =
       models: readonly WireModelOption[]
       droppedModels: number
     }
+  // The two conversation-history arms (#1222) — one backward step of a scroll-back walk, and its
+  // refusal. Both cross from the background process, which owns the ask, the correlation and the
+  // decode; nothing in the window drives either yet (#1224 asks, #1223 renders, #1225 joins a page to
+  // the live stream), so all four exhaustive bridges take null arms.
+  //
+  // `conversationId` IS THE ONE FIELD ON BOTH ARMS THE DAEMON DID NOT ASSERT, and the provenance is
+  // `runConfigReceived`'s exactly: a `history_page` carries NO conversation id — a decision rather than
+  // an omission, since correlation rides `in_reply_to` and nothing in a page is echoed from the request
+  // — so it is resolved in the background process, which records each `request_history`'s envelope id
+  // against the conversation that request named and matches the reply back by `Envelope.in_reply_to`.
+  // What crosses is therefore CLIENT-OWNED: the id this app put in its own outbound frame, held in
+  // main-process memory and handed back, never a string parsed out of an inbound payload. That is the
+  // one thing not to generalise from the daemon-asserted ids on assistantDelta / modelAnnounced /
+  // toolUse — their warnings are theirs. What it DOES share with them is required-ness and the reason:
+  // an optional routing key invites `?? openConversation` fallbacks, which is the misattribution the
+  // correlation exists to remove, so a consumer that cannot resolve it drops the event rather than
+  // guessing. It is a routing key and not rendered text — never markup, an attribute, a URL, a
+  // filename, a cache key or a lookup path — and it reaches no log sink. The numeric `in_reply_to` it
+  // was resolved from is deliberately NOT carried: the window receives the id it supplied.
+  //
+  // SECURITY — `entries` IS REPLAYED CONTENT AND THE MOST UNTRUSTED PAYLOAD ON THIS UNION. Each entry
+  // is one stored envelope's worth, operator-authored for a stored `message` and `claude`-authored for
+  // a stored assistant frame, carrying EXACTLY the trust class of the live frame it mirrors — nothing
+  // about it is more trusted for having been stored, and the daemon's § Security model threat 1 lands
+  // here. Its `type` is a stored string nothing re-validates and its `payload` crosses unparsed and
+  // opaque; the render surface applies the same sanitisation the live lane gets, and the two
+  // consumer-side rules (no `Object.assign` through a payload, no field of it as a path or key) are
+  // stated on `HistoryEntry` itself. No token, key or raw frame can ride either arm.
+  //
+  // `cursor` and `atStart` cross AS SENT and are never inferred from each other or from the entry
+  // count. `atStart` is the ONLY termination signal — a page filling exactly at the log's first entry
+  // reports it false with a usable cursor, and a SHORT page says nothing, since the daemon may serve
+  // fewer entries than asked to fit the envelope cap. The cursor is opaque: stored and handed back
+  // verbatim, never parsed, and NOT a secret and NOT a capability — it is deliberately unsigned, and
+  // authorization is pairing, enforced at the Noise handshake.
+  | {
+      type: 'historyPageReceived'
+      conversationId: string
+      entries: readonly HistoryEntry[]
+      cursor: string
+      atStart: boolean
+    }
+  // The refusal half. `reason` is a CLIENT-OWNED literal narrowed from the daemon's `code` at the
+  // decode boundary and compared there against constants — no daemon string crosses, and neither the
+  // daemon's static message nor anything echoed from the request does either.
+  //
+  // `retryable` is CARRIED rather than left to the consumer to derive, which diverges from
+  // `DaemonErrorOutcome`'s "retryability is documented, not computed" posture on purpose. That posture
+  // holds because the attachment flags live in two upstream files, so no single client-side list could
+  // be right; here the whole set is one verb's, published in one section, with exactly ONE retryable
+  // member. Computing it once, at the single emit, is what stops the walk driver (#1224) from
+  // re-deriving it wrong into a retry loop against a relay that is merely withholding the frame.
+  | {
+      type: 'historyRequestFailed'
+      conversationId: string
+      reason: HistoryRequestFailure
+      retryable: boolean
+    }
 
 /**
  * Which server an event came from (#1068). Carried BESIDE the union rather than inside it: the app
@@ -1058,7 +1143,7 @@ interface ServerOrigin {
 
 /**
  * Distributes `ServerOrigin` over each arm of a union. Written as a distributive conditional rather
- * than the plainer `DaemonEvent & ServerOrigin` so the result is a genuine 43-arm union of stamped
+ * than the plainer `DaemonEvent & ServerOrigin` so the result is a genuine union of stamped
  * members: `.type` narrowing and `Extract<…>` then behave for consumers exactly as they do on the bare
  * union, which a single unnormalised intersection does not reliably give.
  */
@@ -1066,7 +1151,7 @@ type WithOrigin<E> = E extends unknown ? E & ServerOrigin : never
 
 /**
  * What actually travels on DAEMON_EVENT_CHANNEL (#1068): a `DaemonEvent` plus the id of the server it
- * came from. An INTERSECTION over the existing union, never a member added to each of the 43 arms —
+ * came from. An INTERSECTION over the existing union, never a member added to each arm —
  * that choice is the whole reason this is one slice rather than three. It keeps the union's arms
  * untouched, so the 33 test files that build bare `DaemonEvent` literals for the renderer bridges
  * still compile, and it makes the two directions of assignability do the work:

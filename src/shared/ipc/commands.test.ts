@@ -419,6 +419,84 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(named)).toBe(true)
   })
 
+  it('accepts a requestHistory carrying all three fields, EMPTY cursor included (#1222)', () => {
+    // The empty cursor is not a tolerated edge here — it is the NORMAL OPENING VALUE of every walk
+    // ("start at the newest"), so a non-empty clause on that field would refuse the first ask of every
+    // scroll-back. `limit: 0` is the daemon's published "you choose" and equally ordinary, and `''` for
+    // the conversation id passes for the siblings' reason (type, not emptiness).
+    expect(
+      isRendererCommand({
+        type: 'requestHistory',
+        payload: { conversation_id: 'conv-1', cursor: '', limit: 0 }
+      })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'requestHistory',
+        payload: { conversation_id: 'conv-1', cursor: 'opaque-daemon-minted', limit: 50 }
+      })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'requestHistory',
+        payload: { conversation_id: '', cursor: '', limit: 0 }
+      })
+    ).toBe(true)
+    // A negative limit passes THIS layer: it is a documented daemon reject, and buildRequestHistory
+    // normalises it to the "you choose" value before the wire — one bound, not two.
+    expect(
+      isRendererCommand({
+        type: 'requestHistory',
+        payload: { conversation_id: 'conv-1', cursor: '', limit: -1 }
+      })
+    ).toBe(true)
+    // A structurally extra field is harmless; the builder's fresh literal is what bounds the wire.
+    expect(
+      isRendererCommand({
+        type: 'requestHistory',
+        payload: { conversation_id: 'conv-1', cursor: '', limit: 0, extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects requestHistory with no payload, or an explicitly undefined one (#1222)', () => {
+    // Rejected BY VALUE, not by `'payload' in value` — structured clone preserves an
+    // explicitly-undefined property across the bridge (the requestModelList arm's reason).
+    expect(isRendererCommand({ type: 'requestHistory' })).toBe(false)
+    expect(isRendererCommand({ type: 'requestHistory', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'requestHistory', payload: null })).toBe(false)
+  })
+
+  it('rejects a requestHistory missing or mistyping ANY of the three fields (#1222)', () => {
+    // All three are always on the wire (the daemon declares no `omitempty`), so an absent one is a
+    // caller bug rather than a shorthand — and each is asserted separately, so a guard that checked
+    // only the id would pass three of these six.
+    const bad: unknown[] = [
+      { cursor: '', limit: 0 },
+      { conversation_id: 42, cursor: '', limit: 0 },
+      { conversation_id: 'conv-1', limit: 0 },
+      { conversation_id: 'conv-1', cursor: null, limit: 0 },
+      { conversation_id: 'conv-1', cursor: '' },
+      { conversation_id: 'conv-1', cursor: '', limit: '50' }
+    ]
+    for (const payload of bad) {
+      expect(isRendererCommand({ type: 'requestHistory', payload })).toBe(false)
+    }
+  })
+
+  it('types requestHistory as payload-REQUIRED — a bare send does not compile (#1222)', () => {
+    // The requestModelList arm's compile-time half; see its comment for why the directive cannot open
+    // a prose line.
+    // @ts-expect-error payload is required — a request with no conversation has nothing to ask about
+    const bare: RendererCommand = { type: 'requestHistory' }
+    const named: RendererCommand = {
+      type: 'requestHistory',
+      payload: { conversation_id: 'conv-1', cursor: '', limit: 0 }
+    }
+    expect(isRendererCommand(bare)).toBe(false)
+    expect(isRendererCommand(named)).toBe(true)
+  })
+
   it('accepts a newSession naming a conversation (#1217)', () => {
     // The requestModelList arm's shape with the verb changed — except for emptiness, below.
     expect(isRendererCommand({ type: 'newSession', payload: { conversation_id: 'conv-1' } })).toBe(

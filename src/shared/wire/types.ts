@@ -268,6 +268,38 @@ export type EnvelopeType =
   // internal/protocol/attachments.go RequestAttachmentPayload / codes.go TypeRequestAttachment,
   // docs/protocol-mobile.md § Attachments. Declared by pyrycode#2052, answered by #2054.
   | 'request_attachment'
+  // Conversation scroll-back's ASK (#1222) — one backward step of a walk over the daemon-owned,
+  // append-only on-disk log (pyrycode#2112), which a conversation opened today can otherwise see
+  // nothing of. v2 client → daemon only, absent from the daemon's `v1TypeSet`, so an old client never
+  // sends one and `IsKnownAppType` refuses it.
+  //
+  // NOT the Mode A `last_event_id` replay, and confusing the two is the mistake this comment exists to
+  // prevent. That one is catch-up across a dropped connection over a bounded IN-MEMORY ring that is
+  // empty after a daemon restart; this is a log on disk that survives one. They answer different
+  // questions and a client uses both.
+  //
+  // Carries RequestHistoryPayload: `conversation_id`, an opaque `cursor` and a `limit`, all three
+  // ALWAYS on the wire. Answered by ONE `history_page` correlated by `in_reply_to` — there is no
+  // request-id key, the decision `attachment_stored` already took. A request the daemon cannot answer
+  // draws one `error`: `conversation.not_found`, `history.invalid_request`,
+  // `history.invalid_page_size`, `history.invalid_cursor`, or the one retryable member
+  // `history.unavailable`. SSOT pyrycode docs/protocol-mobile.md § Conversation history (v2).
+  // Declared by pyrycode#2113, answered by #2116.
+  | 'request_history'
+  // The answer to the ask above (#1222): one backward step of a walk, newest-first, correlated by
+  // `in_reply_to`. Carries HistoryPagePayload — `entries`, a `cursor` to ask again with, and
+  // `at_start`.
+  //
+  // IT CARRIES NO `conversation_id`, and that is a decision rather than an omission — the shape
+  // `session_settings` already takes for the same reason. A client knows which conversation a page
+  // describes because it knows which envelope the page answers, so it keeps its outstanding asks keyed
+  // by envelope id. Nothing in a page is echoed back from the request.
+  //
+  // A WALK TERMINATES ON `at_start`, NEVER ON AN EMPTY `entries`, and a SHORT PAGE IS NOT AN
+  // END-OF-LOG SIGNAL: the entry clamp bounds a count while the envelope cap bounds bytes, so the
+  // daemon may serve fewer entries than asked for. See HistoryPagePayload. SSOT pyrycode
+  // docs/protocol-mobile.md § Conversation history (v2).
+  | 'history_page'
   | 'ack'
   | 'error'
 
@@ -1807,6 +1839,121 @@ export interface ModelListPayload {
  */
 export interface RequestModelListPayload {
   conversation_id: string
+}
+
+/**
+ * Outbound `request_history` payload (client → daemon, #1222). Mirrors the daemon's published shape
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Conversation history (v2) → `request_history`,
+ * internal/protocol). ALL THREE KEYS ARE ALWAYS PRESENT — the daemon declares no `omitempty` on any of
+ * them, so a decoder on either side may rely on all three, and this client emits all three.
+ *
+ * `conversation_id` is a routing id and NEVER a secret, client-owned exactly as its two neighbours
+ * above are: read from this app's own conversation state, never off the network. Naming a conversation
+ * here IS NOT AUTHORIZATION — the daemon validates it against its own registry before resolving
+ * anything and serves only what the authenticated session is entitled to; the name says WHICH, never
+ * WHETHER. Authorization is pairing, enforced structurally at the Noise IK handshake.
+ *
+ * `cursor` is the position handed back by the previous page, echoed VERBATIM. **A client MUST NOT
+ * PARSE ONE.** It names a position in an append-only file rather than an offset or a page number, both
+ * of which an append landing while the operator scrolls would invalidate; the daemon's own
+ * `parseCursor` is the only thing anywhere that reads one. **Empty means "start at the newest"** — the
+ * first ask of a walk has nothing to echo yet, so `''` is the normal opening value and NOT a missing
+ * one. A decoder or a guard that required a non-empty cursor would break the first ask of every walk.
+ *
+ * IT IS ALSO NOT A SECRET AND NOT A CAPABILITY, and reading it as one is the mistake to avoid on this
+ * side: the encoding is trivially reversible, what it carries is the conversation id the client already
+ * knows, and it is deliberately UNSIGNED because a MAC would imply an authorization it does not carry.
+ * So it is stored and echoed, never compared against anything, never validated, and never treated as
+ * proving anything.
+ *
+ * `limit` is a REQUEST, NOT A GUARANTEE, and three published rules narrow it. **`0` — sent as zero, or
+ * omitted — asks the daemon to choose**, and never means zero entries. A large ask is CLAMPED, not
+ * refused (the ceiling is the daemon's `history.MaxPageEntries`, 4096), so this client invents no
+ * ceiling of its own. A NEGATIVE limit is a reject (`history.invalid_page_size`), so
+ * `buildRequestHistory` normalises an absent or non-positive ask to `0` rather than emitting one. The
+ * consequence that binds every consumer: a page may come back SHORTER than asked because the daemon
+ * budgets bytes, so a client reads the reply's actual entry count and never infers "short page ⇒ start
+ * of log".
+ */
+export interface RequestHistoryPayload {
+  conversation_id: string
+  cursor: string
+  limit: number
+}
+
+/**
+ * ONE ENTRY of a `history_page` (daemon → client, #1222). Mirrors the daemon's published shape
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Conversation history (v2) → § A history
+ * entry). One entry is ONE STORED WIRE ENVELOPE'S WORTH — a wire type, its payload, a timestamp and a
+ * durable entry id — which is what makes history renderable without a second mapping: a client
+ * re-reduces a loaded page oldest-first through the same timeline reducer it runs for the live stream.
+ *
+ * `id` IS NOT AN `event_id`, AND THE TWO MUST NEVER BE JOINED. This one is the durable, per-conversation
+ * on-disk log id: monotonic within one conversation's log and stable across daemon restarts.
+ * `event_id` is the IN-MEMORY replay ring's — per-process, reset by a restart, and meaningful only to
+ * Mode A. They are different sequences that both look like small integers, which is exactly why a join
+ * would typecheck and be wrong.
+ *
+ * `type` IS A STORED STRING THAT NOTHING RE-VALIDATES against the daemon's type table, so it is
+ * deliberately NOT narrowed to `EnvelopeType` or to any closed set here, and a client MUST TOLERATE a
+ * type it does not recognise rather than treating one as a protocol violation. The set it spans is the
+ * whole live-lane vocabulary — every interactive-stream frame the daemon emits, plus
+ * `session_transition`, plus the operator's own `message` — and enumerating it in a type would
+ * fail-close a valid future frame.
+ *
+ * DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT, and the type system carries no signal for
+ * that — the `RetrievedAttachmentChunk` warning, and it lands harder here. `type` and `payload` are
+ * REPLAYED CONTENT: operator-authored for a stored `send_message`, `claude`-authored for a stored
+ * assistant frame. An entry carries EXACTLY the trust class of the live frame it mirrors, so the
+ * daemon's § Security model threat 1 lands on this shape and a client applies exactly the sanitisation
+ * it applies on the live lane. NOTHING ABOUT AN ENTRY IS MORE TRUSTED FOR HAVING BEEN STORED.
+ *
+ * `payload` crosses VERBATIM as opaque data — `#1222` interprets it nowhere, and #1223 owns the
+ * reduction. It is typed as an open record rather than a union of the wire payloads because it can hold
+ * a type this client does not recognise. Two rules bind the consumer that eventually reads it. It is
+ * held BY REFERENCE off the `JSON.parse` result, so a `__proto__` key is present as an ORDINARY OWN DATA
+ * PROPERTY: reading it, spreading it (`{...payload}` uses CreateDataProperty and triggers no setter) and
+ * `structuredClone`-ing it across IPC are all inert, while `Object.assign(target, payload)` and a
+ * `target[k] = v` copy loop are NOT — those reach the prototype setter and must never be written against
+ * this field. And no field of it may become a filesystem path, a filename, a cache key, a lookup path or
+ * a raw-markup sink. `MessagePayload` above is the shape a stored operator `message` carries and needs no
+ * duplicate; this type deliberately does not narrow into it.
+ */
+export interface HistoryEntry {
+  id: number
+  type: string
+  payload: Record<string, unknown>
+  ts: string
+}
+
+/**
+ * Inbound `history_page` payload (daemon → client, #1222) — the answer to one `request_history`, and
+ * one backward step of a walk. Mirrors the daemon's published shape field-for-field (SSOT pyrycode
+ * docs/protocol-mobile.md § Conversation history (v2) → `history_page`).
+ *
+ * IT NAMES NO CONVERSATION, deliberately — see the `'history_page'` `EnvelopeType` member. The
+ * conversation a page describes is resolved in the background process from the envelope it answers, and
+ * what crosses to the window is therefore a CLIENT-OWNED id rather than a field of this payload.
+ *
+ * `entries` are NEWEST-FIRST. Always present: an empty page carries `[]` and never `null` or an omitted
+ * key, so a decoder requires the array and admits the empty one.
+ *
+ * `cursor` is the opaque position to ask again with, EMPTY whenever `at_start` is true — so `''` is a
+ * valid value on this side too, and a decoder that required a non-empty one would fail-close every
+ * terminal page. The MUST-NOT-PARSE and not-a-capability rules are the request payload's; they bind
+ * identically on the value coming back.
+ *
+ * `at_start` IS THE ONLY TERMINATION SIGNAL. A page that fills EXACTLY at the log's first entry reports
+ * `at_start` false with a usable cursor, and the call after it returns no entries with `at_start` true —
+ * so a client that stops on an empty page is usually right and is wrong precisely at the boundary. A
+ * SHORT PAGE SAYS NOTHING EITHER: the daemon may serve fewer entries than asked for to fit the envelope
+ * cap, and `at_start` still reports what the log said for the size actually served. Both fields are
+ * therefore carried AS SENT and never normalised into each other. The walk that acts on them is #1224.
+ */
+export interface HistoryPagePayload {
+  entries: HistoryEntry[]
+  cursor: string
+  at_start: boolean
 }
 
 /**

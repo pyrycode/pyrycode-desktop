@@ -6,14 +6,16 @@ failure. A conversation opened today shows nothing that happened before this cli
 slice teaches the desktop transport to ask the daemon's append-only on-disk log
 (pyrycode#2112/#2113/#2116) for one backward step of a walk over it, and stops there.
 
-Introduced in [#1222](../codebase/1222.md), split from #1088. **Nothing asks for a page** (that's
-[#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)), **nothing renders one** (that's
-[#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)), and **nothing joins a page to the
+Introduced in [#1222](../codebase/1222.md), split from #1088. **Nothing asks for a page yet** (that's
+[#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)), and **nothing joins a page to the
 live stream** (that's [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)). #1222 shipped
-the ask and the envelope-level decode with an entry's `type`/`payload` still opaque; **[#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
-added the payload decode** — see § Payload decode below — so `historyPageReceived.entries` now carries
-typed events, not stored pairs. `timelineBridge`'s two arms stay dormant (#1223 still owns rendering
-them); `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null.
+the ask and the envelope-level decode with an entry's `type`/`payload` still opaque; [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
+added the payload decode — see § Payload decode below — so `historyPageReceived.entries` now carries
+typed events, not stored pairs. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) is the
+render consumer: it draws a page through a **fifth** independent channel subscriber ([history page
+bridge](conversation-timeline-store.md)), not by claiming `historyPageReceived` inside this file's four
+exhaustive bridges — `timelineBridge`'s two arms stay dormant here (see § The `DaemonEvent` arms below),
+and `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null.
 
 Nearest shapes in the tree: `ddd9a0b` ([session settings send](session-settings-send.md), request +
 reply decode) is the full request-and-decode analogue; `e199833` (#1165, `requestModelList`) is the
@@ -394,14 +396,17 @@ each gain two null arms — the compile-time guard doing its job. `daemonEventBr
 same reason a page may *carry* a stored `modal_shown` among its wire entries without *being* one —
 though since #1227 that's true only of the pre-decode wire page: the decode has no `modal_shown` arm at
 all, so one can no longer reach `modalBridge`'s switch in the first place; `questionBridge`'s is
-permanent on the same "not a question event" grounds. `timelineBridge`'s two arms are **dormant, not
-permanent** — a page's entries are literally timeline items, and #1223 is expected to claim them, now
-against the typed `HistoryTimelineEntry` shape rather than the raw `{type, payload}` pair. **Stale
-comments, not blocking:** as of #1227 the `timelineBridge.ts` and `modalBridge.ts` arms above still
-describe the pre-decode shape in prose (`timelineBridge`: "that is the whole point of a history entry
-carrying a stored frame's `type` and `payload`"; `modalBridge`: "a page may CARRY a stored `modal_shown`
-among its entries") — flagged as a verifier NIT on PR #1228, left for #1223 to correct when it claims
-the `timelineBridge` arm.
+permanent on the same "not a question event" grounds. `timelineBridge`'s two arms **are still dormant —
+[#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) never claimed them here.** It drew a
+page a different way: a **fifth** independent subscriber ([history page
+bridge](conversation-timeline-store.md)) owns `historyPageReceived` on its own channel subscription and
+folds each entry through `translateTimelineEvent`'s *other* arms instead — the ones keyed by the entry's
+own `type`, `messageReceived` (#1223's actual new case) among them. **Stale comments, still open:** the
+`timelineBridge.ts` and `modalBridge.ts` prose at these two arms still describes the pre-decode shape and
+says "the mapping is #1223's" (`timelineBridge`: "that is the whole point of a history entry carrying a
+stored frame's `type` and `payload`"; `modalBridge`: "a page may CARRY a stored `modal_shown` among its
+entries") — flagged as a verifier NIT on PR #1228 and again as a SHOULD FIX on PR #1229; neither blocked
+ship, and neither has been fixed.
 
 ## Data flow
 
@@ -439,7 +444,7 @@ daemon → error frame (in_reply_to matches a pending history ask)
 | `requestHistory` (connection method) | `void` | Inert no-op when `driver === null`. `try/catch` drops any thrown object silently — never logged, never forwarded, no retry. |
 | `case 'history-page'` (consumer) | `void` | Absent or unmatched `inReplyTo` → dropped silently. A hit → exactly one `historyPageReceived`. |
 | `case 'daemon-error'` (consumer, history tier) | `void` | A correlated refusal always settles the ask, including a code outside the five (`'unclassified'`). A miss falls through unchanged to the pre-existing `daemon-error` consumers. |
-| Window | — | Nothing yet: both arms are dormant/permanent-null across all four bridges. #1223/#1224 are the first consumers. |
+| Window | — | `historyRequestFailed` still dormant/permanent-null across all four bridges (#1224's to claim). `historyPageReceived` is claimed outside them, by #1223's fifth subscriber — see § The `DaemonEvent` arms above. |
 
 ## Security properties
 
@@ -590,8 +595,9 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
 - [Daemon connection — methods](daemon-connection-methods.md) — the `requestHistory(payload)` entry in
   the public surface.
 - [Daemon-event channel — the sealed union](daemon-event-channel-sealed-union.md) — where
-  `historyPageReceived`/`historyRequestFailed` would be catalogued alongside every other arm, once a
-  render consumer exists to warrant the entry.
+  `historyPageReceived`/`historyRequestFailed` would be catalogued alongside every other arm; still
+  unlisted as of #1223, since neither arm is claimed inside any of the four bridges this catalogue
+  covers.
 - [Inbound message decode — extension history](inbound-message-decode-history.md) — the `history_page`
   kind's place in the chronological account of every additive extension to `InboundDaemonMessage`.
 - [Daemon error outcome](daemon-error-outcome.md) — the sibling narrower `HistoryRejectReason` mirrors
@@ -608,6 +614,7 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   FIX findings fixed before ship), and the `## Revisions` section recording the four departures from
   plan — `decodeHistoryPage` returning `{ page, skipped }` rather than a bare page, the 1200→800 fixture
   count, and the two Open Questions both resolving as planned.
-- `src/renderer/src/store/timelineBridge.ts`'s `historyPageReceived` / `historyRequestFailed` arms are
-  where #1223 claims the typed entries this ticket produces; its comment there is stale as of #1227
-  (see § The `DaemonEvent` arms above).
+- [Conversation timeline store](conversation-timeline-store.md) — #1223, the render consumer. Draws a
+  page via a fifth independent channel subscriber, `historyPageBridge.ts`, not by claiming
+  `historyPageReceived` in `timelineBridge.ts` — see § The `DaemonEvent` arms above for why that arm
+  stays dormant and its stale comment stays open.

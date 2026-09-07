@@ -406,9 +406,18 @@ with the `attachments` field documented above (§ Types).
   concept of "another device's drop" to build a heuristic for; pyrycode#2092's own doc criterion states
   the daemon-side half of the same rule ("an item whose `message_id` matches no local echo renders as a
   plain queued row and is never dropped").
-- **An echo with no `messageId` can never be removed by a drop** — the shape a future history-backfill
-  producer would take, on the same "absent correlates with nothing" rule the field's own paragraph
-  states above (§ Types). Nothing in this module manufactures a fallback key for it.
+- **An echo with no `messageId` can never be removed by a drop**, on the same "absent correlates with
+  nothing" rule the field's own paragraph states above (§ Types). Nothing in this module manufactures a
+  fallback key for it. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)'s history-drawn
+  `userText` rows are not this case in practice — a stored `message` always carries the wire's
+  `message_id` — but the reducer draws no distinction: a row is a row, whatever folded it.
+- **The `userText` arm's "exactly one production writer" comment predates a second one and is now
+  stale** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223), still open as a verifier
+  SHOULD FIX on PR #1229). A served history page also folds `userText` events through this reducer — but
+  against a scratch state that is discarded and never reaches the *held* one this arm's `localSendPending`
+  side effect writes into, so the arm's invariant ("firing this arm on held state is the composer's own
+  accept signal") is intact in practice even though the comment's producer count is not. See [Conversation
+  timeline store](conversation-timeline-store.md) for the fold.
 
 ## Related
 

@@ -9,7 +9,7 @@
 // owns the rest; this one owns exactly the two stream arms and returns `null` for everything else —
 // two independent subscribers on the same channel.
 import { useEffect } from 'react'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, HistoryTimelineEvent } from '@shared/ipc/events'
 import { timelineStore } from './timelineStore'
 import { conversationTimelineStore } from './conversationTimelineStore'
 import type { ThreadEvent } from './threadTimeline'
@@ -21,9 +21,10 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the eleven timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * timeline state. Owns exactly the twelve timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
- * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage` / `connected`→`reconnected` #538); each is reconstructed
+ * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage` / `connected`→`reconnected` #538 /
+ * `messageReceived`→`userText` #1223); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts`). This is a filter, not a
@@ -39,6 +40,15 @@ function assertNever(event: never): never {
  * bridges are the ones whose `DaemonEvent` switch ends in `assertNever`, not the ~20 siblings ending
  * in `default: return null`.
  *
+ * #1223 WIDENS THE PARAMETER to `DaemonEvent | HistoryTimelineEvent` so one served history entry folds
+ * through this same function. A widening, not a signature change: every existing call site still
+ * compiles, and no case body moved, because each arm already reconstructs from named RENDER fields and
+ * a `HistoryTimelineEvent` arm is its live twin minus the `conversationId` no arm reads. Every history
+ * arm's `type` tag already had a case, so `assertNever` stays total. Reusing this function rather than
+ * writing a second mapping is what makes "a page produces the rows the live stream would have produced"
+ * structural rather than aspirational — and the reason a new drawable arm must be added HERE, never in
+ * a history-only translator that would drift from this one.
+ *
  * #1013 adds the OPTIONAL `now` clock, read on the `assistantDelta` arm and nowhere else. Optional and
  * trailing for `subscribeTimeline`'s own #756 reason — a required parameter would cascade over every
  * existing call site, an optional one over none — and with NO `Date.now` fallback, which is the load-bearing
@@ -47,7 +57,7 @@ function assertNever(event: never): never {
  * **an absent clock means no stamp**, here and at every other seam this field crosses.
  */
 export function translateTimelineEvent(
-  event: DaemonEvent,
+  event: DaemonEvent | HistoryTimelineEvent,
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
@@ -178,10 +188,41 @@ export function translateTimelineEvent(
       // `event.ack` (HelloAckPayload) — the reconcile needs no field off it. `daemonEventBridge` and
       // `sessionStore` stay independent consumers of the same edge; this is a third, not a centralisation.
       return { type: 'reconnected' }
+    case 'messageReceived':
+      // #1223: THE OPERATOR'S OWN TURN, and the one arm this translator owns that a live frame does not
+      // produce. The daemon writes the operator's message to its conversation log and pushes no
+      // `message` frame on the interactive lane, so a served history page is the only thing that
+      // reaches this case — which is what makes claiming it a no-op for the live lane rather than a
+      // behaviour change. It is not gated on provenance, because an event carries none; it is gated on
+      // the ROLE, which is the fact that actually decides whether a row is the operator's.
+      //
+      // `role: 'assistant'` returns null and MUST keep returning null. A stored assistant `message` is
+      // not a user row, and assistant content reaches the timeline through `assistantDelta` entries
+      // anyway — mapping it here would draw claude's words in the operator's own bubble.
+      //
+      // NO `createdAt`, and this is AC5's bridge half: the clock is read on `assistantDelta` and nowhere
+      // else, so a replayed row cannot be stamped with the moment it was drawn even on the live path,
+      // which does inject one. The entry's own `ts` is the daemon's real timestamp, but no typed event
+      // in this app carries a wire timestamp and wiring one is a separate change. No `attachments`
+      // either: `MessagePayload` has no attachment field, so there is nothing to carry.
+      //
+      // `message.text` is REPLAYED operator-authored content under the same plain-text-NEVER-HTML
+      // constraint as every other string this translator passes; reusing the live lane's own row is what
+      // keeps that escaping in force. `message_id` is carried for `removeUserEcho`'s key ALONE — it is
+      // read for strict string equality and is never a lookup path, a cache key, a Map key or a React
+      // key (the item's own contract, `threadTimeline.ts`), and unlike the held echo's it is a string
+      // ANOTHER client minted, stored by the daemon and replayed.
+      //
+      // `timelineTargetFor` is deliberately NOT widened for this arm, so a live `messageReceived` — which
+      // this daemon does not send — resolves to no keyed target and reaches the flat store only, whose
+      // `items` no screen reads. Routing one by its daemon-asserted `message.conversation_id` is a
+      // separate decision with its own detector.
+      return event.message.role === 'user'
+        ? { type: 'userText', text: event.message.text, messageId: event.message.message_id }
+        : null
     case 'connecting':
     case 'disconnected':
     case 'failed':
-    case 'messageReceived':
     case 'messagesReceived':
     case 'debugBundleProgress':
     case 'debugBundleSaved':

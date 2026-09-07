@@ -26,15 +26,28 @@ speculative observer here would defend an unobserved need.
 ## The translator + binding (`src/renderer/src/store/timelineBridge.ts`)
 
 ```ts
-translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
+translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
-// (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538), each rebuilt as a fresh
-// named-field literal (never `return event`, never a spread — for stallDetected and connected->
-// reconnected, both sides are nullary, so the "literal" is arm-selection only; apiRetry and compacting
-// carry data, so each is a filter-and-copy like toolUse/toolResult — apiRetry's DaemonEvent side also
-// carries conversationId since #737, which the bridge drops; compacting's DaemonEvent side carries it
-// too, since #742, likewise dropped here). Every other arm -> null via
-// explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538) / messageReceived->
+// userText (#1223), each rebuilt as a fresh named-field literal (never `return event`, never a spread
+// — for stallDetected and connected->reconnected, both sides are nullary, so the "literal" is
+// arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
+// toolUse/toolResult — apiRetry's DaemonEvent side also carries conversationId since #737, which the
+// bridge drops; compacting's DaemonEvent side carries it too, since #742, likewise dropped here). Every
+// other arm -> null via explicit fall-through, then default: assertNever(event) — a HARD guard, not a
+// soft catch-all default.
+//
+// #1223 WIDENS THE PARAMETER, not the switch's case count over DaemonEvent alone: every
+// HistoryTimelineEvent arm is its live twin minus the conversationId no case reads, so every existing
+// case body is unchanged and total. messageReceived is the one case gated on more than `event.type`:
+// case 'messageReceived': return event.message.role === 'user'
+//   ? { type: 'userText', text: event.message.text, messageId: event.message.message_id } : null
+// role: 'assistant' -> null, always — a stored assistant message is not a user row, and assistant
+// content already reaches the timeline via assistantDelta. No createdAt (the clock is read only on
+// assistantDelta, and a page reduces with no clock at all — historyPageBridge.ts, below); no
+// attachments (MessagePayload carries none). timelineTargetFor is deliberately NOT widened for this
+// arm — a live messageReceived (this daemon sends none) still resolves to no keyed target and reaches
+// the flat timelineStore only, whose items no screen reads.
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
 // switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': return event.conversationId
@@ -177,4 +190,19 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
                               on top of #215's shouldShowThinking/workingIndicatorState gate)
    (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
     reconnected, or reset arm above, never by a fourth path of its own)
+
+served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,
+   conversationId, entries: HistoryTimelineEntry[]}
+   → window.pyry.onDaemonEvent (SAME channel, a FIFTH independent listener — historyPageBridge.ts, not
+                                 subscribeTimeline)
+   → subscribeHistoryPage → reduceHistoryPage(entries):
+        [...entries].reverse()                              // wire serves newest-first
+        .map(entry => translateTimelineEvent(entry.event))   // SAME function as the live lane, no clock
+        .reduce(reduceTimeline, initialTimelineState)         // against a SCRATCH state, discarded
+        → .items                                              // only the rows survive the fold
+   → conversationTimelineStore.getState().prependHistoryFor(conversationId, items)
+        → held slice spread with items: [...fresh, ...held.items]   // fresh = items minus held-echo dupes
+        → chrome (phase/stalled/apiRetry/compacting/localSendPending) carried by the spread, untouched
+   (#1223 — no reader wiring needed beyond the existing selectTimelineFor(conversationId): the keyed
+    holder's read surface does not distinguish a live-appended row from a prepended one)
 ```

@@ -77,7 +77,8 @@ import {
   reduceTimeline,
   initialTimelineState,
   type TimelineState,
-  type ThreadEvent
+  type ThreadEvent,
+  type ThreadItem
 } from './threadTimeline'
 
 /**
@@ -149,9 +150,18 @@ export interface ConversationTimelineState {
  *  Four named write paths rather than a reducer over a keyed action union: a fold, a view-stamp and two
  *  clears are independent operations, so a discriminated-union action set is ceremony without benefit
  *  (the twin's posture). There is deliberately NO generic `write(id, key, value)`, which would
- *  reintroduce a stringly-typed key beside the one hostile string this store exists to contain. */
+ *  reintroduce a stringly-typed key beside the one hostile string this store exists to contain.
+ *
+ *  `prependHistoryFor` (#1223) is the fifth, and the one that takes ROWS rather than an event. That is
+ *  not a shortcut around `dispatchFor`: a served page is not one event, and every arm of
+ *  `reduceTimeline` appends, so a page reduced INTO a held slice would land its rows behind the rows
+ *  already there — backwards. The page is folded to rows first (`historyPageBridge.reduceHistoryPage`,
+ *  against a scratch state) and this path puts them at the HEAD. Splitting it that way is also what
+ *  makes AC3 structural: rows are all that crosses, so no stored `turn_state`, `stall`, `api_retry` or
+ *  `compacting` entry can move the five chrome scalars the live lane owns. */
 export type ConversationTimelineStore = ConversationTimelineState & {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
+  prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
   markViewed: (conversationId: string) => void
   clearAllTimelines: () => void
   clearTimelineFor: (conversationId: string) => void
@@ -256,6 +266,49 @@ function withSliceAtTail(
   return next
 }
 
+/**
+ * #1223 — drop from a page's rows every `userText` whose `messageId` a held `userText` already carries,
+ * returning `page` UNCHANGED (same reference) when nothing matched, so a fully-duplicate page churns no
+ * subscriber. The optimistic echo and the operator's stored `message` are the SAME message arriving by
+ * two routes, and AC4 says they draw as one row.
+ *
+ * THE HELD ECHO WINS AND THE PAGE ROW IS DROPPED. The echo sits at its live position carrying the
+ * operator's own `createdAt` stamp and its `attachments`; the replayed row has neither, and keeping it
+ * instead would move the message earlier in the transcript and silently discard both fields.
+ *
+ * MATCHED BY A STRICT-EQUALITY SCAN, NEVER A `Set` OR A `Map` OF IDS, and that is a constraint rather
+ * than a preference. A page's `messageId` is the id the SENDING client minted, stored by the daemon and
+ * replayed — untrusted, unlike the held echo's, which this window minted itself — and the field's
+ * contract on the `userText` item (`threadTimeline.ts`) binds it to strict string equality only, never
+ * a lookup path, a cache key, a filename, a URL, a Map key or a React key. A keyed collection of them
+ * is exactly what that clause names, whatever its prototype safety. `removeUserEcho` already matches
+ * this way; this is its shape one array over. Both arrays are small and bounded, and `fillResult`
+ * already scans linearly per tool result.
+ *
+ * An ABSENT or EMPTY id never matches, on either side: `undefined === undefined` would collapse every
+ * id-less replayed row against the first id-less echo, and the `kind === 'userText'` guard is what keeps
+ * a daemon-authored row — a tool call, a boundary, an assistant bubble — structurally out of this branch
+ * whatever the wire says. Nothing here compares text: two rows with different ids and identical text are
+ * two messages.
+ */
+function withoutHeldEchoes(
+  page: readonly ThreadItem[],
+  held: readonly ThreadItem[]
+): readonly ThreadItem[] {
+  const isHeld = (messageId: string): boolean =>
+    held.some((item) => item.kind === 'userText' && item.messageId === messageId)
+  const next = page.filter(
+    (item) =>
+      !(
+        item.kind === 'userText' &&
+        item.messageId !== undefined &&
+        item.messageId !== '' &&
+        isHeld(item.messageId)
+      )
+  )
+  return next.length === page.length ? page : next
+}
+
 /** The tail key, or `undefined` for an empty map — "who was viewed most recently". `undefined` is never
  *  `===` a string, so `''` compares correctly rather than aliasing the empty-map reading. */
 function tailKey(timelines: ReadonlyMap<string, TimelineState>): string | undefined {
@@ -324,6 +377,47 @@ export function createConversationTimelineStore(
         if (folded === held) return s
         const next = new Map(s.timelines)
         next.set(conversationId, folded)
+        return { timelines: next }
+      }),
+    // #1223 — a page's rows land AHEAD of the rows already held. Three branches, mirroring
+    // `dispatchFor`'s above:
+    //
+    //   - NOTHING TO ADD (an empty page, or one every row of which was a duplicate) → the state OBJECT
+    //     itself, so zustand's `Object.is` short-circuit fires and no subscriber wakes. AC1's "an empty
+    //     page adds no rows and no error banner" — there is no error path here at all.
+    //   - KEY ABSENT → create through `withNewSliceAtHead`, `dispatchFor`'s unconditional-create branch:
+    //     a page for a conversation the client has never opened creates that slice rather than dropping
+    //     it. The rows go straight in; against an empty slice there is nothing to prepend them to.
+    //   - KEY PRESENT → the held slice SPREAD with a new `items`. The spread is what carries `phase`,
+    //     `stalled`, `apiRetry`, `compacting` and `localSendPending` through untouched (AC3): they are
+    //     copied, never recomputed, so no future scalar added to `TimelineState` can be forgotten here.
+    //
+    // `conversationId` is REQUIRED and CLIENT-OWNED all the way from #1222's correlation, so there is no
+    // absent-id case to resolve and no `?? openConversation` — the misattribution that field exists to
+    // prevent. A hostile id is contained by the `Map` keyspace exactly as it is for the four paths
+    // around this one.
+    //
+    // NOT IDEMPOTENT, and deliberately so: applying the same page twice prepends its rows twice, since
+    // only `userText` rows carry a key to dedup on. Unreachable today — nothing asks for a page, and
+    // #1222's correlation settles each request once — and the general answer needs the entry-level join
+    // key #1225 owns, so a guard built here would be that join built early and wrong. #1224's walk must
+    // not re-apply a page.
+    prependHistoryFor: (conversationId, items) =>
+      set((s) => {
+        if (items.length === 0) return s
+        const held = s.timelines.get(conversationId)
+        if (held === undefined) {
+          return {
+            timelines: withNewSliceAtHead(s.timelines, conversationId, {
+              ...initialTimelineState,
+              items
+            })
+          }
+        }
+        const fresh = withoutHeldEchoes(items, held.items)
+        if (fresh.length === 0) return s
+        const next = new Map(s.timelines)
+        next.set(conversationId, { ...held, items: [...fresh, ...held.items] })
         return { timelines: next }
       }),
     markViewed: (conversationId) =>

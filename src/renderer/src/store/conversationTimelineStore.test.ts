@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { ThreadItem } from './threadTimeline'
 import {
   MAX_RETAINED_TIMELINES,
   createConversationTimelineStore,
@@ -636,6 +637,106 @@ describe('conversationTimelineStore', () => {
     expect(timelineFor(store, '')).toBe(emptyKeyBefore)
     expect(({} as Record<string, unknown>).items).toBeUndefined()
     expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'items')).toBe(false)
+  })
+
+  // #1223 — `prependHistoryFor`, the fifth write path. It takes already-reduced ROWS rather than an
+  // event, because a page is not one event and `reduceTimeline` only ever appends.
+  describe('prependHistoryFor', () => {
+    const userRow = (text: string, messageId?: string): ThreadItem => ({
+      kind: 'userText',
+      text,
+      createdAt: undefined,
+      messageId,
+      attachments: undefined
+    })
+
+    it('lands rows AHEAD of the rows already held, leaving every chrome scalar as the live lane left it', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', delta('t2', 'live'))
+      store.getState().dispatchFor('c1', { type: 'compacting', active: true })
+      store.getState().dispatchFor('c1', { type: 'turnState', state: 'thinking' })
+      store.getState().dispatchFor('c1', { type: 'stallDetected' })
+      store.getState().dispatchFor('c1', { type: 'apiRetry', active: true, current: 1, total: 3 })
+
+      store.getState().prependHistoryFor('c1', [{ kind: 'assistantText', turnId: 't1', text: 'old' }])
+
+      const held = timelineFor(store, 'c1')
+      expect(held?.items).toEqual([
+        { kind: 'assistantText', turnId: 't1', text: 'old' },
+        { kind: 'assistantText', turnId: 't2', text: 'live', createdAt: undefined }
+      ])
+      // AC3's held half: a page moves none of the five, whatever a stored chrome entry said.
+      expect(held?.phase).toBe('thinking')
+      expect(held?.stalled).toBe(true)
+      expect(held?.apiRetry).toEqual({ current: 1, total: 3 })
+      expect(held?.compacting).toBe(true)
+      expect(held?.localSendPending).toBe(false)
+    })
+
+    it('adds no rows for an empty page, and churns no subscriber', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', delta('t1', 'live'))
+      const before = store.getState()
+
+      store.getState().prependHistoryFor('c1', [])
+
+      // The state OBJECT itself, so zustand's Object.is short-circuit fires.
+      expect(store.getState()).toBe(before)
+    })
+
+    it('creates the slice for a conversation it holds nothing for', () => {
+      const store = createConversationTimelineStore()
+
+      store.getState().prependHistoryFor('c1', [userRow('replayed')])
+
+      expect(timelineFor(store, 'c1')).toEqual({ ...emptyTimeline, items: [userRow('replayed')] })
+    })
+
+    it('collapses a history row and a local echo sharing a message id into one row, keeping the echo', () => {
+      const store = createConversationTimelineStore()
+      store
+        .getState()
+        .dispatchFor('c1', { type: 'userText', text: 'why?', messageId: 'm1', createdAt: 111 })
+
+      store.getState().prependHistoryFor('c1', [userRow('why?', 'm1'), userRow('earlier', 'm0')])
+
+      // The HELD echo survives — it carries the operator's own stamp and sits at its live position;
+      // the replayed twin is the one dropped. The unmatched history row still lands ahead of it.
+      expect(timelineFor(store, 'c1')?.items).toEqual([
+        userRow('earlier', 'm0'),
+        { kind: 'userText', text: 'why?', createdAt: 111, messageId: 'm1', attachments: undefined }
+      ])
+    })
+
+    it('keeps two rows with different ids and identical text, and never matches two id-less rows', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', { type: 'userText', text: 'same', messageId: 'm2' })
+      store.getState().dispatchFor('c1', { type: 'userText', text: 'anon' })
+
+      store.getState().prependHistoryFor('c1', [userRow('same', 'm1'), userRow('anon')])
+
+      // Nothing dedups on text, and `undefined === undefined` must not be a match.
+      expect(timelineFor(store, 'c1')?.items).toHaveLength(4)
+    })
+
+    it('is a same-reference no-op when every row of the page is a duplicate', () => {
+      const store = createConversationTimelineStore()
+      store.getState().dispatchFor('c1', { type: 'userText', text: 'why?', messageId: 'm1' })
+      const before = store.getState()
+
+      store.getState().prependHistoryFor('c1', [userRow('why?', 'm1')])
+
+      expect(store.getState()).toBe(before)
+    })
+
+    it('files a page under a hostile id without walking a prototype chain', () => {
+      const store = createConversationTimelineStore()
+
+      for (const key of hostileKeys) store.getState().prependHistoryFor(key, [userRow(key)])
+
+      for (const key of hostileKeys) expect(timelineFor(store, key)?.items).toEqual([userRow(key)])
+      expect(({} as Record<string, unknown>).items).toBeUndefined()
+    })
   })
 
   it('the factory yields independent stores, and honours an injected initial state', () => {

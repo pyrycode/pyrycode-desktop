@@ -104,7 +104,7 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 - The `<textarea>` gains `value={text}`, `onChange`, and `onKeyDown`; the send `<button>` gains `onClick={handleSubmit}`. Existing `className`/`placeholder`/`aria-label="Send"`/SVG untouched.
 - **Since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), that button is `ComposerSendButton`, not a bare `<button>`.** `Composer` also takes a required `phase: TurnPhase` prop from the container and derives `isRunning={isTurnRunning(phase)}` on every render; while a turn is running the control swaps to a stop affordance in place, reusing the same `.composer__send` chrome and the same `aria-label="Send"` string only in the idle branch. `onClick={handleSubmit}`/`disabled={!canSend}` still gate the send branch exactly as above — `isRunning` and `canSend` are independent, so the send-gate logic on this page is unchanged by the swap. See [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the stop variant's own contract.
 - `handleSubmit` builds `deps` **inside the handler body** (so `window.pyry` is dereferenced only at interaction time, never during render — this keeps the server-rendered container smoke test crash-free), calls `submitMessage(text, { sendCommand: window.pyry.sendCommand, dispatch, newMessageId: () => crypto.randomUUID() })`, and `setText('')` when it returns `true`.
-- `onKeyDown`: reads `key`, `shiftKey`, and `nativeEvent.isComposing` off the event and asks `shouldSubmitOnKeyDown` (§7) whether to act; on `false` it returns without touching the event, otherwise `preventDefault()` + `handleSubmit()`.
+- `onKeyDown`: reads `key`, `shiftKey`, and `nativeEvent.isComposing` off the event into one shared `ComposerKeyEvent`, and asks two predicates in turn (§7) — `shouldInterruptOnKeyDown` first, since [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) added it beneath the type-ahead's own claim, then `shouldSubmitOnKeyDown`. A `true` from the interrupt predicate calls `sendInterrupt` and returns with no `preventDefault()`; otherwise `shouldSubmitOnKeyDown`'s `false` returns without touching the event, and `true` does `preventDefault()` + `handleSubmit()`.
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
 
@@ -192,7 +192,7 @@ it is now argued distinct from the status row's two remaining strings instead (`
 as the same string stacked twice. One constant, not a per-arm map: every non-connected arm is a state
 where pyry is unreachable, so one sentence covers all three honestly.
 
-### 7. Keystroke-intent gate — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md))
+### 7. Keystroke-intent gates — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md)) and `shouldInterruptOnKeyDown` ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072))
 
 A fourth pure predicate in `composerSend.ts`, but on a different axis from `composerAvailability`/`shouldOfferRepair`/`shouldShowBanner` (all of which read `ConnectionStatus` — *may* the composer send): this one reads the keydown itself — *did this keystroke ask* to send. Placed directly after `submitMessage`, not beside the `ConnectionStatus` cluster.
 
@@ -209,9 +209,25 @@ export function shouldSubmitOnKeyDown(event: ComposerKeyEvent): boolean {
 
 Plain Enter (no shift, no composition) → `true`; Shift+Enter, a non-Enter key, or — the fix — **the Enter that commits an in-progress IME composition** → `false`. That commit keydown fires with `key === 'Enter'` and `shiftKey === false`, indistinguishable from an ordinary Enter except for `isComposing`; before #512 it both sent the half-composed text and suppressed the commit itself.
 
-`handleKeyDown` is now exactly three statements, and the `return` on `false` **precedes** `preventDefault()` — calling `preventDefault()` first and declining to submit second would still break the IME commit, since the candidate never lands. This ordering, not the predicate, is the actual fix; it's why AC1's "no `preventDefault`" is a separate clause from "no wire command."
+The `return` on `false` **precedes** `preventDefault()` — calling `preventDefault()` first and declining to submit second would still break the IME commit, since the candidate never lands. This ordering, not the predicate, is the actual fix; it's why AC1's "no `preventDefault`" is a separate clause from "no wire command."
 
 The predicate deliberately does **not** absorb the `canSend` gate (§4) — that stays authoritative in `handleSubmit`, preserving #31's contract that a disconnected Enter is *swallowed*, not turned into a newline. It also doesn't read the legacy `keyCode === 229`; `isComposing` is the one signal used, since Electron `^33.2.1` is Chromium-only and doesn't need a WebKit fallback.
+
+**`shouldInterruptOnKeyDown`, a fifth pure predicate ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072)), sits directly after this one — same record, same axis (*did this keystroke ask for something*), a different question:**
+
+```ts
+export function shouldInterruptOnKeyDown(event: ComposerKeyEvent, turnRunning: boolean): boolean {
+  return turnRunning && event.key === 'Escape' && !event.isComposing
+}
+```
+
+True iff a turn is running, the key is Escape, and the keystroke is not an IME composition. It **reuses `ComposerKeyEvent`** rather than minting a second record — one destructure at each call site answers both questions. `turnRunning` is a second positional argument rather than a field of that record: the record models the keystroke, this models the app's state, and folding them would make `ComposerSendButton`'s call site (where the value is `true` by construction — that variant only renders while a turn runs) read as if the button knew something about the keydown it does not. Both call sites pass `isTurnRunning(phase)`, never `localSendPending`: that scalar opens the working-indicator window while `phase` is still the daemon-owned `idle` (#650), which would arm an interrupt before the daemon has actually started a turn — the same reason the stop button itself ignores it.
+
+`shiftKey` is **deliberately unread** — Escape has no meaningful shifted variant, and `composerSend.test.ts` pins a Shift+Escape case so a later "tidy" that adds a `!shiftKey` clause for symmetry with `shouldSubmitOnKeyDown` reddens instead of shipping unnoticed. `isComposing` is not decorative symmetry either: the slash type-ahead's own handler (`ComposerSlashCommandTypeAhead.tsx`) returns `false` on a composing keystroke *even while its panel is open*, so the Escape that cancels a half-typed IME candidate falls through to this predicate — without the clause, a CJK operator cancelling a candidate mid-turn would stop the turn.
+
+`handleKeyDown` now has three key-bearing branches, not the `shouldSubmitOnKeyDown`-era one: the type-ahead's own claim (`typeAhead.handleKeyDown(event)`, returns first and unconditionally consumes a resolved Escape), then `shouldInterruptOnKeyDown`, then `shouldSubmitOnKeyDown`. The two composer predicates are disjoint by key (`Escape` vs `Enter`), so their relative order is a reading convenience, not a behavioural dependency — Enter's send path is untouched either way. No `preventDefault()` on the interrupt branch: Escape has no default action in a textarea to suppress, and if one is ever added it must sit below a `false` return, the rule this section's IME paragraph above already states for the submit predicate.
+
+A second binding lives outside this module, on `ComposerSendButton`'s running variant itself — see [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for why that binding exists (the mouse-send path leaves focus there) and how ordering against the screen's seven other Escape claimants needed no coordination at all.
 
 ### 8. Error chip copy — `composerSend.ts` (#797)
 
@@ -428,6 +444,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [Conversation shell § Actionable-error button](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) / #963 — `shouldOfferRepair`'s current surface: a button in the composer status row's error slot, using `COMPOSER_REPAIR_BUTTON_COPY` (§9 above), replacing #167's block beneath the composer.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell-chrome.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
+- [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) — added the sibling `shouldInterruptOnKeyDown` predicate (§7) and its two bindings; see [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the second binding and the ordering argument against the screen's other Escape claimants.
 - [Conversation shell § Composer error chip](conversation-shell-composer-status.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the optional `now` clock on `ComposerSendDeps`, implementation summary above. [Thread timeline § Types](thread-timeline.md#types) has the full `createdAt` contract; [conversation timeline store](conversation-timeline-store.md) has the mirror wiring for the assistant-side echo.

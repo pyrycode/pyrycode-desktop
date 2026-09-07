@@ -45,6 +45,7 @@ import {
 import {
   submitMessage,
   shouldSubmitOnKeyDown,
+  shouldInterruptOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
@@ -2725,6 +2726,28 @@ export function ComposerSendButton({
         className="composer__send"
         aria-label={INTERRUPT_LABEL}
         onClick={onInterrupt}
+        // #1072: the SECOND Escape binding, and it is not optional. Chromium focuses a <button> on click
+        // and nothing in the composer moves focus back (`handleSubmit` only clears the text), so after a
+        // mouse send the operator's focus is on this control — and this control is what the send button
+        // BECOMES: both variants render a <button> at the same position in the same parent, so React
+        // patches the node in place rather than remounting and the focus survives the flip. Without a
+        // handler here Escape does nothing in exactly the state the operator most often reaches, and the
+        // message box's own handler never sees the keystroke.
+        //
+        // The predicate's `turnRunning` argument is `true` BY CONSTRUCTION rather than by a prop read: this
+        // element only exists inside the `isRunning` branch. It is still asked, so that both bindings
+        // consult one decision and a change to the key or to the composing rule lands on both at once.
+        //
+        // No new prop and no window.pyry: the container-injected `onInterrupt` is already the effect, and
+        // this view still never touches the bridge (the "a view that cannot answer is a bug" rule).
+        // An event handler renders no attribute, so this moves no markup assertion.
+        onKeyDown={(event) => {
+          const { key, shiftKey, nativeEvent } = event
+          if (!shouldInterruptOnKeyDown({ key, shiftKey, isComposing: nativeEvent.isComposing }, true)) {
+            return
+          }
+          onInterrupt()
+        }}
       >
         <svg
           className="composer__send-icon"
@@ -2919,13 +2942,30 @@ function Composer({
     // before shouldSubmitOnKeyDown is consulted, so the send gate below is never reached. A second Enter
     // meets a closed panel, is not consumed, and sends exactly as a typed message does.
     if (typeAhead.handleKeyDown(event)) return
-    // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
-    // neither (#512). `isComposing` is on the DOM event, not React's synthetic one, so it is read
-    // through `nativeEvent` — writing `event.isComposing` is a compile error, which is what keeps
-    // this untested glue honest. The `return` MUST precede preventDefault(): preventing the default
-    // on the committing keydown would break the IME commit itself.
+    // ONE record, TWO questions (#1072). `isComposing` is on the DOM event, not React's synthetic one, so
+    // it is read through `nativeEvent` — writing `event.isComposing` is a compile error, which is what
+    // keeps this untested glue honest.
     const { key, shiftKey, nativeEvent } = event
-    if (!shouldSubmitOnKeyDown({ key, shiftKey, isComposing: nativeEvent.isComposing })) return
+    const keystroke = { key, shiftKey, isComposing: nativeEvent.isComposing }
+    // #1072: Escape stops the running turn, and its position in this handler IS its ordering guarantee.
+    // Sitting BELOW the type-ahead's claim above is the whole of "one Escape does one thing": a consumed
+    // Escape returned already, so the first closes the panel and sends nothing and the second — panel now
+    // closed, key not consumed — reaches here. Every other Escape claimant on this screen takes focus when
+    // it opens and mounts its `document` listener only while open, so while one is open this handler is not
+    // on the event's path at all; that is why binding inside the composer needs no open-state and no
+    // listener ordering. NO preventDefault(): Escape has no default action in a textarea, so there is
+    // nothing to suppress. The gate is isTurnRunning(phase) ALONE, the stop button's gate and for its
+    // reason (#650's localSendPending would arm an interrupt for a turn the daemon has not started), and
+    // `window.pyry` is dereferenced HERE, at interaction time, never during render.
+    if (shouldInterruptOnKeyDown(keystroke, isTurnRunning(phase))) {
+      sendInterrupt({ sendCommand: window.pyry.sendCommand })
+      return
+    }
+    // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
+    // neither (#512). The `return` MUST precede preventDefault(): preventing the default
+    // on the committing keydown would break the IME commit itself. Disjoint from the branch above by key,
+    // so the two orderings are a reading convenience and Enter's path is untouched either way.
+    if (!shouldSubmitOnKeyDown(keystroke)) return
     event.preventDefault()
     handleSubmit()
   }

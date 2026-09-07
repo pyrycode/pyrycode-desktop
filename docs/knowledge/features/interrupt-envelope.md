@@ -136,6 +136,50 @@ No new client-side state represents "stopping": the button reverts to send when 
 `turn_state{idle}` returns `phase` to idle and the live subscription re-renders — the same retraction
 path #307 had, now read one level up in `Composer` rather than in a standalone control.
 
+**Since [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072), a click is not the only route
+to `sendInterrupt`.** Escape reaches it too, from two points inside the composer: `Composer`'s own
+`handleKeyDown` (see [Composer send § 7](composer-send.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072))
+when the caret is in the message box, and a new `onKeyDown` on `ComposerSendButton`'s running variant
+itself, for the state a mouse send actually leaves the operator in.
+
+The second binding exists because of a fact worth stating plainly: Chromium focuses a `<button>` on
+click, and nothing in `handleSubmit` moves focus back — it only clears the text. After a mouse send,
+focus sits on the send control, and that control is what *becomes* the stop control: both variants
+render a `<button>` at the same position in the same parent, so React patches the node in place rather
+than remounting, and focus survives the flip. Without a handler on that node, Escape would do nothing in
+exactly the state an operator reaches most often — right after clicking Send. The two variants sharing
+one DOM node was already true before #1072 (it's what makes the send↔stop swap visually seamless); #1072
+is what makes it load-bearing for the keyboard too. A future change giving the two variants different
+wrappers or a React `key` would silently break the keyboard path, with no markup assertion moving to
+catch it.
+
+The running variant's `onKeyDown` asks the same `shouldInterruptOnKeyDown` predicate with `turnRunning`
+passed as a literal `true`, not read from a prop — this element exists only inside the `isRunning`
+branch, so the value is true by construction; it is still asked, so a future change to the key or the
+composing rule lands on both bindings at once. It calls the existing `onInterrupt` prop, not
+`sendInterrupt` directly: this view still never touches `window.pyry`, the same "a view that cannot
+answer is a bug" property the click handler above already had.
+
+**No ordering coordination was needed against the screen's seven other Escape claimants** (the channel
+info sheet, the thread overflow menu, the background task panel, the workspace picker, the
+default-workspace sheet, the four footer menus behind `ComposerOptionsMenu`, and the slash type-ahead) —
+**and the reason is not a focus trap, precisely stated.** No surface calls `.focus()` when it opens; what
+actually holds is that the click that opens each one leaves focus on that surface's own trigger
+`<button>`, so while one is open, neither composer binding is on the keydown's path at all. Operationally
+identical to a focus trap for the two states this ticket covers, but worth the distinction: a surface
+opened by some future route other than a click (a keyboard shortcut, say) would not inherit this property
+for free, and would need its own check.
+
+A `document`-level interrupt listener was considered and rejected for a reason worth recording precisely,
+because the ticket's own stated reasoning for rejecting it was subtly wrong: "`document` listeners fire
+in attach order" is true only **among listeners on the same node**. React 18 delegates its handlers from
+the root container, which itself lives inside `document`, so the real bubble path is target → root
+container → document — a `document`-level listener necessarily runs *after* every React handler on the
+way up, never before it. The five `document`-listener dismissals above are mount-gated regardless (each
+attaches on mount, detaches on cleanup, and mounts only while its surface is open), so this was never
+load-bearing for #1072 — but it matters for a future change widening Escape's reach to the whole window:
+the real constraint is listener order on one node, not attach order across the React/DOM boundary.
+
 **The glyph is now Figma-sourced.** The mobile Figma file used to draw only the steady-send composer
 state (16-61) with no stop/interrupt component in the design system, so #307 derived a generic M3 `stop`
 glyph (a bare filled square) kept neutral-coloured for lack of a design. That gap closed when Figma node
@@ -188,6 +232,12 @@ without an observed failure.
   assertion) without ever starting or ending that turn through the UI —
   `e2e/thread-scroll-pin.spec.ts` did exactly this and was missed by #678's own architecture-spec audit,
   caught only in code review (PR #804). The correct predicate is "what is `phase` at this line."
+- **A drive proving two independent keyboard bindings needs two independent mutations, not one**
+  ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072)). `e2e/escape-interrupt.spec.ts`'s
+  four legs pass green whether one binding exists or both do; disabling either one alone — the message
+  box's branch in `handleKeyDown`, or the stop control's own `onKeyDown` — reddens exactly one leg while
+  the rest of the drive stays green. A single "does Escape stop the turn at all" mutation would have
+  proven only that *something* carried the keystroke, not which of the two claimed routes actually did.
 
 ## Related
 
@@ -229,6 +279,12 @@ without an observed failure.
   send button. Net-negative diff: deletes `InterruptButton`/`InterruptControl`, their mount, and five CSS
   rules; adds one two-variant component. `sendInterrupt.ts`, the wire type, and the command pathway
   (#305/#306) are untouched. See § The render affordance above.
+- [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) — Escape stops the running turn from
+  the keyboard: `shouldInterruptOnKeyDown` in [Composer send § 7](composer-send.md#7-keystroke-intent-gates--shouldsubmitonkeydown-512-and-shouldinterruptonkeydown-1072),
+  bound in `Composer`'s `handleKeyDown` and, for the mouse-send-then-Escape path, on
+  `ComposerSendButton`'s running variant itself — see § The render affordance above. `sendInterrupt`,
+  the wire type, and the command pathway are all unchanged; this ticket gives `sendInterrupt` two more
+  callers only.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#445 codebase notes](../codebase/445.md) —
   the tier-3 real-stack liveness net over this chain: `e2e/real-claude-interrupt.spec.ts` interrupts a
   genuinely running turn (real daemon + real claude), proving the retract-on-`turn_state{idle}` /

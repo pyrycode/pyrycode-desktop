@@ -31,6 +31,7 @@ export interface DaemonConnection {
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   requestModelList(conversationId: string): void  // #1165: encrypt a request_model_list onto the live session; the id is REQUIRED, unlike its bare-optional sibling above
+  newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
   uploadAttachment(input: AttachmentChunkPlanInput): Promise<AttachmentTransferResult>  // #861: drive a planAttachmentChunks() result onto the live session and resolve on the one terminal; consumer-failing twin like requestDebugBundle, not send's silent no-op
@@ -182,6 +183,31 @@ line for it, and its test factory fake gained a `noop` — a **tsc-only** break,
 full `DaemonConnection` object literal (`npm run build` is the gate, not `npm test`). Ships with no
 renderer sender at all — [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) is the trigger
 that fires it on conversation open.
+
+**`newSession(conversationId)` was added in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217)**
+— asks the daemon to **kill** the supervised claude process in the named conversation and spawn a fresh
+one under a new session id, so every stored setting (model, effort, permission mode, and the
+per-conversation system prompt pyrycode#2094 introduces) re-applies at the spawn. **Not** the `/clear`
+the Actions menu's Reset session already sends as ordinary message text — that clears context in place
+and the process keeps everything it holds; this discards the process outright, which is why it is the
+only route by which a stored per-conversation setting takes effect at all (on the Mac the daemon's idle
+timeout is 0, so nothing evicts and `/clear` respawns nothing). Faithful `requestModelList` send
+mechanics (inert no-op when `driver === null`, sharing the one `nextEnvelopeId` counter, advancing the id
+only on a successful build, a content-free `catch {}`), and the **same** required-id divergence from
+`requestSessionSettings`'s optional one, for a stronger reason still: an unnamed `new_session` is not
+merely useless, it restarts whichever conversation the daemon's process-wide follow-active cursor points
+at — another connection's conversation, mid-work (pyrycode#2099). Routed by conversation through
+`router.route` in `src/main/index.ts`'s dispatch case, exactly like `requestModelList`; a conversation no
+live connection hosts sends nothing and throws nothing. **Unlike `requestModelList`, there is no reply at
+all** — not `model_list`, not an error — so there is no correlation map and nothing for the inbound path
+to route back; the only observable effect is the pre-existing `session_transition` marker. No retry, ever
+— a restart is destructive and unacknowledged, so a resend would be a second kill rather than a second
+attempt at the first. `connectionRegistry.ts`'s `viewOf` gained one delegate line (23 → 24 members) and
+its test factory fake gained a recorder, the same **tsc-only** break shape as #1165's addition. Ships with
+no renderer sender at all — the sibling ticket adds the trigger and whatever confirmation it needs before
+discarding a running turn's context. See [New session envelope](new-session-envelope.md) for the full
+wire contract, the builder, and why the wire type's `conversation_id` stays optional while every layer
+above it makes the id required.
 
 **`answerQuestions(payload)`/`refuseQuestions(payload)` were added in
 [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)** — the resolution half of the question

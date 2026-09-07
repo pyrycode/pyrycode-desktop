@@ -34,8 +34,9 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
 Split out to [Daemon connection — methods](daemon-connection-methods.md) 2026-09-06 to keep this
 document under the size cap: the full `DaemonConnectionDeps`/`DaemonConnection` interface listing, and
 one write-up per method — when it was added, what it builds, and how it fits the `send`-twin /
-consumer-failing-twin split. Latest addition: `requestModelList(conversationId)` (#1165), the
-`requestSessionSettings` twin whose id is required rather than optional.
+consumer-failing-twin split. Latest addition: `newSession(conversationId)` (#1217), which asks the
+daemon to kill claude and spawn a fresh one in the named conversation — the `requestModelList` (#1165)
+send mechanics and required-id posture, but with no reply of any kind.
 
 ## Edge cases and limitations
 
@@ -50,7 +51,10 @@ consumer-failing-twin split. Latest addition: `requestModelList(conversationId)`
 
 - [Daemon connection — methods](daemon-connection-methods.md) — the full public surface, split out of
   this file 2026-09-06 to keep it under the size cap: one write-up per method, including
-  `requestModelList` (#1165).
+  `requestModelList` (#1165) and `newSession` (#1217).
+- [New session envelope](new-session-envelope.md) — the `newSession(conversationId)` method's wire
+  frame, builder, and command path (#1217): kills claude in the named conversation and spawns a fresh
+  one, distinct from the `/clear` the Actions menu's Reset session already sends as message text.
 - [The connection registry](daemon-connection-routing.md#the-connection-registry-1117) / #1117 — the composition root's actual caller since this module stopped being constructed directly at the root: one registry, one connection per stored paired record, reconciled against the store on every pairing/unpair signal.
 - [Live window](live-window.md) / [#519](../codebase/519.md) — the composition root's `sink: live.sink`
   and the `openWindow()` load handler's `live.replayStatus()` call, which converges a dock-reopened

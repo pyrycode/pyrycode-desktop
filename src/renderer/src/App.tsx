@@ -18,6 +18,7 @@ import { ConversationActivityData } from './store/conversationActivityBridge'
 import { SlashCommandListData } from './store/slashCommandListBridge'
 import { ModelListData } from './store/modelListBridge'
 import { SystemPromptData } from './store/systemPromptBridge'
+import { SystemPromptWriteData } from './store/systemPromptWriteBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -263,6 +264,20 @@ function App(): JSX.Element {
   // `requestConversationConfig`) — the only place the conversation to name is known — never from this
   // mount, and it is a one-shot on open rather than a retry. Its conversation-lifetime clear is the
   // shared `clearRunConfig` dep member's, not this leaf's. Ships dormant.
+  // SystemPromptWriteData (#1250) is the THIRTEENTH headless leaf and the leaf above's write-side
+  // counterpart: it folds the two correlated `set_system_prompt` outcomes — one confirmation, one
+  // refusal carrying which of four conditions it was — into the system-prompt write store the editor
+  // surface (#1078) will read, and flips the `connected` edge into the clear that drops the markers a
+  // re-dial stranded. App-level for RunSettingsWriteData's reason rather than its read twin's: an
+  // outcome can arrive AFTER the editor surface closes, so a surface-scoped listener would miss it and
+  // strand a marker reporting a save as permanently in flight — and that rationale covers the reconnect
+  // clear for free, since that edge fires whether or not the editor is open. Unlike its read twin it
+  // takes NO attribution gate: the store is keyed by conversation id, so an outcome naming a
+  // conversation with nothing in flight settles nothing by construction, and a gate would give one
+  // decision two implementations. Reactive-only — the outbound half (`submitSystemPrompt`) is called
+  // from the editor surface, the only place the value to write is known, never from this mount, and it
+  // is never a retry. Its conversation-lifetime clear is the shared `clearRunConfig` dep member's, not
+  // this leaf's. Ships dormant.
   return (
     <>
       <ConversationListData />
@@ -277,6 +292,7 @@ function App(): JSX.Element {
       <SlashCommandListData />
       <ModelListData />
       <SystemPromptData />
+      <SystemPromptWriteData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

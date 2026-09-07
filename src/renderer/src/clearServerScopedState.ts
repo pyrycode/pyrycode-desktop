@@ -33,6 +33,7 @@ import { runConfigStore } from './store/runConfigStore'
 import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { systemPromptStore } from './store/systemPromptStore'
+import { systemPromptWriteStore } from './store/systemPromptWriteStore'
 import { timelineStore } from './store/timelineStore'
 import { exitActiveConversation, type ExitActiveConversationDeps } from './exitActiveConversation'
 
@@ -220,7 +221,7 @@ export const serverScopedClearDeps: Omit<ClearServerScopedStateDeps, 'navigateTo
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // The same one act as in PairedShell's `activateDeps` and `exitConversationDeps`, and the three bodies
   // are deliberately identical: a server departing ends the conversation this state describes exactly as
-  // a delete, an archive or a switch does. Three `getState()` arrows in one body rather than three
+  // a delete, an archive or a switch does. Four `getState()` arrows in one body rather than four
   // members — the snapshot half self-heals in a round trip while the write half never heals at all, so
   // clearing either alone leaves the durable half standing.
   //
@@ -230,9 +231,15 @@ export const serverScopedClearDeps: Omit<ClearServerScopedStateDeps, 'navigateTo
   // the departed server's chat's operator-authored prompt text, which #1078 will offer for edit rather
   // than merely display. Adding it to all three bodies in one edit is the discipline #1167 named — a
   // store added to one body and not the others is how that ticket's own defect arose.
+  //
+  // #1250's system-prompt WRITE outcome is the fourth, and it is the least self-healing of the set:
+  // nothing asks for it and nothing pushes it, because it records an act the operator performed rather
+  // than a value the daemon holds. Left standing past a server's departure it would report a save
+  // against a chat this client can no longer reach.
   clearRunConfig: () => {
     runConfigStore.getState().clearSnapshot()
     runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
     systemPromptStore.getState().clearReading()
+    systemPromptWriteStore.getState().dispatch({ type: 'conversationSwitched' })
   }
 }

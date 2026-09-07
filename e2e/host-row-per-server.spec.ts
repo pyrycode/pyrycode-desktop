@@ -36,6 +36,13 @@ import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/convers
 // case-insensitive `hasText` filter anywhere in the suite.
 const HOST_LABEL = 'Pyrybox'
 
+// The length of `HOST_ROW_FALLBACK_LABEL` — the client-owned word a machine with no stored name shows.
+// Its LENGTH rather than the word, so this file compares lengths throughout and no assertion diff can
+// print a label at all. Six and seven differ, which is the whole mechanism; a rename of that constant to
+// another six-character word leaves this correct, and to a seven-character one reddens it loudly here
+// rather than silently anywhere else.
+const FALLBACK_LABEL_LENGTH = 6
+
 // The first server's seeded row, as a spec-local literal rather than a `SEEDED_ROW.name` read:
 // `ConversationSummary.name` is `string | null`, and a `!` or a `?? ''` at the `hasText` hole would turn
 // a null into either a crash or a filter matching EVERY row — a vacuous selector. It shares no substring
@@ -67,72 +74,96 @@ test('the host row reports the server it names, and the other machine dropping d
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST_ROW_NAME }).click()
   await expect(page.locator('.conversation')).toBeVisible()
 
-  // Exactly ONE host row: both seeds are unpromoted, so only the Chats tree renders. Asserted rather
-  // than assumed, because every locator below is strict-mode single and a second row would fail them
-  // for a reason that has nothing to do with what they are testing. (#1070 is what makes this two.)
-  const hostRow = page.locator('.channel-list__host')
-  await expect(hostRow).toHaveCount(1)
+  // FOUR host rows since #1070: one per paired machine, in EACH section. Both seeds are unpromoted, so
+  // the Chats tree is the populated one and the Channels tree holds the two rows alone — the amendment's
+  // "a machine with nothing in a section still shows its row" in the same render. It read 1 until #1070,
+  // when the sidebar drew a single row from the first paired server.
+  //
+  // Asserted rather than assumed, because the positional reads below are only meaningful against a known
+  // count: `nth()` addressing the wrong row would still produce two labels to compare and would compare
+  // the wrong ones.
+  const hostRows = page.locator('.channel-list__host')
+  await expect(hostRows).toHaveCount(4)
 
-  // The BASELINE, taken while both machines are live. Asserted to be a CONNECTED leg rather than merely
-  // recorded: if the row were already reporting an outage here, the "did not move" assertion below would
-  // hold vacuously for a row that never had anything to lose.
-  const dots = hostRow.locator('.channel-list__host-dot')
-  await expect(dots).toHaveCount(2)
-  await expect(dots.first()).toHaveAttribute('aria-label', 'Pyrycode Connected')
+  // POSITION IS THE ONLY HANDLE, and deliberately so: the server id reaches no attribute, class name or
+  // text on this row (`HostRow`'s ban list), so there is nothing to filter on. Document order is the
+  // paired-server list's order — oldest-paired first — repeated per section, so the Chats tree's rows are
+  // index 2 (machine A) and 3 (machine B). The count assertion above is what makes that arithmetic safe.
+  const dotsOf = (index: number) => hostRows.nth(index).locator('.channel-list__host-dot')
+  const labelsOf = (index: number): Promise<(string | null)[]> =>
+    dotsOf(index).evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')))
+  const rowA = 2
+  const rowB = 3
+
+  // The BASELINE, taken while both machines are live. Machine A's legs are asserted CONNECTED rather than
+  // merely recorded: if its row were already reporting an outage here, the "did not move" assertion below
+  // would hold vacuously for a row that never had anything to lose.
+  await expect(dotsOf(rowA)).toHaveCount(2)
+  await expect(dotsOf(rowA).first()).toHaveAttribute('aria-label', 'Pyrycode Connected')
   // BOTH legs pinned, not just the daemon one. The relay dot's keyed slot fills only because
   // `connectionRegistry.build` binds the whole per-connection sink through `bindServerOrigin`, so
   // `relayLinkChanged` carries the origin stamp; pinning the live category here is what proves the
   // per-server relay read resolved rather than sitting at its "Relay Unknown" launch value — otherwise
   // the relay half of the comparison below would be two silent servers agreeing on nothing.
-  await expect(dots.nth(1)).toHaveAttribute('aria-label', 'Relay Connected')
-  const baseline = await dots.evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute('aria-label'))
-  )
+  await expect(dotsOf(rowA).nth(1)).toHaveAttribute('aria-label', 'Relay Connected')
+  const baselineA = await labelsOf(rowA)
+  const baselineB = await labelsOf(rowB)
 
   // Server B's leg only. Its forwarder is its own, so server A's connection is untouched and stays live
   // and handshaken throughout.
   serverB.forwarder.closeClientLeg(FATAL_CLOSE_CODE)
 
-  // THE POSITIVE READ, ORDERED FIRST. A closing "the dots did not move" assertion on its own passes
-  // before the drop's async work has resolved — it would be reading the pre-drop render and calling it a
-  // result. This auto-waiting read is the proof that the close reached the renderer, and it is
-  // unreachable from the state being asserted against: the Re-pair button appears on the app-wide
-  // session cell, which server B's terminal close writes, and it lives in the composer rather than in
-  // the sidebar.
+  // THE POSITIVE READ, ORDERED FIRST, and it is on the row under test's OWN sibling. A closing "the dots
+  // did not move" assertion on its own passes before the drop's async work has resolved — it would be
+  // reading the pre-drop render and calling it a result. Machine B's dots changing IS the drop's own
+  // effect, it auto-waits, and it is unreachable from the state being asserted against, which is machine
+  // A's dots holding still.
+  await expect.poll(() => labelsOf(rowB)).not.toEqual(baselineB)
+
+  // The app-wide contrast #1199 established, kept: the composer's Re-pair control still reads the
+  // app-wide session cell, which server B's terminal close writes, so one window holds a surface that
+  // must move on that drop and a surface that must not.
   await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toBeVisible()
 
-  // AC4 — and only now. The app-wide surface has moved in this same window; the row naming server A has
-  // not. Both dots, so a regression on either leg reddens: the daemon leg is the one server B's close
-  // writes, and the relay leg is its twin through `selectRelayLinkStatusFor`.
-  expect(
-    await dots.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')))
-  ).toEqual(baseline)
+  // AC3 — and only now. Two surfaces have moved in this same window; the row naming server A has not.
+  // Both dots, so a regression on either leg reddens: the daemon leg is the one server B's close writes,
+  // and the relay leg is its twin through `selectRelayLinkStatusFor`.
+  expect(await labelsOf(rowA)).toEqual(baselineA)
+  // The same row in the OTHER section, which reads the same two keyed cells and must agree with it. A
+  // tree that resolved a section's rows against the wrong machine would separate these two.
+  expect(await labelsOf(0)).toEqual(baselineA)
 })
 
-// AC3's two-server half: server 1 was named at pairing and server 2 was not, so the row naming server 1
-// has to show server 1's name rather than the app-wide "most recently stored" answer — which, with an
-// unnamed machine paired second, is nothing at all.
+// AC3's naming half: server 1 was named at pairing and server 2 was not, so the two rows must READ
+// DIFFERENTLY — machine 1's showing its stored name, machine 2's falling back to the generic word,
+// because nothing was ever stored for it.
 //
 // This test is its own detector, and history is the mutation check: it was written with `hostLabel`
-// passed in the FIRST argument, where the fixture drops it silently, and it failed — the row fell back
-// to the six-character generic word because no name had been typed into any pairing form. Moving the
-// option to `LaunchControl` is the only change, and it passes. The length comparison is what separates
-// the two outcomes without printing either.
-test('the host row shows the label stored for the machine it names', async ({
-  launchPairedApp
-}) => {
+// passed in the FIRST argument, where the fixture drops it silently, and it failed — every row fell back
+// to the generic word because no name had been typed into any pairing form. Moving the option to
+// `LaunchControl` is the only change, and it passes. The length comparison is what separates the two
+// outcomes without printing either.
+test('each host row shows the label stored for the machine IT names', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp({}, { hostLabel: HOST_LABEL, secondServer: {} })
 
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST_ROW_NAME }).click()
   await expect(page.locator('.conversation')).toBeVisible()
 
-  // Server 1 was named at pairing and server 2 was not, so this separates the two: a row reading the
-  // app-wide "most recently stored" answer shows the fallback word, because server 2 paired second and
-  // stored nothing. Read as a length, never as the value — six characters is the fallback, seven is the
-  // machine's name, so the comparison never has to print it.
+  // Read as LENGTHS, never as values — the fallback word is six characters and the typed name is seven,
+  // so the whole comparison lands without printing either, which is the treatment the host-name field
+  // gets throughout (it sits directly below the pairing-code field, and a mis-pasted payload into it is
+  // an anticipated mistake).
+  //
+  // The ARRAY FORM is what makes this AC3 rather than a weaker claim: it pins the count at four, each
+  // row's answer, AND the order — machine 1, machine 2, machine 1, machine 2 down the two sections. A row
+  // reading the app-wide "most recently stored" answer would show the fallback everywhere (server 2
+  // paired second and stored nothing), and a tree that named every row after the first machine would show
+  // the typed length everywhere; both fail here, in opposite directions.
   await expect
     .poll(async () =>
-      (await page.locator('.channel-list__host-label').innerText()).trim().length
+      page
+        .locator('.channel-list__host-label')
+        .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim().length))
     )
-    .toBe(HOST_LABEL.length)
+    .toEqual([HOST_LABEL.length, FALLBACK_LABEL_LENGTH, HOST_LABEL.length, FALLBACK_LABEL_LENGTH])
 })

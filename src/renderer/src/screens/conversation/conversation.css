@@ -183,8 +183,9 @@
    fresh conversation has no items (replacing Timeline's former `return null`). Fills the flexible
    middle region like .conversation__thread (flex: 1 1 auto; min-height: 0) but is a DISTINCT class —
    never .conversation__thread, no data-thread-role — so the split-brain guard (AC4) holds. Centered on
-   both axes: that centering (vs the top-padded, icon-less .channel-list__empty) plus the glyph is the
-   visual axis of distinction from the channel-list empty state (AC4). Muted, token-only; no Figma node
+   both axes: that centering plus the glyph was the visual axis of distinction from the channel list's
+   own top-padded, icon-less empty state (AC4) — which #1070 retired along with `.channel-list__empty`,
+   so the contrast is now with `.archive__empty`, the same shape. Muted, token-only; no Figma node
    (the mobile file draws only the populated thread). #278 pins its workspace chip to the top of this
    surface. */
 .conversation__empty {

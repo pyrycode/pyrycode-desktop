@@ -215,8 +215,9 @@
   display: block;
 }
 
-/* The per-tab loaded-zero empty state (no Figma node — mirrors mobile #312 / .channel-list__empty). A
-   centered neutral body-medium message. */
+/* The per-tab loaded-zero empty state (no Figma node — mirrors mobile #312). A centered neutral
+   body-medium message. It mirrored `.channel-list__empty` until #1070 retired that rule with the sidebar
+   empty state it styled; this rule is the shape's only holder now and copies nothing. */
 .archive__empty {
   margin: 0;
   padding: var(--space-6) var(--space-4);

@@ -1664,8 +1664,9 @@ const EMPTY_THREAD_COPY = 'Send a message to get started'
 // null`) — a fresh thread reads as a purposeful pre-first-message invitation, not a blank gap. A
 // DISTINCT class from .conversation__thread (never that substring, no data-thread-role) so the
 // split-brain guard (AC4) stays green; a decorative chat glyph (aria-hidden — the file's inline-SVG
-// idiom) plus the client-owned copy carry the state, visually distinct from the icon-less
-// .channel-list__empty (AC1/AC4). The icon+copy centre in the flexible middle region; #278 pins its
+// idiom) plus the client-owned copy carry the state, visually distinct from the icon-less empty state
+// the channel list carried until #1070 retired it, and from `.archive__empty`, which kept that shape
+// (AC1/AC4). The icon+copy centre in the flexible middle region; #278 pins its
 // workspace chip to the top of this same surface (not built here).
 function EmptyThread(): JSX.Element {
   return (

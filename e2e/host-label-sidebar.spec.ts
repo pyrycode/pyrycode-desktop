@@ -74,15 +74,21 @@ test('the sidebar host row shows the operator label, bounded to the sidebar', as
   // ChannelList, not by a visit to Settings → Connection.
   const { page } = await launchPairedApp({}, { hostLabel: HOST_LABEL })
 
-  const hostRow = page.locator('.channel-list__host')
-  const hostLabel = page.locator('.channel-list__host-label')
-  const hostStatus = page.locator('.channel-list__host-status')
+  // TWO host rows since #1070, from the one paired machine: both sections draw its row whether or not
+  // they hold any of its conversations. Every locator below is strict-mode single, so each is scoped to
+  // the FIRST row — the Channels tree's, which is the empty section here and therefore the one whose
+  // geometry is least entangled with anything under it. The count assertion below is what makes that
+  // scoping meaningful rather than an arbitrary pick.
+  const hostRows = page.locator('.channel-list__host')
+  const hostRow = hostRows.first()
+  const hostLabel = page.locator('.channel-list__host-label').first()
+  const hostStatus = page.locator('.channel-list__host-status').first()
 
-  // --- 1. One host row, and the label really is the operator's (AC1). The fake tier seeds a single
-  // unpromoted row, so only the Chats tree renders. The population proof is the label's LENGTH, never
-  // its text: the fallback word is six characters, so a row that fell back cannot pass this. It polls
-  // because the label arrives on the loader's one-shot invoke settling after ChannelList mounts. ---
-  await expect(hostRow).toHaveCount(1)
+  // --- 1. The machine's rows, and the label really is the operator's (AC1). The population proof is the
+  // label's LENGTH, never its text: the fallback word is six characters, so a row that fell back cannot
+  // pass this. It polls because the label arrives on the loader's one-shot invoke settling after
+  // ChannelList mounts. ---
+  await expect(hostRows).toHaveCount(2)
   const labelLength = async (): Promise<number> => ((await hostLabel.textContent()) ?? '').length
   await expect.poll(labelLength).toBe(MAX_HOST_LABEL_LENGTH)
 
@@ -109,9 +115,10 @@ test('the sidebar host row shows the operator label, bounded to the sidebar', as
   expect(trailingGap).toBeGreaterThanOrEqual(ROW_INSET_PX - GEOMETRY_TOLERANCE_PX)
   expect(trailingGap).toBeLessThanOrEqual(ROW_INSET_PX + GEOMETRY_TOLERANCE_PX)
 
-  // Two dots, both inside the pair's box, and the pair does not overlap the clipped label — the label
-  // yielded rather than running under them.
-  await expect(page.locator('.channel-list__host-dot')).toHaveCount(2)
+  // Two dots per row — four across the two rows since #1070 — both inside the pair's box, and the pair
+  // does not overlap the clipped label: the label yielded rather than running under them.
+  await expect(page.locator('.channel-list__host-dot')).toHaveCount(4)
+  await expect(hostRow.locator('.channel-list__host-dot')).toHaveCount(2)
   expect(statusBox.x).toBeGreaterThanOrEqual(labelBox.x + labelBox.width - GEOMETRY_TOLERANCE_PX)
 
   // --- 4. AC3's one live sink: the row carries NO `title` anywhere. The ellipsis proved in step 2 is

@@ -99,17 +99,27 @@ function promoteFake(seed: ConversationSummary): (inbound: Uint8Array) => Uint8A
   }
 }
 
-// The two mutually-exclusive section-header proxies. With exactly one seeded row, a non-promoted row renders
-// ONLY the "Chats" header and a promoted row renders ONLY the "Channels" header (a zero-row section
-// renders no header — ChannelList.tsx). So "Channels appears AND Chats disappears AND the row title stays
-// visible" fully captures "the row promoted in place" — the crispest available section-membership assertion, as
-// there is no per-section DOM wrapper to scope a row under a header. `hasText` with a string argument is a
-// CASE-INSENSITIVE substring match, but "Chats" and "Channels" share only the prefix "Cha" and neither is a
-// substring of the other (case-folded either way), so each locator still resolves only its own header.
-const channelsHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Channels' })
-const recentHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Chats' })
+// THE SECTION PROXY, RE-BASED IN #1070. This spec proved "the row moved sections" on two mutually
+// exclusive section headers — "Channels" absent before the promote, "Chats" absent after — which rested
+// entirely on a zero-row section rendering no header. Since #1070 both headers render whenever any machine
+// is paired, so six assertions across this file and its real-daemon twin would have gone quiet: still
+// green, detecting nothing.
+//
+// The replacement is the row's OWN affordance, which is what `sidebar-row-geometry.spec.ts` and both
+// real-daemon rename/lifecycle specs already use and which criterion 2 leaves untouched. The two are
+// disjoint by section BY CONSTRUCTION (ChannelList's `Row`): a Recent row is passed `onSaveAsChannel` and
+// renders `.channel-list__save` with no Rename control; a promoted Channel row is passed `onRename` and
+// renders `.channel-list__rename` with no Save one. With exactly one seeded row per test, "Rename appears
+// AND Save disappears AND the title stays visible" captures "the row promoted in place" at least as
+// tightly as the headers did — and more directly, since it reads the row itself rather than the chrome
+// above it.
+//
+// It still reddens on a promote that never lands: nothing moves the row optimistically (the scratch arm
+// never touches the list store), so without the daemon's `conversation_updated` → re-list the row keeps
+// its Save control and the Rename one never appears — the positive read below times out. That timeout IS
+// the regression signal; never soften it or lengthen it away.
+const renameControl = (page: Page) => page.locator('.channel-list__rename')
+const saveControl = (page: Page) => page.locator('.channel-list__save')
 
 test('scratch branch: Keep in scratch promotes the row in place', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(SCRATCH_SEED) })
@@ -119,15 +129,16 @@ test('scratch branch: Keep in scratch promotes the row in place', async ({ launc
   // #670, the sidebar stays mounted beside the thread — so the baseline below reads the list where it stands.
   // (#1064 deleted the back arrow this used to click first; the round trip reached a list that never left.)
 
-  // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
-  await expect(recentHeader(page)).toBeVisible()
-  await expect(channelsHeader(page)).toHaveCount(0)
+  // AC1 — baseline: the seed is a Recent row, carrying Save-as-channel and no Rename control. Asserted
+  // rather than assumed, so the post-Save reading below proves a TRANSITION and not a pre-existing state.
+  await expect(saveControl(page)).toBeVisible()
+  await expect(renameControl(page)).toHaveCount(0)
   await expect(
     page.locator('.channel-list').getByText('Scratch discussion', { exact: true })
   ).toBeVisible()
 
   // AC1 — open the Save-as-channel dialog from the Recent row's affordance.
-  await page.locator('.channel-list__save').click()
+  await saveControl(page).click()
   await expect(page.locator('.save-as-channel')).toBeVisible()
 
   // AC2 — choose "Keep in scratch" + Save. The two radios share `.save-as-channel__radio`, so target by
@@ -136,10 +147,12 @@ test('scratch branch: Keep in scratch promotes the row in place', async ({ launc
   await page.getByRole('radio', { name: 'Keep in scratch' }).check()
   await page.locator('.save-as-channel__save').click()
 
-  // AC2 — assert the promotion: the row MOVED to "Channels" (header appears, with round-trip headroom), the
-  // "Chats" header is gone, and the row title is still visible.
-  await expect(channelsHeader(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(recentHeader(page)).toHaveCount(0)
+  // AC2 — assert the promotion. THE POSITIVE READ IS ORDERED FIRST and carries the round-trip headroom:
+  // a closing `toHaveCount(0)` on its own would pass before the click's async work resolved, reading the
+  // pre-promote render and calling it a result. The Rename control is the promoted row's own affordance,
+  // unreachable from the state being asserted against.
+  await expect(renameControl(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(saveControl(page)).toHaveCount(0)
   await expect(
     page.locator('.channel-list').getByText('Scratch discussion', { exact: true })
   ).toBeVisible()
@@ -151,15 +164,15 @@ test('dedicated branch: create-folder → returned path promotes the row', async
   // Same launch + baseline as the scratch test, with a fresh launch and single non-promoted seed — and the
   // same reason there is no navigation step: the sidebar is already beside the thread (#670, #1064).
 
-  // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
-  await expect(recentHeader(page)).toBeVisible()
-  await expect(channelsHeader(page)).toHaveCount(0)
+  // AC1 — same baseline as the scratch test: a Recent row carrying Save-as-channel and no Rename control.
+  await expect(saveControl(page)).toBeVisible()
+  await expect(renameControl(page)).toHaveCount(0)
   await expect(
     page.locator('.channel-list').getByText('Dedicated discussion', { exact: true })
   ).toBeVisible()
 
   // AC1 — open the dialog.
-  await page.locator('.channel-list__save').click()
+  await saveControl(page).click()
   await expect(page.locator('.save-as-channel')).toBeVisible()
 
   // AC3 — leave the default ("Move to dedicated channel folder" is pre-checked, AC1) and Save. The radio's
@@ -172,11 +185,11 @@ test('dedicated branch: create-folder → returned path promotes the row', async
   await expect(page.getByRole('radio', { name: 'Move to dedicated channel folder' })).toBeChecked()
   await page.locator('.save-as-channel__save').click()
 
-  // AC3 — identical section-move proof. This trio is also the end-to-end proof the create-folder leg was
-  // answered: had promoteFake not replied to create_workspace_folder, the store would hang in-flight, the
-  // promote would never fire, and the "Channels" header would time out.
-  await expect(channelsHeader(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(recentHeader(page)).toHaveCount(0)
+  // AC3 — identical section-move proof, positive read first. This trio is also the end-to-end proof the
+  // create-folder leg was answered: had promoteFake not replied to create_workspace_folder, the store
+  // would hang in-flight, the promote would never fire, and the Rename control would time out.
+  await expect(renameControl(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(saveControl(page)).toHaveCount(0)
   await expect(
     page.locator('.channel-list').getByText('Dedicated discussion', { exact: true })
   ).toBeVisible()

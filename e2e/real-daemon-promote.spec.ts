@@ -77,16 +77,18 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // Whole spec: handshake + one round-trip + dialog open + headroom. Well under the config's 300s default.
 const SPEC_TIMEOUT_MS = 120_000
 
-// The two mutually-exclusive section-header proxies (cloned from #423). With exactly one seeded row, a
-// non-promoted row renders ONLY the "Chats" header and a promoted row renders ONLY the "Channels"
-// header (a zero-row section renders no header — ChannelList.tsx). So "Channels appears AND Chats disappears"
-// fully captures "the row promoted in place." `hasText` with a string argument is a CASE-INSENSITIVE substring
-// match, but "Chats" and "Channels" share only the prefix "Cha" and neither is a substring of the other
-// (case-folded either way), so each locator still resolves only its own header.
-const channelsHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Channels' })
-const recentHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Chats' })
+// The section proxy, re-based in #1070 and still a clone of the fake twin's (#423). Both specs proved
+// "the row moved sections" on two mutually exclusive section headers, which rested on a zero-row section
+// rendering no header; #1070 renders both headers whenever any machine is paired, so that proxy would
+// have stayed green while detecting nothing. The row's OWN affordance replaces it — the two are disjoint
+// by section by construction in `ChannelList`'s `Row` (a Recent row gets Save-as-channel and no Rename
+// control; a promoted one gets Rename and no Save) and criterion 2 leaves them untouched. The fake twin's
+// header carries the full reasoning.
+//
+// It is if anything a better fit HERE than the headers were: this tier's single observable is the DOM,
+// and the affordance is on the row whose promotion is the claim, rather than on chrome above it.
+const renameControl = (page: Page) => page.locator('.channel-list__rename')
+const saveControl = (page: Page) => page.locator('.channel-list__save')
 
 test('real daemon promotes a Recent discussion into a Channel over the real wire', async ({
   relay,
@@ -112,18 +114,17 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
   // seeded discussion → it rendered in the "Chats" section. The real-daemon path lands on
   // `route='list'` (no opening thread), and Save-as-channel lives on the list row, so this gate reaches the
   // affordance directly — no thread open needed. ---
-  await expect(page.locator('.channel-list__save')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
+  await expect(saveControl(page)).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- Baseline (mirrors #423): the seed starts under "Chats" with NO "Channels" section, so
-  // the post-Save assertion proves a TRANSITION, not a pre-existing state. ---
-  await expect(recentHeader(page)).toBeVisible()
-  await expect(channelsHeader(page)).toHaveCount(0)
+  // --- Baseline (mirrors #423): the seed starts as a Recent row, carrying Save-as-channel and NO Rename
+  // control, so the post-Save assertion proves a TRANSITION and not a pre-existing state. ---
+  await expect(renameControl(page)).toHaveCount(0)
 
   // --- Open the Save-as-channel dialog from the Recent row's affordance (AC1). Exactly one non-promoted row
   // (one seed) → the locator resolves uniquely. The click mounts SaveAsChannelDialog with the clicked list
   // row (setSaveRow(row)); its Name field auto-seeds to titleFor(null) = "Untitled" (non-blank → Save
   // enabled — the Name wrinkle above). No activeConversation, no thread-open is needed. ---
-  await page.locator('.channel-list__save').click()
+  await saveControl(page).click()
   await expect(page.locator('.save-as-channel')).toBeVisible()
 
   // --- Choose scratch + Save (AC2). The default is `dedicated`; the two radios share `.save-as-channel__radio`
@@ -133,10 +134,12 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
   await page.getByRole('radio', { name: 'Keep in scratch' }).check()
   await page.locator('.save-as-channel__save').click()
 
-  // --- Assert the reply-gated promotion (AC3). The row moves "Chats" → "Channels" ONLY after
-  // the daemon's conversation_updated drives the re-list: "Channels" header appears, "Chats"
-  // header is gone. A pre-#949 binary answers `unsupported`, no re-list fires, the row stays put, and
-  // `channelsHeader` never appears → this TIMES OUT (the intended #949-class regression signal). ---
-  await expect(channelsHeader(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(recentHeader(page)).toHaveCount(0)
+  // --- Assert the reply-gated promotion (AC3). The row moves Chats → Channels ONLY after the daemon's
+  // conversation_updated drives the re-list, and the row's affordance flips with it: the Rename control
+  // appears, the Save one goes. The POSITIVE read is ordered first and carries the round-trip headroom —
+  // a closing `toHaveCount(0)` alone would pass against the pre-promote render. A pre-#949 binary answers
+  // `unsupported`, no re-list fires, the row stays put, and the Rename control never appears → this TIMES
+  // OUT (the intended #949-class regression signal). ---
+  await expect(renameControl(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(saveControl(page)).toHaveCount(0)
 })

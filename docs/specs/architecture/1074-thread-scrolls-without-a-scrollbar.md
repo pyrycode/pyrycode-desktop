@@ -144,3 +144,24 @@ tests. They are not re-written here; they must stay green, which the verifier's 
   (supported since Chromium 121). The RED run confirms it by returning `auto` for the thread before the
   declaration lands; an empty string instead would say the property is not exposed and the detector would
   need re-siting. Resolved in the RED run either way.
+
+## Revisions
+
+**2026-09-07 — both open questions resolved by the RED run; the design is unchanged.**
+
+The spec was written and run against the tree with no CSS change, as planned. Both answers came back
+confirming the design rather than altering it, so nothing above is superseded.
+
+- **Keyboard scrolling already reaches the thread.** The second test — wheel, then `PageUp` / `PageDown` /
+  `Home` / `End` after a raw-coordinate click into the thread's padding strip — **passed before either
+  declaration landed**. So Chromium's sequential-focus starting point does route the scroll keys here with
+  no `tabindex`, AC2's premise holds as written, and the forbidden `tabindex="0"` is not merely disallowed
+  but unnecessary. That test is therefore a nothing-broke gate, not a new-behaviour one: what it exists to
+  catch is an implementation reaching for `overflow: hidden`.
+- **`getComputedStyle().getPropertyValue('scrollbar-width')` is exposed on Chromium 130.** It returned
+  `'auto'` for `.conversation__thread` on the RED run and `'none'` on the GREEN one, so the detector is
+  correctly sited and is proven to discriminate on this engine rather than assumed to.
+
+The RED itself was the first test failing on exactly that read (`Expected "none", Received "auto"`), and no
+other assertion in either test failed — so the overflow gate, the neighbour reads and the attribute reads
+were all satisfied by the pre-change tree, which is what makes them guards rather than part of the change.

@@ -283,10 +283,14 @@
    drop the cursor onto its own line. The drawing's rhythm is instead a margin-top on .bubble__meta
    below, which is the only new sibling this ticket adds and so the only place the rhythm has to appear.
 
-   TYPE IS title-small EMPHASIZED (14/20/0.1 at weight 600), the step the drawing sets on every message
-   node — added to tokens.css by this ticket, since the theme carried no title-small family at any
-   weight. The size is unchanged from the body-medium it replaces; the weight and tracking are not. If
-   the thread reads too heavy in use, the fix is a Figma-side change and a one-line restyle here.
+   TYPE IS body-medium (14/20/0.25 at weight 400), the step the drawing sets on every message node.
+   #969 typed this box at title-small emphasized (14/20/0.1 at weight 600) because the drawing said so
+   on 2026-09-03, and predicted its own reversal: "if the thread reads too heavy in use, the fix is a
+   Figma-side change and a one-line restyle here". That is what happened — #1113 read body-medium off
+   every text node of Figma `Message area` 132:4171 and swapped the four declarations back. Size and
+   line are 14/20 in both families, so nothing geometric moved and the two e2e specs that measure this
+   box kept their numbers; only tracking and weight changed. The title-small family stays in tokens.css,
+   now with no consumer.
 
    THE SHADOW (the 2026-09-05 shadow fix, Figma "Content" 132:4012): every element of the message area
    casts --shadow-thread, and the bubble takes it as a box-shadow because it is a filled box with the 6px
@@ -302,10 +306,10 @@
   border-radius: var(--radius-xs);
   box-shadow: var(--shadow-thread);
   word-break: break-word;
-  font-size: var(--text-title-small-size);
-  line-height: var(--text-title-small-line);
-  letter-spacing: var(--text-title-small-tracking);
-  font-weight: var(--text-title-small-weight-emphasized);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 /* The two side treatments, now fill + text role only — the radius moved to .bubble above. Placement
@@ -494,9 +498,13 @@
    property, and no second rhythm mechanism to keep in step. A wrapper would need its own margin AND an
    internal gap: two declarations expressing one number.
 
-   ALL FOUR TYPE AXES ARE RESTATED, and the fourth is the point. .bubble sets title-small EMPHASIZED
-   (14/20/0.1 at weight 600), and body-small differs on every one of size, line-height, tracking and weight,
-   so three of the four are easy to leave inherited by accident.
+   ALL FOUR TYPE AXES ARE RESTATED, because what is inherited here is another step entirely. .bubble sets
+   body-medium (14/20/0.25 at weight 400), and body-small differs from it on size, line-height and tracking,
+   so three of the four are easy to leave inherited by accident. The fourth, weight, reads 400 in both steps
+   and so is the one restatement that changes nothing today — it is declared anyway, because the quartet is
+   the unit this file states type in and a bubble retuned to another step (#969 typed it at title-small
+   emphasized, #1113 moved it back to the design's body-medium) must not silently drag this row's weight
+   with it. That is exactly the coincidence tokens.css warns against borrowing from.
 
    THE COLOUR IS --color-inverse-primary, read from the Figma VARIABLE (`Schemes/Inverse Primary`, #32628d)
    and not from the export, which prints the light-scheme transposition tokens.css:25-33 warns about. The
@@ -1231,10 +1239,14 @@
    alignment comes from the parser and this only replaces the UA's centred <th> over left-aligned <td>
    where the author declared nothing.
 
-   NO font-weight, and the omission is the decision. The type scale tops out at
-   --text-title-small-weight-emphasized (600), which is .bubble's own weight — so a token-sourced weight
-   would ERASE the header distinction rather than state it, and any other value would be a new literal.
-   <th>'s UA `bold` is left to distinguish the header row, alongside the cell borders. */
+   NO font-weight, and the omission is the decision. <th>'s UA `bold` (700) is left to distinguish the
+   header row, alongside the cell borders. #1079 argued the omission from a fact that no longer holds —
+   the scale tops out at --text-title-small-weight-emphasized (600), which was then .bubble's own weight,
+   so a token-sourced weight would have ERASED the distinction rather than stated it. Since #1113 the
+   bubble is body-medium at 400 and an emphasized token would in fact read heavier than the body around
+   it. The rule stands on the simpler ground the old argument was standing in front of: the UA weight
+   already draws the distinction with nothing declared, and choosing which emphasized step to state
+   instead would be a new type decision, which #1113 — a retune of .bubble alone — is not making. */
 .bubble__markdown th,
 .bubble__markdown td {
   padding: var(--space-1) var(--space-3);

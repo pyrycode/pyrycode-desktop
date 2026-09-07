@@ -162,7 +162,7 @@ interface BubbleMetrics {
 
 /**
  * One bubble's live style and geometry — the whole reason this proof lives in e2e. The line height is read
- * from the element's OWN computed style rather than from the --text-title-small-line token, so every
+ * from the element's OWN computed style rather than from the --text-body-medium-line token, so every
  * height comparison below stays true if the type scale is ever retuned.
  */
 const readBubbleMetrics = (bubble: Locator): Promise<BubbleMetrics> =>

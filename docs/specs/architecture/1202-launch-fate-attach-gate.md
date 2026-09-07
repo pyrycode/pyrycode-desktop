@@ -223,3 +223,38 @@ under repair is real-`TestInfo` behaviour, and vitest never sees a `TestInfo`.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — both open questions resolved, and one departure from the testing strategy above
+
+**Open question 1 — does a green run's terminal output stay byte-identical? Yes, measured.**
+`npx playwright test e2e/smoke.spec.ts` after the change prints the same three `✓` lines and the same
+`3 passed` summary, with no attachment line anywhere. The reporter reasoning holds in practice: an
+attachment on a passing test exists in the result and is never printed.
+
+**Open question 2 — how much `test-results/` litter? Less than the plan feared, and it does not
+accumulate.** One *empty* directory per test **that actually attaches**, not per test: a green
+`launch-fate.spec.ts` run leaves two directories for four tests, because only two of them call
+`attachLaunchFate`. And Playwright wipes `test-results/` at the start of every run — the smoke run's
+directories were gone after the next run — so this is per-run litter with no growth. Nothing to change.
+
+**Departure — `recordingSink` is deleted outright, and the AC3 cover is merged into the existing third
+test rather than added as a fifth.** The plan said the double would keep its `failed`/`timedOut` arms
+with its `status` parameter dropped, and that a new test would carry the real-`TestInfo` check. Both
+halves changed once the code was in front of me:
+
+- With the gate gone, `LaunchFateSink` no longer has a `status`, so every one of the double's arms
+  asserts the same thing. What was left of `recordingSink` was a hand-written `attach` that records into
+  an array — strictly weaker than reading `testInfo.attachments`, and it is the exact substitution AC3
+  names as the reason the old cover was blind. So it is gone, and **every** test that attaches now does
+  so through its own real `testInfo`. That moves the killed-launch test's hygiene bound (a real launch, a
+  real `--user-data-dir`, AC4's strongest evidence) onto the real channel too, where the plan had left it
+  on the double.
+- The remaining subject of the third test — two teardown steps named in drain order — needs the same
+  synthetic log and the same real sink as the new status-independence check, and splitting them would
+  have produced two near-identical tests. They are one test with two assertion blocks, and its title
+  names both.
+
+Net effect on the ACs is unchanged or stronger: two tests now redden if the gate is restored (the
+killed-launch test and the merged one), where the plan promised one.

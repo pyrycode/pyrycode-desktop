@@ -210,10 +210,13 @@ export type LaunchFateLog = {
   report(): LaunchFateReport
 }
 
-/** The slice of `TestInfo` the attach needs: the outcome to gate on, and the sink to write to. A `Pick`
- *  rather than the whole interface so the cover spec can drive the real function with a recording
- *  double and read back exactly what a failing run would carry. */
-export type LaunchFateSink = Pick<TestInfo, 'status' | 'attach'>
+/** The slice of `TestInfo` the attach needs: the sink to write to, and nothing else. A `Pick` rather
+ *  than the whole interface so the type states exactly what the function touches.
+ *
+ *  It used to carry `status` too, and dropping it is the structural half of #1202's fix — restoring the
+ *  outcome gate means putting `status` back on this type, which is a visible edit rather than a one-line
+ *  condition slipped back into the body. */
+export type LaunchFateSink = Pick<TestInfo, 'attach'>
 
 /**
  * Node's own bookkeeping, not a `process.kill(pid, 0)` probe: `app.process()` already exposes both
@@ -285,25 +288,41 @@ export function createLaunchFateLog(): LaunchFateLog {
 }
 
 /**
- * Attach the report — on a FAILING test only, so a green run's output and its report are byte-identical
- * to what they were before this existed.
+ * Attach the report. UNCONDITIONALLY, whenever there is one — this function does not decide whether an
+ * operator sees it, the reporter does.
  *
- * `text/plain` is not cosmetic: Playwright's terminal reporter prints an attachment's body inline only
- * when its content type starts with `text/`, and truncates it at 300 characters. An `application/json`
- * body would be silently invisible in the `reporter: 'list'` output the operator actually reads. The
- * report's size is bounded by construction — three primitives per launch plus fixed labels.
+ * #1202: it used to return early unless `sink.status` was in the failure set, and that gate is why the
+ * diagnostic did not fire on the one red it was built for (`question-picks.spec.ts`, a bare
+ * `socket hang up` on PR #1195). Both drain sites call this from a fixture epilogue, and a test's status
+ * is NOT final there. `TestInfoImpl.status` is `'passed'` until `_failWithError` runs, and Playwright
+ * runs that later than the epilogue in two ways this tier hits: a teardown that drains after
+ * `launchPairedApp`'s — a fixture set up before it tears down after it — and `WorkerMain.unhandledError`,
+ * which routes an `uncaughtException`/`unhandledRejection` to the still-open current test, the shape of
+ * a bare `socket hang up` with no in-spec stack frame on a worker that owns two fake sockets. Both were
+ * reproduced against `main` before this changed. Nothing readable at epilogue time IS the final status,
+ * so the code stopped reading it: deferring the attach into a fixture that drains last would beat the
+ * first way and still lose to the second.
  *
- * Does no filesystem I/O (`attach`'s `body` form is held in memory, and is mutually exclusive with
- * `path`), so calling it from a teardown epilogue does not reintroduce #517's hazard of a throwing
- * `finally` replacing the causal error.
+ * A GREEN RUN'S TERMINAL OUTPUT IS UNCHANGED, because the suppression moved rather than vanished.
+ * Playwright's terminal reporter prints an attachment only from `formatFailure`, which is reached only
+ * for a result that carries errors — so a passing test's attachment exists in its result and is never
+ * printed. What a green run now carries that it did not before is one unprinted attachment per test.
+ *
+ * `text/plain` is not cosmetic either: the reporter prints a body inline only when the content type
+ * starts with `text/` and the name does not begin with `_`, and it truncates at 300 characters. An
+ * `application/json` body would be silently invisible in the `reporter: 'list'` output the operator
+ * actually reads. The report's size is bounded by construction — three primitives per launch plus fixed
+ * labels.
+ *
+ * Writes no file (`attach`'s `body` form is held in memory, and is mutually exclusive with `path`), so
+ * calling it from a teardown epilogue does not reintroduce #517's hazard of a throwing `finally`
+ * replacing the causal error.
  */
 export async function attachLaunchFate(sink: LaunchFateSink, log: LaunchFateLog): Promise<void> {
-  const status = sink.status
-  // The failure SET, not equality with 'failed': the two observed reds were one `socket hang up`
-  // (failed) and one 1.0m timeout (timedOut), and an interrupted run is the same class of evidence.
-  if (status !== 'failed' && status !== 'timedOut' && status !== 'interrupted') return
-
   const report = log.report()
+  // NOT a status gate: it keeps a site that never launched and never recorded a teardown failure from
+  // attaching an empty object. A launch that reached Electron makes `launches` non-empty, so any drain
+  // with something to say still reports.
   if (report.launches.length === 0 && report.teardownFailures.length === 0) return
 
   await sink.attach(LAUNCH_FATE_ATTACHMENT, {

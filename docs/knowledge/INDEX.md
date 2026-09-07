@@ -1086,7 +1086,12 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   PASS, no MUST FIX — two SHOULD FIX, both documentation-only: an entry's `payload` is trusted in shape
   and untrusted in content despite looking settled, and it crosses by reference with an inert
   `__proto__` own-data-property a *later* `Object.assign`/`target[k]=v` consumer must not create a
-  hazard from.) Split from #1088.
+  hazard from.) Split from #1088. **#1227 closed both SHOULD FIX findings**: `entries` no longer crosses
+  IPC as opaque `HistoryEntry[]` — a second decode stage (`decodeHistoryEvent`/`decodeHistoryPage`)
+  narrows each entry's payload against the same eleven live-lane parsers into `HistoryTimelineEntry[]`,
+  a closed union, dropping the payload's daemon-asserted `conversation_id` on every arm. An undrawn or
+  unparseable entry is skipped, never failing the page; `modal_shown`/`question_shown` have no arm at
+  all, so no prompt can reach the window from history. `timelineBridge` stays dormant for #1223.
 
 ## Architecture
 

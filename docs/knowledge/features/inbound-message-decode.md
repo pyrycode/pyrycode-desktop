@@ -157,4 +157,11 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   `daemon-error` kind with an optional `historyReject` field. [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)
   is also this boundary's first ticket with a live consumer at ship time — [daemon
   connection](daemon-connection.md)'s `pendingHistoryRequests` correlation map — though every renderer
-  bridge still nulls the two `DaemonEvent` arms it feeds.
+  bridge still nulls the two `DaemonEvent` arms it feeds. [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
+  followed up with a second stage in the same file: `decodeHistoryEvent`/`decodeHistoryPage` narrow each
+  entry's *payload* (not just its envelope) against the same eleven live-lane parsers, so
+  `HistoryEntry.payload` — opaque since #1222 — is now read by something. Not a new `InboundDaemonMessage`
+  kind, so it isn't numbered in this chronology; the full account, including the security review that
+  mandated a `switch` over an object-literal dispatch table for the untrusted `type` discriminant (a
+  lesson worth generalising to any future "which types do we handle" set in this file), is in [Request
+  history send](request-history-send.md#payload-decode-srcmaintransportinboundmessagets-1227).

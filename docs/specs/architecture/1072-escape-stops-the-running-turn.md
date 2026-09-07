@@ -205,3 +205,24 @@ no existing markup assertion moves.
 
 Each is resolved during implementation; anything that changes the design above is recorded in a `## Revisions`
 entry in the same commit as the code that departs.
+
+## Revisions
+
+### 2026-09-07 — both open questions resolved as designed; nothing above changed
+
+- **`box.fill('/c')` opens the type-ahead.** Playwright's `fill` dispatches an input event that React's
+  controlled `onChange` receives, the text lands in `Composer`'s `text`, and the panel — a derivation over that
+  text and the published list, not a reaction to an event — opens on it. The `page.keyboard.type` fallback was
+  not needed and the spec uses `fill`.
+- **Focus survives the variant flip.** Leg 2's `toBeFocused()` on the stop control passes, confirming both that
+  the mouse click left focus on the send button and that React patches the `<button>` in place. The reading in
+  § Design is now a measurement.
+
+**The drive is mutation-checked, and each binding was proven to be its leg's only route.** Flipping the stop
+control's predicate argument to `false` (killing that binding alone) reddens leg 2 at `Expected: 1, Received: 0`
+— so nothing else in the app carries an Escape to an interrupt while focus is on that control. Short-circuiting
+the message box's branch reddens leg 3 at `Expected: 2, Received: 1` while leg 2 stays green. Neither leg passes
+for the other's reason.
+
+The interrupt count helper's readings move 0 → 1 → 2 → 3 across the drive, which is what makes leg 4's
+"still 2 after the first Escape" a detector rather than a number that never moves.

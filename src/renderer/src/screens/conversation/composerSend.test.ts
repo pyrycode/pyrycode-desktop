@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   submitMessage,
   shouldSubmitOnKeyDown,
+  shouldInterruptOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
@@ -460,6 +461,53 @@ describe('shouldSubmitOnKeyDown', () => {
       for (const shiftKey of [false, true]) {
         for (const isComposing of [false, true]) {
           expect(shouldSubmitOnKeyDown({ key, shiftKey, isComposing })).toBe(false)
+        }
+      }
+    }
+  })
+})
+
+// shouldInterruptOnKeyDown is the SECOND keystroke-intent predicate (#1072), sharing the first's record
+// and its tier: plain values, no DOM, no React. Both of its mounts — the message box's handleKeyDown and
+// the stop control's own onKeyDown — are inside `Composer`/`ComposerSendButton`, whose event wiring the
+// node environment structurally cannot exercise, which is exactly why the decision is lifted out here.
+describe('shouldInterruptOnKeyDown', () => {
+  // The record every case below varies from. `shiftKey` is present because ComposerKeyEvent carries it,
+  // NOT because this predicate reads it — see the shift case.
+  const escape = { key: 'Escape', shiftKey: false, isComposing: false }
+
+  it('Escape while a turn is running interrupts (AC1/AC2)', () => {
+    expect(shouldInterruptOnKeyDown(escape, true)).toBe(true)
+  })
+
+  it('Escape at idle does not interrupt (AC3)', () => {
+    expect(shouldInterruptOnKeyDown(escape, false)).toBe(false)
+  })
+
+  // The load-bearing case, and the reason `isComposing` is among the inputs at all: the type-ahead's own
+  // handler returns false on a composing keystroke EVEN WHILE ITS PANEL IS OPEN, so the Escape that
+  // cancels a half-typed IME candidate falls straight through to the composer's handler. Without this
+  // clause a CJK operator cancelling a candidate mid-turn would stop the turn.
+  it('Escape that cancels an IME composition does not interrupt, running or not', () => {
+    expect(shouldInterruptOnKeyDown({ ...escape, isComposing: true }, true)).toBe(false)
+    expect(shouldInterruptOnKeyDown({ ...escape, isComposing: true }, false)).toBe(false)
+  })
+
+  // `shiftKey` is DELIBERATELY not read: Escape has no meaningful shifted variant, and a `!shiftKey`
+  // clause would be a defence for a failure mode nobody has observed (the same evidence rule that kept
+  // `keyCode === 229` out of shouldSubmitOnKeyDown). This case pins the non-read, so a later "tidy" that
+  // adds the clause for symmetry with shouldSubmitOnKeyDown reddens here rather than silently shipping.
+  it('Shift+Escape still interrupts — shiftKey is not among this predicate inputs', () => {
+    expect(shouldInterruptOnKeyDown({ ...escape, shiftKey: true }, true)).toBe(true)
+  })
+
+  // AC5's closing clause, and what leaves Enter's send path (#678 AC4) untouched: no key but Escape ever
+  // interrupts, under any shift/composition combination and even with a turn running.
+  it('no other key interrupts, under any shift/composition combination', () => {
+    for (const key of ['Enter', 'a', 'Tab', 'ArrowDown', 'Esc']) {
+      for (const shiftKey of [false, true]) {
+        for (const isComposing of [false, true]) {
+          expect(shouldInterruptOnKeyDown({ key, shiftKey, isComposing }, true)).toBe(false)
         }
       }
     }

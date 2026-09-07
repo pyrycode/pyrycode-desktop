@@ -227,6 +227,47 @@ export function shouldSubmitOnKeyDown(event: ComposerKeyEvent): boolean {
 }
 
 /**
+ * Whether this keydown asks the composer to STOP the running turn (#1072). Escape while a turn is running
+ * interrupts; Escape at idle does not; and the Escape that cancels an in-progress IME composition never
+ * does. Placed here, directly after `shouldSubmitOnKeyDown`, because it reads the same axis — did this
+ * keystroke ask for something — and the same record.
+ *
+ * IT REUSES `ComposerKeyEvent` RATHER THAN MINTING A SECOND RECORD. A near-duplicate interface would buy a
+ * new exported type for one dropped field, and would give the container a second shape to destructure at a
+ * call site that already builds this one. The two predicates share one destructure and answer two questions.
+ *
+ * `shiftKey` IS DELIBERATELY NOT READ, even though the record carries it. Escape has no meaningful shifted
+ * variant, so a `!shiftKey` clause would be a defence for a failure mode nobody has observed — the same
+ * evidence rule that kept the legacy `keyCode === 229` out of the predicate above. composerSend.test.ts pins
+ * the non-read with a Shift+Escape case, so adding the clause "for symmetry" reddens rather than ships.
+ *
+ * `isComposing` IS LOAD-BEARING HERE, and it is not a mirror of the gate above for symmetry either. The
+ * slash type-ahead's own handler returns `false` on a composing keystroke EVEN WHILE ITS PANEL IS OPEN
+ * (`useSlashCommandTypeAhead`'s handleKeyDown), so the Escape that cancels a half-typed IME candidate falls
+ * straight through to the composer's handler. Without this input a CJK operator cancelling a candidate
+ * mid-turn would stop the turn.
+ *
+ * `turnRunning` is a SECOND POSITIONAL ARGUMENT rather than a field of the record, and the split is the
+ * point: the record models the keystroke, this models the app's state. Folding them would make the container
+ * fabricate a synthetic key-event field, and would make the stop control's call site — where the value is
+ * `true` by construction, since that variant only renders while running — read as if the button knew
+ * something about the keydown that it does not. It is `isTurnRunning(phase)` at both call sites and never
+ * `localSendPending`: that scalar opens the working-indicator window while `phase` is still the daemon-owned
+ * `idle` (#650), so wiring it in would arm an interrupt for a turn the daemon has not started — the same
+ * reason the stop button ignores it.
+ *
+ * Like the gate above, this answers keystroke intent ONLY. It does not absorb the connection gate: a
+ * running turn on a dropped connection must still offer the stop (ComposerSendButton's second load-bearing
+ * property), and `sendInterrupt` already swallows a bridge failure. Unlike the gate above there is nothing
+ * for the caller to suppress — Escape has no default action in a textarea — so no `preventDefault()` belongs
+ * on this path at all; if one were ever added it would have to sit below a `false` return, the rule
+ * `shouldSubmitOnKeyDown`'s docblock states.
+ */
+export function shouldInterruptOnKeyDown(event: ComposerKeyEvent, turnRunning: boolean): boolean {
+  return turnRunning && event.key === 'Escape' && !event.isComposing
+}
+
+/**
  * Whether the composer may send (#31). #968 retired the "why" caption that used to travel beside it, so
  * this is a one-field record: the call site already destructures from it, and collapsing it to a bare
  * boolean would rewrite that site for no behavioural gain.

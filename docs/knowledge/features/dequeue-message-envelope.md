@@ -4,7 +4,9 @@ The **outbound** half of the queue-drop path: the wire type, the pure fail-close
 and the full renderer→main command path the desktop uses to remove one queued-but-not-yet-run message
 from a conversation's backlog before it runs. The renderer UI that dispatches the command — a drop
 affordance on each queued row — shipped in [#296](../codebase/296.md); the path is now complete
-end to end.
+end to end. [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+[#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) later widened what a drop does client-side
+— see § Configuration and usage — without touching the wire frame itself, which stays exactly as below.
 
 Introduced in [#299](../codebase/299.md) (the wire type + `buildDequeueMessage`), split from
 [#295](https://github.com/pyrycode/pyrycode-desktop/issues/295) along the #235/#236 seam (memory:
@@ -93,18 +95,33 @@ detail: [#300 codebase notes](../codebase/300.md).
 
 ## Configuration and usage
 
-- **Producer, shipped ([#296](../codebase/296.md)):** the drop affordance on each queued row (a
-  per-row icon button in `QueuedBacklog`, `ConversationScreen.tsx`) calls the pure
-  `dropQueuedMessage(conversation_id, queued_msg_id, { sendCommand })` helper
-  (`dropQueuedMessage.ts`), which calls `dequeueMessageCommand({ conversation_id, queued_msg_id })`
-  and passes the result to the injected `sendCommand` (`window.pyry.sendCommand` in production). The
-  `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held `QueuedItem`
-  rows, read by #294's `QueuedBacklog`; `conversation_id` is `MILESTONE_CONVERSATION_ID`, supplied
-  by the container (the row itself carries no conversation id — the "conversation-id wall").
+- **Producer, shipped ([#296](../codebase/296.md), widened by
+  [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)):** the drop affordance on each
+  queued row (a per-row icon button in `QueuedBacklog`, `ConversationScreen.tsx`) calls the pure
+  `dropQueuedMessage(conversation_id, queued_msg_id, message_id, deps)` helper (`dropQueuedMessage.ts`),
+  which calls `dequeueMessageCommand({ conversation_id, queued_msg_id })` and passes the result to the
+  injected `deps.sendCommand` (`window.pyry.sendCommand` in production) — byte-identical to the frame
+  #296 shipped. The `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held
+  `QueuedItem` rows, read by #294's `QueuedBacklog`; `conversation_id` is the container's open
+  conversation id (the row itself carries no conversation id — the "conversation-id wall"). Since
+  #1213, `deps` also carries `dispatch`/`dispatchFor` — the same two [thread
+  timeline](thread-timeline.md) writes `submitMessage` used to post the echo — and the row's
+  `QueuedItem.message_id` (pyrycode#2092) rides along as the third positional argument, so a drop that
+  actually reaches the daemon (the send did not throw) also removes the correlated
+  `userText` echo from both timeline stores via the `dropUserText` arm; an absent or empty
+  `message_id` — a pre-#2092 daemon, or a row this window never sent — still drops the queued row and
+  removes no echo. Full design: `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
 - **Consumer, already wired:** `main/index.ts`'s `onCommand` switch → `connection.dequeueMessage`.
   Fire-and-forget — no reply is expected; the daemon's re-broadcast `queue_state` snapshot (decoded
-  by #292, rendered by #294) is the observable effect. #296 never mutates the queue store directly —
-  no optimistic removal; the row leaves only via this existing snapshot-replace path.
+  by #292, rendered by #294) is the observable effect. **The queued row itself is still never
+  removed optimistically** — #296's ruling stands unchanged, and the row leaves only via this existing
+  snapshot-replace path. #1213 does not transfer that ruling to the *echo*: the echo is this window's
+  own optimistic write (`submitMessage` posted it before any daemon acknowledgement), so undoing it at
+  the click is symmetric rather than a new claim — see [thread timeline § Edge
+  cases](thread-timeline.md#edge-cases-and-limitations) for the reasoning and its bounded cost (a drop
+  the daemon silently no-ops, e.g. an out-of-range `queued_msg_id`, leaves the echo removed locally
+  until the next snapshot re-draws the queued row — display-only, and strictly better than the
+  permanent delivered-looking lie it replaces).
 
 ## Edge cases and limitations
 
@@ -146,5 +163,11 @@ detail: [#300 codebase notes](../codebase/300.md).
 - [#299 codebase notes](../codebase/299.md) / [#300 codebase notes](../codebase/300.md) /
   [#296 codebase notes](../codebase/296.md) — implementation summaries for the wire+builder,
   command-path, and render (drop affordance) slices — the full path, now shipped end to end.
+- [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) (PR
+  [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — widened `dropQueuedMessage` to also
+  remove the sending window's `userText` echo, correlated on `QueuedItem.message_id` (pyrycode#2092).
+  The wire frame this doc describes is unchanged; the new behaviour is two additional, purely local
+  store writes gated on the send succeeding. Full design:
+  `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Queue; pyrycode #720 (queue
   security model — dequeue is ungated for any paired client).

@@ -224,6 +224,12 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   `timelineBridge` nulls it alongside `daemonEventBridge`/`modalBridge` rather than owning it as a sixth
   arm. `text` (per queued item) is untrusted, client-originated transit content the eventual render slice
   (#294) must render as plain text, never HTML — this ticket has no DOM sink of its own.
+  [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) later added `QueuedItem.message_id?:
+  string` (pyrycode#2092) — carried across this arm unchanged by the same verbatim-row-reuse rule, so
+  neither this event's shape nor this channel needed a change to widen. It is still none of the
+  three things this arm's construction already rules out — a token, a key, or a raw frame — because it
+  is a client-minted correlation id read for strict string equality only downstream; see [Thread
+  timeline § Types](thread-timeline.md#types) for the field's own contract.
 - **`sessionTransition{newSessionId}`**, shipped [#254](../codebase/254.md), also maps to *no*
   `SessionAction`, consumed instead by the [session-id store](session-id-store.md)'s holder
   ([#259](../codebase/259.md)). Originally a **content-minimised** shape over the **five**-field wire

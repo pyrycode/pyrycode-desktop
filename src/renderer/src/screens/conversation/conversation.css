@@ -2639,6 +2639,28 @@
   display: block;
 }
 
+/* #1263 — the picture, filling the frame above. Figma `Input attachment image` 390:7159 holds a 60x60 rectangle
+   at x=-7.5 inside the 45-wide slot: a square picture overflowing 7.5px each side and clipped, which is `cover`
+   DRAWN rather than inferred. Whatever does not fit is cut off, never squashed and never letterboxed.
+
+   ⭐ IT DECLARES NO RADIUS AND NO CLIP, and that is the whole reason this rule is four lines. .composer__attachment
+   already carries `overflow: hidden` and --radius-xs, and #1262's own comment records that THIS picture is what
+   that clip is for — so the frame clips and the image restates neither. .bubble__image restates its radius only
+   because it has no clipping parent; copying that here would be a second place for the corner to drift.
+
+   CENTRED NEEDS NO DECLARATION: `object-position` defaults to 50% 50%, which is exactly the criterion, and
+   restating a default is a second place for it to disagree with itself.
+
+   The class shares no WHOLE class token with .composer__attachment, -glyph or -ext — a class selector does not
+   prefix-match — so neither the shipped e2e `.composer__attachment` locator nor ComposerAttach.test.tsx's
+   `class="composer__attachment"` count (the closing quote is part of that match) can reach this element. */
+.composer__attachment-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 /* The extension across the glyph's lower half. The geometry is .bubble__file-ext's — `top: 50%` IS
    "top-aligned in the lower half" and lands 1px above the drawn y=31, and the 44px slot is the drawn one
    (44 of the frame's 45), centred by text-align so a two- and a four-character label share an axis.

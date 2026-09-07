@@ -59,6 +59,13 @@ so the in-flight arm can draw a frame where the bubble's `pending` arm deliberat
 
 No ADR is warranted: no new state ownership rule, no new boundary, no new channel, no new dependency.
 
+**Sizing, stated because it is close to the line.** Two production files, one call site, three drawn states, four
+criteria — every column of the one-ticket boundary holds except total written work, which lands near 800 once this
+plan's mandatory `## Security review` section is counted. It is **not split**, on the floor rule: the only seam here
+is between the pure drawing and its container, and a child holding one of them would have exactly one consumer,
+inside this same family. Floor beats ceiling — a ticket that cannot be verified on its own is the failure no resume
+leg fixes, where a budget miss costs one.
+
 ## Design
 
 ### 1. The module — `ComposerAttachmentImage.tsx`

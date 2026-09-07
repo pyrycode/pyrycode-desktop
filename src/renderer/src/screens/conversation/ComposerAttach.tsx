@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
+import { ComposerAttachmentImage } from './ComposerAttachmentImage'
+import { isImageAttachmentName } from './attachmentIsImage'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 // #1055: the take's shape is declared with its CONSUMER (composerSend's `takeAttachments` dep), so the
 // pure send helper never names this React module. See PendingAttachmentTake's own docblock.
@@ -329,9 +331,13 @@ export function ComposerAttachOutcome({
  * column with a `--space-1` gap, so an element that mounts empty is not free. It would move the message box
  * down on every launch, in every spec, forever.
  *
- * EVERY ATTACHMENT DRAWS THE FILE TILE, image or not. #1263 replaces the picture-bearing case and needs
- * this tile as its own fallback for a picture that cannot be decoded, so there is no branch here to get
- * wrong and the file tile under an image name is a shipped state rather than scaffolding.
+ * ⭐ #1263 — ONE BRANCH, OVER THE NAME. `isImageAttachmentName` is the message bubble's own rule applied to the
+ * same untrusted string: an image name draws its picture, everything else keeps the file tile. It decides what is
+ * DRAWN, never what is fetched or from where — the fetch is addressed by `attachmentId`, which that predicate
+ * never sees — so a name that lies produces a picture that fails to decode and falls back to the file tile,
+ * never a different file and never a different request. The two drawings wear the same frame class and the same
+ * 45x60 box, which is why the strip's tile count and each tile's position are a property of this SET and not of
+ * what any picture is doing.
  *
  * THE KEY IS THE ARRAY INDEX, `BubbleAttachmentRow`'s recorded reason: this list only ever appends and is
  * cleared wholesale, so index identity is stable — and a name-derived key is the step that makes
@@ -352,15 +358,19 @@ export function ComposerAttachmentStrip({
   if (attachments.length === 0) return null
   return (
     <div className="composer__attachments">
-      {attachments.map((attachment, index) => (
-        <AttachmentFileIcon
-          key={index}
-          filename={attachment.filename}
-          frameClassName="composer__attachment"
-          glyphClassName="composer__attachment-glyph"
-          labelClassName="composer__attachment-ext"
-        />
-      ))}
+      {attachments.map((attachment, index) =>
+        isImageAttachmentName(attachment.filename) ? (
+          <ComposerAttachmentImage key={index} attachment={attachment} />
+        ) : (
+          <AttachmentFileIcon
+            key={index}
+            filename={attachment.filename}
+            frameClassName="composer__attachment"
+            glyphClassName="composer__attachment-glyph"
+            labelClassName="composer__attachment-ext"
+          />
+        )
+      )}
     </div>
   )
 }

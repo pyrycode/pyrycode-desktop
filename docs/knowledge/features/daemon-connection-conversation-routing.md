@@ -10,8 +10,8 @@ conversation id: `sendMessage`, `requestSessionSettings`, `promoteConversation`,
 `unarchiveConversation`, `deleteConversation`, `renameConversation`, `changeWorkspace`,
 `dequeueMessage`, and the attachment-retrieval channel. The id these commands send **is** the routing
 key, so no renderer file changed and no wire type widened. (`requestModelList`, `newSession`,
-`requestHistory` and `requestSystemPrompt` later joined this set once their own tickets gave the
-daemon a conversation id to name; `interrupt` joined too, in
+`requestHistory`, `requestSystemPrompt` and `setSystemPrompt` later joined this set once their own
+tickets gave the daemon a conversation id to name; `interrupt` joined too, in
 [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), once it left #1120's server-scoped
 router — see § The four plain call sites, below.)
 
@@ -90,8 +90,9 @@ window.
 `connectionFor(serverId): ActiveConnection | null` is `connectionRegistry.ts`'s new member, found with a
 linear `entries.find(... === serverId)` — never an object key, `server` being untrusted QR/paste input,
 same reasoning as `reconcile`'s own lookup. Its view is built by the same `viewOf` helper `active` uses,
-extracted so the delegation list — 26 members as of [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)'s
-`requestSystemPrompt` addition — is written exactly once: the `ActiveConnection` `Omit` (no
+extracted so the delegation list — 27 members as of [#1249](https://github.com/pyrycode/pyrycode-desktop/issues/1249)'s
+`setSystemPrompt` addition (26 as of [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)'s
+`requestSystemPrompt` before it) — is written exactly once: the `ActiveConnection` `Omit` (no
 `start`/`stop`/`reconnect`) is therefore enforced at runtime on **both** accessors by construction, not
 by a second hand-copied literal that could drift. A stale view is inert rather than dangerous — every
 `DaemonConnection` member is a documented no-op once `stop()`ped.

@@ -33,6 +33,7 @@ import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
+import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -92,6 +93,8 @@ import {
   type DeleteConversationPayload,
   type RenameConversationPayload,
   type ChangeWorkspacePayload,
+  type SetSystemPromptPayload,
+  MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
@@ -458,6 +461,33 @@ export interface DaemonConnection {
    */
   changeWorkspace(payload: ChangeWorkspacePayload): void
   /**
+   * Encrypt a payload-carrying `set_system_prompt` control envelope onto the live session — asks the
+   * daemon to store, replace or CLEAR one conversation's durable system prompt (#1249). Keyed by
+   * CONVERSATION, not by session: the prompt must be settable with nothing running, and it outlives
+   * every session the conversation has. `payload.system_prompt` is the TRI-STATE — `null` clears, `''`
+   * is an explicitly-empty stored state, any other string is stored verbatim — and all three pass
+   * through untouched.
+   *
+   * THE ONE WRITE VERB IN THIS INTERFACE THAT CORRELATES ITS REPLY. Its five neighbours
+   * (`renameConversation`, `archiveConversation`, `unarchiveConversation`, `promoteConversation`,
+   * `changeWorkspace`) all decline to correlate the `conversation_updated` they draw; this one must,
+   * because the operator needs to learn whether the write took. So it is NOT fire-and-forget: exactly
+   * one outcome is emitted per write that reached the wire — `systemPromptWriteConfirmed` off the
+   * correlated ack, or `systemPromptWriteRejected` off a correlated `error`.
+   *
+   * IT ALSO REFUSES BEFORE THE SEND, which no neighbour does. A prompt over MAX_SYSTEM_PROMPT_BYTES of
+   * UTF-8 is rejected here, reported through the same event as a daemon refusal, and never built into
+   * a frame — the daemon would answer it with a non-retryable `protocol.malformed`, and there is no
+   * reason to spend that on text this client can measure. The check runs BEFORE the connected guard,
+   * so an over-length write is reported whether or not a socket is up.
+   *
+   * Otherwise the `send` TWIN: an inert no-op when not connected (`driver === null` → return, no
+   * outcome, no correlation entry). A saved prompt does NOT touch the running session — the daemon
+   * installs it at the conversation's next spawn — and nothing here may paper over that with an
+   * optimistic local value. NOTHING RETRIES on any path. NEVER throws out of the module (parity #490).
+   */
+  setSystemPrompt(payload: SetSystemPromptPayload): void
+  /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
    * omitempty PRESENCE CONTRACT via the builder: an unset field is absent ("leave unchanged"), a field
@@ -771,6 +801,36 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // to completion inside a synchronous requestSystemPrompt / onDriverEvent body, no await between a
   // read and a write.
   const pendingSystemPromptRequests = new Map<number, string>()
+  // envelopeId → the conversation id that set_system_prompt named, for a system-prompt WRITE's
+  // attribution (#1249). The ninth correlation store, and the first whose reply is a record that DOES
+  // name a conversation of its own — which is exactly why the map is still the only acceptable source.
+  // The ack is the reused `conversation_updated`, so a daemon answering write A with a record naming
+  // conversation B would misattribute the outcome to B if the emit read the record's `id`; reading the
+  // map's value instead makes the emitted id the one THIS CLIENT wrote to, and the wrong-record case
+  // then costs a lost confirmation rather than a false one.
+  //
+  // A MAP for pendingConfigRequests' reasons exactly: a value to carry per entry, a lookup by one key
+  // as the whole query, and a key this client MINTED (nextEnvelopeId) rather than a daemon-supplied
+  // string — so no prototype setter is reachable through it under any inbound frame, and a later
+  // widening that keys this by anything daemon-supplied must keep the Map.
+  //
+  // IT IS READ FROM TWO INBOUND ARMS, unlike pendingSystemPromptRequests' one, because this verb HAS
+  // refusals where its read half has none: `conversation-updated` settles it as a confirmation and
+  // `daemon-error` settles it as a rejection. Both DELETE the entry, which is what makes "exactly one
+  // outcome per write" structural rather than promised — a daemon sending both frames for one write
+  // has the first consume the entry and the second match nothing.
+  //
+  // Set after a SUCCESSFUL send in setSystemPrompt, matched by the reply's Envelope.in_reply_to and
+  // deleted in onDriverEvent, and cleared on each dial(). The ordering is load-bearing for the reason
+  // pendingConfigRequests states: a build or send that throws advances no envelope id, so an entry
+  // left under an unspent id would settle whichever request re-mints it — here reporting one
+  // conversation's write as another's. Nothing bounds the map's size, deliberately, on
+  // pendingHistoryRequests' argument: an entry costs one number and one string, every settle deletes
+  // one, every dial clears all, so the only way to accumulate is for this client to send writes a
+  // daemon never answers — a rate this client controls, not a remote one. Single-writer — every
+  // mutation runs to completion inside a synchronous setSystemPrompt / onDriverEvent body, no await
+  // between a read and a write.
+  const pendingSystemPromptWrites = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
   // files can be attached in one session, and a lone slot would have to abandon the first to admit the
   // second. Membership plus a scan is the whole query — the success reply is looked up by
@@ -1041,6 +1101,39 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                   conversationId: failedHistory,
                   reason,
                   retryable: reason === 'history-unavailable'
+                })
+                return
+              }
+              // System-prompt WRITE rejection correlation (#1249), the fifth member of the same
+              // unique-per-request-envelope-id tier. Order among them is immaterial for the reason
+              // the siblings state — an envelope id is minted once, so at most one store can hold it
+              // — and a match consumes the frame ENTIRELY, skipping both the reassembler.fail and the
+              // modal-FIFO shift below exactly as they do. Consuming the frame is right HERE and
+              // wrong on the ack arm above: an error correlated to a write has exactly one meaning,
+              // where the ack doubles as every client's list-refresh trigger.
+              //
+              // A CORRELATED REFUSAL ALWAYS SETTLES THE WRITE, including one whose code is outside
+              // the verb's two published rejects. Dropping such a frame would leave #1250 reporting a
+              // refused write as permanently in flight, which is strictly worse than reporting it
+              // refused for a reason this client could not name. `'unclassified'` is where those land.
+              //
+              // What crosses is the CLIENT-OWNED reason narrowed at the decode boundary plus the
+              // conversation id this app itself named — never the daemon's `code` string, never its
+              // static message, and never the numeric in_reply_to the match was made on. No
+              // `retryable` flag: BOTH published conditions are non-retryable, so a carried flag would
+              // be a constant, and the reasoning that makes historyRequestFailed carry one — exactly
+              // one retryable member in its set — does not transfer.
+              //
+              // It reads the SAME map the ack arm does, which is what makes "exactly one outcome per
+              // write" structural: whichever frame arrives first deletes the entry, and the other
+              // matches nothing.
+              const failedWrite = pendingSystemPromptWrites.get(inReplyTo)
+              if (failedWrite !== undefined) {
+                pendingSystemPromptWrites.delete(inReplyTo)
+                emitDaemonEvent(sink, {
+                  type: 'systemPromptWriteRejected',
+                  conversationId: failedWrite,
+                  reason: inbound.systemPromptReject ?? 'unclassified'
                 })
                 return
               }
@@ -1669,19 +1762,58 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               path: inbound.workspaceFolderCreated.path
             })
             return
-          case 'conversation-updated':
-            // The conversation-updated data path (#273). An UNSOLICITED daemon BROADCAST (not correlated
-            // by in_reply_to), so it is emitted unconditionally on decode — no outstanding-request memory.
-            // Verbatim passthrough (the `conversation-created` precedent): parseConversationUpdatedPayload
-            // already returned a fresh 5-field object with nothing to drop (no secret field), so the
-            // reference passes through — no re-construction. Field names stay snake_case (the event reuses
-            // the wire type). The list-reflect slice (#275), not the session store, reconciles the row.
-            // `name` / `cwd` are untrusted display text.
+          case 'conversation-updated': {
+            // The conversation-updated data path (#273). Emitted UNCONDITIONALLY on decode, first and
+            // before any correlation below — the record is a list-refresh trigger for every consumer
+            // that sees it, and the requester's own writes must refresh their own row like anyone
+            // else's. Verbatim passthrough (the `conversation-created` precedent):
+            // parseConversationUpdatedPayload already returned a fresh 5-field object with nothing to
+            // drop (no secret field), so the reference passes through — no re-construction. Field
+            // names stay snake_case (the event reuses the wire type). The list-reflect slice (#275),
+            // not the session store, reconciles the row. `name` / `cwd` are untrusted display text.
             emitDaemonEvent(sink, {
               type: 'conversationUpdated',
               conversation: inbound.conversationUpdated
             })
+            // The set_system_prompt WRITE ack (#1249) — a SECOND reading of the same frame, ADDITIVE
+            // to the emit above and never a gate on it. This is the file's first correlation of this
+            // record, and the shape is deliberately NOT the `daemon-error` tier's: that tier consumes
+            // a matched frame entirely and returns early, which is right there because an error has
+            // exactly one meaning, and would be wrong here because it would stop the requester's own
+            // write from refreshing their conversation row. A confirmation is produced IN ADDITION TO
+            // the broadcast, not instead of it.
+            //
+            // Fail-closed on the correlation: an absent in_reply_to short-circuits BEFORE the lookup —
+            // the ordinary case, since the daemon also pushes this record genuinely unsolicited when a
+            // host-side `pyry channel new` mints a conversation — and a record matching no outstanding
+            // write (a stale ack from a connection whose ids were cleared, a duplicate of one already
+            // settled, or a hostile daemon forging an ack for a write this client never sent) produces
+            // no outcome at all. Both branches are SILENT: the only values a diagnostic could carry
+            // are the conversation id and the wire routing id, and neither may reach a sink.
+            //
+            // THE EMITTED conversationId IS THE MAP'S VALUE, NEVER `inbound.conversationUpdated.id`.
+            // Unlike the read half's reply, this record DOES name a conversation — which makes the
+            // wrong choice available and typecheck cleanly. A daemon answering write A with a record
+            // naming conversation B would report the write as landing on B; reading the map instead
+            // makes the outcome name the conversation this client actually wrote to, and turns that
+            // case into a lost confirmation rather than a false one. The numeric in_reply_to it was
+            // resolved from is NOT placed on the event.
+            //
+            // The confirmation carries NOTHING ELSE, deliberately: the record does not carry the
+            // prompt back (it is broadcast-shaped daemon-side, and only the requester asked about the
+            // value), so there is nothing here to report about what the conversation now holds. That
+            // is the read path's answer.
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo === undefined) return
+            const written = pendingSystemPromptWrites.get(inReplyTo)
+            if (written === undefined) return
+            pendingSystemPromptWrites.delete(inReplyTo)
+            emitDaemonEvent(sink, {
+              type: 'systemPromptWriteConfirmed',
+              conversationId: written
+            })
             return
+          }
           case 'conversation-deleted':
             // The conversation-deleted data path (#375). A CORRELATED reply (matched by in_reply_to, NOT a
             // broadcast — the deliberate contrast with the conversation-updated arm), but the `id` is
@@ -2604,6 +2736,75 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function setSystemPrompt(payload: SetSystemPromptPayload): void {
+    // THE BYTE BOUND RUNS FIRST — before the connected guard, deliberately, and this is the one place
+    // this method departs from every sibling write verb's opening line. The verdict is about the VALUE,
+    // not about the link: an over-length prompt is over-length whether or not a socket is up, and the
+    // daemon would answer it with a NON-RETRYABLE `protocol.malformed`. Checking connectedness first
+    // would make a disconnected over-length write vanish silently, which is exactly the "thrown away"
+    // refusal the ticket forbids — the operator would see nothing and retype the same text.
+    //
+    // MEASURED IN BYTES OF UTF-8, never in `.length`, which counts UTF-16 code units: a prompt of
+    // emoji or CJK text sits well under 8192 code units at several thousand bytes over the daemon's
+    // bound, so `.length` would let exactly the multi-byte cases through that this exists to stop.
+    // `Buffer.byteLength` measures without copying the string, so no transient copy of the prompt is
+    // made here. `null` is the clear path and carries no bytes to bound.
+    //
+    // NEITHER THE PROMPT NOR ITS LENGTH IS LOGGED on this branch. The refusal is an EVENT, not a
+    // diagnostic — the only two facts a log line here could add are the two AC5 forbids.
+    const prompt = payload.system_prompt
+    if (prompt !== null && Buffer.byteLength(prompt, 'utf8') > MAX_SYSTEM_PROMPT_BYTES) {
+      emitDaemonEvent(sink, {
+        type: 'systemPromptWriteRejected',
+        conversationId: payload.conversation_id,
+        reason: 'prompt-too-long'
+      })
+      return
+    }
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). NO OUTCOME on this path, and no correlation entry: a write
+    // sent while disconnected never reaches a daemon, so there is nothing to settle and nothing left
+    // dangling. It is deliberately not reported as a rejection — the value was never refused by
+    // anyone, and reporting one would be indistinguishable from a daemon verdict.
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`.
+      // This is the deterministic net that bounds the wire to exactly conversation_id / system_prompt,
+      // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
+      // fresh-literal posture). The tri-state crosses UNTOUCHED: no `?? ''`, no `|| null`, no
+      // truthiness read — any of them collapses two of the three states into one and makes the clear
+      // path unreachable.
+      //
+      // ONE local for the envelope id, read three times (the #1176 rule), so the id sent, the id
+      // counted and the id recorded can never be three different expressions. Shares the one monotonic
+      // nextEnvelopeId with send / changeWorkspace — no second counter — so ids stay unique across
+      // interleaved calls, which is what makes them usable as the correlation key below.
+      const envelopeId = nextEnvelopeId
+      const bytes = buildSetSystemPrompt({
+        id: envelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          system_prompt: payload.system_prompt
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+      // Record AFTER the send, so a build or send that throws leaves no entry under an id the next
+      // request will re-mint. The value is the conversation this app named, held here and handed back
+      // when the ack or the refusal lands — and it is the ONLY source the outcome may use, even though
+      // the ack record carries an `id` of its own, because that one is the daemon's to choose.
+      pendingSystemPromptWrites.set(envelopeId, payload.conversation_id)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. Near-unreachable from both directions — the prompt is bounded above and the
+      // conversation id by the routing lookup one layer up — but caught regardless. The caught object
+      // is DROPPED: its message could echo the payload, INCLUDING THE PROMPT (classify-don't-forward,
+      // inherited #62). No log, no event, NO RETRY. No entry was recorded, so the unspent envelope id
+      // carries no stale attribution.
+    }
+  }
+
   function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
@@ -2963,6 +3164,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // reply inheriting a dead connection's conversation would report one conversation's stored prompt
     // as another's, which #1078 then offers the operator to edit.
     pendingSystemPromptRequests.clear()
+    // Reset the system-prompt WRITE correlation map (#1249): the same rationale on the write leg, and
+    // here a surviving entry would settle a NEW connection's write against a dead one's conversation —
+    // reporting a prompt as stored on a conversation that was never written to.
+    pendingSystemPromptWrites.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
@@ -3021,6 +3226,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     deleteConversation,
     renameConversation,
     changeWorkspace,
+    setSystemPrompt,
     setSessionSettings,
     answerModal,
     cancelModal,

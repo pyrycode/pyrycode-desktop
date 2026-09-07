@@ -444,3 +444,24 @@ guard, which stringifies the whole event into an `Error` message, cannot become 
 prompt text. Architect (builder) self-review PASS, no MUST FIX findings (one SHOULD FIX — the emitted
 `conversationId` must come from the correlation map and not the decoded payload — closed by a
 dedicated test before ship).
+
+[#1249](../codebase/1249.md) is the write half's transport leg, `set_system_prompt` (pyrycode#2151),
+and it changes this module twice — both additive, no new kind and no new payload parser. First,
+**`conversation-updated` gains `inReplyTo?: number`**, propagated from `envelope.in_reply_to` in `case
+'conversation_updated':`. The pre-existing member comment claiming that kind is never correlated was
+wrong as of this ticket and was corrected in the same edit: the daemon replies to the requester with
+`in_reply_to` on all six conversation write verbs, this one included, though the emit stays
+unconditional and first regardless of correlation — see [Daemon connection — correlation § System-prompt
+write correlation (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) for
+why the ack must not consume the frame the way a `daemon-error` match does. Second, **`daemon-error`
+gains a *third* per-verb narrowed sibling field**, `systemPromptReject?: SystemPromptRejectReason`
+(`'protocol-malformed' | 'conversation-not-found'`), set beside `historyReject` off the same untrusted
+`code`. `narrowSystemPromptRejectReason` is `narrowHistoryRejectReason`'s twin exactly — `isRecord`, a
+`string` check, a `switch` comparing the untrusted code against client-owned literals and dropping it,
+total and never-throwing, `undefined` outside its two-member set rather than a member of its own. Two
+pre-existing whole-object `toEqual` assertions on the `daemon-error` kind went red the moment this
+narrower started classifying `protocol.malformed` (`toEqual` tolerates a missing property but not a
+newly-*defined* one); both were repaired by naming the sibling field explicitly, deliberately not
+loosened to `toMatchObject`. See [System prompt write](system-prompt-write.md) for the full design,
+including the outbound builder, the client-side byte bound, and the two `DaemonEvent` arms this
+decode change feeds. Architect (builder) self-review PASS, no MUST FIX findings.

@@ -235,6 +235,38 @@ export type HistoryRejectReason =
   | 'history-unavailable'
 
 /**
+ * Which of `set_system_prompt`'s two published refusals a correlated `error` frame carries (#1249) —
+ * the client-owned form of the daemon's `code`, narrowed at this boundary so no daemon string crosses
+ * IPC.
+ *
+ * `HistoryRejectReason`'s twin, sharing its placement argument and its `undefined`-outside-the-set
+ * return. It is a THIRD union rather than members bolted onto either neighbour for the reason the
+ * first split states: `DaemonErrorOutcome` answers "what class of failure is this" over EVERY frame,
+ * and these two answer "is this ONE VERB's refusal, and which". `conversation.not_found` appearing in
+ * both this union and `HistoryRejectReason` is that separation working as designed, not duplication to
+ * fold: the same wire code means "no such conversation to read a page from" there and "no such
+ * conversation to write a prompt to" here, and a consumer of one has no business narrowing the other.
+ *
+ * BOTH MEMBERS ARE NON-RETRYABLE, and neither carries a byte of what was supplied. The daemon's
+ * message for each is static, and nothing crosses from it: this narrower reads `code` and drops it.
+ *
+ * THE SET IS NOT EXHAUSTIVE OVER WHAT A `set_system_prompt` CAN DRAW — the narrower returns
+ * `undefined` outside it, and the single consumer maps that to a terminal, so a correlated refusal
+ * always settles the write rather than leaving it reported as in flight.
+ */
+export type SystemPromptRejectReason =
+  /** The payload would not decode, or `system_prompt` exceeded the daemon's own 8192-byte cap. NOT
+   *  retryable. One code, two conditions, and the merge is the daemon's: both are faults in the
+   *  request, and its message for either echoes nothing supplied. This client bounds the value before
+   *  the send precisely so the over-length half is not normally reached — see MAX_SYSTEM_PROMPT_BYTES
+   *  — and the two verdicts stay DISTINCT on the IPC side (`prompt-too-long` vs `protocol-malformed`),
+   *  because a refusal this client made itself is not one the daemon issued. */
+  | 'protocol-malformed'
+  /** The `conversation_id` matched no conversation in the daemon's registry. NOT retryable, and
+   *  nothing is stored. Also the permanent answer for a conversation the daemon no longer hosts. */
+  | 'conversation-not-found'
+
+/**
  * One decoded `attachment_chunk` frame from the RETRIEVAL leg (#998) — the client-owned form of
  * AttachmentChunkPayload, differing in exactly one field: `data` is raw bytes here, base64 on the wire.
  *
@@ -561,6 +593,18 @@ export type InboundDaemonMessage =
       // member is not a hedge: a `message.too_long` correlated to a `request_history` is a published
       // case (§ Page size), and a walk that dropped it would stall with no terminal.
       historyReject?: HistoryRejectReason
+      // The system-prompt WRITE verb's refusal (#1249), narrowed off the SAME untrusted `code` string
+      // the two fields above are and by the same comparand idiom — see SystemPromptRejectReason for
+      // why it is a third field rather than two members added to either union.
+      //
+      // OPTIONAL for `historyReject`'s reason exactly: absence has ONE meaning — "this code is outside
+      // the published set for this verb" — read at ONE emit, which maps it to the `'unclassified'`
+      // member of the IPC-side failure so that a correlated refusal always settles the write.
+      //
+      // THREE PER-VERB NARROWED FIELDS IS THE CEILING OF THIS SHAPE. A fourth correlated verb should
+      // prompt a rethink — one narrowed field carrying a verb tag, say — rather than a fourth field;
+      // merging them now would be a refactor of two shipped verbs for no behaviour.
+      systemPromptReject?: SystemPromptRejectReason
     }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
@@ -589,7 +633,24 @@ export type InboundDaemonMessage =
   | { kind: 'queue-state'; queueState: QueueStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
-  | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
+  | {
+      kind: 'conversation-updated'
+      conversationUpdated: ConversationUpdatedPayload
+      // OPTIONAL, like `session-settings`' and `history-page`'s (#1249). Absence is the ORDINARY case
+      // here, not a degraded one, which is why this member carried no handle at all until a consumer
+      // needed one: the daemon also pushes this record genuinely unsolicited, with no `in_reply_to`,
+      // when a host-side `pyry channel new` mints a conversation (pyrycode#2156). So a record without
+      // a handle is merely uncorrelatable, never malformed, and the fail-closed drop belongs one layer
+      // up rather than here as a decode failure.
+      //
+      // IT IS NOT THE ONLY HANDLE, and that is what makes this member unlike its two neighbours. The
+      // record names its own `id`, so a consumer COULD attribute by it — and must not, on the write
+      // path: a daemon answering write A with a record naming conversation B would misattribute the
+      // outcome. `set_system_prompt`'s confirmation (#1249) is resolved by matching this against the
+      // envelope id the write was sent under, and the conversation it names comes from the requester's
+      // own record of what it asked.
+      inReplyTo?: number
+    }
   | { kind: 'conversation-deleted'; conversationDeleted: ConversationDeletedPayload }
   | { kind: 'recent-workspaces'; recentWorkspaces: RecentWorkspace[] }
   | { kind: 'workspace-folder-created'; workspaceFolderCreated: WorkspaceFolderCreatedPayload }
@@ -2755,6 +2816,42 @@ function narrowHistoryRejectReason(payload: unknown): HistoryRejectReason | unde
 }
 
 /**
+ * Map a daemon `error` frame's payload onto a client-owned SystemPromptRejectReason (#1249), or
+ * `undefined` when the code is outside the `set_system_prompt` verb's two published rejects.
+ *
+ * narrowHistoryRejectReason's twin, sharing every property that matters: it returns `undefined` rather
+ * than an `unclassified` member (this narrower answers "is this THIS VERB's refusal, and which", where
+ * narrowDaemonErrorOutcome answers "what class of failure is this" over every frame), and the single
+ * consumer maps that absence to a terminal so a correlated refusal always settles the write.
+ *
+ * TOTAL BY CONSTRUCTION: it never throws and has no failure return, for the reason both neighbours'
+ * docblocks state — an error frame is terminal because it ARRIVED, not because its payload parsed, and
+ * a throw here would silently kill every consumer of the `daemon-error` kind and hand a hostile daemon
+ * a one-frame kill switch.
+ *
+ * The `switch` IS the trust boundary: the untrusted string is a COMPARAND against client-owned
+ * literals and is then dropped, never an index, a join or a resolve, and nothing is retained from the
+ * payload — so `code` needs no length bound, and the frame-level MAX_PLAINTEXT_BYTES guard already
+ * bounds a hostile oversized frame before this runs.
+ */
+function narrowSystemPromptRejectReason(payload: unknown): SystemPromptRejectReason | undefined {
+  // isRecord rejects null and arrays; a string / number / absent payload lands here too. Reading
+  // `payload.code` off a JSON.parse result is prototype-safe — a `__proto__` key round-trips as an
+  // ordinary OWN data property, and this never ASSIGNS, which is the only real hazard.
+  if (!isRecord(payload)) return undefined
+  const code = payload.code
+  if (typeof code !== 'string') return undefined
+  switch (code) {
+    case 'protocol.malformed':
+      return 'protocol-malformed'
+    case 'conversation.not_found':
+      return 'conversation-not-found'
+    default:
+      return undefined
+  }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -3198,7 +3295,16 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'conversation-updated', conversationUpdated }
+      // Propagate the ALREADY-decoded Envelope.in_reply_to (#1249) — do not re-decode it. `undefined`
+      // when the frame omits it, which is the ordinary case for the genuinely unsolicited producer
+      // (pyrycode#2156's host-side channel create) and makes a write's correlation fail closed one
+      // layer up. The numeric id is a routing id and is not logged (no new DiagnosticEvent field).
+      //
+      // ADDITIVE FOR EVERY EXISTING CONSUMER. This record has one already — the conversation-list
+      // refresh — which reads only `conversationUpdated` and must keep firing on every frame,
+      // correlated or not. The handle is a SECOND reading of the same frame, never a gate on the
+      // first.
+      return { kind: 'conversation-updated', conversationUpdated, inReplyTo: envelope.in_reply_to }
     }
     case 'conversation_deleted': {
       // Narrow BEFORE logging so a malformed reply (a missing / non-string `id`) throws first and leaves
@@ -3473,6 +3579,12 @@ export function parseInboundMessage(
       // however mangled its payload; and like `outcome` the daemon's string is dropped, so the logged
       // `code` below stays the client-owned literal it must be.
       const historyReject = narrowHistoryRejectReason(envelope.payload)
+      // The system-prompt WRITE verb's refusal (#1249), narrowed off the SAME untrusted `code` by the
+      // same comparand idiom and into a THIRD client-owned union — see SystemPromptRejectReason for
+      // why the three do not merge. Like its two neighbours it cannot throw, so every consumer of this
+      // frame still fires however mangled its payload; and like them the daemon's string is dropped,
+      // so the logged `code` below stays the client-owned literal it must be.
+      const systemPromptReject = narrowSystemPromptRejectReason(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'error',
@@ -3485,7 +3597,13 @@ export function parseInboundMessage(
       // client-owned outcome, never daemon text. `outcome` is REQUIRED rather than optional so a
       // mangled payload yields 'unclassified' instead of absence: a consumer has no "field missing"
       // state to mishandle, and no `if (outcome)` branch that behaves differently for a hostile frame.
-      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to, outcome, historyReject }
+      return {
+        kind: 'daemon-error',
+        inReplyTo: envelope.in_reply_to,
+        outcome,
+        historyReject,
+        systemPromptReject
+      }
     }
     default:
       // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it

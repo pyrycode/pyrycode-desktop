@@ -333,6 +333,21 @@ unreachability as an invariant to build on.
 - **No length bound on `code`.** Deliberate — a cap would imply the value is retained somewhere, which is
   the impression to avoid; nothing is copied, concatenated, or kept past the `switch`.
 
+### The fourth-verb caution
+
+[System prompt write](system-prompt-write.md) (#1249) added a **third** sibling narrower beside
+`HistoryRejectReason` — `SystemPromptRejectReason` (`'protocol-malformed' | 'conversation-not-found'`),
+carried on `daemon-error` as `systemPromptReject?: SystemPromptRejectReason`. Same shape, same
+reasoning as `historyReject`'s § Related entry below: kept off `DaemonErrorOutcome` because that union
+is inherited whole by `AttachmentTransferFailure`/`AttachmentUploadFailure`, and neither of this verb's
+two codes has any attachment-leg producer. `daemon-error` now carries three per-verb narrowed sibling
+fields (`historyReject`, `systemPromptReject`, plus `outcome` itself for the attachment legs). That is
+recorded here as an honest cost, not a pattern to keep stacking: **a fourth correlated verb needing its
+own reject codes should prompt a rethink of the shape** — one `Record<string, unknown>`-free
+discriminated sub-union, or a per-verb correlation result type entirely, rather than a fourth optional
+field bolted onto the same kind. No such rethink was warranted at three; note it here so the next
+verb's planner reads this before adding a fourth.
+
 ## Related
 
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the positive-terminal sibling on the
@@ -376,3 +391,7 @@ unreachability as an invariant to build on.
   and diverges in one: it returns `undefined` outside its five-member set rather than an
   `'unclassified'` member of its own, since a correlated `message.too_long` — the case this type
   already classifies — is a real, published outcome of that verb too.
+- [System prompt write](system-prompt-write.md) — [#1249](https://github.com/pyrycode/pyrycode-desktop/issues/1249)
+  adds a **second** sibling narrower on `HistoryRejectReason`'s exact template, `SystemPromptRejectReason`,
+  carried as `daemon-error`'s `systemPromptReject?`. See § The fourth-verb caution above for the standing
+  concern this addition raises about the shape.

@@ -188,6 +188,28 @@ Three pieces, three layers:
 - **`modalAnswerRejected` is correlated, not decoded.** [#248](../codebase/248.md) added a fifteenth member, `modalAnswerRejected{modalId}` — the only member built entirely from main-side memory rather than a wire field: the daemon `error` (#116) that follows a rejected `modal_answer` carries no `modal_id`, so `daemonConnection.ts` attributes it via a FIFO queue of its own outstanding answered ids (push-on-send, dequeue-on-error, drain-on-accept, reset-on-dial). Consumed by neither `daemonEventBridge` nor `timelineBridge` (both null it); the real, still-dormant owner is the [modal store + bridge](modal-store-bridge.md) — render lands in #249.
 - **`screenSnapshotReceived` shared its producer's choke point with `snapshotReceived`, not a new one — and both were removed together.** [#316](../codebase/316.md) added the second `emitDaemonEvent` call inside the same `case 'snapshot'` block `snapshotReceived` already occupied — the first member to be emitted from an *existing* member's exact call site rather than a new `case` or a new orchestrator. Both fired on every `screen_snapshot` reply; `screen_snapshot` is always-available (ADR-025, not gated on `interactive` — see [screen snapshot fetch](screen-snapshot-fetch.md)), so unlike `assistantDelta`/`turnState`/`toolUse`, this member had live traffic from the moment #180 shipped the underlying request/reply, not gated behind [#179](../codebase/179.md). Sharing one choke point meant [#621](../codebase/621.md) removed both emits in the same deletion — there was no seam to split the removal on either.
 - **`sessionSettingsRejected` is correlated by lookup, not by FIFO memory.** [#269](../codebase/269.md) added a seventeenth member, sharing the *same* `daemon-error` wire trigger as `modalAnswerRejected` above but a different attribution mechanism: unlike the FIFO (which cannot disambiguate two outstanding answers of the same kind and picks oldest-first), `daemon-error` here is looked up in `pendingSettings` by its own `Envelope.in_reply_to` — a precise per-request match, not a queue position. On a match this precedence gate **consumes the frame entirely**, skipping both the bundle reassembler and the `modalAnswerRejected` FIFO shift; on no match, both fire exactly as before #269. Consumed by none of the three existing bridges; the real consumer is the [Run configuration write store](run-settings-write-store.md) ([#256](../codebase/256.md), shipped), same as `sessionSettingsUpdated`.
+- **`systemPromptWriteConfirmed`/`systemPromptWriteRejected` correlate a record this file's union had
+  never correlated before: `conversationUpdated`.** [#1249](../codebase/1249.md) adds two members,
+  reusing the reply to `set_system_prompt` (pyrycode#2151) — the *existing* `conversation_updated`
+  broadcast for the confirm arm, and the *existing* `daemon-error` path for the reject arm, its **fifth**
+  precedence-tier member (after `sessionSettingsRejected` above, `workspaceFolderRejected`, the
+  debug-bundle reassembler, and the attachment-transfer reject correlation). Unlike
+  `sessionSettingsRejected` above (looked up by a `Map` and then **consumes** the frame), the confirm
+  half here is additive: `case 'conversation-updated':` keeps emitting the unconditional broadcast
+  first, exactly as before this ticket — `conversationListBridge`'s live trigger — and only *then*
+  checks `pendingSystemPromptWrites` for a match, emitting a **second**, separate event on a hit.
+  Consuming the frame the way the reject half (and `sessionSettingsRejected`) does would have silently
+  stopped the requester's own write from refreshing their own conversation row — the trap the ticket
+  names explicitly and a mutation check confirms (reddens five tests). Both new members carry
+  `conversationId` sourced from the correlation map's value, never from the ack record's own `id`
+  field, keeping a hostile-or-confused daemon from misattributing the confirmation to the wrong
+  conversation. See [System prompt write](system-prompt-write.md) for the full design and [Daemon
+  connection — correlation § System-prompt write correlation
+  (#1249)](daemon-connection-correlation.md#system-prompt-write-correlation-1249) for the correlation
+  store. Ships dormant across all four exhaustive bridges (two arms each, eight total); the real
+  consumer is #1250. **Not reflected in [the sealed union reference](daemon-event-channel-sealed-union.md)**
+  — that file is at its 50000-byte cap with no heading structure to split at; `src/shared/ipc/events.ts`
+  and this bullet are authoritative for these two members until it is split.
 
 ## Security posture
 
@@ -239,6 +261,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
   none of the three exhaustive bridges; ships dormant no longer — [the announced-model store (#588,
   shipped)](announced-model-store.md) is the first consumer, still dormant pending #560's render
   surface.
+- [System prompt write](system-prompt-write.md) / [#1249](../codebase/1249.md) — the `systemPromptWriteConfirmed`/`systemPromptWriteRejected` members: the full design, the additive-ack pattern (broadcast first, correlated confirm second, never consuming), and the standing note that [the sealed union reference](daemon-event-channel-sealed-union.md) does not yet list these two, being at its size cap
 - [Emit and subscribe](daemon-event-channel-plumbing.md) / #1068 — `StampedDaemonEvent`, `bindServerOrigin`, and why the field rides beside the union rather than as a 44th touch on each of the 43 arms
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam

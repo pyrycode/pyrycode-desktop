@@ -801,6 +801,25 @@ app.whenReady().then(() => {
         // workspace from the re-list). Inert no-op when not connected (#379).
         router.route(command.payload.conversation_id)?.changeWorkspace(command.payload)
         return
+      case 'setSystemPrompt':
+        // ROUTED BY CONVERSATION (#1249), mirroring changeWorkspace above — a system prompt belongs to
+        // one conversation, so the frame goes to the server that hosts it or to no wire at all. Not
+        // routed by session id, deliberately: this verb is keyed by conversation on the daemon side
+        // too, so the prompt can be set with nothing running.
+        //
+        // UNLIKE ITS NEIGHBOURS THE REPLY IS CORRELATED — the connection method records the write and
+        // the inbound path settles it as exactly one systemPromptWriteConfirmed or
+        // systemPromptWriteRejected. Still direct to the connection method: there is no orchestrator,
+        // and no retry on any path. The renderer sender is #1250's; nothing in the window reaches this
+        // arm yet.
+        //
+        // The `?.` refusal is the sibling posture: an id no server has claimed puts no frame on any
+        // wire, having already refused and logged in conversationRouter, and produces no outcome. The
+        // payload's OVER-LENGTH refusal is deliberately NOT here — it lives in the connection method,
+        // which can emit the rejection an operator has to see; a check at this arm would have to
+        // return silently.
+        router.route(command.payload.conversation_id)?.setSystemPrompt(command.payload)
+        return
       case 'setSessionSettings':
         // ROUTED BY SESSION ID (#1119) — the DAEMON's own session id, not a conversation id (#501 is the
         // standing bug about those two being confused), learned off the stamped `runConfigReceived` and

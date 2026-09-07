@@ -169,6 +169,44 @@ export type HistoryRequestFailure =
   | 'unclassified'
 
 /**
+ * Why a `set_system_prompt` write did not take (#1249). Every member is NON-RETRYABLE — which is why
+ * this union's carrier has no `retryable` field, where `historyRequestFailed` has one: a flag whose
+ * value is a constant across the whole set carries no information, and `HistoryRequestFailure`'s
+ * reason for carrying one (exactly one retryable member, computed at the single emit so a walk driver
+ * cannot re-derive it wrong) does not transfer to a set with none.
+ *
+ * IT MIRRORS `SystemPromptRejectReason`'S TWO MEMBERS BY HAND rather than importing them, the
+ * placement rule `HistoryRequestFailure` and `AttachmentUploadFailure` already follow:
+ * `inboundMessage.ts` is IPC-free by construction, so a type the decode produces cannot be shared
+ * across the boundary it exists to cross. The lists are kept in agreement by the single mapping in
+ * `daemonConnection`'s emit.
+ *
+ * THE FIRST MEMBER IS THIS CLIENT'S OWN VERDICT AND HAS NO WIRE CODE AT ALL. `prompt-too-long` is
+ * raised BEFORE the send, so nothing reached the wire and nothing was refused by anyone; it is
+ * deliberately NOT folded into `protocol-malformed`, which the daemon returns for an over-length value
+ * AND for a payload that would not decode. Folding them would claim the daemon said something it never
+ * did, and would blur the one repair an operator can actually make — shorten the text — with one they
+ * cannot.
+ *
+ * THE LAST MEMBER IS NOT A HEDGE, `HistoryRequestFailure`'s argument transplanted. The daemon
+ * publishes two refusals for this verb, and a correlated refusal must ALWAYS settle the outstanding
+ * write: a code outside the published set that was dropped instead would leave #1250 reporting a
+ * rejected write as permanently in flight.
+ */
+export type SystemPromptWriteFailure =
+  /** This client refused the value before the send: over MAX_SYSTEM_PROMPT_BYTES of UTF-8. No frame
+   *  was built and no frame reached any wire. */
+  | 'prompt-too-long'
+  /** The daemon could not decode the payload, or the value exceeded its own 8192-byte cap. Nothing was
+   *  stored. Its static message echoes no supplied byte, and none of it crosses here. */
+  | 'protocol-malformed'
+  /** The `conversation_id` matched no conversation in the daemon's registry. Nothing was stored. */
+  | 'conversation-not-found'
+  /** A refusal correlated to this write whose code is outside the two published above — reported
+   *  rather than dropped, so the write always settles. */
+  | 'unclassified'
+
+/**
  * The relay-socket leg's state category (#328), mirroring mobile's RelayLinkStatus where it maps
  * cleanly: 'connected' = socket up; 'offline' = socket dropped (an ordinary retryable close);
  * 'daemon-absent' = relay reachable but no daemon registered behind it (the relay's 4404 close). No
@@ -1273,6 +1311,46 @@ export type DaemonEvent =
       conversationId: string
       systemPrompt: string | undefined
       sessionPromptStatus: SessionPromptStatus
+    }
+  // The system-prompt WRITE arms (#1249), the read arm's counterpart: one confirmation, one refusal,
+  // and exactly one of the two per write. NOTHING IN THE WINDOW CONSUMES THEM YET — the sender and the
+  // store holding the outcome are #1250, the editor surface #1078 — so all four exhaustive bridges
+  // take a no-op arm for each.
+  //
+  // `conversationId` IS THE CORRELATION HANDLE, and it is what keeps these off the
+  // `workspaceFolderRejected` precedent above, which carries NOTHING. A bare outcome would satisfy a
+  // careless reading of "exactly one confirmation outcome" while leaving the consumer unable to settle
+  // the write that caused it. Its provenance is `historyPageReceived`'s and `systemPromptReceived`'s
+  // exactly: the background process records each `set_system_prompt`'s envelope id against the
+  // conversation that write named, and matches the answer back by `Envelope.in_reply_to`. What crosses
+  // is CLIENT-OWNED — the id this app put in its own outbound frame — and on the confirmation that
+  // matters more than on the read arm, because here a daemon-asserted id IS available and must not be
+  // used: the ack record carries an `id` of its own, so a hostile or confused daemon answering write A
+  // with a record naming conversation B would misattribute the outcome if the emit read it. The
+  // numeric `in_reply_to` the match was resolved from is deliberately NOT carried.
+  //
+  // EXACTLY ONE OUTCOME PER WRITE IS STRUCTURAL, NOT PROMISED. Both arms consume the SAME correlation
+  // entry, so a daemon sending both an ack and an error for one write settles it once — whichever
+  // frame arrives first wins, and the second matches nothing.
+  //
+  // THE CONFIRMATION CARRIES NOTHING ELSE, DELIBERATELY. The `conversation_updated` record that
+  // answers this write does not carry the prompt — it is broadcast-shaped daemon-side, and only the
+  // requester asked about the value — so this arm must not be grown a field that would suggest it
+  // does. What a conversation now holds is the READ path's answer (`systemPromptReceived`), and that a
+  // saved prompt leaves the RUNNING session untouched, taking effect at the next spawn, is #1078's to
+  // tell the operator. Nothing here may paper over that with an optimistic local value.
+  //
+  // SECURITY: neither arm carries a prompt byte, nor its length, on any path — the ack has no prompt
+  // field to carry and the refusal echoes no supplied byte. `reason` is a CLIENT-OWNED literal:
+  // narrowed at the decode boundary against constants for the two daemon conditions, and minted here
+  // for `prompt-too-long`, which no daemon ever sends. `conversationId` is a routing key and not
+  // rendered text — never markup, an attribute, a URL, a filename, a cache key or a lookup path — and
+  // it reaches no log sink; if a consumer indexes by it, THE INDEX IS A `Map`.
+  | { type: 'systemPromptWriteConfirmed'; conversationId: string }
+  | {
+      type: 'systemPromptWriteRejected'
+      conversationId: string
+      reason: SystemPromptWriteFailure
     }
 
 /**

@@ -1752,9 +1752,13 @@
 
    THE SHADOW (the 2026-09-05 shadow fix, Figma "Tool use" 134:4939): --shadow-thread as a box-shadow, the
    value every element of the message area casts. The design puts it on each single row and ONCE on the
-   grouped stack (384:7103); the app draws no group yet (#1073), so every row casts its own, and the
-   thread's 12px gap is wider than the shadow's 9px reach (4 down plus a 5px blur), so no row's shadow
-   lands on the next. NOT CLIPPED by this rule's own overflow: hidden — an element's overflow clips its
+   grouped stack (384:7103). THIS RULE IS NOW THE LONE ROW'S HALF ONLY: #1073 joined consecutive rows, which
+   falsified the argument that used to stand here — that "the thread's 12px gap is wider than the shadow's 9px
+   reach (4 down plus a 5px blur), so no row's shadow lands on the next" — since closing that gap is exactly
+   what #1073 does. A row with a tool-row successor now computes `box-shadow: none` and the run's last row
+   carries the group's one shadow; see the #1073 comment below for why the last rather than the first. A row
+   standing alone still casts its own, which is what this declaration is for and what
+   e2e/thread-shadow.spec.ts reads. NOT CLIPPED by this rule's own overflow: hidden — an element's overflow clips its
    descendants, never its own outer shadow — and the pending row's 50% opacity dims the shadow with the
    box, the same compositing the Figma effect renders. e2e/thread-shadow.spec.ts reads the computed value
    on a pending row, where the dimming could pass for the shadow's absence by eye. */
@@ -1788,6 +1792,90 @@
    than silently drawing no failure device at all. */
 .tool-row--error {
   border-color: var(--color-error);
+}
+
+/* #1073 — CONSECUTIVE TOOL ROWS JOIN INTO ONE STACK (Figma "Consequent tool uses" 384:7103), so a run of
+   steps reads as one sequence rather than as a column of unrelated boxes. Natively unblocked by #1102: the
+   box treatment lives on .tool-row itself now, so joining two rows is a rule on the row rather than a rule on
+   the row plus a correction on the chip with an expanded body hanging between two borders.
+
+   TWO SELECTORS CARRY ALL OF IT, and each names one half of a join: `.tool-row + .tool-row` is the LOWER row
+   of a join, `.tool-row:has(+ .tool-row)` the UPPER one. A row matching neither — a lone row, or a row beside
+   a bubble — is byte-identical to what ships above, which is what makes "a row standing alone is unchanged"
+   true by reading rather than by argument. Both are (0,1,1)/(0,2,0) against the base rule's (0,1,0), so they
+   win on specificity and their placement here is NOT load-bearing the way .tool-row--error's is.
+
+   THE MARKUP DOES NOT CHANGE. Every tool row is already a direct child of .conversation__thread's flex column
+   (Timeline maps items straight into it and TimelineRow's toolCall arm returns ToolRow with no wrapper), so
+   the adjacent-sibling selectors reach exactly the internal joins of a run and nothing else — nothing is
+   grouped, wrapped or re-parented, and a run interrupted by a message bubble stops being a run for free. A
+   `turnBoundary` between two calls does NOT interrupt one, because that arm renders as null and emits no
+   element: a run is DOM adjacency, and two tool rows either side of a closed turn still read as consecutive.
+
+   THE MARGIN. gap cannot be varied per pair, so the join is a negative top margin on the lower row: the
+   column's gap and the item's margin both apply, so the pair's effective separation is 12 + (-13) = -1px and
+   the lower row's 1px top border lands on exactly the pixel band the upper row's bottom border occupies. One
+   line, not two and not a 2px-looking one. Tokenised rather than -13px so the gap follows --space-3 if it
+   ever moves; the 1px stays a literal because it is the BORDER WIDTH, not a spacing step. On the lower row
+   rather than Figma's own mb-[-1px] on the upper one — equivalent under a flex gap, and `+` is the cheaper
+   selector, so :has() is spent only where the property genuinely lives on the upper element.
+
+   THE CORNERS ARE THE ONE PLACE THE DESIGN NODE IS NOT THE ANSWER. 384:7103 is literally two instances
+   overlapped, so both keep their 6px and the node's own render shows the artefact: two curves facing each
+   other across a join with a notch of thread background at either side. Juhana ruled 2026-09-04 that a run's
+   internal corners go square and only its outer ones keep the 6px — the top two of the first row and the
+   bottom two of the last. Written as the ABSENCE of --radius-xs on two corners, 0 inline; deliberately NOT a
+   --radius-none token, because a square corner is not a value in the radius scale.
+
+   THE SHADOW, and it is the half most easily missed. The design casts --shadow-thread ONCE on the wrapper
+   frame where a lone row (134:4939) casts its own, and .tool-row's own comment above says in as many words
+   that per-row shadows are safe only because "the thread's 12px gap is wider than the shadow's 9px reach" —
+   which is precisely what this rule falsifies. Left alone every interior row would drop 9px of shadow across
+   its join onto the row below and smear ~2.5px past the stack's sides at each join, and where a pending row
+   precedes a resolved one its atomic paint group (see below) would put that shadow fully on top. So every row
+   with a successor computes none and the LAST row of the run carries the group's. The last rather than the
+   first because the effect's 4px downward offset puts its visible mass below the stack, where the design's
+   group shadow is; and it can stay because an outer shadow is clipped to outside its own border box and
+   starts 4 − 2.5 = 1.5px below that box's top, so it cannot paint back up across the join above it.
+
+   THE JOIN'S COLOUR IS A RULE RATHER THAN A CONSEQUENCE OF PAINT ORDER, and that is the subtle part. Two
+   facts pull opposite ways. A later sibling paints its background and border over an earlier one's, so by
+   default the row below a failed row would erase that row's red bottom edge and a row above one would gain a
+   red edge it should not have. AND .tool-row's pending opacity: 0.5 makes a pending row an atomic paint
+   group, which paints above every non-dimmed sibling regardless of DOM order — so the direction reverses the
+   moment a pending row is one of the pair. Making both coincident borders carry the same colour is what makes
+   the drawn line independent of which row happens to paint last. Neither rule leaks past the shared edge: a
+   failed row's own four sides stay red through .tool-row--error above, and each neighbour is retinted on
+   exactly one edge.
+
+   A PENDING/RESOLVED JOIN NEEDS NO RULE. A 50% border painted over a 100% border of the same colour at the
+   same pixels composites back to full strength, so that join reads as one full line rather than a half one.
+   And a failed row is always --resolved as well (ToolRow's rowClass adds tool-row--error only on top of
+   tool-row--resolved), so a dimmed row and a red border are never the same element — only ever the two sides
+   of a join.
+
+   :has() SHIPPED IN CHROMIUM 105 and this app runs Electron 33 (Chromium 130) with no other renderer.
+   e2e/tool-row-toggle.spec.ts drives a run of four resolving pending/resolved/failed/resolved, which is the
+   arrangement that reaches every join case at once; the lone-row readings stay in e2e/thread-shadow.spec.ts
+   and e2e/thread-scroll-pin.spec.ts, which each drive exactly one row and so form no run. */
+.tool-row + .tool-row {
+  margin-top: calc(-1 * var(--space-3) - 1px);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.tool-row:has(+ .tool-row) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+}
+
+.tool-row--error + .tool-row {
+  border-top-color: var(--color-error);
+}
+
+.tool-row:has(+ .tool-row--error) {
+  border-bottom-color: var(--color-error);
 }
 
 /* #696 — the expanded row. Since #1102 the row is a column in BOTH states, so what is left on this

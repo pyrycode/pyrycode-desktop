@@ -196,3 +196,24 @@ join-colour assertions must be red.
 2. Does the last row of a run need `overflow` reconsidered so its surviving shadow is not clipped? Expected no:
    an element's `overflow` clips its descendants, never its own outer shadow (the #1102 comment's own finding).
    Confirmed by the assertion that the last row computes a shadow at all.
+
+## Revisions
+
+**2026-09-07, in Phase B. Both open questions resolved; neither changed the design, and no rule in the plan
+moved.**
+
+1. *Nothing draws between the bubble and the run.* The drive pushes an `assistant_delta` and its `turn_end`
+   rather than driving the composer — fewer imports, and `thread-scroll-pin.spec.ts`'s precedent for an
+   unsolicited delta. That closes the turn, so a `turnBoundary` item does sit between the bubble and the
+   calls; `TimelineRow` renders that arm as `null` and emits no element, so the bubble and the first tool row
+   stay DOM-adjacent and the 12px read is sound. The finding is worth more than the question: **a run is DOM
+   adjacency, not item adjacency**, so two tool calls either side of a closed turn still join. That is the
+   right behaviour and it is now stated in the CSS comment and exercised by the drive.
+2. *The surviving shadow is not clipped.* `overflow: hidden` clips descendants, never the element's own outer
+   shadow, as #1102's comment already found. The last row of the run computes a shadow; asserted.
+
+**One shipped comment was falsified and is corrected in the same commit.** `.tool-row`'s own shadow paragraph
+argued that per-row shadows are safe because "the thread's 12px gap is wider than the shadow's 9px reach, so
+no row's shadow lands on the next" — closing that gap is precisely what this ticket does. The paragraph now
+says it is the lone row's half only and points at the join rules. `docs/knowledge/features/conversation-shell-tool-row-box.md` § The shadow carries the same stale claim and
+is the documentation phase's to correct; it is flagged in the PR body rather than edited here.

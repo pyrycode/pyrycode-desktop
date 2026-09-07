@@ -97,6 +97,7 @@ The ticket carries the `security-sensitive` label; the architect's review verdic
 
 ## Related
 
+- **`UnrecognizedMessagePayload`'s doc comment** (`src/shared/wire/types.ts`, above the interface) — the dated census of what the daemon actually forwards for the two lines this codec's `unrecognized_message` frame is *not* emitted for. `system` and `rate_limit_event` both stay unreachable from that frame, but by different routes: `system` holds it because it is the sole member of the daemon's `ignoredLineTypes` map (unreachable **by list membership**), `rate_limit_event` because it has an arm of its own that never falls through to the unrecognized case (unreachable **by matching**, the daemon's stronger guarantee) — the two phrases are not interchangeable, and a comment that applies one to both inverts the distinction. Measured 2026-09-07 against pyrycode `internal/streamsup/parser.go`; re-measure rather than citing that date once the daemon moves again (#1248).
 - [Relay connection](relay-connection.md) (#21) — the opaque byte pipe this codec sits on top of; its 1 MiB `maxFrameBytes` bounds the input decode sees.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) — "do not drift the encoded form from mobile without a matching daemon change", and the types→`shared` / codec→`transport` split this ticket enforces.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) — the background-process transport home.

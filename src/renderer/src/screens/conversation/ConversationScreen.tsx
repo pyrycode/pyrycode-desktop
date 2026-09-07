@@ -57,6 +57,7 @@ import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
+import { EffortDefaultData } from './EffortDefaultData'
 import {
   ComposerAttachButton,
   ComposerAttachOutcome,
@@ -3050,6 +3051,12 @@ function Composer({
         <ComposerPermissionModeMenu conversationId={activeConversationId} />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />
+        {/* #1169: headless — it renders null, so it adds no item to this row and no count, anchor or
+            geometry assertion in e2e can see it. It sits beside the control it feeds rather than
+            app-level in App.tsx because its decision reads the OPEN chat's session and published levels,
+            and this is where that conversation id is already in hand and where its lifetime is the open
+            chat's. */}
+        <EffortDefaultData conversationId={activeConversationId} />
         <ContextUsageControl />
         <ComposerAttachButton onAttach={attach.requestAttach} />
       </div>

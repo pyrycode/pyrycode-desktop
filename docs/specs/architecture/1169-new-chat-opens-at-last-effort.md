@@ -1,0 +1,346 @@
+# #1169 — A new chat opens at the last effort level used
+
+## Files read
+
+| Path → symbol | Why it matters |
+|---|---|
+| `src/renderer/src/store/pushNotificationPrefStore.ts` → `PushNotificationPrefStorage`, `localStoragePushNotificationPref`, `createPushNotificationPrefStore` | The storage-port preference shape this ticket's third key copies verbatim, including the `typeof window` import-safety guard the `node` vitest env needs. |
+| `src/renderer/src/store/defaultWorkspaceStore.ts` → `WorkspacePrefStorage`, `DEFAULT_WORKSPACE_KEY` | The first of the two precedents; its header carries the standing "defer a key-namespacing helper until a genuine third case" note this ticket deliberately declines to act on. |
+| `src/renderer/src/store/runSettingsWriteStore.ts` → `reduceRunSettingsWrite`, `selectEffectiveSettings`, `selectError`, `SettingsChange` | The write machine. Its `pending` map is where a confirm's value is recovered from, its `confirmed`/`pending` composition is what makes an applied level ≠ `''`, and `error` is the standing-rejection cell the security review rejected as a no-retry guard (`changeDispatched` clears it). |
+| `src/renderer/src/store/runSettingsWriteBridge.ts` → `subscribeRunSettingsWrite`, `submitSettingsChange`, `RunSettingsWriteData` | The one place a confirm reply is folded into the store, and therefore the only seam where "remember on confirm" can read the value that was confirmed before the reducer deletes the pending record. |
+| `src/renderer/src/screens/conversation/runSettingsControls.ts` → `changeSetting`, `isAddressableSessionId` | The gated write this ticket supplies a value and a moment to. `isAddressableSessionId` is the single definition of "there is a session to address" and this plan reuses it rather than restating the `null` / `''` rule. |
+| `src/renderer/src/screens/conversation/ComposerEffortMenu.tsx` → `composerEffortMenuModel`, `ComposerEffortMenu` | The control whose blank rendering (`effort === '' → null`) is the defect, and the container whose four store reads this ticket's leaf mirrors. |
+| `src/renderer/src/screens/conversation/RunConfigSections.tsx` → `effortRowFor`, `publishedRowFor`, `EffortSection` | #1168's row join — the ONE home of "which row's levels does an effort surface offer", including the empty-model → `default` substitution. Also the surface that stays operable at `effort === ''`, which is how the real-claude drive can pick a level at all. |
+| `src/renderer/src/store/runConfigStore.ts` → `RunConfigSnapshot`, `clearSnapshot`, `selectSnapshot` | The daemon-authored snapshot base. Its `effort: ''` is the wire's "no explicit effort" and is this ticket's whole precondition. |
+| `src/renderer/src/activateConversation.ts` → `activateConversation`, `clearRunConfig`, `requestConversationConfig` | #1166 + #1167's landed guarantees: opening a chat clears the previous chat's snapshot and write state and asks for the new one's configuration without waiting for a turn end. Both are load-bearing preconditions here and neither is re-implemented. |
+| `src/renderer/src/screens/conversation/runConfigSnapshot.ts` → `subscribeRunConfig`, `requestRunConfigSnapshot` | #1176's attribution gate — why a late reply naming another chat cannot mis-seed the precondition this ticket reads. |
+| `src/renderer/src/store/modelListStore.ts` → `ModelListEntry`, `selectModelListFor` | The per-conversation published rows; the `useMemo`-stable selector idiom the leaf reuses. |
+| `docs/knowledge/features/composer-effort-menu.md` § "Where this control departs from its neighbour", § "Security", § "Testing" | The label **is** the session's value (no relabelling); the levels are unsanitized claude-authored text; and the e2e lesson that the `.composer-options-anchor` count is what isolates *this* control. |
+| `docs/knowledge/features/push-notification-preference-store.md` (via the module header) | Why the port is the DI seam and why absence-mapping lives at the store, not at the port. |
+| `e2e/run-config-scoped-to-conversation.spec.ts` | #1167's two-chat drive: the FAB create round trip, the per-request `session_settings` fake, and the "seed a confirmed override in A, then switch" shape this ticket's fake spec adapts. |
+| `e2e/composer-effort-menu.spec.ts` | The effort control's own fake drive — invented levels, the capturing reply factory, and `settingsFramesMatching`'s deep-equal frame count. |
+| `e2e/real-claude-permission-mode.spec.ts`, `e2e/run-config-settings.spec.ts` | The real-claude settings drive's shape (cursor-quiesce turn gate, read-the-baseline discipline) and how the run-configuration sheet is opened (`menuitem` "Run configuration"). |
+
+## Design source
+
+**Figma:** https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=115-3688
+
+The node is the composer footer's effort trigger as already shipped by #989: a 36×16 control drawn as the level's lowercase text in `--color-primary` at the body-small size, followed by the 8×4 `chevron-up-solid-full` glyph, with no border, no fill and no chrome of its own — the trigger is text plus glyph. **This ticket introduces no new markup, no new CSS and no new token.** It changes only *whether that trigger has a value to draw*: today the control renders `null` on a chat whose session reports no explicit effort, and after this ticket such a chat carries the remembered level, so the already-designed trigger draws exactly as the node shows. The visual-fidelity question therefore reduces to "does the existing control render", which `ComposerEffortMenuView` already answers and this ticket does not reopen.
+
+## Context
+
+The footer's effort control draws nothing when the session carries no explicit effort — the wire's `SessionSettingsPayload.effort === ''`, "inherited daemon default". That is every session nobody has set a level on. Unlike the model, there is nothing to fall back on: claude's session-open line does not carry effort, so no part of the system knows the effective effort of a session that was never given one. The fix is to make sure a session always has one rather than to report one nobody holds.
+
+Juhana's call, 2026-09-04: **the default is the last level used, held client-side.** A new chat opens at whatever level the last one was set to; the value persists across restarts; it is validated against the published levels before use and dropped when it matches none; and with no usable remembered level the control stays blank rather than being filled with an invented level (#988's constraint — nothing the client displays here is client-authored).
+
+The three blockers have landed and are what make this reachable at all: #1166 asks for the opened chat's run configuration and model list on open rather than at the next turn end; #1167 clears the previous chat's snapshot and write state on a switch, which is what makes a blank effort control reachable; #1168's `effortRowFor` resolves an unconfigured chat's inherited-default row, which is what makes its levels knowable. #1176 refuses a late reply naming another chat.
+
+**No ADR is warranted.** This is a third instance of the shipped renderer-preference pattern plus a decision rule over existing stores; the reasoning that would go in a decision record is the "one remembered level app-wide" and "remember on confirm" argument, which belongs in the effort-menu package overview beside the control it governs.
+
+## Size
+
+The refiner sized this **S at ~900 lines against the table's 800**, and merged the two halves deliberately: the only clean cut is remembering from applying, and the remembered value's sole consumer is the apply half in this same slice. That is the § A1 **floor** rule — a slice whose only deliverable is consumed by exactly one sibling in the same family is part of that sibling — and when floor and ceiling disagree the floor wins. Re-counted against this written plan: **4 production source files**, ~5 new exported types/stores/components, 2 wiring sites, 5 acceptance criteria, no new reject branch. Every other line of the table is well inside its bound; the overage is one test file's worth of total written work, stated here rather than worked around.
+
+## Design
+
+Four production files. Nothing on the write path changes: `changeSetting` → `submitSettingsChange` already sends one `set_session_settings` carrying the single changed field, and `runSettingsWriteStore` already holds the optimistic overlay and folds the confirm or reject back in. This ticket supplies a **value** and a **moment**.
+
+### 1. `src/renderer/src/store/lastEffortStore.ts` (new) — the remembered level
+
+The app's **third** renderer preference, in the same shape as the two shipped ones (`defaultWorkspaceStore`, `pushNotificationPrefStore`): an injected storage **port** as the DI seam, a DI factory, an app-wide singleton, a narrow-slice hook and one read selector.
+
+- `LastEffortStorage` — `read(): string | null`, `write(value: string): void`. No clear path: the only writer is a daemon-confirmed level, and no reset-to-default action exists (the push preference's own simplification).
+- `LAST_EFFORT_KEY = 'pyry.lastEffort'` — the third key, added in the same shape as the other two. **The standing key-namespacing deferral is declined here on purpose**: extracting the helper means editing two adjacent modules this task does not otherwise need, which is squarely "don't refactor adjacent code while you are there". If the helper is wanted it is its own ticket.
+- `localStorageLastEffortPref()` — the real port, with the `typeof window` import-safety guard both precedents carry (the vitest env is `node`, so the singleton must be constructible with no `window`). `read()` maps a stored `''` to `null`: `''` is the wire's *absence* of a level, never a level, so it is not a value this store may hand out. Not a try/catch — an unobserved failure mode gets no defense.
+- `LastEffortState { lastEffort: string | null }`, `setLastEffort(value: string)` — persist-through-then-record, the precedents' order.
+
+`null` is the distinct "nothing remembered" state (fresh install, or every level so far rejected).
+
+### 2. `src/renderer/src/store/runSettingsWriteBridge.ts` (modified) — remember on confirm
+
+Two new pure helpers plus one wiring change in `RunSettingsWriteData`.
+
+- `confirmedEffortLevel(pending, event): string | null` — the value to remember. Non-null only when the event is `settingsConfirmed`, the `changeId` matches a pending record, that record's `field` is `'effort'`, and its `value` is non-empty. Everything else — a model/yolo/permissionMode confirm, a rejection, an unmatched `changeId`, a reconnect, a switch — is `null`. **Remember on confirm, not on pick**: a rejected level is not a level that was used, and this is the only seam where the confirmed *value* is recoverable, because the confirm reply carries only a `changeId` and the reducer deletes the pending record as it commits.
+- `foldWriteEvent(deps, event): void` — reads the pending map, dispatches, then remembers. **The read must precede the dispatch** and that ordering is the whole helper; it gets its own named test. Deps are `{ getPending, dispatch, rememberEffort }`, injected, so the path stays unit-testable with plain spies (the file's existing idiom).
+- `RunSettingsWriteData` swaps its inline `dispatch` arrow for a `foldWriteEvent` call wired to the two real stores. `subscribeRunSettingsWrite` itself is untouched.
+
+Applying a remembered level is an ordinary change that confirms and re-remembers the same value — idempotent, not a loop.
+
+### 3. `src/renderer/src/screens/conversation/EffortDefaultData.tsx` (new) — the decision and the moment
+
+One file holding a pure decision function and the headless leaf that runs it — `ComposerEffortMenu.tsx`'s own shape (pure model function beside its React binding), so every rule is unit-testable as data under a `node` env that cannot run an effect.
+
+```ts
+export function effortDefaultToApply(input: EffortDefaultInput): string | null
+```
+
+`EffortDefaultInput` is `{ conversationId, appliedFor, sessionId, effort, model, models, remembered }`. It returns the level to apply, or `null`. The rules, in order:
+
+1. `conversationId === null` → `null`. No chat is open, so there is no opening to apply to.
+2. `remembered === null` → `null`. Nothing stored (AC4's first arm).
+3. `appliedFor === conversationId` → `null`. **AC3's no-retry arm and the one-per-chat-opening rule, and they are the same rule.** `appliedFor` is the conversation id the leaf last applied for; once the default has been offered to a chat it is not offered again, whatever the outcome. See below for why this and not the standing-rejection cell.
+4. `effort !== ''` → `null`. **The chat already answered the question this ticket exists to answer** (AC2) — and `effort` here is `selectEffectiveSettings`' composition, so an in-flight or already-confirmed apply also reads non-empty. Different fabric from rule 3: this is the store's composed truth about the session, that is the leaf's own record of what it did.
+5. `!isAddressableSessionId(sessionId)` → `null`. Reused from `runSettingsControls`, never restated: `null` (never observed) and `''` (the daemon says it has no session to address) are both inert. `changeSetting` re-checks it downstream as its own gate; this rule is here so the decision is complete as data, not as a substitute for that gate. It is also what makes the window #1167 opens safe: a switch clears the session id, so between the clear and the new chat's reply this rule is what stops a default being written into the session the operator just left.
+6. `effortRowFor(models, model)?.effort_levels ?? []` must **contain** the remembered level, by `Array.prototype.includes` — an equality scan, never an object keyed by daemon text. Levels are published per model, so a level carried over from one model may not exist for the next (AC4's second arm). No fallback list, no repair, no normalisation: #976 deleted the last client-side vocabulary and nothing here re-mints one. `?? []` guards the shape for `EffortSection`'s stated reason.
+
+**Why rule 3 is a marker and not `runSettingsWriteStore.error`.** The obvious guard is "a standing effort rejection blocks the retry", and it is wrong: `changeDispatched` clears `error`, so an operator who picks a *model* after the default was refused clears the guard while the chat's effort is still `''` — and the refused level goes out again, once per unrelated setting change. That is reachable without a switch and violates AC3 as written. The marker has no such coupling: it records that this chat's opening has had its one attempt, and nothing on the write path can clear it.
+
+`appliedFor` is an input rather than something the decision reads for itself, so every rule stays testable as data.
+
+```tsx
+export function EffortDefaultData({ conversationId }: { conversationId: string | null }): null
+```
+
+The leaf mirrors `ComposerEffortMenu`'s container reads (session id, snapshot, raw write state, the `useMemo`-stable per-conversation model-list selector) plus `selectLastEffort`, so it wakes on exactly the facts the decision reads, and holds `appliedFor` in a `useRef` — a value that must not trigger a re-render, and the leaf's own record rather than shared state. It renders `null` — no DOM node, so no footer count or geometry assertion anywhere in `e2e/` can see it.
+
+**The effect resolves the current store state through `getState()` rather than closing over the render-time values.** `main.tsx` wraps the app in `React.StrictMode`, which double-invokes an effect against the *same* closure: a render-time `effort` of `''` would still read `''` on the second invocation even though the first already dispatched. The ref already closes that double-send (a ref survives StrictMode's simulated remount), and reading fresh state is the second, independent reason the same frame cannot go out twice — it is also what makes rule 4 true of the store rather than of a stale render. `RunSettingsWriteData`'s own `runSettingsWriteStore.getState()` idiom, for the same class of reason. The hooks stay as the *wake* signal; the effect body is the *read*.
+
+The marker is set **before** the send, so a throw out of `sendCommand` cannot leave the chat eligible for a retry on the next tick.
+
+**Why a separate leaf rather than an effect inside `ComposerEffortMenu`.** The menu is a display-and-pick control whose container is documented as reading no state of its own beyond what it draws; folding a write policy into it would fuse two unrelated concerns into one container and make the control's own tests answer for a decision they do not own. A `null`-rendering sibling costs four zustand subscriptions and no render.
+
+### 4. `src/renderer/src/screens/conversation/ConversationScreen.tsx` (modified) — the mount
+
+One import and one JSX line: `<EffortDefaultData conversationId={activeConversationId} />` beside `<ComposerEffortMenu />` in the composer footer, which is where `activeConversationId` is already in hand and where the leaf's lifetime is the open chat's.
+
+## State + concurrency model
+
+- **Stores touched:** `lastEffortStore` (new, global, one key); `runSettingsWriteStore` (read for `effort`/`error`, written through the existing `dispatch` only); `runConfigStore`, `sessionIdStore`, `modelListStore` read-only. No new store is conversation-keyed and none needs to be.
+- **Unidirectional:** the leaf reads selectors and calls `changeSetting`; nothing two-way-binds. The preference store's only writer is `foldWriteEvent`, and its only reader is the decision.
+- **Async:** none introduced. `changeSetting` is fire-and-forget over an already-typed IPC command; there is no promise to await, no timer, no subscription beyond the zustand ones React tears down with the leaf.
+- **Cancellation / teardown:** the leaf's subscriptions are hook-owned and unmount with `ConversationScreen`; the effect starts nothing that outlives it, so it needs no cleanup function. `localStorage` access is synchronous.
+- **Re-render seams:** the leaf renders `null`, so its own re-renders cost nothing and cascade nowhere. The raw write state is selected whole (stable identity between dispatches) exactly as `ComposerEffortMenu` does, never `selectEffectiveSettings` as the selector.
+
+## Error handling
+
+No new failure mode and no new result type. The apply rides the existing write path, so its two outcomes are the shipped ones: a confirm commits the override and re-remembers the same value; a rejection drops the pending marker, the label reverts through `selectEffectiveSettings`, `error` is set to `'effort'`, and rule 3 stops the retry. The footer says nothing further about it — the row has a hard 20px height and no slot for an error line, and the run-configuration sheet is where a rejection is named (#989's ruling, unchanged).
+
+Nothing here throws. A missing `window` (the `node` render path) is answered by the port's guard; an absent model list, an unmatched row and an empty published list all collapse into rule 5's single "not usable" arm, which is a no-op and not an error.
+
+**Logging:** none added, and that is deliberate rather than an omission. Every value on this path is either claude-authored text or a conversation-scoped identifier, and ADR 0007's content-free rule plus #989's "nothing on this path is logged at all" both point the same way; the observable evidence is the wire frame itself, which the e2e tiers assert.
+
+## Testing strategy
+
+**vitest (`node`, static renders only) — the whole decision surface:**
+
+- `lastEffortStore.test.ts` — hydration from a populated port; hydration from an empty port (`null`); a stored `''` reads as `null`; `setLastEffort` persists **through the port** and then records (AC3's "a store built fresh from that same storage reports it" is asserted literally: write through store 1, construct store 2 over the same fake storage, read it back); the real port is a no-op with no `window`; the key string is pinned.
+- `runSettingsWriteBridge.test.ts` (extended) — `confirmedEffortLevel` returns the value for a matching effort confirm; `null` for a model/yolo/permissionMode confirm, for a rejection, for an unmatched `changeId`, for `reconnected` / `conversationSwitched`, and for an empty value. `foldWriteEvent` dispatches exactly once for every event; remembers only on the effort confirm; and **reads the pending map before dispatching** — pinned with a spy whose `getPending` is asserted to have been called before `dispatch`, so a reordering that would read an already-deleted record fails.
+- `EffortDefaultData.test.tsx` — `effortDefaultToApply` as a table: each of the six rules returning `null` in isolation, the one path returning the level, the empty-model row substitution reaching the `default` row's levels, a near-miss level (a published `xhigh` against a remembered `high`) returning `null`, and a `null` / `''` session id returning `null`. Plus a smoke render of the leaf proving it emits no markup.
+- `EffortDefaultData.test.tsx`, the **send-loop** pins — the availability hazard this design introduces, so they are asserted against the **real** `runSettingsWriteStore` rather than a hand-built input, which pins the composition instead of my belief about it. Dispatch a `changeDispatched` for `{ field: 'effort' }` into a real store, compose `selectEffectiveSettings` over an `effort: ''` snapshot, feed that into the decision, and assert `null` (rule 4 holds the moment the send is recorded). Then confirm it and assert `null` again. Then, on a fresh store, dispatch → reject → assert the decision returns `null` **because of the marker**, and — the regression this pass found — that it still returns `null` after an unrelated `changeDispatched` for `{ field: 'model' }` has cleared `error`.
+
+**Playwright, fake tier — `e2e/composer-effort-default.spec.ts` (new):** the two-chat drive, adapted from #1167's `run-config-scoped-to-conversation.spec.ts`. Levels are **invented**, mutually non-substring (the sibling specs' rule — seeding the measured five would put back the vocabulary #976 deleted and would let a client-side fallback pass unnoticed). One launch, one continuous drive:
+
+1. Chat A opens (the fixture navigates by clicking the seeded row) and its `request_session_settings` is answered with a real effort and a model whose row publishes the levels. **AC2's assertion lands here**: zero `set_session_settings` frames have gone out, and the label reads A's own level — a chat that reports an effort of its own is left alone.
+2. Pick a level in A through the real menu; the fake confirms it. That confirm is what writes the remembered level.
+3. Mint chat B through the FAB's real create round trip. B's own `request_session_settings` is answered with `effort: ''` and the same model, and B's `model_list` is pushed.
+4. **AC1's assertion**: exactly one `set_session_settings` deep-equal to `{ session_id: <B>, effort: <picked> }` — a frame count, which can only be non-zero if the apply fired, so it cannot pass vacuously — and the footer label reads that level on B before any message is sent.
+
+Why a new file rather than a step on `composer-effort-menu.spec.ts`: that drive's whole premise is a chat that *reports* an effort, and every existing effort spec seeds one. A second chat reporting none is the shape, and the shape is what makes it its own file (#1167's own stated reason, one axis over).
+
+**Playwright, real-claude tier — `e2e/real-claude-effort-default.spec.ts` (new), AC5.** The `real-*` filename is what partitions the tier, and the criterion is discharged by a `npm run e2e:real:gate` run reporting it **executed**, never by an exit code. Two real turns, `real-claude-permission-mode.spec.ts`'s budget and its cursor-quiesce turn gate:
+
+1. Pair; create chat A through the FAB; send one message and let the turn quiesce, so a real session is resolved and addressable.
+2. Open the run-configuration sheet and pick a level from the **published** segments — the sheet, not the footer, because the footer control draws nothing at `effort === ''` while `EffortSection` stays operable there. The level is read off what the daemon actually published; nothing is assumed.
+3. Mint chat B through the FAB and send **nothing**. Assert the footer effort label reads the picked level. **This is AC5's "a level set on a chat before its first message"**, and it also proves the ticket's load-bearing wire premise — that a session is minted at conversation creation, so `set_session_settings` against a never-messaged conversation is addressable and persists (pyrycode#2085).
+4. Send B's first message and let the turn quiesce. Assert the label still reads that level once the turn has ended — the daemon composed it into the child's launch arguments — and that **no `.bubble` in the thread contains `/effort`**, since a slash line would mean the value reached the turn stream instead.
+
+Accepted limitation, stated rather than papered over (the sibling real specs' own): `runSettingsWriteStore.confirmed` outlives the post-turn re-read, so the final label is not *provably* snapshot-sourced. What the drive does prove is the failure this tier exists to catch — a daemon that refuses the level, or drops it for a never-messaged conversation, rejects or reports `''`, the override is never committed, and step 3 or step 4 reddens.
+
+**Fakes over mocks** throughout: the fake storage port is an in-memory object, the daemon is the fake-tier forwarder, and `vi.fn()` appears only for the injected `foldWriteEvent` deps where call *ordering* is the assertion.
+
+## Open questions
+
+1. **Does AC3's "not applied again to that chat" survive a switch away and back, or a screen remount?** No: `appliedFor` holds one conversation id, so A → B → A makes A eligible again, and leaving the conversation screen for Settings and returning resets the ref. Both are re-*openings*, and the ticket words the guard as "one per chat opening" rather than one per chat ever — a durable per-chat memo would need a conversation-keyed store for a documented upstream asymmetry (the daemon refusing a level it published) that costs exactly one refused frame per opening, and each occurrence needs a fresh operator action. Recorded as the deliberate bound rather than the maximal one. To be re-checked in Phase B against the wired leaf; if the re-check changes the design, it lands as a `## Revisions` entry.
+2. **Does the daemon's `session_settings` reply report a level set on a never-messaged conversation, or keep reporting `''` until the child spawns?** It changes nothing in the design — if it reports `''` the apply simply repeats the same value idempotently on a re-open — but it decides whether step 3 of the real-claude drive can also assert the *sheet's* re-read. Resolve while writing that spec; assert only what holds either way.
+3. **Is `.composer__effort-label` mounted on chat B before its `model_list` arrives?** No — rule 5 needs the levels, so the apply waits for the list. The fake spec must therefore push B's list before polling the frame count, and must not assert a pre-apply absence (an opening `toHaveCount(0)` there would be the vacuous-pass trap). Confirm the ordering when the drive is written.
+
+## Security review
+
+**Verdict:** PASS (first pass returned FAIL on one MUST FIX; the Design section above is the revision)
+
+**Findings:**
+
+- **[Trust boundaries] No findings.** This design adds exactly one boundary — renderer `localStorage` → memory — and it is a single named site, `effortDefaultToApply`'s membership rule, not a check scattered across callers. Its guarantee is strong rather than structural: the remembered string can only leave the decision if it is byte-identical to a level the daemon *itself* published for this chat's model, so the only values that reach `changeSetting` or the wire are values the daemon just minted. It also never reaches a render sink as itself — it becomes the pending overlay, so it renders through `.composer__effort-label` under the same React escaping and the same client-owned 64px bound a live level does. The daemon-side boundary is unmoved: `effort_levels` is still unsanitized text and this ticket adds no new sink for it.
+- **[Trust boundaries] No findings — cross-chat write.** The sharp hazard on this path is writing a default into the session the operator just navigated away from (the one `runConfigSnapshot.ts` names). It is closed by rule 5 over #1167's clear: a switch nulls the session id, so between the clear and the new chat's reply the decision is inert; #1176's attribution gate means the reply that refills it describes the open chat and no other.
+- **[Tokens, secrets, credentials] N/A by construction.** No token, key, credential or lifecycle exists on this path. What is persisted is a published effort level — the same class of non-secret UX preference as `pyry.defaultWorkspace` and `pyry.pushNotificationsEnabled`, and the reason `localStorage` is the right store here and would not be for a device token. Nothing on this path is minted, rotated, revoked or compared against a secret.
+- **[File / storage operations] No findings, and one decision worth naming.** No filesystem path, no `path.join`, no check-then-open, no partial-write window (a `localStorage` set is atomic per key). The key is a **client-owned constant literal** and the ticket's "one remembered level app-wide" ruling is what keeps it one: a per-model or per-chat key would have composed claude-authored text into a storage key, and that shape is declined rather than merely unused. The remembered value is likewise never a plain-object key — the only structure it meets is an array scanned by `includes`, so the `__proto__`-as-key hazard does not arise.
+- **[Inter-process / Electron attack surface] N/A by construction.** No new `contextBridge` API, no new `ipcMain` channel, no new `BrowserWindow`, no protocol handler, no navigation. The send rides the existing `setSessionSettings` command through the existing `buildSettingsPayload`, adding no field, so the main-side guard is unchanged and the renderer gains **no capability it did not already have**. Nothing moves toward the renderer: no key, no socket, no raw frame.
+- **[Cryptographic primitives] N/A by construction.** No randomness, no hashing, no comparison against a secret. The `changeId` mint stays `crypto.randomUUID()` inside `submitSettingsChange`, untouched.
+- **[Network & I/O] MUST FIX — fixed in the plan before commit.** The one availability hazard this design introduces is a self-inflicted write loop against the daemon over the relay: "empty effort ⇒ apply" re-arms itself every time a rejection drops the pending record. The first draft guarded it with `runSettingsWriteStore.error`, and that guard is clearable — `changeDispatched` resets `error`, so an operator picking a *model* after the default was refused re-arms the apply while the chat's effort is still `''`, and the refused level goes out again, once per unrelated setting change. Reachable with no switch and a straight violation of AC3. **Fixed** by replacing it with the leaf's own `appliedFor` marker (Design rule 3), which nothing on the write path can clear, and pinned by a named test that dispatches an unrelated model change after a rejection and asserts the decision still refuses. Both remaining guards are deterministic code — a store composition and a ref — not a stochastic rule. No new socket, frame type or size limit is in scope.
+- **[Error messages, logs, telemetry] No findings.** Nothing on this path logs, and that is the decision rather than an omission: the value is claude-authored text and ADR 0007's content-free rule plus #989's "nothing on this path is logged at all" agree. No error message, thrown error or renderer-console write carries the level, the session id or the conversation id. The e2e specs' levels are invented non-secret literals, so no failure diagnostic serialises anything real.
+- **[Concurrency] No findings.** The effect is fully synchronous — no `await`, so there is no check-then-act gap for a concurrent handler to slip into, and `changeSetting`'s record-before-send makes the guard true before control returns. It launches nothing long-lived: no timer, no listener, no promise, so it owes no cleanup and can leak nothing past the conversation screen's unmount. `React.StrictMode`'s double-invoke is closed twice over — the ref survives the simulated remount, and the effect re-reads store state through `getState()` instead of the render-time closure — which is also why a duplicate mount would net one send rather than two.
+- **[Threat model — malicious / compromised relay] No findings.** On-path and content-blind. Dropping the confirm means nothing is remembered, which is correct by design (remember on confirm, not on pick). Replaying a confirm is closed by the shipped correlation: an unmatched `changeId` is a reducer no-op and `confirmedEffortLevel` returns `null` on the same miss, so a replayed ack can neither commit an override nor re-write the preference.
+- **[Threat model — hostile daemon response] Recorded decision, no fix.** A hostile or buggy daemon could publish an oversized or control-byte-bearing level, have it confirmed, and get it persisted — so the one genuinely new property is that such a string now survives a restart instead of dying with the process. The blast radius does not grow with the persistence: to be re-applied it must still appear in that chat's published levels, and it renders through the same escaped, ellipsized, 64px-bounded label as a live one. No length bound is added at the port, because the render bound already exists and shipping a defense for an unobserved failure mode is Evidence-Based Fix Selection's anti-pattern; if it surfaces, the fix is localized to `localStorageLastEffortPref`.
+- **[Threat model — renderer compromise / token theft from disk] N/A by construction.** The renderer still reaches the transport only through already-typed commands, and the `userData` localStorage file gains one non-secret preference and no credential.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-09-06
+
+## Revisions
+
+### 2026-09-06 — the real-claude gate's FAIL on `real-claude-effort-default.spec.ts`
+
+**What the gate reported.** `a level set before a chat's first message survives into the first turn` failed at the post-turn label read: `.composer__effort-label` **element(s) not found**, i.e. the composed effort was `''`. Whole-test duration 16.7s against a 15s timeout on that one assertion — so the entire drive ahead of it took ~1.7s, which is less than one cold claude turn. **No turn ran at any point in that drive.**
+
+**Both defects are in the spec, not in the implementation.** No production file changes.
+
+1. **Every turn gate was vacuous.** The drive used a bare closing `toHaveCount(0)` on `.bubble__cursor` as its quiesce signal. That locator is 0 from launch, so it resolves before the send it is meant to wait on has done anything. The rest of the drive then ran against a chat whose turn had not started. Corrected to `real-claude.spec.ts`'s idiom, transcribed: poll `nonEmptyAssistantCount` **up** first (content-agnostic, strips the cursor span and the meta row), and only then wait the cursor back down. Positive read first, mutation check second.
+
+2. **The one real turn was spent in the wrong conversation, which is the defect that actually reddened the assertion.** The apply is gated on the remembered level appearing in the levels published for the target chat's model (`effortDefaultToApply`'s membership rule). The daemon builds `model_list` from claude's own `initialize` reply, one exchange per child spawn, so a never-messaged conversation has no list of its own and depends on pyrycode#2124's daemon-wide fallback — whose source is `Pool.Default()`, **the bootstrap session's** retained list. The harness binds its one seeded conversation to that bootstrap session, while `create_conversation` mints a dedicated session for every FAB-created chat. The old drive spent its turn in a FAB-created chat, so the bootstrap child never spawned, the fallback stayed empty, the never-messaged chat got no levels, and the apply correctly refused — AC4's second arm, firing for an arrangement reason rather than a product one. The turn now runs in the seeded row.
+
+3. **The pick is waited out to its settle.** The old drive read the optimistic overlay and immediately switched chats. Because the remembered level is written when the **confirm** is folded (`foldWriteEvent`), a switch before the settle clears the pending record, drops the confirm unmatched and remembers nothing. The drive now waits #558's `aria-busy` off `.run-config__effort` and then re-reads the marked segment with `.run-config__error` at zero — `real-daemon-session-settings.spec.ts`'s three-step confirm/reject discrimination, which is the only place in this drive where a daemon reply gates a DOM transition rather than the overlay.
+
+**The wire premise was verified independently before any of this was rewritten**, with a throwaway claude-less probe (`spawnClaude: false`, gated on `pyry` alone): a FAB-created, never-messaged conversation renders an operable `YoloSection` (⇒ addressable session id) and a `set_session_settings` against it settles and holds with no `.run-config__error` (⇒ the daemon accepts and confirms it). So pyrycode#2085's eager bind holds over the real wire and the design's moment is reachable. The probe also showed the claude-less tier's effort section at zero segments with an empty current line, which is what made the model-list provenance above the obvious suspect. It was deleted rather than kept: it duplicates `real-daemon-session-settings.spec.ts`'s write coverage and its own new half (never-messaged addressability) is what step 3 of the real-claude drive asserts as part of AC5.
+
+**Two verifier NITs folded in.** The segment click no longer compiles a daemon-published level into a `RegExp`; it addresses `segment.nth(pickedIndex)` into the array the drive already read. And § Testing strategy above describes the fake drive as two chats where it shipped as three — chat C exists because A's own "nothing was sent" reading is vacuous at launch, and the reason is recorded in `e2e/composer-effort-default.spec.ts`'s header.
+
+**Open question 3 is resolved by the same change.** The fake drive must push the new chat's model list before polling the frame count; the real drive's equivalent is the separate "segments are visible on the never-messaged chat" assertion, placed before the label read so a daemon that publishes nothing for a childless conversation fails there, saying so, rather than as a blank label that could mean anything.
+
+### 2026-09-06 — the second real-claude gate FAIL is a stale daemon, not a defect in this repo
+
+**No production or spec change. The drive is correct as written and passes on a current daemon; the gate host's `pyry` predates the daemon feature the drive depends on.**
+
+**What the gate reported.** The same spec failed one assertion earlier than before: `.run-config__effort-segment` **element(s) not found** on the never-messaged chat, at the separate "segments are visible" assertion the previous revision added for exactly this purpose. That placement did its job — the failure named the missing precondition instead of presenting as a blank label three assertions later. The turn gates fixed last revision held: total duration 19.8s against `real-claude.spec.ts`'s own 6.6s for one real turn, so the seeded row's turn ran and the ~1.7s no-turn signature of the first FAIL is gone.
+
+**Root cause, established from the daemon binary rather than inferred.** A never-messaged conversation has no claude child and so no `model_list` of its own; its vocabulary can only come from pyrycode#2124's daemon-wide fallback, delivered on open by pyrycode#2125's `request_model_list` verb, which `activateConversation`'s `requestModelList` (#1166, already on `main`) fires. Neither is in the daemon installed on the gate host:
+
+| symbol / literal | installed `~/.local/bin/pyry` | freshly built from `pyrycode` HEAD |
+|---|---|---|
+| `resolveBoundModelList` (#1857) | present | present |
+| `retainedModelLists` (connect-time reconcile) | present | present |
+| `retainedModelVocabulary` (#2124 fallback) | **absent** | present |
+| `handleRequestModelList` (#2125 handler) | **absent** | present |
+| `modelListFor` (#2125 seam) | **absent** | present |
+| `request_model_list` wire verb | **absent** | present |
+
+The timeline agrees: the installed binary was built 2026-09-05 18:14, pyrycode#2124 merged 23:07 and #2125 landed 23:38 the same evening. With that binary, `resolveBoundModelList` refuses any conversation whose bound session holds no retained list — which every FAB-created chat is, since pyrycode#2085 binds it a session eagerly and no child spawns until its first message. So no `model_list` frame can reach a never-messaged chat by any path, the membership rule in `effortDefaultToApply` correctly refuses, and the control stays blank. That is AC4's second arm firing for an environment reason.
+
+**Why this cannot be fixed in this repo, and must not be papered over.** From the client, a stale daemon and a broken feature are indistinguishable here: both present as "the never-messaged chat has no published levels". That is precisely why #933 gated on the handshake capability set rather than on behaviour. The gate is unavailable to this spec because `supportedV2Capabilities` is `[interactive, question]` — pyrycode#2124/#2125 added no capability string — so `requiredCapabilities` has nothing to name. A behavioural skip on "no segments appeared" would convert AC5 into a test that passes by skipping exactly when the feature is broken, which is the 2026-07-22 failure this tier exists to prevent. It is therefore left as a hard failure.
+
+**The two remedies, both outside this ticket.** Rebuild and reinstall the daemon on the gate host (`go build -o ~/.local/bin/pyry ./cmd/pyry` from a current `pyrycode` checkout, or point `PYRY_BIN` at a fresh binary — the harness honours both, and `daemonCapabilityGate.ts`'s own `REBUILD_INSTRUCTION` says the same). And, in the `pyrycode` repo, add a capability string for the on-demand model list so a stale daemon skips with an actionable reason instead of failing a spec back to a builder who cannot rebuild a Go binary — the durable fix, and #933's stated intent.
+
+**One verifier NIT folded in.** `e2e/composer-effort-default.spec.ts` step 5 credited the `SESSION_C` zero-count as the rule-4 detector "after C's list has landed", which the drive does not establish: the `model_list` push is fire-and-forget and follows C's `session_settings` reply, so the label read that gates the assertion proves only that the reply was processed. The comment now says which line actually carries the detection — the `SESSION_A` count, which reads 2 on a rule-4-less build the moment A's own confirm lands — so a future editor cannot delete it believing C's zero is doing that work.
+
+### 2026-09-06 — the third gate FAIL moved to a DIFFERENT assertion, and the previous entry mis-attributed it
+
+**The environment is unchanged, and the previous entry's remedy still stands. What changes here is which assertion reddened, and one genuine spec defect that finding exposed.** No production behaviour changes; two docblocks and one e2e drive do.
+
+**What the gate reported, read off the stack rather than off the shape of the failure.** `expect(locator).toBeVisible()` on `.run-config__effort-segment` failed at `real-claude-effort-default.spec.ts:174:33` — which is the segment check on the **seeded** chat, taken after its own first turn, *not* the never-messaged chat's check the previous entry described. The previous entry read the failure as landing on the chat-B assertion it had just added and concluded the seeded row's turn had run; the line number says otherwise, and it was available in the log both times. Recorded as a mis-attribution rather than quietly corrected: the lesson is that "which assertion" is a fact to be read, and a diagnosis that fits the *narrative* of the previous lap is exactly the one to distrust.
+
+**The stale-daemon finding is re-verified and still holds, from a fresh angle.** The installed `~/.local/bin/pyry` is byte-identically the same build (2026-09-05 18:14) and still lacks `retainedModelVocabulary`, `handleRequestModelList`, `modelListFor` and the `request_model_list` verb. Independently: the `pyrycode` tree at HEAD (`62a25950`, newer than the previous lap's checkout) still defines exactly two capability constants, `CapabilityInteractive` and `CapabilityQuestion`, so `requiredCapabilities` genuinely has nothing to name and #933's gate cannot convert this into a skip from this repo. Reading the stale-era daemon source at `c7e9f927` also sharpens *why*: `retainedModelLists` is the **connect-time** reconcile seam (#1863), so it runs before any child exists and contributes nothing, which leaves the live turn stream as the only path by which a model list can reach a client on that binary.
+
+**The spec defect, which is mine and is fixed here.** Turn 1's liveness gate was `nonEmptyAssistantCount >= 1`. That is `real-claude.spec.ts`'s first-turn idiom, but it is sound there *only* because the chat it drives was minted empty by the FAB two lines earlier; that spec switches to a baseline captured before the send the moment a turn has already landed in the thread. This drive's turn 1 runs in the **seeded** row — pre-existing daemon state whose thread this spec never established as empty — so `>= 1` is satisfiable by whatever the history reply already rendered, and the drive would sail past a send that produced no turn at all. Same vacuous-gate family as the opening `toHaveCount(0)` the previous lap removed, one direction over: an opening absence and an already-satisfied presence both resolve against state the action did not cause. Now base-relative (`> baseBeforeTurn1`). Turn 2 keeps `>= 1` and says why in a comment — its chat is FAB-minted and asserted empty, so its baseline is established rather than assumed.
+
+**Whether that defect caused this FAIL is genuinely undetermined, and is not claimed either way.** The 18.1s whole-test duration less the 15s timeout leaves ~3s of drive, which is consistent both with a turn that never ran (the vacuous gate) and with a fast cold turn against the sibling spec's measured ~6.6s whole-spec budget. The real-claude tier is not runnable from this agent environment — neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is exported into it — so the two were not separated by experiment. The fix is correct under either reading and costs nothing under the one where it was not the cause.
+
+**The seeded chat's precondition now names itself.** The previous lap gave the never-messaged chat's segment check a message explaining what its absence means; the seeded chat's had none, which is part of why this FAIL was read as the other one. It now carries the same treatment, pointing at the installed daemon as the thing to check before reading it as a defect in this feature.
+
+**A verifier NIT is closed rather than folded in, because `main` closed it.** The review flagged `effortDefaultToApply`'s "rule 5 is also the cross-chat guard" as accounting only for the `runConfigReceived` ingress and not for `sessionIdBridge`'s app-lifetime `sessionTransition` marker. That was accurate against the tree it reviewed. #1192 has since merged to `main` and into this branch, and `subscribeSessionId` now drops a `sessionTransition` whose `conversationId` is not the open chat's — so both ingresses are attribution-gated and the window is closed. The docblock records the conclusion as *conditional on that gate* rather than unconditional, and names what re-opens it, since nothing in this file would change if the gate were widened. The second NIT (the "hooks are the wake signal" sentence overstating what the effect body re-reads, `models` being the exception) is folded in as written.
+
+### 2026-09-06 — the stale-daemon blocker is cleared on the gate host, and the last verifier NIT is folded in
+
+**No design change and no spec change. One production line moves; the rest of this entry closes the two entries above, which both ended on an open remedy.**
+
+**The environment the previous two entries diagnosed is fixed, verified from the binary rather than assumed.** `~/.local/bin/pyry` was rebuilt at 2026-09-06 19:50 local and now carries all four symbols it lacked across the four gate runs — `retainedModelVocabulary` (pyrycode#2124), `handleRequestModelList` and `modelListFor` (pyrycode#2125), and the `request_model_list` wire verb — alongside the `resolveBoundModelList` it already had. The daemon process running on the host started 2026-09-06 19:50:14, fourteen seconds after the binary was written, so the service was bounced too.
+
+**That is the whole precondition `real-claude-effort-default.spec.ts` was missing**, and it reaches the spec by the path that matters: `realDaemon.ts` *spawns* its own daemon per run rather than dialling the launchd service, resolving `PYRY_BIN` first and PATH second. `PYRY_BIN` is unset on this host and PATH resolves to `~/.local/bin/pyry`, so the next gate run spawns the rebuilt binary. A never-messaged conversation can therefore be served the daemon-wide fallback vocabulary on open, `effortDefaultToApply`'s membership rule has levels to scan, and the never-messaged chat's segment precondition can pass on its merits.
+
+**This is not a claim that the spec now passes.** It is the claim that the one blocker established from the binary is gone and the drive is reachable for the first time. The two genuine spec defects found on the way — the vacuous cursor-quiesce gate (entry 1) and turn 1's non-base-relative liveness gate in a thread this spec never established as empty (entry 3) — are fixed and unrelated to the environment. The tier remains unrunnable from this agent environment: neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is exported into it, so the verdict is still `npm run e2e:real:gate`'s to give, read off the executed count and never the exit code.
+
+**pyrycode#2172 is the durable fix and stays open regardless.** Rebuilding the host settles this ticket; a capability string for the on-demand model list is what turns the next stale daemon into a skip naming its cause instead of a red routed back to an agent that cannot rebuild a Go binary. Filed on board #1, sized XS, and out of scope here.
+
+**The verifier NIT is folded in.** `EffortDefaultData`'s effect read `selectSessionId(sessionIdStore.getState())` twice — once for the decision, once for `changeSetting`'s deps. The body is fully synchronous so nothing could intervene and the two were provably equal, which is why this is a NIT and not a defect. It is now read once into `addressedSessionId` and reused, making "the frame addresses the session the decision was taken against" true by construction rather than by inspecting the lines in between — the property a later edit inserting anything between them would otherwise break silently.
+
+### 2026-09-06 — AC5 is discharged; the gate's remaining red is a different ticket's defect (#1204)
+
+**No production change and no spec change this leg.** The real-claude gate ran with the rebuilt daemon and
+`real-claude-effort-default.spec.ts` **passed**. What follows is the triage of the one spec that did not,
+which is not this ticket's.
+
+**AC5 is met on its own terms.** The gate executed 14 tests (13 passed, 1 failed, 0 skipped) against a floor
+of 10, and this ticket's spec — `a level set before a chat's first message survives into the first turn` —
+is among the passing, at 6.9s. That is exactly what the criterion asks: a spec under `e2e/real-*.spec.ts`
+that `npm run e2e:real:gate` reports as **actually executed**, read off the executed count rather than the
+exit code. The previous four laps' environmental blocker is gone and the drive passed on its merits the
+first time it was reachable.
+
+**The failing spec is `real-claude-attachment.spec.ts` (#1055 AC4), and the cause is a wire-contract drift
+between this client and the rebuilt daemon.** It failed at its outcome assertion with
+`attachment-invalid-chunk` — "The host rejected part of the upload." — where it expected "File attached.".
+
+The daemon removed the follow-active cursor as the upload's destination resolver and now requires the client
+to name the conversation on every chunk: pyrycode#2142 added `conversation_id` to `attachment_chunk`
+published inert, and pyrycode#2143 made the daemon honour it, its commit message stating that **absent**,
+unknown and foreign are one answer on the wire — `attachment.invalid_chunk` — with **no fallback** to the
+cursor. This client still sends the pre-#2142 payload: `AttachmentChunkPayload` is documented in
+`src/shared/wire/types.ts` as the published eight fields with no `conversation_id`, and `types.test.ts` pins
+that absence deliberately. Every chunk it sends now hits the absent-id arm.
+
+Established from the binary actually installed on the gate host rather than from source: `~/.local/bin/pyry`
+(built 2026-09-06 19:50) carries #2143's `KnownConversation` membership seam and **no longer carries**
+`followActiveCursor`.
+
+**Why it is not this branch's, and why the two are nonetheless connected.** This diff is a null-rendering
+leaf plus two store modules; it touches no attachment, upload or wire code. It is also provably *inert* in
+that spec: `withIsolatedElectronApp` mkdtemps a fresh `--user-data-dir` per launch, so `pyry.lastEffort` is
+empty there, `effortDefaultToApply`'s rule 2 returns `null`, and the leaf sends no frame and writes nothing.
+The config is `workers: 1, fullyParallel: false`, so there is no cross-spec channel either. The connection
+is the environment alone: the rebuild that unblocked this ticket's model-list precondition (pyrycode#2124,
+\#2125) is the same rebuild that carried #2143 past the attachment contract. The runbook's last green
+attachment run was 2026-09-04, against the older daemon.
+
+**Filed as [#1204](https://github.com/pyrycode/pyrycode-desktop/issues/1204)** (board #7, Inbox) rather than
+fixed here: the fix adds a field to a shared wire type and reverses two committed comments and an assertion
+that pin its absence, which is squarely outside this ticket's scope. The spec is deliberately **left failing
+and visible** — a behavioural skip would drop the tier's executed count and hide a real defect behind the
+silent-skip failure mode the gate exists to prevent.
+
+**Consequence worth stating plainly:** the gate cannot go green until #1204 lands, so re-running it against
+this branch will fail again on the same spec for the same reason. That is a property of the tier and the
+daemon, not of this PR.
+
+### 2026-09-06 — the predicted re-fail happened; the base comparison now exists and is cross-branch
+
+**No production, spec or test change this leg.** The previous entry predicted that re-running the gate would
+fail again on `real-claude-attachment.spec.ts` for a reason outside this PR. It did, the dispatcher attributed
+it here because "no base comparison was available", and this entry records the comparison it could not make.
+
+**AC5 is discharged twice over, not once.** `real-claude-effort-default.spec.ts` — `a level set before a
+chat's first message survives into the first turn` — **passed** in both gate runs since the daemon rebuild:
+17:12 UTC at 6.9s and 18:01 UTC at 8.6s. The criterion asks for a spec the gate reports as actually executed,
+read off the executed count rather than the exit code, and that is what both runs report.
+
+**The failure is branch-independent, established from the dispatcher's own gate logs rather than argued from
+the diff.** Reconstructed from `pyrycode-desktop-agents/logs/`:
+
+| gate run (UTC) | branch | `real-claude-attachment` | `real-claude-effort-default` |
+|---|---|---|---|
+| 13:09, 13:45, 14:23 | `feature/1169` | passed | failed (this ticket's own defects, since fixed) |
+| 15:13 | `feature/1169` | passed | failed (last lap's defect, since fixed) |
+| 17:12 | `feature/1169` | **failed** | **passed** |
+| 17:43 | `feature/1070` | **failed** | passed |
+| 18:01 | `feature/1169` | **failed** | **passed** |
+
+The attachment spec passed four times on this branch and then went red on it, on `feature/1070`, and on it
+again — the crossing at 17:43 is the load-bearing row, because `feature/1070` is a sidebar-grouping change
+touching no attachment, composer or wire code. A defect that reddens two unrelated branches within
+thirty-one minutes of each other is not either branch's. `~/.local/bin/pyry` was rebuilt inside that window,
+which is the same rebuild the entry two above welcomed for clearing this ticket's own blocker.
+
+**The two failures on this branch are therefore opposite in kind, and the log distinguishes them.** The
+15:13-and-earlier reds were this ticket's own spec defects, found and fixed. The 17:12-onward red is a
+different spec entirely, and it is worth naming that the previous laps' hardest-won lesson applies here in
+reverse: *read which assertion failed off the stack, not off the shape of the failure.* The same routing
+label arrived for two unrelated causes, and only the log tells them apart.
+
+**Blocker set rather than worked around.** `blockedBy` now names \#1204 on this ticket. The alternative was to
+skip the attachment spec to green the gate, and that is declined for the reason the previous entry gave and
+the cross-branch evidence now strengthens: the spec is failing because a shipped product feature is genuinely
+broken against the current daemon — every attachment upload is refused — so a skip would hide a live defect
+behind exactly the silent-skip failure mode this tier exists to prevent, and would drop the executed count
+while doing it. The spec belongs to \#1055 and the fix belongs to \#1204; neither is this ticket's to move.
+
+**Recorded for whoever reads this next:** nothing on this branch can turn that gate green, and re-dispatching
+the builder cannot either. The decision is the parking comment's own — judge the attachment failure unrelated,
+drop `needs-real-claude`, and advance — or land \#1204 first. Sibling ticket \#1070 reached this same
+conclusion independently on its own branch and is parked on the same blocker awaiting the same call.

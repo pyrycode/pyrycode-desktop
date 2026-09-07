@@ -17,6 +17,7 @@ import {
   type RunSettingsWriteEvent,
   type SettingsChange
 } from './runSettingsWriteStore'
+import { lastEffortStore } from './lastEffortStore'
 
 /** Compile-time exhaustiveness guard: a new SettingsChange field without a case is a type error. */
 function assertNever(x: never): never {
@@ -129,6 +130,66 @@ export function submitSettingsChange(deps: SubmitSettingsChangeDeps, change: Set
 }
 
 /**
+ * #1169 — the level to REMEMBER, or `null`. Non-null only when the event is a `settingsConfirmed` whose
+ * `changeId` matches a pending record for the `effort` field carrying a non-empty value.
+ *
+ * REMEMBER ON CONFIRM, NOT ON PICK: a rejected level is not a level that was used. And this is the ONLY
+ * seam where the confirmed VALUE is recoverable at all — `sessionSettingsUpdated` carries only the
+ * correlation key (the daemon's ack names no field), and `reduceRunSettingsWrite` deletes the pending
+ * record in the same step as it commits, so after the dispatch there is nothing left to read. Hence the
+ * pending map is a parameter here and `foldWriteEvent` below reads it first.
+ *
+ * The no-match arm is the store's own fail-closed rule reused rather than restated: an uncorrelated
+ * confirm commits nothing there, so it remembers nothing here. That is also what closes a REPLAYED ack
+ * from the content-blind relay — the second copy matches no pending record.
+ *
+ * `''` is refused: it is the wire's absence of a level (`SessionSettingsPayload.effort`, the inherited
+ * daemon default), never a level, so a confirm carrying it is not a level that was used. No path in this
+ * app submits one; this guards the shape rather than an observed frame.
+ */
+export function confirmedEffortLevel(
+  pending: ReadonlyMap<string, SettingsChange>,
+  event: RunSettingsWriteEvent
+): string | null {
+  if (event.type !== 'settingsConfirmed') return null
+  const change = pending.get(event.changeId)
+  if (change === undefined || change.field !== 'effort' || change.value === '') return null
+  return change.value
+}
+
+/**
+ * The effects `foldWriteEvent` performs, injected so the helper stays pure and deterministic in tests.
+ * `getPending` is `runSettingsWriteStore.getState().pending`, `dispatch` is that store's `dispatch`, and
+ * `rememberEffort` is `lastEffortStore`'s `setLastEffort`.
+ *
+ * `getPending` is a GETTER rather than a threaded value for the reason the ordering below states: it must
+ * be sampled at fold time, immediately before the dispatch that empties it.
+ */
+export interface FoldWriteEventDeps {
+  getPending: () => ReadonlyMap<string, SettingsChange>
+  dispatch: (event: RunSettingsWriteEvent) => void
+  rememberEffort: (level: string) => void
+}
+
+/**
+ * Fold one store event in: resolve what would be remembered, dispatch, then remember it.
+ *
+ * THE ORDER IS THE WHOLE HELPER, and it is pinned by a named test. `settingsConfirmed` deletes the
+ * pending record as it commits, so a read placed after the dispatch would find an emptied map and
+ * remember nothing — a change that compiles, dispatches the same events the same number of times, passes
+ * every count assertion, and silently persists nothing at all.
+ *
+ * Remembering AFTER the dispatch rather than before is deliberate too, though it is not load-bearing:
+ * the store is the app's source of truth for the change, and the preference is a consequence of it, so
+ * the writes run in the order a reader expects. Both are synchronous, so no observer sees between them.
+ */
+export function foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWriteEvent): void {
+  const level = confirmedEffortLevel(deps.getPending(), event)
+  deps.dispatch(event)
+  if (level !== null) deps.rememberEffort(level)
+}
+
+/**
  * The write-machine's inbound data-path binding — a headless component mounted app-level in App.tsx,
  * alongside SessionIdData: one stable, app-lifetime listener, because a confirm/reject reply can arrive
  * AFTER the Run config sheet (#257) closes — a sheet-scoped listener would miss it and strand the
@@ -141,8 +202,19 @@ export function submitSettingsChange(deps: SubmitSettingsChangeDeps, change: Set
  */
 export function RunSettingsWriteData(): null {
   useEffect(() => {
+    // #1169: the fold, not a bare dispatch. Every reply still reaches the store exactly as before; the
+    // one addition is that an effort confirm also writes the level to the renderer-local preference.
+    // `getState()` PER EVENT, never captured at subscription: this listener is app-lifetime, so a
+    // snapshot of `pending` taken here would freeze at whatever was in flight when App mounted.
     return subscribeRunSettingsWrite(window.pyry.onDaemonEvent, (event) =>
-      runSettingsWriteStore.getState().dispatch(event)
+      foldWriteEvent(
+        {
+          getPending: () => runSettingsWriteStore.getState().pending,
+          dispatch: runSettingsWriteStore.getState().dispatch,
+          rememberEffort: lastEffortStore.getState().setLastEffort
+        },
+        event
+      )
     )
   }, [])
 

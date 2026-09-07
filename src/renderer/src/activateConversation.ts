@@ -12,8 +12,8 @@ import type { ThreadEvent } from './store/threadTimeline'
  *  - `setActiveConversation`     — records the newly activated one (the same store's setter).
  *  - `dispatchTimeline`          — timelineStore's dispatch; carries #528's `reset`.
  *  - `clearSessionId`            — sessionIdStore's #529 clear.
- *  - `clearRunConfig`            — #1167's drop of the previous chat's run configuration, all three
- *                                  stores since #1231.
+ *  - `clearRunConfig`            — #1167's drop of the previous chat's run configuration, all four
+ *                                  stores since #1250.
  *  - `stampLastRead`             — #777's last-read stamp for the conversation being opened.
  *  - `markViewed`                — #786's view stamp, conversationTimelineStore's eviction ranking.
  *  - `requestConversationConfig` — #1166's ask for the opened conversation's run configuration and
@@ -58,6 +58,13 @@ export interface ActivateConversationDeps {
    * displaying. THE SIGNATURE DOES NOT CHANGE: this member stayed `() => void` and gained a third
    * `getState()` arrow in each of its three production bodies, rather than being renamed for the store
    * list it happens to cover.
+   *
+   * #1250's fourth store — `systemPromptWriteStore`'s record of whether that chat's system-prompt write
+   * is in flight, confirmed or refused — does not self-heal AT ALL, which puts it below all three. It
+   * describes an act the operator performed rather than a value the daemon holds, so no ask refills it
+   * and no frame corrects it. It is dropped through the same `conversationSwitched` arm as the write
+   * machine above, which clears the WHOLE of that state where the reconnect edge clears only what
+   * strands. The signature did not change for it either, for the reason stated one paragraph up.
    *
    * REQUIRED, not optional, for `stampLastRead`'s reason: `activateDeps` is module-private,
    * `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo runs a React effect

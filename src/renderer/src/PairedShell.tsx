@@ -42,6 +42,7 @@ import { modalStore } from './store/modalStore'
 import { runConfigStore } from './store/runConfigStore'
 import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { systemPromptStore } from './store/systemPromptStore'
+import { systemPromptWriteStore } from './store/systemPromptWriteStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -67,10 +68,10 @@ const activateDeps: ActivateConversationDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // #1167: the departing conversation's run configuration, all halves dropped as one act — the held
-  // daemon snapshot, the write machine's pending / confirmed / rejected state, and since #1231 the held
-  // system-prompt reading. Three `getState()` arrows in one body rather than three members, the
-  // `requestConversationConfig` shape below; these three singletons appear here and nowhere else in this
-  // file, and none is subscribed to.
+  // daemon snapshot, the write machine's pending / confirmed / rejected state, since #1231 the held
+  // system-prompt reading, and since #1250 the outcome of that conversation's system-prompt write. Four
+  // `getState()` arrows in one body rather than four members, the `requestConversationConfig` shape
+  // below; these four singletons appear here and nowhere else in this file, and none is subscribed to.
   //
   // #1231 joins this body rather than earning a member of its own for the reason the member's docstring
   // gives: it is the SAME act ("this chat's configuration is no longer the one to show"), it always
@@ -79,10 +80,17 @@ const activateDeps: ActivateConversationDeps = {
   // prompt shown against another chat's thread is offered for EDIT, not merely displayed — while its
   // self-healing is the weakest: this arm is reply-only, so nothing pushes a correction unsolicited and
   // the only refill is the ask fired moments later from `requestConversationConfig` below.
+  //
+  // #1250's fourth arrow is the one that NEVER self-heals — nothing asks for it and nothing pushes it,
+  // because it describes an act the operator performed rather than a value the daemon holds. It uses
+  // the same `conversationSwitched` arm as its write-machine sibling above and for the same reason:
+  // past this seam the WHOLE of that state (in flight, confirmed, refused alike) describes a chat that
+  // is no longer the one being shown, where the reconnect edge clears only what strands.
   clearRunConfig: () => {
     runConfigStore.getState().clearSnapshot()
     runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
     systemPromptStore.getState().clearReading()
+    systemPromptWriteStore.getState().dispatch({ type: 'conversationSwitched' })
   },
   // #777: restore point 1 of "the open conversation's mark equals its own held item count" — the stamp
   // for the conversation being opened. It reaches its two singletons through the bridge's own production
@@ -154,12 +162,13 @@ const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> =
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // #1167: the same one act as in `activateDeps` above, and the two bodies are deliberately identical —
   // a delete or an archive ends the conversation this state describes exactly as a switch does. #1231
-  // added its third line to both in the same edit, for that reason: a store added to one body and not
-  // the other is precisely how #1167's own defect arose.
+  // added its third line to both in the same edit and #1250 its fourth, for that reason: a store added
+  // to one body and not the other is precisely how #1167's own defect arose.
   clearRunConfig: () => {
     runConfigStore.getState().clearSnapshot()
     runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
     systemPromptStore.getState().clearReading()
+    systemPromptWriteStore.getState().dispatch({ type: 'conversationSwitched' })
   }
 }
 

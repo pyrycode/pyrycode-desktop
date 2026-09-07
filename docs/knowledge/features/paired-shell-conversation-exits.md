@@ -462,31 +462,35 @@ it as the half a detector should be built on — a drive that only shows the sna
 \#1166's round trip instead.
 
 Both `ActivateConversationDeps` and `ExitActiveConversationDeps` gain one shared, required, nullary
-member, `clearRunConfig` — since [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) a
-third arrow wide:
+member, `clearRunConfig` — since [#1250](https://github.com/pyrycode/pyrycode-desktop/issues/1250) a
+fourth arrow wide:
 
 ```ts
 clearRunConfig: () => {
   runConfigStore.getState().clearSnapshot()
   runSettingsWriteStore.getState().dispatch({ type: 'conversationSwitched' })
   systemPromptStore.getState().clearReading()   // #1231
+  systemPromptWriteStore.getState().dispatch({ type: 'conversationSwitched' })   // #1250
 }
 ```
 
-**One member for three stores, not three members** — the `requestConversationConfig` precedent from
+**One member for four stores, not four members** — the `requestConversationConfig` precedent from
 [§ The run-configuration and model-list ask](#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
 above, applied to the opposite direction: the clears are one act ("this chat's run configuration is no
 longer the one to show"), they always fire together, and none is sufficient alone — clearing only the
 snapshot store would leave a confirmed override standing over the newly opened chat's snapshot,
 clearing only the write store would leave the departing chat's raw snapshot on display until a reply
-arrived, and leaving [System-prompt store](system-prompt-store.md) standing would show the departed
-chat's system prompt, offered for edit by #1078, against the newly opened chat's thread. **The member
-is not renamed** for the third store it now covers — it names the act, not the store list, and its
-signature stays `() => void` at both declaration sites.
+arrived, leaving [System-prompt store](system-prompt-store.md) standing would show the departed chat's
+system prompt, offered for edit by #1078, against the newly opened chat's thread, and leaving
+[System prompt write](system-prompt-write.md)'s window-side store (`systemPromptWriteStore`) standing
+would report a save made in the departed chat as still in flight, confirmed or refused against the
+newly opened one — the one arrow of the four that never self-heals, since nothing asks for it and
+nothing pushes it unsolicited. **The member is not renamed** for the fourth store it now covers — it
+names the act, not the store list, and its signature stays `() => void` at both declaration sites.
 
-`activateConversation`'s full sequence, current as of #1231 (extending the #1166 snippet above by one
-line inside the gate, widened again by #1231 without a new line of its own — the addition is inside
-`clearRunConfig`'s own body, shown above):
+`activateConversation`'s full sequence, current as of #1250 (extending the #1166 snippet above by one
+line inside the gate, widened again by #1231 and #1250 without a new line of its own — the addition is
+inside `clearRunConfig`'s own body, shown above):
 
 ```
 previous = getActiveConversation()
@@ -516,9 +520,9 @@ note.** `clearRunConfig` is nullary, so on `ActivateConversationDeps` it is swap
 `clearSessionId`, and on `ExitActiveConversationDeps` with `clearSessionId`, `clearActiveConversation`
 and `navigateToList` — every swap compiles, and a bare `toHaveBeenCalled()` passes for both halves. The
 defence is unchanged in kind: both test files' `realDeps` integration cases wire the real
-`createRunConfigStore`/`createRunSettingsWriteStore`/`createSystemPromptStore` (since #1231) instances
-alongside the other real stores, so a swap leaves one store uncleared and another wrongly cleared,
-failing several cases together.
+`createRunConfigStore`/`createRunSettingsWriteStore`/`createSystemPromptStore` (since #1231)/
+`createSystemPromptWriteStore` (since #1250) instances alongside the other real stores, so a swap
+leaves one store uncleared and another wrongly cleared, failing several cases together.
 
 **Consequence, already carried by the session-id clear and now widened by one more reading.** Clearing
 the snapshot drops `usedTokens`/`windowTokens` with it, so the footer's context-usage reading unmounts
@@ -526,9 +530,9 @@ until the newly opened (or, on exit, never-reopened) chat's own reply lands. Tha
 window, not a regression — see [Run configuration store § Scoped to the open chat since
 \#1167](run-config-store.md#scoped-to-the-open-chat-since-1167).
 
-**`clearPairingScopedState` stays out of scope, on the ticket's own rule — and #1231's third store
-inherits the same reasoning rather than re-arguing it.** An unpair leaves all three stores held, but no
-footer renders until a chat is opened, and that open clears them by construction through
+**`clearPairingScopedState` stays out of scope, on the ticket's own rule — and #1231's and #1250's
+stores inherit the same reasoning rather than re-arguing it.** An unpair leaves all four stores held,
+but no footer renders until a chat is opened, and that open clears them by construction through
 `activateConversation` — a member there would guard state nothing can read. That mirrors this document's
 existing "stores deliberately left out" list above for `exitActiveConversation`'s own five clears.
 

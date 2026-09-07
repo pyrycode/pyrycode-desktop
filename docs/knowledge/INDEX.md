@@ -1140,10 +1140,26 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `SystemPromptRejectReason` (`protocol-malformed`/`conversation-not-found`), the same shape as
   `HistoryRejectReason`. Both emitted events (`systemPromptWriteConfirmed`/`systemPromptWriteRejected`)
   carry `conversationId` from the correlation map's own value, never from the daemon-controlled ack
-  `id` — the handle #1250 plans against, closing the `workspaceFolderRejected` bare-outcome trap the
-  ticket names explicitly. (#1249, security-sensitive, builder self-review PASS, no MUST FIX; five
-  mutation checks confirmed non-vacuity.) Split from #1232. Ships dormant; #1250 is the first consumer,
-  #1078 still owns the render.
+  `id` — the handle #1250's store correlates on, closing the `workspaceFolderRejected` bare-outcome
+  trap the ticket names explicitly. (#1249, security-sensitive, builder self-review PASS, no MUST FIX;
+  five mutation checks confirmed non-vacuity.) Split from #1232. Ships dormant; #1250 closed the window
+  half — see [System-prompt write store](features/system-prompt-write-store.md) below — #1078 still
+  owns the render.
+
+- [System-prompt write store](features/system-prompt-write-store.md) — the window's half of the write:
+  `submitSystemPrompt` (record `writeSubmitted` **before** `sendCommand`, tri-state copied verbatim,
+  falsy id refuses both) and a keyed `Map<conversationId, SystemPromptWrite>` reducer store reporting
+  `in-flight`/`confirmed`/`rejected{reason}`, absence a distinct fourth reading. Correlates on the
+  conversation id, not a renderer-minted change id — #1249 rejected minting one, so two writes on one
+  conversation stay indistinguishable here and #1078 gates its submit on the in-flight state instead.
+  `writeConfirmed`/`writeRejected` are gated on the named conversation currently being `in-flight`, so a
+  replayed second outcome cannot flip a settled write. `reconnected` (the `connected` edge) drops only
+  in-flight entries; the shared `clearRunConfig` dep member's new **fourth** arrow
+  (`conversationSwitched`) empties the store outright at all three production bodies. Confirmation
+  carries no prompt — nothing here ever holds an optimistic stored value or logs, on any path. (#1250,
+  security-sensitive, builder self-review PASS, one SHOULD FIX discharged by explicit check — the
+  conversation-id index is a `Map`, not a plain object.) Split from #1232. Ships dormant; #1078 is the
+  first reader.
 
 ## Architecture
 

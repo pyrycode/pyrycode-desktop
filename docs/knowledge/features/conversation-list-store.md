@@ -44,6 +44,7 @@ export interface ConversationListState {
 export type ConversationListStore = ConversationListState & {
   setConversations: (conversations: readonly ConversationSummary[], serverId?: string | null) => void
   clearAllConversations: () => void   // the pairing-boundary drop (#1086, AC5) — nullary
+  clearConversationsFor: (serverId: string) => void   // the per-server drop (#1196), see below
 }
 
 createConversationListStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
@@ -52,7 +53,8 @@ useConversationListStore(selector)     // narrow-slice React binding: useStore(c
 selectConversations(state)             // the flat union — unchanged name and `| null`
 selectConversationsFor(origin)(state)  // one server's slot (#1086), defaulting a missing one to `null`
 selectConversationIdsFor(origin)(state) // one server's conversation ids as a Set (#1138), see below
-EMPTY_CONVERSATION_IDS: ReadonlySet<string>  // stable empty-Set reference `selectConversationIdsFor` returns
+selectExclusiveConversationIdsFor(origin)(state) // origin's ids claimed by NO other slot (#1196), see below
+EMPTY_CONVERSATION_IDS: ReadonlySet<string>  // stable empty-Set reference both selectors above return
 ```
 
 Mirrors [`runConfigStore`](run-config-store.md)'s DI-factory → singleton → hook → selector structure
@@ -175,6 +177,58 @@ path](queue-store.md) for the shape.
 `EMPTY_CONVERSATION_IDS` is a shared singleton, the `EMPTY_BACKLOG` idiom applied here: `Object.freeze`
 does not stop `Set.prototype.add`, so the type is the only guard against a caller mutating it, and no
 consumer has cause to.
+
+### The per-server drop, and its stricter sibling selector, since #1196
+
+Per-server unpair now exists in the renderer — [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)
+closed the gap this document used to name as "a later ticket's" (§ AC5 below). `clearConversationsFor`
+is the keyed sibling of `clearAllConversations`: copy-on-write (`new Map(held)`, `delete`), the union
+recomputed through the same `flattenByServer` in the same `set`, every surviving slot handed back by
+reference so a component watching another server does not re-render, and the same subscriber
+short-circuit — a key not held hands the state object straight back. Dropping the *only* held slot
+flattens to `conversations: null` (not-loaded), the honest read for a surviving server that has not
+replied yet, never a false loaded-empty. **Typed `string`, not `ConversationListOrigin`** — narrower
+than the store's key domain on purpose, since only a paired server can be forgotten, so the `null`
+(bound, no record) and `undefined` (never bound) slots are unreachable from this entry point by the
+type. Call it only with a **client-held** id — the one `runUnpairServer` just erased — never a
+daemon-supplied one; that is `selectConversationsFor`'s own read-side rule, carried to the write side.
+
+`selectExclusiveConversationIdsFor(origin)` is a **sibling** of `selectConversationIdsFor`, not a
+widening of it — the two must answer different questions. `selectConversationIdsFor` is the shared
+"which conversations belong to this server" read three reconnect-reset bridges (#1138, #1139, #1140)
+ride, where an over-broad answer costs a reset that self-heals. On the unpair path the departed
+conversation ids are the one **daemon-supplied** input: they are whatever the departing server listed
+in its own `conversationsReceived` reply, and nothing stops a confused or hostile paired daemon from
+listing ids that belong to *another* paired machine. Fed to a thread clear unfiltered, that turns
+"forget machine A" into "destroy machine B's retained threads and close the chat the operator is
+reading on B" — destructive, with no backfill in either timeline store. `selectExclusiveConversationIdsFor`
+answers the ids held for `origin` that appear under **no other slot**, so a claimed id is simply not
+dropped:
+
+```ts
+export const selectExclusiveConversationIdsFor =
+  (origin: ConversationListOrigin) =>
+  (s: ConversationListState): ReadonlySet<string> => {
+    const rows = selectConversationsFor(origin)(s)
+    if (rows === null || rows.length === 0) return EMPTY_CONVERSATION_IDS
+    const claimedElsewhere = new Set<string>()
+    for (const [key, kept] of s.byServer) {
+      if (key === origin) continue
+      for (const row of kept) claimedElsewhere.add(row.id)
+    }
+    const exclusive = rows.filter((r) => !claimedElsewhere.has(r.id)).map((r) => r.id)
+    return exclusive.length === 0 ? EMPTY_CONVERSATION_IDS : new Set(exclusive)
+  }
+```
+
+This is `serverIdForOpenConversation`'s shipped ambiguity refusal ([Unpair channel § The two renderer
+callers](unpair-channel.md#the-two-renderer-callers)) applied to a set rather than a single id — that
+function also refuses an ambiguous match with `filter` and a length check rather than `find`. It costs
+nothing against an honest daemon: conversation ids are UUIDv4 from the system random source, so a real
+collision cannot occur and the exclusive set equals the full set. Called from exactly one place,
+[`clearServerScopedState`](unpair-channel.md#the-two-renderer-callers)'s `serverScopedClearDeps`, and —
+like its sibling — not a `useConversationListStore` read surface (a non-empty result is a fresh `Set`
+per call).
 
 ### The data path (`src/renderer/src/store/conversationListBridge.ts`)
 
@@ -331,6 +385,10 @@ new-discussion FAB's own subscription on the same event, #242)
   #1140's bridges (both not yet shipped).
 - `clearAllConversations` is invoked only by `clearPairingScopedState` (via `PairedShell.tsx`'s
   `clearPairingDeps`), never two-way-bound from a component — see § AC5 below.
+- **`clearConversationsFor` / `selectExclusiveConversationIdsFor` import surface, since #1196**: both are
+  invoked only from `clearServerScopedState.ts`'s `serverScopedClearDeps`
+  ([Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers)), reached from
+  `runUnpairServer`'s non-last-server arm. Neither is two-way-bound from a component.
 
 ## Edge cases and limitations
 
@@ -385,12 +443,13 @@ new-discussion FAB's own subscription on the same event, #242)
   steer which server's rows survive the boundary. Idempotent via the subscriber short-circuit — an
   already-clear store hands back the same state object, so a redundant clear wakes no listener — not
   the side-effect guard `clearAllLastRead` needs, since this clear reaches nothing outside memory and
-  cannot throw. **Per-server unpair does not exist in the renderer and this ticket does not build
-  toward it**: unpair is whole-app, so this is a whole-set clear at the boundary that exists today
-  (pairing another server no longer reaches this clear at all, since
-  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — it adds a server rather than ending
-  a pairing, and the new server's reply lands in its own `byServer` slot without disturbing the others);
-  per-server eviction on an eventual per-server unpair is a later ticket's.
+  cannot throw. This clear stays whole-set: it fires only when the **last** paired server is forgotten
+  (pairing another server no longer reaches it at all, since
+  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — the new server's reply lands in its
+  own `byServer` slot without disturbing the others). **Per-server eviction — forgetting one of several
+  paired machines — shipped in [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)** as
+  `clearConversationsFor`, § "The per-server drop" above; the two clears can never both fire, since
+  `runUnpairServer` picks between them on whether any record remains.
 - **A store's exclusion from `clearPairingScopedState` is a claim about mechanisms elsewhere, and it
   can go stale without anyone touching the store.** `clearPairingScopedState.ts`'s docblock names the
   discriminator as "does a reconnect to the SAME daemon need to clear it?" — this store's answer
@@ -460,3 +519,7 @@ new-discussion FAB's own subscription on the same event, #242)
   own conversations. Also the first store to repeat this store's own AC5 sequence — scoping a
   reconnect reset retired the self-healing argument that kept `queueStore` out of
   `clearPairingScopedState`, the same way keying this store's `conversations` field did.
+- [Unpair channel](unpair-channel.md#the-two-renderer-callers) /
+  [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196) — the per-server unpair path this
+  store's `clearConversationsFor` and `selectExclusiveConversationIdsFor` exist for; the same ticket that
+  closed this document's own long-standing "later ticket's" note under § AC5.

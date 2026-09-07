@@ -33,6 +33,15 @@ The composer's Re-pair control ([#166](../codebase/166.md), migrated by
 conversation is open and calls `runUnpair`, which now **delegates** to `runUnpairServer` rather than
 restating its erase→refresh→maybe-flip sequence. See [§ The two renderer callers](#the-two-renderer-callers) below.
 
+**Forgetting one of several servers now clears that machine's renderer state too, since
+[#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196).** Before #1196, `runUnpairServer`
+reached renderer state through exactly one conditional line — the whole-app
+[`clearPairingScopedState`](paired-shell-routing.md), fired only when the erase left nothing paired — so
+forgetting one of two servers cleared nothing at all, and the departed machine's conversation rows,
+retained threads and open chat all stayed on screen. `runUnpairServer`'s tail is now an `if`/`else`:
+the last-server arm is byte-identical, and the new `else` calls the departed server's scoped clear. See
+§ below for the mechanism.
+
 ## Why this exists
 
 The renderer can never erase a pairing record itself — the paired-server record (bearer `token`,
@@ -192,7 +201,44 @@ above both registrations, which used to enumerate "four seams, four disjoint `Pi
 
 Both callers share one rule — forgetting a server flips the route to the pairing screen only when the
 *refreshed* collection comes back empty — implemented once, in `runUnpairServer`, because that helper
-is the only one holding the post-erase list.
+is the only one holding the post-erase list. Since [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)
+they share a second rule the same way: when a record *does* remain, the departed server's own renderer
+state — its conversation rows, every one of its conversations' retained threads, and its open chat if
+one was open — is dropped through `clearServerScopedState`
+(`src/renderer/src/clearServerScopedState.ts`). `UnpairServerDeps` gained a required
+`clearServerScopedState: (serverId: string) => void` member for this, so `UnpairDeps extends
+UnpairServerDeps` means the composer inherits it rather than re-declaring it — the same inheritance
+that already carried `onLastServerUnpaired`. `runUnpairServer`'s tail:
+
+```ts
+if (remaining.length === 0) deps.onLastServerUnpaired()
+else deps.clearServerScopedState(serverId)
+```
+
+An `else`, not a second statement: the last-server path stays byte-identical, and the two clears can
+never both fire. Both containers spread one shared `serverScopedClearDeps` const (module scope in
+`clearServerScopedState.ts`, the `conversationLastReadDeps` idiom — every member reaches its singleton
+through `getState()` inside the arrow body) rather than each declaring its own deps literal, because a
+drift between two enumerations of the same clear set is exactly the half-fix this design exists to
+prevent. The one member that legitimately differs per caller is `navigateToList`: the Settings row's
+`ServerRowControl` supplies a no-op (`nextPairedRoute`'s only exit from `settings` is the already-absolute
+`back`, and `settings-per-server-unpair.spec.ts` pins Settings staying visible after a non-last unpair),
+while the composer's `ComposerErrorSlotControl` supplies `() => onBack?.()` — unconditionally, since
+`serverIdForOpenConversation` (below) means the open conversation on this path is always one of the
+departing machine's. See [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+for `clearConversationsFor` and `selectExclusiveConversationIdsFor`, the two store-level primitives this
+clear composes, and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
+`clearServerScopedState` calls once per departed conversation id to close the open-chat case (AC3)
+without re-deriving its gate.
+
+**The departed conversation-id set is the one daemon-supplied input on this path, and it is not trusted
+verbatim.** The ids come from the departing server's own `conversationsReceived` reply, so a confused or
+hostile paired daemon could list ids belonging to *another* paired machine; fed to a thread clear
+unfiltered, that would turn "forget machine A" into "destroy machine B's retained threads and close the
+chat the operator is reading on B," with no backfill in either timeline store. `clearServerScopedState`
+reads through `selectExclusiveConversationIdsFor`, not the shared `selectConversationIdsFor` the
+reconnect-reset bridges ride, so an id another slot also claims is never dropped — found and fixed inside
+the architecture spec's own security review, before any code shipped. See § Security posture below.
 
 **Settings screen's per-row Unpair** ([#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162),
 `src/renderer/src/screens/settings/unpairServerAction.ts`) calls `runUnpairServer` directly, with no
@@ -265,7 +311,13 @@ renderer side, both callers:
     'ok' ⇒ await refreshServers()  [same serverInfo re-read the Settings mount uses]
            refreshed list empty ⇒ onLastServerUnpaired() → applyPairingChange(deps,'unpaired')
                                     → clearPairingScopedState (thirteen stores) + route → 'pairing'
-           refreshed list non-empty ⇒ nothing further; shell stays up
+           refreshed list non-empty ⇒ clearServerScopedState(serverId)   [#1196]
+                                        → getDepartedConversationIds(serverId)  — BEFORE the drop below
+                                          (selectExclusiveConversationIdsFor: ids no OTHER slot claims)
+                                        → clearConversationsFor(serverId)  — that server's row slot dropped
+                                        → for each departed id: clearTimelineFor(id); exitActiveConversation(…, id)
+                                          (the id gate means at most one iteration's exit actually fires)
+                                        → shell stays up; only the caller-supplied navigateToList differs
 ```
 
 ## Security posture
@@ -310,6 +362,17 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   the one handler whose store dep (`ClearablePairedServerStore`) *inherited* `load` and could therefore
   materialise a full `PairedServerRecord`, with only a test pinning its non-use. Nothing replaces that
   capability; the surviving handler structurally cannot reach it.
+- **[#1196] A confused or hostile paired daemon cannot use its own conversation list to erase another
+  machine's threads.** The `serverId` this channel erases is client-held on every route in (§ above), but
+  the renderer-side clear it triggers also reads a *daemon-supplied* set — the departing server's own
+  `conversationsReceived` reply — to decide which conversation timelines and open chat to drop. The first
+  design draft fed that set to `clearTimelineFor`/`exitActiveConversation` unfiltered; the architect's own
+  security review caught it (MUST FIX) before any code shipped, since an id another paired machine also
+  reports would otherwise let "forget machine A" destroy machine B's retained threads and close the chat
+  the operator is reading on B, with no backfill in either timeline store. Fixed by
+  `selectExclusiveConversationIdsFor` ([Conversation list store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)):
+  an id another slot also holds is never dropped. Costs nothing against an honest daemon — conversation
+  ids are UUIDv4, so a real collision cannot occur.
 
 ## Edge cases and limitations
 
@@ -349,12 +412,13 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   last-server unpair, but not #833's renderer store — so an unpair-then-repair *inside one running app
   session* can leave the window holding the previous label until the next `hostLabel()` load overwrites
   it.
-- **After a Re-pair that leaves other servers paired, the unpaired server's rows stay in the sidebar
-  until something clears them** — named and left open by
-  [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)'s architecture spec, the same gap
-  [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) is scoped to close for the Settings
-  path. No credential and no live connection survive (`reconcile()` already dropped it) — this is a
-  stale-display gap only.
+- **Closed by [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196): after a Re-pair or a
+  Settings-row Unpair that leaves other servers paired, the departed server's rows no longer stay in the
+  sidebar.** Named and left open by [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)'s
+  architecture spec (split into [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150), then
+  #1196), this was a stale-display gap only — no credential and no live connection ever survived
+  (`reconcile()` already dropped the connection) — and both unpair paths now reach the fix through the
+  one `clearServerScopedState` implementation (§ The two renderer callers).
 
 ## Related
 
@@ -391,3 +455,10 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   the label erase at `clearFor` and deleted its remaining-count gate. [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)
   gave it its first caller. [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) migrated
   the last whole-collection caller onto it and deleted that path.
+- [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196) · Spec:
+  `docs/specs/architecture/1196-scoped-clear-on-per-server-unpair.md` — gave `runUnpairServer`'s
+  non-last-server arm a scoped clear, closing the gap #1163's spec left open (both unpair callers now
+  reach `clearServerScopedState`; see § The two renderer callers). [Conversation list
+  store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196) —
+  `clearConversationsFor` and `selectExclusiveConversationIdsFor`, the two store primitives this clear
+  composes.

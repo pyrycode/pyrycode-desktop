@@ -2175,12 +2175,31 @@ export const ATTACHMENT_MIME_TYPE_MAX_BYTES = 255
  * are INDEX-ADDRESSED and may arrive in any order — the receiver addresses by `index` and never
  * appends. The neighbouring rule is the obvious one to copy and it is the wrong one here.
  *
- * All eight fields are always present in both directions (no `omitempty`), so a decoder may rely on
- * all eight. Because `total_chunks` rides every chunk, the stream needs NO completion frame — the
+ * All nine fields are always present in both directions (no `omitempty`), so a decoder may rely on
+ * all nine. Because `total_chunks` rides every chunk, the stream needs NO completion frame — the
  * DebugBundleDonePayload analogue does not exist. Mirrors the daemon field-for-field
- * (pyrycode #1752); do not drift it without a matching daemon change. See ADR 0002.
+ * (pyrycode #1752, `conversation_id` added by pyrycode #2142); do not drift it without a matching
+ * daemon change. See ADR 0002.
+ *
+ * `conversation_id` IS THE UPLOAD'S DESTINATION, AND IT USED TO BE ABSENT ON PURPOSE. Until pyrycode
+ * #2143 the daemon filed an upload under its follow-active cursor — the conversation the last routed
+ * `send_message` named — and this type documented the omission as a security property: a client could
+ * not steer bytes into another conversation's directory by naming one. That cursor is gone. The daemon
+ * now REQUIRES the field on every chunk and refuses an absent, empty or unknown one with
+ * `attachment.invalid_chunk` on the first chunk carrying it (#2143), and refuses a chunk naming a
+ * different conversation than its transfer was admitted under (#2146). The property the omission
+ * bought is kept daemon-side, by different fabric: the id is a lookup key VALIDATED AGAINST THE
+ * DAEMON'S REGISTRY before it becomes a path component, never a value trusted as sent, and naming a
+ * conversation is not authorization — the rule `request_attachment` already publishes. Client-side
+ * (pyrycode-desktop #1205) the value is the open conversation's daemon-minted id, latched once per
+ * transfer and spread onto every chunk, so #2146's mid-upload switch refusal is unreachable from here.
  */
 export interface AttachmentChunkPayload {
+  /** UPLOAD: the conversation the bytes belong to — the destination, validated by the daemon against its
+   *  registry, identical on every chunk of one transfer. RETRIEVAL: emitted empty and ignored, since a
+   *  retrieval chunk is correlated by `in_reply_to` to a request that already named the conversation.
+   *  Same shape and budget as `attachment_id`; <= ATTACHMENT_ID_MAX_BYTES. */
+  conversation_id: string
   /** The transfer this chunk belongs to, identical on every chunk; <= ATTACHMENT_ID_MAX_BYTES.
    *  NOT a capability — not secret, not unguessable, and never resolved into a filesystem path. */
   attachment_id: string

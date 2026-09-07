@@ -68,8 +68,8 @@ round-trip passes silently on an unknown string.
 ## How it works
 
 **One frame carries both directions.** `attachment_chunk` rides upload (client → daemon) and
-retrieval (daemon → client) alike, and all eight fields are always present in both — no `omitempty`,
-so a decoder may rely on all eight. This slice only ever produces the frame; decoding an inbound one
+retrieval (daemon → client) alike, and all nine fields are always present in both — no `omitempty`,
+so a decoder may rely on all nine. This slice only ever produces the frame; decoding an inbound one
 on the retrieval leg is [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md)
 (#998).
 
@@ -81,10 +81,22 @@ retrieval decode](attachment-chunk-retrieval-decode.md) § The provenance correc
 `attachmentChunkPlan.ts`'s own docblock states the upload-direction claim correctly and was
 deliberately left untouched by #998.
 
-**There is no `conversation_id`, and the omission is a security property.** An upload lands in the
-conversation the authenticated session is already on, decided daemon-side from session context, so a
-client cannot steer bytes into another conversation's directory by naming one. Do not add one "for
-clarity" — that would reopen exactly the hole the omission closes.
+**`conversation_id` is the upload's destination, and it used to be absent on purpose
+([#1205](https://github.com/pyrycode/pyrycode-desktop/issues/1205)).** Until pyrycode#2143 the daemon
+filed an upload under its follow-active cursor — the conversation the last routed `send_message` named —
+and this page called the omission a security property: a client could not steer bytes into another
+conversation's directory by naming one. That cursor is gone. The daemon now *requires* the field on every
+chunk (pyrycode#2142 published it, #2143 enforces it: absent, empty and unknown are all
+`attachment.invalid_chunk` on the first chunk carrying them, with no fallback), and refuses a later chunk
+naming a different conversation than its transfer was admitted under (pyrycode#2146). The property the
+omission bought is kept daemon-side by different fabric: the id is a lookup key **validated against the
+daemon's registry** before it becomes a path component, and naming a conversation is not authorization.
+On this side the value is the open conversation's daemon-minted id, carried on the ask, read **once** into
+the plan input and spread onto every chunk — so #2146's mid-upload switch refusal is unreachable from
+here, because no chunk of one transfer can name a different conversation than its first. The field is
+first, matching the daemon's struct order. Every upload from this client was refused between the gate
+host's daemon rebuild and this change; three tickets described it from three sides (#1076 before the
+daemon flipped, #1204 and #1205 after) and one field closes all three.
 
 **`planAttachmentChunks` — the arithmetic.**
 

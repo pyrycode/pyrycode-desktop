@@ -23,6 +23,7 @@ describe('createAttachmentTransfer', () => {
     Uint8Array.from({ length }, (_, index) => index % 251)
 
   const input = (bytes: Uint8Array): Parameters<typeof createAttachmentTransfer>[0] => ({
+    conversation_id: 'conv-1',
     attachment_id: 'att-1',
     filename: 'notes.txt',
     mime_type: 'text/plain',
@@ -417,7 +418,7 @@ describe('createAttachmentTransfer', () => {
     const attachmentId = 'att-secret-9f2b'
     const bytes = pattern(STRIDE + 5)
     const transfer = createAttachmentTransfer(
-      { attachment_id: attachmentId, filename, mime_type: mimeType, bytes },
+      { conversation_id: 'conv-1', attachment_id: attachmentId, filename, mime_type: mimeType, bytes },
       { sendChunk: recordingSender().sendChunk, yieldToEventLoop: immediate, diagnosticLog: captured.log }
     )
 

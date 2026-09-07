@@ -28,26 +28,18 @@ import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/convers
 // `skipPermissions` stays at its `true` default (`--dangerously-skip-permissions`), so claude's read of
 // the attached file does not block on a permission modal — this spec proves delivery, not the modal.
 //
-// ⭐ WHY A CURSOR-STAMP TURN RUNS BEFORE THE ATTACH, AND WHY IT IS NOT OPTIONAL. An `attachment_chunk`
-// carries no conversation id BY DESIGN: the bytes land in whatever conversation the authenticated session
-// is already on, which the daemon reads from its follow-active cursor. That cursor is stamped in the relay
-// handler for `send_message`, on the successful-route path — creating a conversation does NOT stamp it. So
-// on a conversation that has never sent a message the cursor is empty, the completing chunk resolves no
-// destination, and the daemon answers `attachment.storage_failed`, which this composer renders as "The
-// host could not store the file." Measured, not deduced: the first live gate run of this spec attached to
-// a freshly-created conversation and died on exactly that sentence, 123 polls deep. Upstream's daemon-side
-// twin rides a prior stamp turn for the identical reason — see pyrycode's
-// docs/specs/architecture/2039-live-attachment-read.md § Sequence step 2, which names this failure as the
-// precondition it exists to satisfy.
-//
-// The stamp turn is drained to QUIESCE (its streaming cursor gone), not merely to a first token, so no
-// turn is in flight across the upload and turn 2's frames cannot interleave with turn 1's. Its reply is
-// then excluded from the assertion by row index — see `assistantText`'s `skip`.
-//
-// That the OPERATOR hits the same wall — attach to a brand-new discussion and the composer blames the host
-// for a flow that cannot succeed — is a real gap, filed as **#1076**. It is deliberately not worked around
-// here: this spec proves delivery, and papering the precondition over inside it would hide the very thing
-// the live run found.
+// ⭐ THE ATTACH HAPPENS BEFORE THE CONVERSATION'S FIRST MESSAGE, AND THAT IS A SECOND PROOF (#1205, #1076).
+// Until pyrycode#2143 an `attachment_chunk` carried no conversation id and the daemon filed the bytes under
+// its follow-active cursor — stamped only by a routed `send_message`, so a never-messaged conversation had
+// no destination and the upload was refused with `attachment.storage_failed`. This spec then rode a prior
+// "cursor-stamp" turn to get past it, and the operator's own version of the wall was filed as #1076. The
+// daemon now REQUIRES the chunk to name its conversation, validates the id against its registry, and
+// accepts a known but never-messaged one — the case #1076 is — so the stamp turn is gone and the attach is
+// the FIRST thing this conversation does. If the chunk stopped carrying the id, or the daemon stopped
+// accepting a childless conversation, the "File attached." assertion below reddens before any turn runs
+// (with "The host rejected part of the upload."), which is exactly how the omission was found on
+// 2026-09-06: every upload from this client refused, on every branch, after the gate host's daemon was
+// rebuilt past #2143. The fake tier cannot see this — it stubs the upload — so this line is the proof.
 //
 // Current gate state (which real-claude specs pass/fail) lives in the live e2e runbook —
 // docs/knowledge/features/live-e2e-runbook.md § Current real-claude gate state. This header stays
@@ -97,7 +89,7 @@ const UPLOAD_TIMEOUT_MS = 60_000
 // One turn = cold claude (spawn + model load + a tool call that reads the file + the reply). Both turns
 // get the same budget: turn 1 pays the cold spawn, turn 2 pays a `Read` of the attachment.
 const TURN_TIMEOUT_MS = 180_000
-// Handshake + stamp turn + upload + attachment turn + headroom, and it must be set here because the
+// Handshake + upload + attachment turn + headroom, and it must be set here because the
 // config's per-test `timeout` is 300_000 — under the sum below. Generous rather than tight on purpose:
 // the happy path is fast (the whole 13-spec tier ran in ~130s), so this bound is only ever paid by a
 // hang, where a diagnosis is worth more than an early red.
@@ -110,11 +102,11 @@ const SPEC_TIMEOUT_MS = 600_000
  * cursor and #1014's timestamp both live INSIDE the row — and it runs on a detached clone, so the live
  * DOM is untouched.
  *
- * `skip` drops that many leading assistant rows, which is how the stamp turn's reply is kept out of the
- * assertion. Without it the poll reads a transcript the attachment played no part in, and a stamp reply
- * that happened to contain the expected word would green this spec with no attachment delivered at all —
- * the precise vacuity the header says the assertion exists to refuse. Rows only ever append here, so an
- * index recorded once the stamp turn has quiesced stays the boundary between the two turns.
+ * `skip` drops that many leading assistant rows. Unused since #1205 removed the cursor-stamp turn — the
+ * attachment turn is now the conversation's first, so there is no prior reply to exclude — and kept so a
+ * future drive with a prior turn can keep that reply out of the assertion: a reply that happened to contain
+ * the expected word would green this spec with no attachment delivered at all, the precise vacuity the
+ * header says the assertion exists to refuse.
  */
 function assistantText(page: Page, skip = 0): Promise<string> {
   return page
@@ -177,24 +169,11 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
       await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-      // --- The cursor-stamp turn (see the header): one ordinary message, so the daemon's follow-active
-      // cursor names this conversation by the time the upload's completing chunk asks it to. Without it
-      // the upload below is refused with `attachment.storage_failed` and never reaches the send under
-      // test. It asks for nothing about images and nothing about colour, so its reply cannot supply the
-      // word the assertion looks for — and it is excluded by row index regardless. ---
-      await composer.fill('Reply with a single short word.')
-      await sendButton.click()
-      await expect
-        .poll(async () => (await assistantText(page)).trim(), {
-          timeout: TURN_TIMEOUT_MS,
-          message:
-            'the cursor-stamp turn never streamed a reply, so the daemon never routed a message and the upload below would be refused with attachment.storage_failed'
-        })
-        .not.toBe('')
-      // Quiesce before the upload, so no turn is in flight across it.
-      await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-      // The boundary between the two turns, read once the thread is settled.
-      const priorAssistantRows = await page.locator(ASSISTANT_ROW).count()
+      // --- No message has been sent on this conversation, and none will be before the attach (see the
+      // header): the thread is empty, which is what makes the upload below #1076's case as well as
+      // #1055's. Asserted rather than assumed, so a fixture change that seeds a turn cannot quietly turn
+      // this back into the stamp-turn drive. ---
+      await expect(page.locator(ASSISTANT_ROW)).toHaveCount(0)
 
       // --- The picker answers with the real file. `defineProperty` rather than assignment: it succeeds
       // against a data property and an accessor alike, and the app reads `dialog.showOpenDialog` at call
@@ -207,9 +186,11 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
         })
       }, imagePath)
 
-      // --- The REAL upload: production chunks the file to the real daemon and the composer states the
-      // terminal the daemon's `attachment_stored` produced. The expected sentence is DERIVED by calling
-      // the production copy module, never typed out here, so this spec cannot drift from the copy. ---
+      // --- The REAL upload, to a conversation that has never had a turn: production chunks the file to
+      // the real daemon, naming this conversation on every chunk, and the composer states the terminal
+      // the daemon's `attachment_stored` produced. A refusal here reads "The host rejected part of the
+      // upload." and means the chunk named no conversation the daemon knows (#1205). The expected
+      // sentence is DERIVED by calling the production copy module, never typed out here. ---
       await attach.click()
       await expect(outcome).toHaveText(
         attachmentUploadOutcomeCopy({
@@ -228,7 +209,7 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       await sendButton.click()
 
       await expect
-        .poll(() => assistantText(page, priorAssistantRows), {
+        .poll(() => assistantText(page), {
           timeout: TURN_TIMEOUT_MS,
           message:
             'claude never named the attached image colour: either no attachment_ids rode the send_message frame, or the daemon did not name the stored path in the prompt'

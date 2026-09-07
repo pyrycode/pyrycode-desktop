@@ -54,6 +54,7 @@ import {
   ATTACHMENT_UPLOAD_CHANNEL,
   ATTACHMENT_UPLOAD_EVENT_CHANNEL,
   isAttachmentPasteRequest,
+  isAttachmentPickRequest,
   isAttachmentUploadRequest
 } from '../shared/ipc/attachmentUpload'
 import {
@@ -920,7 +921,14 @@ app.whenReady().then(() => {
      * that keeps it denied: `route` is reached only from `upload`, `upload` only from the flow
      * module, and the flow module only from a matched arm.
      */
-    const buildDeps = (serverId: string | undefined): AttachmentUploadDeps => ({
+    const buildDeps = (
+      serverId: string | undefined,
+      conversationId: string
+    ): AttachmentUploadDeps => ({
+      // #1205: the destination, as the ask carried it and as the guard admitted it. Read once by the
+      // flow module into the plan, which spreads it onto every chunk; it reaches no filename, path or
+      // log line from here. See `AttachmentUploadDeps.conversationId`.
+      conversationId,
       /**
        * The progress seam is forwarded, never swallowed: the flow module owns the threshold that
        * decides whether a report becomes a message, and this arrow owns nothing but the join and,
@@ -976,7 +984,7 @@ app.whenReady().then(() => {
     // shape is accepted. A malformed ask falls past both guards and returns below, having made no
     // filesystem call, no clipboard read and no event.
     if (isAttachmentUploadRequest(request)) {
-      void uploadAttachmentFile(request.path, buildDeps(request.serverId))
+      void uploadAttachmentFile(request.path, buildDeps(request.serverId, request.conversationId))
       return
     }
 
@@ -988,23 +996,20 @@ app.whenReady().then(() => {
     // wire field. See AttachmentPasteRequest, which amends its own "and nothing else" paragraph to
     // say so.
     if (isAttachmentPasteRequest(request)) {
-      void uploadClipboardImage(readClipboardImagePng, buildDeps(request.serverId))
+      void uploadClipboardImage(readClipboardImagePng, buildDeps(request.serverId, request.conversationId))
       return
     }
 
-    // An ask that carried SOMETHING and matched neither guard is dropped outright, matching every
-    // sibling attachment channel: no event, and no log either, which is what denies a looping renderer
-    // a way to drive the main-process logger.
-    if (request !== undefined) return
-
-    // The PICKER arm (#862). There is no ask object on this path, so there is nowhere for a routing
-    // key to ride and none is invented: it takes the resolver's UNNAMED path, the same one an
-    // id-less drop or paste takes — the sole connection when the registry holds exactly one entry,
-    // a refusal when it holds more. Built AFTER the pickerOpen gate so a suppressed second picker
-    // builds nothing.
+    // The PICKER arm (#862), which since #1205 has an ask of its own: the destination has to ride it,
+    // so the argument-free intent is retired and a bare send matches no guard. An ask matching none of
+    // the three — a bare send included — is dropped outright, matching every sibling attachment
+    // channel: no event, and no log either, which is what denies a looping renderer a way to drive the
+    // main-process logger. The picker's `serverId` takes the resolver's path like the other two asks'.
+    // Deps are built AFTER the pickerOpen gate so a suppressed second picker builds nothing.
+    if (!isAttachmentPickRequest(request)) return
     if (pickerOpen) return
     pickerOpen = true
-    const pickerDeps = buildDeps(undefined)
+    const pickerDeps = buildDeps(request.serverId, request.conversationId)
     void dialog
       .showOpenDialog({ properties: ['openFile'] })
       .then((choice) => {

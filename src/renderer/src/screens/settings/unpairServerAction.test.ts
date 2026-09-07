@@ -17,11 +17,13 @@ function deps(
   unpairServer: ReturnType<typeof vi.fn>
   refreshServers: ReturnType<typeof vi.fn>
   onLastServerUnpaired: ReturnType<typeof vi.fn>
+  clearServerScopedState: ReturnType<typeof vi.fn>
 } {
   return {
     unpairServer: vi.fn(async (): Promise<UnpairResult> => ({ result: 'ok' })),
     refreshServers: vi.fn(async (): Promise<ServerInfoValue[]> => [SURVIVOR]),
     onLastServerUnpaired: vi.fn(),
+    clearServerScopedState: vi.fn(),
     ...overrides
   } as never
 }
@@ -117,12 +119,72 @@ describe('runUnpairServer', () => {
     const exhaustive: UnpairServerDeps = {
       unpairServer: async () => ({ result: 'error' }),
       refreshServers: async () => [],
-      onLastServerUnpaired: () => {}
+      onLastServerUnpaired: () => {},
+      clearServerScopedState: () => {}
     }
     expect(Object.keys(exhaustive).sort()).toEqual([
+      'clearServerScopedState',
       'onLastServerUnpaired',
       'refreshServers',
       'unpairServer'
     ])
+  })
+
+  // #1196 — the arm that was missing entirely. Until now this helper reached renderer state through one
+  // conditional line, so forgetting one of several servers cleared nothing at all and the departed
+  // machine's rows, threads and open chat stayed.
+  it('ok with servers remaining → clears exactly the erased server’s state (AC1–AC3)', async () => {
+    const d = deps()
+
+    await runUnpairServer(d, 'fake-daemon')
+
+    expect(d.clearServerScopedState).toHaveBeenCalledTimes(1)
+    // The ERASED id, not one the call site closed over: the server whose state is dropped is by
+    // construction the server this helper just forgot.
+    expect(d.clearServerScopedState).toHaveBeenCalledWith('fake-daemon')
+  })
+
+  it('the LAST server’s unpair runs the whole-app clear and NOT the scoped one (AC5)', async () => {
+    // An `else`, not a second statement. The last-server path is unchanged — `onLastServerUnpaired`
+    // reaches `applyPairingChange`'s `unpaired` arm, which drops all thirteen stores — and the two
+    // clears can never both fire, so nothing on that path is cleared twice or in a new order.
+    const d = deps({ refreshServers: vi.fn(async (): Promise<ServerInfoValue[]> => []) })
+
+    await runUnpairServer(d, 'fake-daemon')
+
+    expect(d.onLastServerUnpaired).toHaveBeenCalledTimes(1)
+    expect(d.clearServerScopedState).not.toHaveBeenCalled()
+  })
+
+  it('clears only AFTER the refresh, so nothing is dropped on a path that never completed', async () => {
+    const order: string[] = []
+    const d = deps({
+      refreshServers: vi.fn(async (): Promise<ServerInfoValue[]> => {
+        order.push('refresh')
+        return [SURVIVOR]
+      }),
+      clearServerScopedState: vi.fn(() => order.push('clear'))
+    })
+
+    await runUnpairServer(d, 'fake-daemon')
+
+    expect(order).toEqual(['refresh', 'clear'])
+  })
+
+  it('neither error arm clears anything — fail-safe extends to the new effect', async () => {
+    const refused = deps({
+      unpairServer: vi.fn(async (): Promise<UnpairResult> => ({ result: 'error' }))
+    })
+    const rejected = deps({
+      unpairServer: vi.fn(async (): Promise<UnpairResult> => {
+        throw new Error('handler absent')
+      })
+    })
+
+    expect(await runUnpairServer(refused, 'fake-daemon')).toBe('error')
+    expect(await runUnpairServer(rejected, 'fake-daemon')).toBe('error')
+
+    expect(refused.clearServerScopedState).not.toHaveBeenCalled()
+    expect(rejected.clearServerScopedState).not.toHaveBeenCalled()
   })
 })

@@ -7,6 +7,7 @@ import {
 } from '../../store/serverInfoStore'
 import { loadServerInfo } from '../../store/serverInfoLoader'
 import { runUnpairServer } from './unpairServerAction'
+import { clearServerScopedState, serverScopedClearDeps } from '../../clearServerScopedState'
 
 // Client-owned copy — module-level constants (the SETTINGS_COPY idiom), never daemon strings. The
 // placeholder is apostrophe-free (renderToStaticMarkup escapes '), U+2026 ellipsis (the 'Thinking…'
@@ -261,7 +262,24 @@ export function ServerRowControl({
         // remain?" decision come from one read and cannot disagree. It resolves to the list it wrote.
         refreshServers: () =>
           loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers),
-        onLastServerUnpaired
+        onLastServerUnpaired,
+        // #1196: forgetting one of several servers must take that machine's conversation rows, its
+        // retained threads and its open chat with it. The clear set and its store wiring live in
+        // `clearServerScopedState` — one copy, spread here and at the composer's Re-pair, because two
+        // literals would be two enumerations of one clear set and a drift between them is the half-fix
+        // AC4 exists to catch.
+        //
+        // `navigateToList` is a deliberate NO-OP on this path, not a missing wire. The Settings route
+        // has no thread to leave: `nextPairedRoute`'s only exit from `settings` is `back`, which is
+        // absolute to `list`, so the operator's own next move already lands on the Channel List with the
+        // departed rows gone — and `settings-per-server-unpair.spec.ts` pins Settings STAYING VISIBLE
+        // after a non-last unpair, so navigating from here would eject the operator from a screen they
+        // are still using. Every clear behind the exit still fires; only the navigation is inapplicable.
+        clearServerScopedState: (departedServerId) =>
+          clearServerScopedState(
+            { ...serverScopedClearDeps, navigateToList: () => {} },
+            departedServerId
+          )
       },
       serverId
     ).then(() => {

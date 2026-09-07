@@ -28,14 +28,27 @@ import type { ServerInfoValue } from '../../store/serverInfoStore'
  *  - `onLastServerUnpaired` — the App route flip → `pairing`, reached through the shell's existing
  *                             `applyPairingChange(deps, 'unpaired')`, which clears the thirteen
  *                             pairing-scoped stores before it navigates.
+ *  - `clearServerScopedState` — #1196's drop of the state ONE departed server authored: its conversation
+ *                             rows, every one of its conversations' retained threads, and the open chat
+ *                             when it was one of them. The `else` to the flip above, never a companion
+ *                             to it.
  *
  * There is deliberately NO `dispatch` — see the header. Adding one is a design change, not a
  * convenience.
+ *
+ * `clearServerScopedState` is the member that makes both unpair paths correct from ONE implementation
+ * (#1196, AC4). `UnpairDeps extends UnpairServerDeps`, so the composer's Re-pair inherits it rather than
+ * re-declaring it, and the alternative — clearing inside `ServerRowControl` — would satisfy every other
+ * criterion while leaving the Re-pair path broken. It TAKES THE ID rather than being nullary like
+ * `PairingChangeDeps.clearPairingScopedState`, and that is the stronger property here: the server whose
+ * state is dropped is by construction the server this helper just erased, rather than whatever the call
+ * site happened to close over.
  */
 export interface UnpairServerDeps {
   unpairServer: (serverId: string) => Promise<UnpairResult>
   refreshServers: () => Promise<ServerInfoValue[]>
   onLastServerUnpaired: () => void
+  clearServerScopedState: (serverId: string) => void
 }
 
 /**
@@ -90,6 +103,14 @@ export async function runUnpairServer(
   if (result.result !== 'ok') return 'error'
 
   const remaining = await deps.refreshServers()
+  // #1196: an `else`, and both halves of that are load-bearing. Before it, this one line was the ONLY
+  // route from either unpair path into renderer state, so forgetting one of several servers cleared
+  // nothing at all — the departed machine's conversation rows, its retained threads and its open chat
+  // all stayed, and since #1070 its rows render under no host row at all because the sidebar draws its
+  // subtrees from the store this function already refreshed. `else` rather than a second statement keeps
+  // the last-server path byte-identical: it runs the whole-app clear alone, exactly as it always has,
+  // and the two clears can never both fire.
   if (remaining.length === 0) deps.onLastServerUnpaired()
+  else deps.clearServerScopedState(serverId)
   return 'ok'
 }

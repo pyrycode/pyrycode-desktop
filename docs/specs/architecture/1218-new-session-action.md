@@ -316,3 +316,19 @@ and this ticket makes 15. The bump is the operator's; the PR says so.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+**2026-09-07 — two consequences of the fourth row that the plan did not name.**
+
+- `e2e/composer-actions-unavailable.spec.ts` arrows from the greyed row back to `Reset session`, and the
+  focus ring wraps: over three rows that was one `ArrowDown`, over four it is two. The extra step is
+  added, and it now asserts that the intermediate stop is the control row — arrowing onto a row does not
+  activate it, which is worth pinning where the drive already passes over it. The plan named only this
+  spec's row count and its new AC3 assertion.
+- `ComposerActionsMenu.test.tsx` gained a `viewMarkup()` helper. `ComposerActionsMenuView`'s new required
+  prop had to be added at its three shipped smoke renders, and one shared helper is what keeps those three
+  identical rather than three copies drifting; no assertion changed.
+
+Neither changes the design. Open question 1 (does the current daemon binary answer `new_session` with a
+`session_transition`?) stays open by construction — the real tier is the operator's gate.

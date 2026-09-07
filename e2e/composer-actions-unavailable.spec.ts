@@ -48,6 +48,10 @@ const ACTIONS_LABEL = 'Actions'
 const AVAILABLE_ROW = 'Reset session'
 const UNAVAILABLE_ROW = 'Knowledge capture'
 const UNAVAILABLE_NOTE = '(unavailable in this workspace)'
+// #1218's control row. It is NOT a slash command, so a complete published list that does not name it
+// proves nothing about it and it must never be greyed out — the whole of that ticket's AC3, and a
+// failure that would ship looking correct.
+const CONTROL_ROW = 'New session (restarts claude)'
 
 function command(overrides: Partial<WireSlashCommand> & { name: string }): WireSlashCommand {
   return { argument_hint: '', description: '', aliases: [], truncated_fields: null, ...overrides }
@@ -130,10 +134,10 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   const unavailable = panel.getByRole('menuitem', { name: UNAVAILABLE_ROW })
   const available = panel.getByRole('menuitem', { name: AVAILABLE_ROW })
 
-  // --- 2. GREYING IS NOT HIDING (AC1). All three rows are still offered and still menu items; exactly
+  // --- 2. GREYING IS NOT HIDING (AC1). Every row is still offered and still a menu item; exactly
   // one of them is marked, and it is the one no published row names. The assertion retries, so a frame
-  // still in flight when the panel opened resolves here rather than racing. ---
-  await expect(panel.getByRole('menuitem')).toHaveCount(3)
+  // still in flight when the panel opened resolves here rather than racing. Four rows since #1218. ---
+  await expect(panel.getByRole('menuitem')).toHaveCount(4)
   await expect(unavailable).toHaveAttribute('aria-disabled', 'true', {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
@@ -147,6 +151,17 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   // AC3's alias arm, through the real decode: `compact` is published only as an ALIAS of
   // `compact-conversation`, and its row is NOT marked. A name-only match would have greyed it.
   await expect(panel.getByRole('menuitem', { name: 'Compact session' })).not.toHaveAttribute(
+    'aria-disabled',
+    'true'
+  )
+
+  // #1218's AC3, live and against the strongest input this spec has: a COMPLETE published list naming
+  // `clear` and `compact-conversation` and nothing else. That list proves the absence of the three slash
+  // commands, and proves NOTHING about a control frame that is not a slash command at all — so the
+  // control row must be offered here exactly as in a workspace that publishes everything. The `count(1)`
+  // above already bounds the marking to one row; this names which row must not be it, so a regression
+  // reads as "New session was greyed out" rather than as an arithmetic surprise.
+  await expect(panel.getByRole('menuitem', { name: CONTROL_ROW })).not.toHaveAttribute(
     'aria-disabled',
     'true'
   )
@@ -178,6 +193,12 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
 
   // --- 5. THE GATE IS PER ROW, not a dead menu (AC1). The same open panel still sends an available row's
   // command — arrowed back to it, so the keyboard path is proven to work rather than merely to refuse. ---
+  //
+  // TWO steps, not one, since #1218 appended a fourth row: the ring wraps, so from the third row the
+  // first is now two ArrowDowns away, THROUGH the control row. Passing over it is part of what this
+  // proves — arrowing onto a row does not activate it.
+  await page.keyboard.press('ArrowDown')
+  await expect(panel.getByRole('menuitem', { name: CONTROL_ROW })).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(available).toBeFocused()
   await page.keyboard.press('Enter')

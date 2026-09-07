@@ -37,7 +37,16 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // LABELS BELOW ARE LOAD-BEARING LOCATORS — rewording one in ComposerActionsMenu.tsx breaks this spec,
 // which is the point.
 const ACTIONS_LABEL = 'Actions'
-const ROW_LABELS = ['Reset session', 'Compact session', 'Knowledge capture']
+// #1218 appended a FOURTH row, and it is the one entry here that is not a slash command: picking it
+// dispatches a `new_session` control frame rather than message text, so this spec's captures never see
+// it. Its own drive is e2e/composer-new-session.spec.ts. It is listed here because `toHaveText` below
+// asserts the panel's rows exactly, which is what makes a row appearing or vanishing fail loudly.
+const ROW_LABELS = [
+  'Reset session',
+  'Compact session',
+  'Knowledge capture',
+  'New session (restarts claude)'
+]
 
 // EXACT IS LOAD-BEARING, not defensive tidiness. getByRole's `name` matches as a case-insensitive
 // SUBSTRING by default, and the thread overflow trigger one region up is labelled `More actions` — so a
@@ -93,7 +102,7 @@ test('picking Reset session sends /clear as an ordinary message (AC1, AC2, AC3)'
   await actionsTrigger(page).click()
   const panel = actionsPanel(page)
   await expect(panel).toBeVisible()
-  // Exactly three entries, in the design's order — the mapping's visible half.
+  // Exactly these entries, in the design's order — the mapping's visible half.
   await expect(panel.getByRole('menuitem')).toHaveText(ROW_LABELS)
 
   // --- Pick (AC2, AC3). ---

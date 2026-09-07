@@ -22,7 +22,8 @@ corners (the two side modifiers, `.bubble--user` / `.bubble--daemon`, no longer 
 all), `padding: var(--space-4) var(--space-5)` (16/20, replacing the mobile 12/14 — and *not* by
 repurposing `--space-bubble-x`, which still reads 14px for its two other consumers,
 `.tool-row__result`/`.tool-row__input-value` and `.unrecognized-row__raw`, untouched by this ticket),
-and the `title-small` emphasized type below in place of body-medium. `max-width: min(680px, 75%)`
+and the `title-small` emphasized type below in place of body-medium — reversed by [#1113](#type-retuned-to-body-medium-1113)
+below, once the drawing itself moved back. `max-width: min(680px, 75%)`
 stands unchanged — the drawing's one measured width (680px in a 780px column at 1280px) is exactly what
 that rule already yields, so there was no drawn constant to switch to.
 
@@ -54,7 +55,9 @@ blocks, keeping the scale's display→headline→title→body→label order:
 | `--text-title-small-weight` | `500` (M3's base weight for the step — Figma exposes the emphasized weight only, so this one is not read off the file; ships with no consumer today, on `--text-label-medium-weight`'s precedent that shipping three quarters of a quartet would surprise the next consumer of the step) |
 | `--text-title-small-weight-emphasized` | `600` (M3 SemiBold — read from the Figma **variable**, not the export's fallback) |
 
-`.bubble` uses the emphasized weight; the base ships dormant. **`--text-label-large-*` reads 14/20/0.1
+`.bubble` used the emphasized weight from #969 until [#1113](#type-retuned-to-body-medium-1113) moved
+the bubble onto body-medium instead, following the drawing's own reversal; both title-small tokens now
+ship with no consumer at all, kept in place rather than removed. **`--text-label-large-*` reads 14/20/0.1
 too and is deliberately not borrowed** — the `--text-label-medium-weight-emphasized` token (added by
 [#721](../codebase/721.md)) has a comment ruling out exactly that reach and predicting this ticket by
 name ("the same node already uses title-small-emphasized, so more are coming"). A bubble typed from the
@@ -258,6 +261,46 @@ No ADR: the value (`pre-wrap`) was already settled by #607; this ticket only ext
 stated. See [architecture spec](../../specs/architecture/1057-user-bubble-whitespace.md) for the full
 design and its `## Revisions`, where these three measurements were recorded.
 
+## Type retuned to body-medium (#1113)
+
+The drawing itself reversed: `Message area` 132:4171 now types every message text node at M3
+body-medium (Roboto 14/20, tracking 0.25, weight 400) rather than the title-small emphasized step
+\#969 read off it on 2026-09-03 — the self-predicted reversal #969's own comment named ("if the thread
+reads too heavy in use, the fix is a Figma-side change and a one-line restyle here"). `.bubble`'s four
+type declarations swap from the `--text-title-small-*` tokens to `--text-body-medium-*`: size and line
+hold at 14/20 in both families, so only tracking (0.1 → 0.25) and weight (600 → 400) move. No markup,
+no new token, no geometry change — the streaming tail, the queued row and the retired `MessageBubble`
+take the new type by the same inheritance that gave them the old one, and `e2e/user-whitespace.spec.ts`
+/ `e2e/attachment-file-row.spec.ts` (`ROW_TOP_IN_BUBBLE_PX = 48`) keep their numbers because both are
+geometry reads, not weight or tracking reads.
+
+The `title-small` family (§ above) stays in `tokens.css`, now with zero consumers — kept in place
+rather than removed, per the ticket. `--text-title-small-weight-emphasized`'s comment records that: it
+is still tied for the heaviest weight in the scale (`--text-label-medium-weight-emphasized` is also
+600), with no consumer today.
+
+**Two comments changed for reasons other than the token name.** `.bubble__markdown th, td`'s "NO
+font-weight" paragraph had argued the omission from a fact that stopped being true: the scale topped
+out at `.bubble`'s own 600, so a token-sourced weight would have *erased* the header/body distinction.
+At 400 that argument inverts — an emphasized token would now read heavier than the body around it — so
+the comment was rewritten on the new footing even though the decision (no declaration, `<th>`'s UA
+`bold` still carries the distinction) didn't move. `.bubble__markdown h1`'s heading-ladder comment, by
+contrast, needed no edit: it states `.bubble`'s type as body-medium and justifies h5/h6 by their
+500/0.1 sitting *lighter* than the bubble's 400/0.25 — a claim #969's title-small window had silently
+made false (title-small-emphasized's 600 outweighed h5/h6's 500, reading the ladder upside down at its
+bottom two rungs) and #1113 made true again by accident, with nobody touching that comment.
+
+**A token-name grep alone misses that fourth comment.** It never writes `--text-title-small-*` as a
+string, only the step's name in prose. The sweep that finds it is a grep for the step's *name* across
+the stylesheet, not for the token — the token-only sweep turned up the three premise-comments that
+name it directly (`.bubble`, `.bubble__file`, `.bubble__markdown th, td`); the name sweep is what
+confirms the heading comment needed nothing.
+
+No new proof, per the ticket: the change is four token references with no new logic and no geometry,
+and the two guarding e2e specs above already read the bubble's live line box and a measured row offset
+rather than the swapped tokens, so a wrong token is unobservable in this suite unless it also moves the
+geometry.
+
 ## The shadow (the 2026-09-05 shadow fix)
 
 Every element of the desktop message area casts one drop shadow (Figma "Content" 132:4012 / "Message
@@ -353,6 +396,10 @@ alongside the sections that describe what each spec proves.
 
 ## Related
 
+- [#1113 architecture spec](../../specs/architecture/1113-bubble-body-medium-type.md) — the body-medium
+  retune, the Figma variable read confirming title-small was withdrawn from the message nodes, and the
+  comment sweep that found the three premise-comments naming the token plus the one that only names the
+  step.
 - [#1057 architecture spec](../../specs/architecture/1057-user-bubble-whitespace.md) — the
   `white-space: pre-wrap` / `> *` reset design, the redden-check evidence, and the `## Revisions`
   where the "inert on the other children" assumption was measured false.

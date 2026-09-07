@@ -36,27 +36,51 @@ import {
 } from './conversationTimelineStore'
 
 /**
- * Drop the entries this conversation's LIVE lane has already drawn (#1225), joined on the (`type`, `ts`)
- * key `joinKeyFor` composes. Pure over its two inputs, so the whole join is unit-testable with no store,
- * no DOM and nothing to click.
+ * Drop the RUN of entries at the page's newest end that this conversation's LIVE lane has already drawn
+ * (#1225), joined on the (`type`, `ts`) key `joinKeyFor` composes. Pure over its two inputs, so the whole
+ * join is unit-testable with no store, no DOM and nothing to click.
  *
  * IT RUNS ON ENTRIES, AHEAD OF THE FOLD, because rows carry no `ts` and the fold is not one-to-one — a
  * turn's deltas coalesce into a single bubble, so there is no row to attribute back to an entry once
  * `reduceTimeline` has run. The entry is the only place the key exists.
  *
- * IT DROPS ON THE PAGE SIDE, NEVER THE LIVE SIDE, and that is AC3 rather than an implementation
- * convenience: the live row stays exactly where the live stream put it, and the page's copy — which
- * `prependHistoryFor` would otherwise put at the HEAD, above rows that came before it — never becomes a
- * row at all. Suppressing the live row instead would move the message.
+ * ⭐ THE SUPPRESSED SET IS A CONTIGUOUS RUN, NEVER A SCATTER, AND THAT IS THE WHOLE SAFETY ARGUMENT.
+ * `entries` arrives newest-first, so the run this walks off the FRONT is a chronological SUFFIX of the
+ * page, which leaves the survivors a chronological PREFIX. `reduceHistoryPage` folds them left from
+ * `initialTimelineState`, and a prefix folds against exactly the state it would have seen inside the
+ * whole page: every entry a survivor could depend on is itself a survivor. Filtering entry-by-entry does
+ * NOT have that property, and the two losses it admits are both real —
+ *
+ *   - AN ORPHANED RESULT. The live lane drew a `tool_use` but lost the `tool_result` to a reconnect
+ *     (this client advertises no `last_event_id`, so a dropped live frame is gone and the served page is
+ *     the only repair path). A per-entry filter drops the page's `toolUse` and keeps its `toolResult`;
+ *     `fillResult` then finds no row carrying that `toolUseId` and DISCARDS the result, while the live
+ *     row stays pending forever — `prependHistoryFor` reconciles nothing across the lanes.
+ *   - A TURN READ BACKWARDS. The live lane drew a turn's older deltas but not its newer ones. A per-entry
+ *     filter drops the older, and the surviving newer fold into a bubble `prependHistoryFor` places
+ *     ABOVE the live bubble holding the older text.
+ *
+ * Both are content LOST or CORRUPTED, the one direction this join refuses. The run rule costs coverage
+ * instead: an overlap that is a GAP in the page rather than its newest run suppresses nothing, so those
+ * entries draw twice — which is precisely what they did before this ticket. THE STRONGEST STATEMENT
+ * AVAILABLE ABOUT THIS FUNCTION IS THEREFORE THAT ITS OUTPUT IS EITHER THE JOINED PAGE OR THE UNJOINED
+ * ONE: it can only remove duplicates, never introduce a loss or a reordering the un-joined page did not
+ * already have.
  *
  * ⭐ AN AMBIGUOUS KEY SUPPRESSES NOTHING (AC4). An entry is dropped only when its key occurs EXACTLY ONCE
  * among this page's entries: the daemon mints one timestamp per logical event, so two entries sharing a
  * key are two entries this client cannot tell apart, and a comparison that cannot separate them must
- * draw both rather than guess which one the live row was. That is the same posture every other
- * degradation here takes — an entry whose `ts` will not key (`joinKeyFor` returns `undefined`), a key
- * evicted from the bounded live set, an event whose live fold changed nothing so no key was ever
- * recorded: all of them draw. A duplicated row is a cosmetic fault, a silently dropped one is a lost
- * message, and this is a dedup on entirely remote-supplied input.
+ * draw both rather than guess which one the live row was. Here it also ENDS the run, which is the same
+ * posture every other stop takes — an entry whose `ts` will not key (`joinKeyFor` returns `undefined`),
+ * one whose key was evicted from the bounded live set, one whose live fold changed nothing so no key was
+ * ever recorded, and the operator's own `message`, which the emit never stamps: all of them draw, along
+ * with everything older. A duplicated row is a cosmetic fault, a silently dropped one is a lost message,
+ * and this is a dedup on entirely remote-supplied input.
+ *
+ * IT DROPS ON THE PAGE SIDE, NEVER THE LIVE SIDE, and that is AC3 rather than an implementation
+ * convenience: the live row stays exactly where the live stream put it, and the page's copy — which
+ * `prependHistoryFor` would otherwise put at the HEAD, above rows that came before it — never becomes a
+ * row at all. Suppressing the live row instead would move the message.
  *
  * The counting pass is bounded by the page, which arrived inside one `MAX_PLAINTEXT_BYTES` frame, so no
  * daemon-chosen number sizes an allocation here. Returns the SAME array reference when nothing was
@@ -72,11 +96,13 @@ export function withoutLiveEntries(
     const key = joinKeyFor(entry.event.type, entry.ts)
     if (key !== undefined) seen.set(key, (seen.get(key) ?? 0) + 1)
   }
-  const next = entries.filter((entry) => {
+  let drawn = 0
+  for (const entry of entries) {
     const key = joinKeyFor(entry.event.type, entry.ts)
-    return key === undefined || seen.get(key) !== 1 || !liveKeys.has(key)
-  })
-  return next.length === entries.length ? entries : next
+    if (key === undefined || seen.get(key) !== 1 || !liveKeys.has(key)) break
+    drawn += 1
+  }
+  return drawn === 0 ? entries : entries.slice(drawn)
 }
 
 /**

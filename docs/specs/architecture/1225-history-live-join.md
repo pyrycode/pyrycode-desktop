@@ -182,11 +182,15 @@ export function withoutLiveEntries(
 ): readonly HistoryTimelineEntry[]
 ```
 
-**The rule.** Drop entry `E` iff `joinKeyFor(E.event.type, E.ts)` is defined, is present in `liveKeys`,
-AND occurs **exactly once** among this page's entries. The unique-within-the-page clause is AC4: the
-daemon mints one timestamp per logical event, so two page entries sharing a key mean the key cannot
-separate them, and a comparison that cannot separate two entries draws both rather than dropping one.
-Returns the same array reference when nothing was dropped — `withoutHeldEchoes`' no-churn idiom.
+**The rule** (revised on the rework leg — see Revisions; the paragraph below is what shipped). Walk
+`entries` from its newest end and drop while `joinKeyFor(E.event.type, E.ts)` is defined, is present in
+`liveKeys`, AND occurs **exactly once** among this page's entries; stop at the first entry that fails any
+of the three and keep it and everything older. The unique-within-the-page clause is AC4: the daemon mints
+one timestamp per logical event, so two page entries sharing a key mean the key cannot separate them, and
+a comparison that cannot separate two entries draws both rather than dropping one. The **run** clause is
+the fold's own requirement: `entries` arrives newest-first, so a run off the front is a chronological
+suffix, the survivors are a chronological prefix, and every entry a survivor depends on is itself a
+survivor. Returns the same array reference when nothing was dropped — `withoutHeldEchoes`' no-churn idiom.
 
 Dropping on the PAGE side rather than the live side is AC3: the live row stays exactly where the live
 stream put it, and the page copy that would have drawn it a second time at the head never becomes a row.
@@ -242,11 +246,21 @@ which fail open by construction:
 | `ts` over `MAX_JOIN_TS_CHARS` on either lane | No key composed. Nothing suppressed. |
 | Live key set at its bound, oldest evicted | Nothing suppressed for the evicted key. |
 | Two page entries share one key | Neither suppressed. |
-| Live fold changed nothing | No key recorded, so the page copy still draws. |
+| Live fold changed nothing, in EITHER of `dispatchFor`'s branches | No key recorded, so the page copy still draws. |
 | Slice resolved from the screen, not from the event | No key recorded (see the ⭐ above). |
+| The overlap is a GAP in the page rather than its newest run | The run stops at the first undrawn entry; the gap and everything older draw twice. |
 
 Every row of that table draws a duplicate rather than dropping a message. That asymmetry is the whole
 posture: a duplicated row is a cosmetic fault, a silently dropped one is a lost message.
+
+**The rows above are per-ENTRY, and per-entry reasoning is not sufficient on its own** — the correction
+the last row carries. The page fold reads its entries as a SEQUENCE (`fillResult` writes into a row an
+earlier entry created; a turn's deltas coalesce in order), so a suppression scattered through the middle
+of a page can orphan a survivor's dependency even when every individual drop was correct. The suppressed
+set is therefore a contiguous run at the page's newest end, which leaves the survivors a chronological
+prefix that folds against exactly the state it would have seen inside the whole page. That makes the
+table's guarantee hold at the level it is stated: whatever this join does, its output is either the
+joined page or the un-joined one.
 
 The decode side keeps its existing fail-closed behaviour untouched — `Envelope.ts` is already required by
 `decodeEnvelope`, so a frame without one never reaches the ten arms.
@@ -348,8 +362,30 @@ loses a message rather than merely repeating one.
   into the conversation ON SCREEN. A live `session_transition` belonging to conversation B would have
   minted a key on conversation A's slice, which could suppress A's own page entry on a same-millisecond
   same-type collision — a DROPPED row. Addressed in Design § "⭐ only an event's own attribution may mint
-  a key": the key is passed only when `conversationId !== null`. The residual cost is a duplicate
+  a key" and implemented in `subscribeTimeline` (see Revisions): the key is passed only when
+  `conversationId !== null`. The residual cost is a duplicate
   `Session reset` divider, the fail-open side.
+- **[Threat model / false suppression, second finding — MUST FIX, fixed on the rework leg]** ⭐ **This
+  pass reasoned about one entry at a time, and that was the gap.** Every category above asks whether a
+  given key can be wrong for a given entry; none asked what a CORRECT drop does to the entries around it.
+  The page fold is not entry-independent, so an entry-independent filter loses content in two reachable
+  ways: dropping a `toolUse` while keeping its `toolResult` makes `fillResult` find no row to write into
+  and discard the result (the live row then stays pending forever, since this client advertises no
+  `last_event_id` and nothing reconciles across the lanes), and dropping a turn's older deltas while
+  keeping its newer ones makes `prependHistoryFor` place the tail of the reply above its head. Both are
+  fail-CLOSED — content lost or corrupted — in exactly the reconnect scenario the served page exists to
+  repair. Addressed by making the suppressed set a contiguous run at the page's newest end, so the
+  survivors are a chronological prefix and no survivor can depend on a dropped entry; the stated cost is
+  that a gap-shaped overlap suppresses nothing. **The generalisable lesson: a suppression primitive over
+  a SEQUENCE must be audited at the level of the sequence, not only at the level of the item.** A
+  per-item audit that concludes "every degradation draws a duplicate" is sound only if the consumer of
+  the surviving items treats them independently, and this one does not.
+- **[Threat model / false suppression, third finding — MUST FIX, fixed on the rework leg]** `dispatchFor`
+  applied the "a key is recorded only where the fold changed something" guard in its UPDATE branch only;
+  the create branch stored the key beside a fold whose result it never inspected. Reachable on
+  `toolResult`, the one stamped arm that no-ops against `initialTimelineState`: an orphan result as a
+  conversation's first live frame minted a key for a row nobody was shown, which the page's copy of that
+  result would then have been suppressed by. Both branches now compare their fold before recording.
 - **[Memory exhaustion — addressed]** `MAX_PLAINTEXT_BYTES` is 65519, so `Envelope.ts` may legitimately
   decode to a ~64KB string. Unbounded, a hostile daemon streaming such frames would pin
   `MAX_LIVE_JOIN_KEYS` × 10 slices × 64KB ≈ hundreds of MB of retained keys. `MAX_JOIN_TS_CHARS` bounds
@@ -439,3 +475,63 @@ call widens the arity a third time and the seam is the one #756's own note marks
 across `inboundMessage.test.ts` and `daemonConnection.test.ts` gained the stamp. Four key-list guards in
 `daemonConnection.test.ts` (`Object.keys(event).sort()`) gained `'daemonTs'`, and three of their names'
 property counts moved with them. No production behaviour rides on any of it.
+
+### 2026-09-08 — the suppressed set became a contiguous RUN, not a scatter (verifier MUST FIX)
+
+**What changed.** `withoutLiveEntries` filtered entry-by-entry: every entry whose key was held, unique and
+resolvable was dropped, wherever it sat in the page. It now walks the page from its newest end and stops
+at the first entry that fails any of those three tests, keeping it and everything older. The three
+per-entry conditions are unchanged; what is new is that they may only end the run, never punch a hole
+through it.
+
+**Why.** The plan's whole safety argument — and its Error-handling table, and its `## Security review` —
+reasoned one entry at a time, and the page fold does not. `reduceHistoryPage` folds left from
+`initialTimelineState`, so a survivor can depend on an entry the filter dropped. Two reachable losses
+followed, both found by the verifier and both reproduced as failing tests before the fix:
+
+- **An orphaned result.** The live lane drew a `tool_use` and lost the `tool_result` to a reconnect — this
+  client advertises no `last_event_id`, so a dropped live frame is gone and the served page is the only
+  repair path. The old filter dropped the page's `toolUse` and kept its `toolResult`; `fillResult` found
+  no row carrying that `toolUseId` and discarded the result, while the live row stayed pending forever.
+- **A turn read backwards.** The live lane drew a turn's older deltas but not its newer ones. The old
+  filter dropped the older, and the surviving newer folded into a bubble `prependHistoryFor` places above
+  the live bubble holding the older text. `reduceHistoryPage` returned `'world'` where the turn read
+  `'hello world'`.
+
+Both are fail-CLOSED, the one direction this ticket refuses. The run rule closes them structurally rather
+than by special-casing either: `entries` arrives newest-first, so a run off the front is a chronological
+suffix and the survivors are a chronological prefix, which folds against exactly the state it would have
+seen inside the whole page.
+
+**What it costs, stated rather than hidden.** An overlap shaped like a GAP — the live lane drew something
+in the middle of the page but not the newest entry — now suppresses nothing, and those entries draw twice.
+That is precisely what they did before this ticket, which is the carve-out's strongest form: the output of
+this function is either the joined page or the un-joined one, so the join can only remove duplicates and
+can never introduce a loss or a reordering the un-joined page did not already have. AC2 holds at the seam
+the two lanes actually meet at; it does not hold across a gap, and no key-level rule could make it,
+because the loss is in the fold rather than in the key.
+
+### 2026-09-08 — `dispatchFor`'s create branch now asks whether its fold drew anything (verifier MUST FIX)
+
+**What changed.** The create branch stored `liveKeys: withJoinKey(NO_LIVE_KEYS, joinKey)` beside a
+`reduceTimeline(initialTimelineState, event)` whose result it never inspected, so the ⭐ "a key is
+recorded only where the fold changed something" guard lived in the update branch alone. The fold is now
+taken into a local and the key withheld when it came back as `initialTimelineState`. The SLICE is still
+created unconditionally — that invariant is untouched.
+
+**Why.** `toolResult` is stamped, and `threadTimeline`'s `toolResult` arm returns the same reference for
+an orphan against a fresh state. So an orphan result as a conversation's first live frame — the relay
+resuming mid-tool-call, or the slice having been evicted — minted a key for a row the operator was never
+shown, and the served page's copy of that result would then have been suppressed by it. The existing
+regression test seeds a delta first and therefore exercises the update branch only; the create branch has
+its own case now, and reverting the guard reddens it.
+
+### 2026-09-08 — two test-quality fixes (verifier SHOULD FIX)
+
+`selectLiveJoinKeysFor` had been inserted between #1260's `selectPrependedRowsFor` docblock and its
+declaration, leaving one symbol with two docblocks and the other with none; it now sits below, with its
+own. And the AC5 case handed `withoutLiveEntries` an EMPTY key set, so it returned at the size guard and
+asserted nothing the test above it did not — the function has no type-level exclusion for
+`messageReceived` and would drop it if handed a key. It now runs against a realistic set holding keys only
+for the arms the emit does stamp, and names where the guarantee actually lives: at the emit, pinned in
+`daemonConnection.test.ts`.

@@ -1029,6 +1029,19 @@ describe('conversationTimelineStore — the live join keys (#1225)', () => {
     expect([...keysFor(store, 'c1')]).toEqual(['assistantDelta T1'])
   })
 
+  it('⭐ records NOTHING for a fold that changed nothing and CREATED the slice', () => {
+    // The create branch's own case, and it is not the one above: that test seeds the slice with a delta
+    // first, so it exercises the update branch's same-reference short-circuit only. Here the orphan
+    // `toolResult` is the conversation's FIRST event — the relay resuming mid-tool-call, or the slice
+    // having been evicted — so the slice is created and the timeline still draws nothing. A key here
+    // would let the served page's copy of that result be suppressed and the tool row draw unfilled.
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', orphanResult, 'toolResult T1')
+
+    expect(timelineFor(store, 'c1')?.items).toEqual([])
+    expect(keysFor(store, 'c1').size).toBe(0)
+  })
+
   it('records nothing when no key is passed — every existing call site keeps its meaning', () => {
     const store = createConversationTimelineStore()
     store.getState().dispatchFor('c1', delta('t1', 'a'))

@@ -314,7 +314,13 @@ with the `attachments` field documented above (§ Types).
   render time by keying on array index instead: the list is append-only with tail-mutation and never
   reorders or inserts mid-list (`appendDelta` grows the tail in place, every other arm appends a new
   tail, `fillResult` replaces a `toolCall` at its own index), so index identity is stable per logical
-  item without needing a dedicated `id` field on `ThreadItem`.
+  item without needing a dedicated `id` field on `ThreadItem`. **That premise is scoped to
+  `reduceTimeline`'s own array and does not extend to a consumer that inserts at the head rather than
+  the tail.** The [keyed holder](conversation-timeline-holder.md)'s `prependHistoryFor`
+  ([#1223](../codebase/1223.md)) does exactly that, and array-index keys broke under it —
+  [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260) gave the render layer its own
+  origin-relative key for this reason; see [Conversation timeline store § Edge
+  cases](conversation-timeline-store.md#edge-cases-and-limitations).
 - **`stalled` is onset-only with no daemon "cleared" signal** ([#317](../codebase/317.md)) — the daemon
   sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
   entirely client-side on the next turn-activity arm. A stall with no following activity stays shown

@@ -6,11 +6,13 @@ import {
   COMPOSER_DROP_ACTIVE_CLASS,
   ComposerAttachButton,
   ComposerAttachOutcome,
+  ComposerAttachmentStrip,
   NO_PENDING_ATTACHMENTS,
   composerClassName,
   dragCarriesFiles,
   drainPendingAttachments,
   fileToAttach,
+  mirrorTakeToDisplay,
   pasteCarriesImageOnly,
   reduceFileDropDepth,
   reducePendingAttachments
@@ -91,10 +93,12 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
   // AC3, through the view. The rendered text is compared against the copy module's OWN output for the
   // same event, which is what proves the view SELECTS rather than composes: any sentence assembled here
   // would diverge from the module's, and any interpolation of a discriminator would too.
+  // #1262 TOOK THE COMPLETION OFF THIS TABLE, and its absence is the assertion one test below rather than a
+  // gap here: a completion draws a TILE now, so a sentence saying the same thing twice was cut, and the
+  // arms that remain are the three this line still speaks for.
   const arms: Array<[string, AttachmentUploadEvent]> = [
     ['a refusal', { type: 'refused', uploadId: 'u1', reason: 'too-large', limitBytes: 23_040_000 }],
     ['a failure', { type: 'failed', uploadId: 'u2', reason: 'not-connected' }],
-    ['a completion', { type: 'completed', uploadId: 'u3', filename: 'report.pdf' }],
     // The retrieval-leg code a conforming daemon never sends for an upload, and a hostile one can. It must
     // not fall through to a blank line.
     ['an unreachable failure', { type: 'failed', uploadId: 'u4', reason: 'attachment-not-found' }]
@@ -119,24 +123,27 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
   // would be a live layout hazard against AC5 for no semantic gain.
   it('is a div, so no UA margin moves the composer', () => {
     const markup = renderToStaticMarkup(
-      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u1', filename: 'r.pdf' }} />
+      <ComposerAttachOutcome outcome={{ type: 'failed', uploadId: 'u1', reason: 'unreadable' }} />
     )
     expect(markup.startsWith('<div')).toBe(true)
     expect(markup).not.toContain('<p')
   })
 
-  // ⭐ #1038's supply ships with no consumer, asserted at the VIEW as well as at the copy module —
-  // because these are two separate places a name could be rendered, and only one of them is a function
-  // whose output the other compares against. A name reaching this markup would be #1039's decision,
-  // and it arrives with a layout obligation (a 255-byte name in a fixed-height composer row) that
-  // nothing here discharges yet. The stem is distinctive so a partial interpolation is caught too.
-  it('puts the stored file’s name nowhere in the terminal markup', () => {
+  // ⭐ #1262 — THE COMPLETION'S SENTENCE IS GONE, and this is the whole of the second criterion on this
+  // side. The tile is the report now, so a line beneath the footer would state the same fact twice; a
+  // completion therefore renders NOTHING AT ALL rather than an empty element, which is `null`'s own ruling
+  // one arm up. A bare equality, never a not.toContain: an element holding the slot open would be
+  // invisible, would still cost the column's gap, and would still satisfy a substring assertion.
+  //
+  // It also carries #1038's guarantee forward at no cost: the stored file's NAME cannot reach this markup,
+  // because there is no markup. The tile is where a name could now be rendered and where the guard moved.
+  it('#1262: renders nothing at all for a completion — the tile is the report', () => {
     const filename = 'Raportti-läpivienti-日本語.pdf'
-    const markup = renderToStaticMarkup(
-      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u7', filename }} />
-    )
-    expect(markup).not.toContain(filename)
-    expect(markup).not.toContain('Raportti')
+    expect(
+      renderToStaticMarkup(
+        <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u7', filename }} />
+      )
+    ).toBe('')
   })
 
   // ==============================================================================================
@@ -179,7 +186,7 @@ describe('ComposerAttachOutcome — the latest outcome to arrive (#863 AC3, AC5)
     expect(inFlight.match(/<div/g)).toHaveLength(1)
 
     const terminal = renderToStaticMarkup(
-      <ComposerAttachOutcome outcome={{ type: 'completed', uploadId: 'u6', filename: 'r.pdf' }} />
+      <ComposerAttachOutcome outcome={{ type: 'failed', uploadId: 'u6', reason: 'send-failed' }} />
     )
     expect(terminal).not.toContain('composer__attach-progress')
     expect(terminal.match(/<div/g)).toHaveLength(1)
@@ -489,5 +496,148 @@ describe('fileToAttach', () => {
     // compiler-forced switch, which is the follow-up ticket's, together with the messaging.
     expect(fileToAttach(['a', 'b'])).toBe(null)
     expect(fileToAttach(['a', 'b', 'c'])).toBe(null)
+  })
+})
+
+// ================================================================================================
+// #1262 — the strip. The pending set #1039 accumulated is finally drawn, and this tier owns exactly
+// what a static render can see: the present/absent matrix, one tile per attachment in the set's order,
+// and what of the record reaches the DOM. The geometry (45x60, the 12px gap, the 8px above and below,
+// the left edge) and the send-clears are layout and lifecycle, so they are e2e/composer-attach.spec.ts.
+// ================================================================================================
+
+describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1, AC5)', () => {
+  const tile = (filename: string): MessageAttachment => ({ attachmentId: 'att-1', filename })
+
+  // Counts the tile frame without also counting `-glyph` / `-ext`, which share the prefix — the
+  // `rowCount` idiom the bubble's own spec established for exactly this hazard.
+  const tileCount = (markup: string): number =>
+    markup.match(/class="composer__attachment"/g)?.length ?? 0
+
+  // ⭐ AC1's LAST CLAUSE, and the reason this is an equality rather than a not.toContain: `.composer` is a
+  // flex column with a gap, so an element that mounts empty is not free — it would move the message box
+  // down on every launch, in every spec, forever. `ComposerAttachOutcome`'s shipped ruling, one component
+  // over, applied to the column's FIRST child instead of its last.
+  it('renders nothing at all when nothing is pending — not an empty element', () => {
+    expect(renderToStaticMarkup(<ComposerAttachmentStrip attachments={[]} />)).toBe('')
+    expect(
+      renderToStaticMarkup(<ComposerAttachmentStrip attachments={NO_PENDING_ATTACHMENTS} />)
+    ).toBe('')
+  })
+
+  it('draws one tile per pending attachment, in the set’s own completion order', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[tile('first.pdf'), tile('second.txt'), tile('third.zip')]}
+      />
+    )
+    expect(tileCount(markup)).toBe(3)
+    expect(markup.indexOf('PDF')).toBeLessThan(markup.indexOf('TXT'))
+    expect(markup.indexOf('TXT')).toBeLessThan(markup.indexOf('ZIP'))
+  })
+
+  // The drawing is the bubble's, reached through the shared component rather than transcribed again —
+  // asserted here as the three class runs the strip passes down, since a second transcription would be
+  // free to drift from the first.
+  it('wears its own three classes, sharing no whole class token with the outcome line', () => {
+    const markup = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('a.pdf')]} />)
+    expect(markup).toContain('<div class="composer__attachments">')
+    expect(markup).toContain('<span class="composer__attachment">')
+    expect(markup).toContain('class="composer__attachment-glyph"')
+    expect(markup).toContain('<span class="composer__attachment-ext" aria-hidden="true">PDF</span>')
+    // Neither shipped run of the sentence beneath the footer is reachable from this markup.
+    expect(markup).not.toContain('class="composer__attach-outcome"')
+    expect(markup).not.toContain('class="composer__attach-progress"')
+    // An image draws the file tile too in this slice — #1263 replaces the picture-bearing case and needs
+    // this tile as its own undecodable fallback, so there is no branch here to get wrong.
+    const image = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('shot.png')]} />)
+    expect(tileCount(image)).toBe(1)
+    expect(image).toContain('>PNG</span>')
+  })
+
+  // ⭐ AC5, AND THE ELEMENT THE SHIPPED e2e NEGATIVES ARE RE-AIMED AT. Against an outcome line that no
+  // longer mounts for a completion those two assertions pass vacuously and guard nothing; here they guard
+  // a mounted element. Nothing but the derived label goes through: not the name, not the host's storage
+  // handle, not a path — and the label reaches the DOM as escaped React children, never an attribute.
+  it('puts nothing of the record in the DOM but the derived extension label', () => {
+    const attachmentId = 'b3f1c0de-0000-4000-8000-000000000000'
+    const filename = '../../etc/passwd"><img src=x onerror=alert(1)>.pdf'
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[{ attachmentId, filename }]} />
+    )
+    expect(markup).not.toContain(attachmentId)
+    expect(markup).not.toContain(filename)
+    expect(markup).not.toContain('passwd')
+    expect(markup).not.toContain('onerror')
+    expect(markup).toContain('>PDF</span>')
+    // No title, no alt, no aria-label: the name reaches no attribute at all, which is the sink the
+    // drawing's aria-hidden children exist to keep closed.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('alt=')
+    expect(markup).not.toContain('aria-label')
+  })
+
+  // A name with no usable extension draws an empty label rather than a fallback word — the derivation's
+  // designed empty case. The glyph holds the tile's size regardless, so the tile is still 45x60.
+  it('draws a tile for a name with no usable extension', () => {
+    const markup = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('README')]} />)
+    expect(tileCount(markup)).toBe(1)
+    expect(markup).toContain('<span class="composer__attachment-ext" aria-hidden="true"></span>')
+  })
+})
+
+// #1262: the take's DISPLAY half, and a pure function for `drainPendingAttachments`'s own reason — the
+// hook it serves is reachable by no tier this repo has. What it must not do is change the act it wraps:
+// the ref take-and-clear stays one act and its rollback stays synchronous, because the send takes, sends
+// and rolls back with no `await` between and a display update cannot be allowed to reorder that.
+describe('mirrorTakeToDisplay (#1262 AC4)', () => {
+  const REPORT_A: MessageAttachment = { attachmentId: 'att-1', filename: 'report.pdf' }
+
+  const recorder = (): {
+    shown: Array<readonly MessageAttachment[]>
+    show: (attachments: readonly MessageAttachment[]) => void
+  } => {
+    const shown: Array<readonly MessageAttachment[]> = []
+    return { shown, show: (attachments) => void shown.push(attachments) }
+  }
+
+  it('empties the display as the take claims the set, handing the same set back', () => {
+    const holder = { current: [REPORT_A] as readonly MessageAttachment[] }
+    const { shown, show } = recorder()
+    const take = mirrorTakeToDisplay(drainPendingAttachments(holder), show)
+    expect(take.attachments).toEqual([REPORT_A])
+    expect(holder.current).toBe(NO_PENDING_ATTACHMENTS)
+    expect(shown).toEqual([NO_PENDING_ATTACHMENTS])
+  })
+
+  // #1055's undo, carried through to the tiles: a send whose bridge threw named nothing on the wire, so
+  // the files are still attached AND still drawn for the retry.
+  it('restores both the holder and the display on rollback', () => {
+    const pending: readonly MessageAttachment[] = [REPORT_A]
+    const holder = { current: pending }
+    const { shown, show } = recorder()
+    mirrorTakeToDisplay(drainPendingAttachments(holder), show).rollback()
+    expect(holder.current).toBe(pending)
+    expect(shown).toEqual([NO_PENDING_ATTACHMENTS, pending])
+  })
+
+  // ⭐ THE ORDER INSIDE ROLLBACK IS LOAD-BEARING: the holder is restored FIRST, so a reader that ran
+  // between the two writes would never see a drawn tile the next send would fail to record.
+  it('restores the holder before it restores the display', () => {
+    const pending: readonly MessageAttachment[] = [REPORT_A]
+    const holder = { current: pending }
+    const seen: Array<readonly MessageAttachment[]> = []
+    mirrorTakeToDisplay(drainPendingAttachments(holder), () => void seen.push(holder.current))
+    seen.length = 0
+    mirrorTakeToDisplay(drainPendingAttachments(holder), () => void seen.push(holder.current))
+    expect(seen[0]).toBe(NO_PENDING_ATTACHMENTS)
+  })
+
+  it('leaves a take of nothing showing the shared empty constant', () => {
+    const holder = { current: NO_PENDING_ATTACHMENTS }
+    const { shown, show } = recorder()
+    const take = mirrorTakeToDisplay(drainPendingAttachments(holder), show)
+    expect(take.attachments).toBe(NO_PENDING_ATTACHMENTS)
+    expect(shown[0]).toBe(NO_PENDING_ATTACHMENTS)
   })
 })

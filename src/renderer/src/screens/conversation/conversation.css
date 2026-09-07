@@ -2581,6 +2581,86 @@
   padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
+/* #1262 — the pending attachments, drawn between the status row and the message box (Figma `Attachment
+   area` 390:7136). Four tiles at x = 0, 57, 114, 171, each 45 wide: the 12px gap below.
+
+   THE MARGIN IS ARITHMETIC, and stating it is cheaper than the alternative. The design puts 8px between
+   this strip and the message box; the column's own gap is --space-1, so this makes up the remaining 4 to
+   --space-2. The 8px ABOVE needs no declaration at all — .composer's padding-top is already --space-2 and
+   .composer-status is a sibling in a .conversation column that declares no gap, which is the same
+   arithmetic the block above records for the message box it used to sit against. A `margin` and not a
+   `padding`, so the strip's border box is exactly its tiles and a geometry assertion measuring either
+   reads the same number.
+
+   NO HORIZONTAL PADDING, and that is the design's own alignment rather than an omission: the area sits at
+   x=0 in the drawing — the same left edge as the status area and the `Input large` frame, NOT the x=16 the
+   input's TEXT starts at, which is what .composer__attach-outcome pads to reach. As a stretched child of
+   this column the strip's left edge is already .composer__row's, so alignment costs nothing.
+
+   flex-wrap IS THE TICKET'S STATED ASSUMPTION, drawn: the design shows four tiles and no overflow, and
+   more than fit the width wrap to a second row 12px below rather than overflowing the composer. `gap`
+   covers both axes, so that row rhythm comes free. */
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+/* One tile: the 45x60 frame, the positioning context its extension overlay hangs on, and the GLYPH's ink.
+   The measurements are the drawn constants with no theme role, .bubble__file-icon's ruling for the same
+   drawing one region over — and `flex: 0 0 auto` states there, as it does here, that this item never
+   shrinks when the row fills.
+
+   ⭐ THE TWO INKS. This block resolves `color` for the outline (the svg inherits it through
+   stroke="currentColor"), and .composer__attachment-ext resolves its own for the label. That split is the
+   whole reason the shared drawing takes three class props: the bubble derives BOTH of its inks from one
+   inherited `color` and must keep doing so, while this copy needs them different.
+   --color-inverse-primary here is read from the Figma VARIABLE (get_variable_defs on 390:7217 resolves
+   Schemes/Inverse Primary to #32628d, this app's token exactly) and confirmed by the glyph export's own
+   baked stroke — never from the generated snippet's variable NAMES, which print this node's pair
+   transposed exactly as tokens.css warns.
+
+   THE CLIP IS THE SLOT'S, NOT A DECORATION. --radius-xs is inert for a file tile — the outline is drawn
+   inside a 7px corner radius, so a 6px clip removes nothing of it — and it is declared anyway because the
+   design's slot clips its content and #1263's picture is what that clip is for. */
+.composer__attachment {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+  width: 45px;
+  height: 60px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  color: var(--color-inverse-primary);
+}
+
+.composer__attachment-glyph {
+  display: block;
+}
+
+/* The extension across the glyph's lower half. The geometry is .bubble__file-ext's — `top: 50%` IS
+   "top-aligned in the lower half" and lands 1px above the drawn y=31, and the 44px slot is the drawn one
+   (44 of the frame's 45), centred by text-align so a two- and a four-character label share an axis.
+
+   IT RESTATES THE TYPE where the bubble inherits it, and that is not a copy-paste of a settled value: the
+   bubble's row IS body-small, so its label needs nothing but the weight, while this tile sits in a composer
+   column that is not — an inherited size here would be the message box's. Every value is the token the
+   design names (M3/body/small-emphasized: 12/16, 0.4, 500). --color-primary is this drawing's second ink;
+   see the block above for why the pair is read off the variables rather than off the snippet. */
+.composer__attachment-ext {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 44px;
+  text-align: center;
+  color: var(--color-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+}
+
 /* #890 — the drop state, while a file is held over the composer. Juhana's ruling of 2026-09-02: the
    design has no drag-over state drawn for the composer (node 102-4 covers the input's resting appearance
    only), so an edge change on the tokens already in this file is the treatment until he draws one.

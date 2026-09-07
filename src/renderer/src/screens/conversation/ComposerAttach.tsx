@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { AttachmentUploadEvent } from '../../../../shared/ipc/attachmentUpload'
 import type { MessageAttachment } from '../../store/threadTimeline'
+import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
 // #1055: the take's shape is declared with its CONSUMER (composerSend's `takeAttachments` dep), so the
 // pure send helper never names this React module. See PendingAttachmentTake's own docblock.
@@ -271,9 +272,11 @@ export function ComposerAttachButton({ onAttach }: { onAttach: () => void }): JS
  * THE TERMINAL IS A LIVE REGION, departing from both of its neighbours, and the departure is the point.
  * ComposerErrorChip and ContextUsageReading each decline one with a stated reason — the #279 banner
  * already announces the same fact, and a per-turn cadence would announce a percentage after every turn.
- * Neither reason holds here: until #815 lands a file row in the message bubble this sentence is the ONLY
- * evidence anywhere that an upload produced anything, it appears asynchronously after an operator gesture,
- * and it fires at most once per attach. `role="status"` is polite (announced without stealing focus) —
+ * Neither reason holds here: this sentence is the only evidence anywhere that an attach went WRONG (#1262
+ * narrowed that from "produced anything" — a completion draws a tile instead and is silent here), it
+ * appears asynchronously after an operator gesture, and it fires at most once per attach, which is if
+ * anything a stronger case for announcing than the one #863 made. `role="status"` is polite (announced
+ * without stealing focus) —
  * LogDataSection's idiom for an operator-initiated outcome — and deliberately not `role="alert"`, which is
  * assertive, would collide with permission-modal-answer-paths.spec.ts's bare getByRole('alert'), and would
  * announce a success as an emergency.
@@ -284,6 +287,17 @@ export function ComposerAttachButton({ onAttach }: { onAttach: () => void }): JS
  * The sentence is SELECTED, never composed — see attachmentUploadCopy, where the reasoning and the
  * compiler-forced exhaustiveness live. Nothing about the event reaches the DOM except that sentence: not
  * the uploadId, not the discriminator, not the reason literal.
+ *
+ * ⭐ #1262 CUT THE COMPLETION'S SENTENCE, and the cut is a second `null` arm rather than an empty element:
+ * the outcome element's attribute run stays untouched and the role="status" region simply does not mount
+ * for a completion. A completed upload draws a TILE in the strip above the message box now, so a line here
+ * would state the same fact twice — Juhana's ruling of 2026-09-05, that the tile is the report. The two
+ * halves landed together because either alone is wrong: no strip and no sentence leaves a completion with
+ * no feedback at all, and both report it twice.
+ *
+ * WHAT THAT COSTS, STATED: a completion no longer announces to assistive technology. `refused`, `failed`
+ * and the in-flight figure are unchanged, and if a completion should announce later, that is a
+ * client-owned constant in a live region on the strip — never the filename — and not this ticket.
  */
 export function ComposerAttachOutcome({
   outcome
@@ -291,6 +305,7 @@ export function ComposerAttachOutcome({
   outcome: AttachmentUploadEvent | null
 }): JSX.Element | null {
   if (outcome === null) return null
+  if (outcome.type === 'completed') return null
   if (outcome.type === 'progress') {
     return (
       <div key="in-flight" className="composer__attach-progress">
@@ -301,6 +316,51 @@ export function ComposerAttachOutcome({
   return (
     <div key="terminal" className="composer__attach-outcome" role="status">
       {attachmentUploadOutcomeCopy(outcome)}
+    </div>
+  )
+}
+
+/**
+ * #1262 — the pending set, drawn: a row of file tiles between the status row and the message box (Figma
+ * `Attachment area` 390:7136), in the set's own completion order.
+ *
+ * `null` FOR AN EMPTY SET, NOT AN EMPTY ELEMENT — `ComposerAttachOutcome`'s ruling applied to the column's
+ * FIRST child instead of its last, and load-bearing for the same reason twice over: `.composer` is a flex
+ * column with a `--space-1` gap, so an element that mounts empty is not free. It would move the message box
+ * down on every launch, in every spec, forever.
+ *
+ * EVERY ATTACHMENT DRAWS THE FILE TILE, image or not. #1263 replaces the picture-bearing case and needs
+ * this tile as its own fallback for a picture that cannot be decoded, so there is no branch here to get
+ * wrong and the file tile under an image name is a shipped state rather than scaffolding.
+ *
+ * THE KEY IS THE ARRAY INDEX, `BubbleAttachmentRow`'s recorded reason: this list only ever appends and is
+ * cleared wholesale, so index identity is stable — and a name-derived key is the step that makes
+ * `id={filename}` look natural next. `attachmentId` would key correctly and is deliberately not used
+ * either: it is a host-side storage handle with no display value, and keeping it out of the render path is
+ * what keeps it out of the markup.
+ *
+ * ITS OWN THREE CLASSES, sharing no whole class token with `.composer__attach`,
+ * `.composer__attach-outcome` or `.composer__attach-progress`, so no shipped locator and no
+ * whole-attribute-run assertion can reach this markup. The drawing itself is the bubble's, through
+ * `AttachmentFileIcon` — see that module for why the classes are passed down rather than shared.
+ */
+export function ComposerAttachmentStrip({
+  attachments
+}: {
+  attachments: readonly MessageAttachment[]
+}): JSX.Element | null {
+  if (attachments.length === 0) return null
+  return (
+    <div className="composer__attachments">
+      {attachments.map((attachment, index) => (
+        <AttachmentFileIcon
+          key={index}
+          filename={attachment.filename}
+          frameClassName="composer__attachment"
+          glyphClassName="composer__attachment-glyph"
+          labelClassName="composer__attachment-ext"
+        />
+      ))}
     </div>
   )
 }
@@ -387,6 +447,36 @@ export function reducePendingAttachments(
  * `takeAttachments` dep once, below both of its `false` returns, so a blank Enter or a submit with no
  * active conversation never reaches this and the operator's attached file survives for the next send.
  */
+/**
+ * #1262 — the take's DISPLAY half, wrapped around the act above rather than folded into it.
+ *
+ * ⭐ IT DOES NOT CHANGE THE ACT IT WRAPS, and that is the whole reason it is a wrapper. Everything the
+ * docblock above argues still holds byte-for-byte: one destructive read of the holder, no reader that does
+ * not empty, no emptier to remember, and a rollback that is synchronous with respect to the holder. What
+ * this adds is a second, DISPLAY-ONLY writer that mirrors both directions of that act to the strip.
+ *
+ * PURE, FOR `drainPendingAttachments`'S OWN REASON: the hook it serves is reachable by no tier this repo
+ * has — no DOM, no `renderHook` — so a rule living inside it would be provable nowhere. A recorder function
+ * is all its tests need.
+ *
+ * ⭐ THE HOLDER IS RESTORED BEFORE THE DISPLAY. `take.rollback()` runs first, so there is no instant at
+ * which a tile is drawn for an attachment the next send would fail to record. The reverse order would be
+ * wrong in the direction that loses a file rather than the one that draws a stale tile.
+ */
+export function mirrorTakeToDisplay(
+  take: PendingAttachmentTake,
+  showPending: (attachments: readonly MessageAttachment[]) => void
+): PendingAttachmentTake {
+  showPending(NO_PENDING_ATTACHMENTS)
+  return {
+    attachments: take.attachments,
+    rollback: () => {
+      take.rollback()
+      showPending(take.attachments)
+    }
+  }
+}
+
 export function drainPendingAttachments(holder: {
   current: readonly MessageAttachment[]
 }): PendingAttachmentTake {
@@ -419,7 +509,10 @@ export function drainPendingAttachments(holder: {
  * figure on exactly the path a completion does. No second piece of state, and nothing to keep in step.
  * QUALIFIED BY #1039: that nullable is still the whole of what this hook DISPLAYS, but it is no longer
  * the whole of what this hook holds — the pending set below sits beside it, fed by the same listener and
- * read by nothing on screen.
+ * read by nothing on screen. QUALIFIED AGAIN BY #1262, which spends the other half of that sentence: the
+ * pending set IS read on screen now, by the strip. The nullable's own paragraph is untouched by that —
+ * the two display states it holds are still one value in one slot — except that a `completed` event now
+ * assigns a value the outcome view deliberately renders as nothing.
  *
  * ⭐ WHAT #1039 FALSIFIES, HONESTLY. The paragraph that stood here said the composer "states the latest
  * event to arrive, and it cannot state anything narrower", because `requestAttachmentUpload()` returns
@@ -431,18 +524,25 @@ export function drainPendingAttachments(holder: {
  * in arrival order, which the events give on their own. So the listener now assigns AND accumulates; it
  * still does not merge, queue, or correlate anything to a gesture.
  *
- * THE PENDING SET LIVES IN A REF, NOT IN `useState`, BECAUSE NOTHING RENDERS IT. No view reads it — the
- * consumers are #815's file row and #868's thumbnail, and both read the timeline ITEM the send records,
- * not this hook — so state would re-render the whole composer on every arriving upload event for a value
- * no markup consults. Worse, its batching would open a real drop window: a completion arriving after the
- * last commit but before the click would be invisible to the closure the click reads, and the take would
- * then clear it unsent. A ref is written by the listener and read by the send synchronously, so that
- * window does not exist. It is still ADR 0006 state in every other respect — ephemeral, screen-local,
- * per-mount — and it resets on a conversation switch for the held outcome's free reason: `PairedShellView`
- * keys the chat pane on the conversation id, so a switch rebuilds this component with an empty set.
+ * ⭐ THE PENDING SET LIVES IN A REF, AND #1262 DID NOT MOVE IT. The half of that decision this ticket
+ * falsifies is its FIRST clause — "because nothing renders it" — since `ComposerAttachmentStrip` now
+ * does. The half that carries the weight survives untouched, and it was never about rendering: `useState`
+ * batching would open a real drop window, because a completion arriving after the last commit but before
+ * the click would be invisible to the closure the CLICK reads, and the take would then clear it unsent. A
+ * ref is written by the listener and read by the send synchronously, so that window does not exist.
+ *
+ * So the set is held TWICE and the two holdings answer different questions. The ref is the record — what
+ * the send takes, authoritative, synchronous. The `useState` beside it is the DISPLAY's copy, written from
+ * the same fold in the same listener call, and it is allowed to be batched precisely because nothing reads
+ * it to decide anything. Do not collapse them by making the take read the state: that is the drop window
+ * above, restored, and it would fail silently. Both are still ADR 0006 state in every other respect —
+ * ephemeral, screen-local, per-mount — and both reset on a conversation switch for the held outcome's free
+ * reason: `PairedShellView` keys the chat pane on the conversation id, so a switch rebuilds this component
+ * with an empty set and an empty strip.
  */
 export function useAttachmentUpload({ conversationId }: { conversationId: string | null }): {
   outcome: AttachmentUploadEvent | null
+  pending: readonly MessageAttachment[]
   requestAttach: () => void
   dropFile: (file: File) => void
   pasteImage: () => void
@@ -452,6 +552,11 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
   // #1039: the files whose uploads have completed since the last send. See the ref-not-state paragraph
   // above; `useRef` gives a fresh empty set per mount, which is the whole of the conversation-switch reset.
   const pendingRef = useRef<readonly MessageAttachment[]>(NO_PENDING_ATTACHMENTS)
+  // #1262: the same set again, as state this time, and the DISPLAY's copy alone. The strip draws this; the
+  // send still reads the ref. Both are written from one fold in one place (see the listener), so they
+  // cannot disagree about which events happened, and the drop window the paragraph above names stays
+  // closed: it is a window in what the CLICK reads, and state that only draws cannot open it.
+  const [pending, setPending] = useState<readonly MessageAttachment[]>(NO_PENDING_ATTACHMENTS)
 
   useEffect(() => {
     // One subscription per mount; the returned off handle IS the effect cleanup, so a remount nets
@@ -465,7 +570,12 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
       // record are two readings of one arrival, taken in one place so they cannot disagree about which
       // events happened. The assignment is synchronous, so an upload that completes while the operator is
       // typing is already in the set by the time the send reads it.
-      pendingRef.current = reducePendingAttachments(pendingRef.current, event)
+      // #1262: ONE fold, TWO writes. The ref is what the send reads and stays authoritative; the state is
+      // what the strip draws. A refusal, a failure and a progress each fold to the same reference, so they
+      // set the state to the value it already holds and React bails out of the re-render on its own.
+      const next = reducePendingAttachments(pendingRef.current, event)
+      pendingRef.current = next
+      setPending(next)
     })
   }, [])
 
@@ -556,9 +666,14 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
    * attachments hands back the same reference every time and `submitMessage` normalises it to an absent
    * field — on the echo since #1039, and on the outbound frame since #1055.
    */
-  const takePendingAttachments = (): PendingAttachmentTake => drainPendingAttachments(pendingRef)
+  // #1262: the same act, with the strip kept in step through `mirrorTakeToDisplay` — the take empties the
+  // tiles, and a rolled-back take (a send whose bridge threw) brings exactly those tiles back. The ref is
+  // still the only thing the send reads: the display copy must never become the take's source, which is
+  // precisely the drop window the ref exists to close and would fail silently.
+  const takePendingAttachments = (): PendingAttachmentTake =>
+    mirrorTakeToDisplay(drainPendingAttachments(pendingRef), setPending)
 
-  return { outcome, requestAttach, dropFile, pasteImage, takePendingAttachments }
+  return { outcome, pending, requestAttach, dropFile, pasteImage, takePendingAttachments }
 }
 
 /**

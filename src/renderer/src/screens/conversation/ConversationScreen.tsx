@@ -64,6 +64,7 @@ import { EffortDefaultData } from './EffortDefaultData'
 import {
   ComposerAttachButton,
   ComposerAttachOutcome,
+  ComposerAttachmentStrip,
   composerClassName,
   pasteCarriesImageOnly,
   useAttachmentUpload,
@@ -84,7 +85,7 @@ import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
-import { attachmentExtensionLabel } from './attachmentExtensionLabel'
+import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
 import { BubbleAttachmentImage } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
@@ -1068,44 +1069,25 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
       className="bubble__file"
       onClick={() => downloadAttachment(attachmentDownloadDeps, attachment)}
     >
-      <span className="bubble__file-icon">
-        {/* The Figma glyph transcribed inline, following .bubble__copy-icon in this same bubble: sized by
-            its own width/height with a matching viewBox, aria-hidden because the name beside it carries
-            the meaning, and no shared component. Three export artefacts are dropped rather than
-            transcribed — preserveAspectRatio="none" and overflow="visible", which only mean anything for
-            the <img> wrapper Figma generates, and a clipPath whose rect is a full-bleed 45x60 no-op
-            (.bubble__copy-icon dropped its own for the same reason).
+      {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.
+          The markup this renders is BYTE-IDENTICAL to the transcription that stood here: the component
+          takes this row's three class names as props rather than lifting a shared class into their
+          attribute runs, precisely because several assertions in ConversationScreen.test.tsx match those
+          runs whole and a two-class mix would redden four while a fifth passed vacuously.
 
-            STROKE, NOT FILL — a deliberate, recorded departure from AC3's literal `fill="currentColor"`.
-            The drawing is an OUTLINE: the export is fill="none" with a stroked path, and filling it would
-            render a solid document, contradicting the same ticket's "outlined document glyph". The
-            criterion's substance is met — the ink comes from the row's `color` rather than a hardcoded hex,
-            so a theme change moves it. The ticket already caught this trap once (the layer is named
-            `file-solid-full` and it says take the render, not the name); AC3's `fill=` is that same name
-            leaking one line further.
-
-            INLINED, NEVER REFERENCED. Figma's export hands back an https:// asset URL for this glyph.
-            Shipping it would put a remote subresource in a renderer whose CSP is default-src 'self' — it
-            would fail closed, but it would also be an outbound request to a third party on every render. */}
-        <svg
-          className="bubble__file-glyph"
-          viewBox="0 0 45 60"
-          width="45"
-          height="60"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M7.5 0.5H25.0195C26.7633 0.5 28.4292 1.1438 29.7119 2.30566L29.9629 2.54492L42.4551 15.0254C43.7667 16.3371 44.5 18.1197 44.5 19.9805V52.5C44.5 56.3606 41.3606 59.5 37.5 59.5H7.5C3.63942 59.5 0.5 56.3606 0.5 52.5V7.5C0.5 3.63942 3.63942 0.5 7.5 0.5ZM23.875 17.8125C23.875 19.6472 25.3528 21.125 27.1875 21.125H39.3516L23.875 5.64844V17.8125Z" />
-        </svg>
-        {/* aria-hidden because this restates characters the name already carries — hiding it keeps the
-            row's accessible text exactly the filename, with nothing doubled. An empty label (a name with no
-            usable extension) emits an empty element, the .bubble__meta-time empty-slot precedent: it needs
-            no CSS of its own because the glyph beside it holds the row's height regardless. */}
-        <span className="bubble__file-ext" aria-hidden="true">
-          {attachmentExtensionLabel(attachment.filename)}
-        </span>
-      </span>
+          Every decision the transcription recorded moved with it and is documented there: stroke and not
+          fill (the export is fill="none" over a stroked path, and the layer's `file-solid-full` name is a
+          trap this repo has been caught by), the dropped export artefacts, the inlined path rather than
+          Figma's https:// asset URL, and both children aria-hidden so the row's accessible text stays
+          exactly the filename. The COLOURS still come from this row's `color` through currentColor — the
+          composer's copy resolves its own on its own two classes, which is what lets the two consumers
+          differ without either moving. */}
+      <AttachmentFileIcon
+        filename={attachment.filename}
+        frameClassName="bubble__file-icon"
+        glyphClassName="bubble__file-glyph"
+        labelClassName="bubble__file-ext"
+      />
       <span className="bubble__file-name">{attachment.filename}</span>
     </button>
   )
@@ -3144,6 +3126,24 @@ function Composer({
     // as a whole attribute run, two of them as `class="composer" hidden=""` — so `className` also stays
     // ahead of `hidden` in this list. The spread carries event handlers only and renders no markup.
     <div className={composerClassName(fileDrop.active)} hidden={covered} {...fileDrop.handlers}>
+      {/* #1262: the pending attachments, this column's FIRST child (Figma `Attachment area` 390:7136, at
+          y=40 between a status area ending at 32 and an input beginning at 108 — the drawn 8px above and
+          below). Note that ComposerAttachOutcome below is the same column's LAST child: "the composer
+          column takes a row of its own for this" is the shared reasoning, not the position.
+
+          The 8px ABOVE needs no rule at all — `.composer`'s own padding-top already sits between the
+          status row and this child, which is exactly what the design draws. The 8px BELOW is the column's
+          --space-1 gap plus the strip's own --space-1 margin; conversation.css states that arithmetic.
+
+          It renders `null` until an upload completes, and `null` costs no flex gap — the same criterion
+          the outcome line answers the same way, and load-bearing here for a sharper reason: an element
+          that mounted empty would move the message box down on every launch, in every spec, forever.
+
+          It is INSIDE the element that wears `hidden`, so #906's question panel covers the tiles along
+          with the message box and the footer — nothing new to hide. And a conversation switch clears it
+          for free: PairedShellView keys the chat pane on the conversation id, so this composer is rebuilt
+          around a fresh holder. */}
+      <ComposerAttachmentStrip attachments={attach.pending} />
       {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
           positions against it (`position: relative` in conversation.css) and inherits the clamp's
           --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { COMPOSER_ATTACH_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
-import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/conversation/attachmentUploadCopy'
+import { attachmentExtensionLabel } from '../src/renderer/src/screens/conversation/attachmentExtensionLabel'
 
 // #1055 — the live proof that an attached file actually REACHES claude. Every other tier in this repo can
 // only prove client state: the fake tier stubs the upload's outcome and uploads nothing, and the unit tier
@@ -36,8 +36,10 @@ import { attachmentUploadOutcomeCopy } from '../src/renderer/src/screens/convers
 // daemon now REQUIRES the chunk to name its conversation, validates the id against its registry, and
 // accepts a known but never-messaged one — the case #1076 is — so the stamp turn is gone and the attach is
 // the FIRST thing this conversation does. If the chunk stopped carrying the id, or the daemon stopped
-// accepting a childless conversation, the "File attached." assertion below reddens before any turn runs
-// (with "The host rejected part of the upload."), which is exactly how the omission was found on
+// accepting a childless conversation, the upload gate below reddens before any turn runs — since #1262
+// that gate is the drawn TILE rather than the deleted "File attached." sentence, and the refusal that
+// takes its place still states "The host rejected part of the upload." on the line beneath the footer,
+// which is where the diagnosis is read. That is exactly how the omission was found on
 // 2026-09-06: every upload from this client refused, on every branch, after the gate host's daemon was
 // rebuilt past #2143. The fake tier cannot see this — it stubs the upload — so this line is the proof.
 //
@@ -157,6 +159,8 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       const composer = page.getByPlaceholder('Message…')
       const attach = page.getByRole('button', { name: COMPOSER_ATTACH_LABEL, exact: true })
       const outcome = page.locator('.composer__attach-outcome')
+      // #1262: the pending tiles above the message box — where a completion reports itself now.
+      const tiles = page.locator('.composer__attachment')
 
       await pairFromUnpairedLaunch(page, payload)
 
@@ -192,14 +196,18 @@ test('an attached image reaches claude, which describes it back (#1055 AC4)', as
       // upload." and means the chunk named no conversation the daemon knows (#1205). The expected
       // sentence is DERIVED by calling the production copy module, never typed out here. ---
       await attach.click()
-      await expect(outcome).toHaveText(
-        attachmentUploadOutcomeCopy({
-          type: 'completed',
-          uploadId: 'unread-by-the-copy',
-          filename: IMAGE_FILENAME
-        }),
-        { timeout: UPLOAD_TIMEOUT_MS }
-      )
+      // ⭐ #1262 MOVED THE COMPLETION'S REPORT FROM A SENTENCE TO A TILE, so this gate reads the tile. It
+      // is the stronger gate of the two and not merely the surviving one: a drawn tile is the composer's
+      // PENDING SET rendered, and that set is precisely what the send below has to carry — where the old
+      // sentence was only a report that an event had arrived. The label is DERIVED by calling the
+      // production module rather than typed out, this spec's standing rule for the copy it replaces.
+      await expect(tiles).toHaveCount(1, { timeout: UPLOAD_TIMEOUT_MS })
+      await expect(tiles.first()).toHaveText(attachmentExtensionLabel(IMAGE_FILENAME))
+      // And the line beneath the footer stays absent for a completion. It is the surface a REFUSAL or a
+      // FAILURE still speaks through, so a sentence appearing here is the diagnosis when the tile does
+      // not: "The host rejected part of the upload." means the chunk named no conversation the daemon
+      // knows (#1205).
+      await expect(outcome).toHaveCount(0)
 
       // --- The send under test. The prompt names no colour and the filename carries none, so the only
       // way the word below can appear in the reply is if claude opened the file the daemon stored. ---

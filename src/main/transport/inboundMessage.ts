@@ -302,6 +302,38 @@ export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, '
 }
 
 /**
+ * The `ts` of the envelope an arm was decoded from (#1225) — the DAEMON'S OWN timestamp for the logical
+ * event, mixed into exactly the ten timeline-bearing arms of `InboundDaemonMessage` below and into no
+ * other. The daemon mints one timestamp per logical event, hoisted above its per-connection fan-out, and
+ * hands that same value to the conversation-log entry and to every outbound envelope for that event — so
+ * (`type`, `ts`) is the one key on which a served history page can be joined to what the live stream
+ * already drew, and the window's `HistoryTimelineEntry` has carried the page half of it since #1227.
+ *
+ * IT MUST COME FROM THE DECODE AND CANNOT RIDE #1068's STAMP. `bindServerOrigin` applies `serverId` at
+ * BIND time, once per producer; this value is per-FRAME. That is the whole reason the thread crosses
+ * this file at all rather than being added beside the origin in `emitDaemonEvent.ts`.
+ *
+ * MIXED IN PER-ARM RATHER THAN DISTRIBUTED OVER THE WHOLE UNION, which is the opposite of the shape the
+ * IPC side takes (`DaemonEvent`'s optional `daemonTs`, #1068's `WithOrigin`). The two differ because the
+ * requirements do: here the field is REQUIRED and the set of arms is closed, so naming it at each of the
+ * ten sites is what makes "these ten and no others" readable at the declaration instead of inferable
+ * from the emit; there it is optional and must not perturb 33 test files of bare literals. `history-page`
+ * is deliberately NOT among them — a page's `ts` is per-ENTRY and already on each decoded entry, so
+ * stamping the envelope that carried the page would put the ANSWER's clock where the entries' belong.
+ *
+ * SECURITY: a daemon-asserted string that reaches a COMPARISON and nothing else. `decodeEnvelope` has
+ * already fail-closed a non-string `ts`, so what is carried here is a validated `string` — the check
+ * matters, because a `ts: {}` template-stringified downstream would collapse every frame onto one join
+ * key and turn a dedup into a mass suppressor. It is never parsed into a date, never sorted on to decide
+ * row order, never rendered, and never a filename, a lookup path, a cache key or a log field: the ten
+ * decode arms below log byte length and a one-way hash only, and `emitDaemonEvent` is log-free by
+ * construction.
+ */
+interface FrameTimestamp {
+  ts: string
+}
+
+/**
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
  * transport layer stays IPC-free. An internal transport result the consumer (#62) maps onto the
  * daemon-event channel.
@@ -606,18 +638,20 @@ export type InboundDaemonMessage =
       // merging them now would be a refactor of two shipped verbs for no behaviour.
       systemPromptReject?: SystemPromptRejectReason
     }
-  | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
-  | { kind: 'turn-end'; turnEnd: TurnEndPayload }
-  | { kind: 'turn-state'; turnState: TurnStatePayload }
-  | { kind: 'stall'; stall: StallPayload }
-  | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
-  | { kind: 'compacting'; compacting: CompactingPayload }
+  // The ten arms carrying FrameTimestamp start here (#1225) — see that type for why the mix-in is
+  // named at each site rather than distributed over the union.
+  | ({ kind: 'assistant-delta'; delta: AssistantDeltaPayload } & FrameTimestamp)
+  | ({ kind: 'turn-end'; turnEnd: TurnEndPayload } & FrameTimestamp)
+  | ({ kind: 'turn-state'; turnState: TurnStatePayload } & FrameTimestamp)
+  | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
+  | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
+  | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
-  | { kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload }
-  | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
+  | ({ kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload } & FrameTimestamp)
+  | ({ kind: 'session-transition'; sessionTransition: SessionTransitionPayload } & FrameTimestamp)
   | {
       kind: 'session-settings-updated'
       sessionSettingsUpdated: SessionSettingsUpdatedPayload
@@ -628,8 +662,8 @@ export type InboundDaemonMessage =
       sessionSettings: SessionSettingsPayload
       inReplyTo?: number
     }
-  | { kind: 'tool-use'; toolUse: ToolUsePayload }
-  | { kind: 'tool-result'; toolResult: ToolResultPayload }
+  | ({ kind: 'tool-use'; toolUse: ToolUsePayload } & FrameTimestamp)
+  | ({ kind: 'tool-result'; toolResult: ToolResultPayload } & FrameTimestamp)
   | { kind: 'queue-state'; queueState: QueueStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
@@ -3011,7 +3045,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'assistant-delta', delta }
+      return { kind: 'assistant-delta', delta, ts: envelope.ts }
     }
     case 'turn_end': {
       // Narrow BEFORE logging (see the assistant_delta case). No decoded field (turn_id / stop_reason)
@@ -3023,7 +3057,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'turn-end', turnEnd }
+      return { kind: 'turn-end', turnEnd, ts: envelope.ts }
     }
     case 'turn_state': {
       // Narrow BEFORE logging so a malformed frame (a `state` outside the closed enum) throws first
@@ -3036,7 +3070,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'turn-state', turnState }
+      return { kind: 'turn-state', turnState, ts: envelope.ts }
     }
     case 'stall': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string conversation_id) throws
@@ -3050,7 +3084,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'stall', stall }
+      return { kind: 'stall', stall, ts: envelope.ts }
     }
     case 'api_retry': {
       // Narrow BEFORE logging so a malformed frame (an absent boolean `active`, a string `current`)
@@ -3064,7 +3098,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'api-retry', apiRetry }
+      return { kind: 'api-retry', apiRetry, ts: envelope.ts }
     }
     case 'compacting': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-boolean `active`, a non-string
@@ -3078,7 +3112,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'compacting', compacting }
+      return { kind: 'compacting', compacting, ts: envelope.ts }
     }
     case 'model_announced': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string `model`, a non-boolean
@@ -3159,7 +3193,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'unrecognized-message', unrecognized }
+      return { kind: 'unrecognized-message', unrecognized, ts: envelope.ts }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an
@@ -3173,7 +3207,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'session-transition', sessionTransition }
+      return { kind: 'session-transition', sessionTransition, ts: envelope.ts }
     }
     case 'session_settings_updated': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string `session_id`) throws first
@@ -3206,7 +3240,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'tool-use', toolUse }
+      return { kind: 'tool-use', toolUse, ts: envelope.ts }
     }
     case 'tool_result': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a non-boolean
@@ -3222,7 +3256,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'tool-result', toolResult }
+      return { kind: 'tool-result', toolResult, ts: envelope.ts }
     }
     case 'queue_state': {
       // Narrow BEFORE logging so a malformed snapshot (a non-array `queued`, a string `queued_msg_id`)

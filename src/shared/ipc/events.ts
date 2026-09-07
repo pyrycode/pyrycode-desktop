@@ -232,8 +232,12 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * only a count, a local path, and the closed DebugBundleFailure enum. Session member and field
  * names mirror SessionAction's so #19's mapping is near-identity, while the two unions stay
  * separately declared per layer.
+ *
+ * NOT THE EXPORTED TYPE since #1225 — `DaemonEvent` below is this union with the optional envelope
+ * timestamp mixed in. Every arm is still declared here and nothing about an arm changed; see
+ * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
-export type DaemonEvent =
+type BaseDaemonEvent =
   | { type: 'connecting' }
   | { type: 'connected'; ack: HelloAckPayload }
   | { type: 'disconnected' }
@@ -1352,6 +1356,56 @@ export type DaemonEvent =
       conversationId: string
       reason: SystemPromptWriteFailure
     }
+
+/**
+ * The DAEMON'S OWN timestamp for the logical event this DaemonEvent was decoded from (#1225) — the
+ * envelope's `ts`, carried verbatim from `parseInboundMessage` through the ten timeline-bearing emits in
+ * `daemonConnection.ts`. With the event's `type` it forms the (`type`, `ts`) key on which the window
+ * joins a served history page to what the live stream already drew: the daemon mints one timestamp per
+ * logical event above its per-connection fan-out and hands that same value to the log entry and to every
+ * outbound envelope, and `HistoryTimelineEntry.ts` has carried the page half of the key since #1227.
+ *
+ * IT IS NOT `createdAt`, and the two must never be conflated. `createdAt` (#1013) is the LOCAL clock
+ * stamp taken from `Date.now` where `useTimelineBridge` wires the bridge, it means "when this client
+ * drew the bubble", and it keeps that meaning and that producer untouched. This one is remote, is the
+ * daemon's, and is read by no display.
+ *
+ * OPTIONAL, AND NO CLOCK EVER DEFAULTS IT. Absence means the event came from no envelope — `connected`
+ * is the standing example, and `messageReceived` is the deliberate one: the daemon writes the operator's
+ * own message to its log and pushes no `message` frame on the interactive lane, so that arm has no live
+ * twin to join and its duplicate is the optimistic echo `removeUserEcho` dedups on `message_id`. A
+ * defaulting clock here would mint a key matching nothing and would break the `toEqual` rule #1013's own
+ * contract rests on (an undefined-valued property is ignored, a defined one fails).
+ *
+ * AN INTERSECTION DISTRIBUTED OVER THE UNION, never a member added to each arm — `ServerOrigin`'s shape
+ * directly below, taken for its two reasons. The 33 test files that build bare `DaemonEvent` literals as
+ * bridge INPUTS keep compiling, which is what makes this one slice rather than three; and the field
+ * resolves on the bare union with no per-arm switch, so the renderer needs no second enumeration of the
+ * ten stamped arms to drift from the emit's. The type therefore does not say WHICH arms carry it: that
+ * set is enforced at the ten emit sites in one file and pinned by `daemonConnection.test.ts`. The
+ * failure direction of a wrongly-stamped arm is a key that matches no entry, never a suppression.
+ *
+ * SECURITY — A COMPARAND, AND NOTHING ELSE. It is remote-supplied text, already fail-closed to a
+ * `string` by `decodeEnvelope`, that reaches a membership test and is discarded. It is never parsed into
+ * a date, never sorted on to decide row order, never rendered, and never a filename, a lookup path, a
+ * cache key, a React key or a log field — `emitDaemonEvent` is log-free by construction and the decode
+ * arms log byte length and a one-way hash only. A dedup on remote input is a SUPPRESSION PRIMITIVE, so
+ * the consumer bounds what it will consider and fails OPEN (two rows) on anything it cannot resolve: a
+ * duplicated row is a cosmetic fault, a silently dropped one is a lost message.
+ */
+interface DaemonEventTimestamp {
+  daemonTs?: string
+}
+
+/** Distributes `DaemonEventTimestamp` over each arm of a union — `WithOrigin`'s mechanism below, and
+ *  written as a distributive conditional for the same reason: the result is a genuine union of stamped
+ *  members, so `.type` narrowing and `Extract<…>` behave exactly as they do on the bare union. */
+type WithDaemonTs<E> = E extends unknown ? E & DaemonEventTimestamp : never
+
+/** A single typed event from the background process to the renderer window (see `BaseDaemonEvent` for
+ *  the arms) plus, on the arms decoded from a timeline-bearing envelope, the daemon's own timestamp for
+ *  the logical event. */
+export type DaemonEvent = WithDaemonTs<BaseDaemonEvent>
 
 /**
  * Which server an event came from (#1068). Carried BESIDE the union rather than inside it: the app

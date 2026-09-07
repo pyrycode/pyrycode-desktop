@@ -300,6 +300,43 @@ export type EnvelopeType =
   // daemon may serve fewer entries than asked for. See HistoryPagePayload. SSOT pyrycode
   // docs/protocol-mobile.md § Conversation history (v2).
   | 'history_page'
+  // The ASK for the frame below (#1230) — v2-only client→daemon CONTROL frame, intercepted upstream in
+  // `dispatchAppFrame` before `dispatch.Route`, gated on the negotiated `interactive` capability and
+  // FULLY INERT on a conn that did not negotiate it: no decode, no reply, no error. It exists because
+  // a stored system prompt takes effect only at a conversation's NEXT session start, so a client that
+  // did not itself perform the write had no way to learn what a conversation holds, nor that the child
+  // it is typing at predates an edit.
+  //
+  // Carries RequestSystemPromptPayload: a single REQUIRED `conversation_id`, like
+  // `request_model_list` and unlike `request_session_settings`. Answered by ONE `system_prompt`
+  // correlated by `in_reply_to`, and BY NOTHING ELSE.
+  //
+  // THERE IS NO ERROR FRAME FOR THIS VERB — it mints no wire code and has no failure branch, which is
+  // the whole difference from `request_model_list` and the reason an empty id must never reach the
+  // wire. Every unresolvable case upstream (no such conversation, no session, a request that named
+  // nothing) already has a truthful constant answer, so there is nothing for a code to distinguish.
+  // Two consequences bind this client: NOTHING RETRIES AND NOTHING BLOCKS on the reply (the rule
+  // `modelListStore`'s header states), and an id the client cannot route must be refused BEFORE the
+  // send — an empty one on the wire would draw an ordinary-looking `no_session` reply with an absent
+  // prompt, and nothing downstream could tell that false reading from a real one. SSOT pyrycode
+  // docs/protocol-mobile.md § Reading a conversation's system prompt / internal/protocol/system_prompt.go.
+  // Declared and answered by pyrycode#2152.
+  | 'request_system_prompt'
+  // The answer to the ask above (#1230): what system prompt a conversation holds, and whether the
+  // running session was started with a different one. Unicast to the conn that asked, correlated by
+  // `in_reply_to`, carrying NO `event_id`.
+  //
+  // IT CARRIES NO `conversation_id`, the decision `session_settings` and `history_page` already take,
+  // and here it is load-bearing rather than merely consistent: it is what makes an UNHOSTED
+  // conversation's answer byte-identical to a hosted-but-quiet one, which is what stops the verb being
+  // a conversation-membership oracle. A client knows which conversation a reply describes because it
+  // knows which envelope the reply answers, so it keeps its outstanding asks keyed by envelope id.
+  //
+  // Carries SystemPromptPayload — a tri-state `system_prompt` beside a three-value
+  // `session_prompt_status`. See that type for why the two fields are INDEPENDENT and why neither may
+  // be derived from the other. SSOT pyrycode docs/protocol-mobile.md § Reading a conversation's system
+  // prompt.
+  | 'system_prompt'
   | 'ack'
   | 'error'
 
@@ -1967,6 +2004,97 @@ export interface HistoryPagePayload {
   entries: HistoryEntry[]
   cursor: string
   at_start: boolean
+}
+
+/**
+ * Outbound `request_system_prompt` payload (client → daemon, #1230). Mirrors the daemon's
+ * internal/protocol/system_prompt.go RequestSystemPromptPayload field-for-field: one
+ * `conversation_id`, no `omitempty`, so the key is always on the wire.
+ *
+ * `conversation_id` is REQUIRED, `RequestModelListPayload`'s rule rather than
+ * `RequestSessionSettingsPayload`'s — an unnamed request has nothing to ask about. It is CLIENT-OWNED,
+ * read from this app's own conversation state and never off the network, and it is a routing id, NEVER
+ * a secret: naming a conversation is not authorization, which is pairing, enforced structurally at the
+ * Noise IK handshake. It is an object value in a payload the background process rebuilds from scratch —
+ * never a key, a path, a log field, or an attribute.
+ *
+ * WHERE THIS VERB DIVERGES FROM `request_model_list`, AND WHY IT MATTERS MORE HERE: an unresolvable id
+ * on that verb draws a visible `error` frame. This one has NO error path, so an empty id that reached
+ * the wire would draw an ordinary-looking `no_session` reply with an absent prompt, and a client's
+ * correlation map would file that false "no prompt, no session" reading against a real conversation.
+ * Nothing downstream can tell it from a true one. The refusal that keeps such a frame off the wire is
+ * the ROUTING LOOKUP at the IPC arm (`router.route(id)?.…`) — deliberately not an emptiness check in
+ * the boundary guard or the builder, which check type and shape, as their siblings do.
+ */
+export interface RequestSystemPromptPayload {
+  conversation_id: string
+}
+
+/**
+ * The three verdicts `system_prompt.session_prompt_status` can carry (#1230), mirroring the daemon's
+ * `SystemPromptStatus*` constants. Exactly one is ALWAYS present — the handler sets one on every path,
+ * including every unresolvable one, so `''` is not among them and a client has no fourth case to guess
+ * at.
+ *
+ * `no_session` DELIBERATELY MERGES FIVE DAEMON STATES, among them *a conversation this daemon does not
+ * host* and *a request that named nothing*. That merge is the verb's entire error handling and it is
+ * what stops the verb being a conversation-membership probe: an unhosted conversation's reply is
+ * byte-identical to a hosted one holding no prompt and running nothing. READ IT AS ONE READING, never
+ * as a failure to repair — a client that tried to separate the merged states back out would rebuild
+ * the oracle upstream removed.
+ *
+ * A CLOSED UNION HERE, which diverges from the deliberately un-allowlisted `SessionSettingsPayload`
+ * `permission_mode`, and the divergence is upstream's rather than a style choice. That field's read
+ * half carries one mode its write half refuses, so narrowing it client-side would fail-close valid
+ * traffic; this one is a published three-value enum with no fourth member and no zero value, so a
+ * value outside the set is an off-contract frame and is rejected at the decode rather than folded into
+ * one of the three.
+ */
+export type SessionPromptStatus = 'matches' | 'differs' | 'no_session'
+
+/**
+ * Inbound `system_prompt` payload (daemon → client, #1230) — what a conversation's system prompt holds
+ * and whether the running session was started with a different one. Mirrors the daemon's
+ * internal/protocol/system_prompt.go SystemPromptPayload field-for-field. It names NO conversation; see
+ * the `'system_prompt'` `EnvelopeType` member for why that omission is load-bearing.
+ *
+ * `system_prompt` IS A TRI-STATE AND ALL THREE STATES MUST SURVIVE A ROUND TRIP. The daemon encodes it
+ * `*string` with `omitempty`, which tests the POINTER rather than the pointee, so:
+ *
+ *   key omitted  → no prompt is stored
+ *   `""`         → an explicitly empty prompt IS stored
+ *   any string   → the stored text
+ *
+ * Optional here for exactly that reason, and the empty string is the case worth stating twice: a
+ * client must be able to read this value and write it straight back through `set_system_prompt`
+ * without collapsing "explicitly empty" into "no prompt". A `?? ''`, a `|| undefined`, or any
+ * truthiness read anywhere on this path is that collapse. An explicit `system_prompt: null` is
+ * OFF-CONTRACT — the daemon's encoding never emits one — and is rejected at the decode rather than
+ * read as either absence or emptiness.
+ *
+ * THE TWO FIELDS ARE INDEPENDENT AND NEITHER MAY BE DERIVED FROM THE OTHER. Text beside `no_session`
+ * is the ordinary "configured, applies at the next session start" reading. An ABSENT key beside
+ * `matches` is a conversation holding no prompt whose live session spawned with none — the daemon
+ * compares the COLLAPSED stored value (`Pool.SystemPromptFor` returns `""` for both no-bytes states by
+ * design), so both of them read as `matches` against a session spawned with nothing. Inferring "has
+ * bytes" from the key's presence would report a conversation storing an explicitly empty prompt, whose
+ * session spawned with none, as *differing* — telling an operator a session is stale that is running
+ * exactly what they stored.
+ *
+ * THE SPAWNED-WITH TEXT IS DELIBERATELY NOT CARRIED. `differs` says the two disagree and stops there,
+ * rather than echoing up to another 8192 bytes of operator text back over the wire to prove it.
+ *
+ * SECURITY: `system_prompt` is UNTRUSTED OPERATOR TEXT arriving over the network. It is a value to be
+ * rendered later — never a lookup path, a cache key, a filename, an attribute or a URL, never into a
+ * raw-markup sink (no innerHTML / dangerouslySetInnerHTML), and never into a log line or an error
+ * message on ANY path, the decode-failure path included. ITS LENGTH IS NOT A CLIENT BRANCH: the daemon
+ * caps it write-side at 8192 bytes and this client relies on that bound the way it relies on the
+ * daemon's 256-byte bound for `model`; `MAX_PLAINTEXT_BYTES` on the envelope is the only size gate on
+ * this path, and a second one invented here would only fail-close a valid future frame.
+ */
+export interface SystemPromptPayload {
+  system_prompt?: string
+  session_prompt_status: SessionPromptStatus
 }
 
 /**

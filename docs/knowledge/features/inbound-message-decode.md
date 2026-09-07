@@ -165,3 +165,12 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   mandated a `switch` over an object-literal dispatch table for the untrusted `type` discriminant (a
   lesson worth generalising to any future "which types do we handle" set in this file), is in [Request
   history send](request-history-send.md#payload-decode-srcmaintransportinboundmessagets-1227).
+- [System prompt send](system-prompt-send.md) — the twenty-seventh additive extension: the
+  `system_prompt` kind, `parseSystemPromptPayload` + the new `narrowSessionPromptStatus` comparand
+  narrower, and the file's first payload whose optional field (`system_prompt`) must keep three
+  distinct states apart (absent / `''` / text) rather than collapsing to two.
+  [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) is also this boundary's second
+  ticket with a live consumer at ship time — [daemon connection](daemon-connection.md)'s new
+  `pendingSystemPromptRequests` correlation map — though every renderer bridge still nulls the one
+  `DaemonEvent` arm it feeds. Unlike every other kind in this file, the verb it answers has **no**
+  `daemon-error` counterpart to widen: `system_prompt` mints no wire error code at all.

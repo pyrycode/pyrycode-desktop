@@ -8316,3 +8316,264 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     expect(emitted(ctx.sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
   })
 })
+
+describe('createDaemonConnection — requestSystemPrompt + the correlated reply (#1230)', () => {
+  const CONV = 'conv-prompt'
+
+  /** A `system_prompt` reply's plaintext, `null` OMITTING the correlation key (a sentinel rather than
+   *  `undefined`, which a default parameter would swallow). */
+  function systemPromptPlaintext(payload: unknown, inReplyTo: number | null): Uint8Array {
+    return encodeEnvelope({
+      id: 51,
+      type: 'system_prompt',
+      ts: FIXED_TS,
+      ...(inReplyTo === null ? {} : { in_reply_to: inReplyTo }),
+      payload
+    })
+  }
+
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The envelope id of the LAST request_system_prompt this connection put on the wire. */
+  function lastRequestId(ctx: ReturnType<typeof build>): number {
+    const requests = ctx.drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((e) => e.type === 'request_system_prompt')
+    return requests[requests.length - 1].id
+  }
+
+  /**
+   * Connected, with one outstanding request_system_prompt naming `conversationId` — the correlation
+   * every reply below must match. Its envelope id is read off the frame ACTUALLY SENT rather than
+   * assumed, so a change to the client's numbering cannot silently make every reply here
+   * uncorrelatable-and-therefore-dropped while the assertions still read as if the gate were exercised.
+   */
+  async function requested(
+    conversationId: string = CONV
+  ): Promise<ReturnType<typeof build> & { replyTo: number }> {
+    const ctx = await connected()
+    ctx.connection.requestSystemPrompt(conversationId)
+    return { ...ctx, replyTo: lastRequestId(ctx) }
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
+    const { connection, drivers } = build()
+    expect(() => connection.requestSystemPrompt(CONV)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends exactly one request_system_prompt frame carrying the conversation id it was handed', async () => {
+    const ctx = await connected()
+
+    ctx.connection.requestSystemPrompt('conv-42')
+
+    const requests = ctx.drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((e) => e.type === 'request_system_prompt')
+    // Exactly one: this verb has NO error frame, so a missing reply is indistinguishable from a slow
+    // one, and a second frame here would be the self-inflicted spin requestModelList's catch forbids.
+    expect(requests).toHaveLength(1)
+    // Asserted as an exact payload against a value distinct from every other string on the envelope,
+    // so forwarding the wrong field cannot pass.
+    expect(requests[0].payload).toEqual({ conversation_id: 'conv-42' })
+  })
+
+  it('decodes a correlated system_prompt into systemPromptReceived carrying the REQUESTED id', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext(
+        { system_prompt: 'be terse', session_prompt_status: 'differs' },
+        replyTo
+      )
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([
+      {
+        type: 'systemPromptReceived',
+        conversationId: CONV,
+        systemPrompt: 'be terse',
+        sessionPromptStatus: 'differs'
+      }
+    ])
+  })
+
+  it('attributes the reply to the conversation ASKED ABOUT, not to another open one', async () => {
+    // The reply carries NO conversation id — deliberately, upstream, so an unhosted conversation's
+    // answer is byte-identical to a hosted-but-quiet one and the verb cannot be used as a membership
+    // probe. So the ONLY place the answer's conversation exists is the map this client wrote. Asking
+    // about one conversation while a DIFFERENT one is the obvious ambient candidate is what makes this
+    // non-vacuous: an implementation that emitted the open conversation, or the last one seen on any
+    // frame, would pass a single-conversation test and fail this.
+    const ctx = await connected()
+    ctx.connection.send({
+      conversation_id: 'conv-open-and-noisy',
+      message_id: 'm-1',
+      text: 'hello'
+    })
+    ctx.connection.requestSystemPrompt('conv-asked-about')
+    const replyTo = lastRequestId(ctx)
+
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'no_session' }, replyTo)
+    })
+
+    const events = emitted(ctx.sink).filter((e) => e.type === 'systemPromptReceived')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ conversationId: 'conv-asked-about' })
+  })
+
+  it('keeps the three stored states apart across IPC: absent, "", and text', () => {
+    // AC2's round-trip guarantee, at the LAST boundary before a consumer: a value read here must be
+    // writable straight back without collapsing one state into another. Asserted field by field
+    // because `toEqual` ignores an undefined property, so an object-shaped expectation would pass
+    // against a producer that collapsed `''` into absence.
+    const rows: Array<[Record<string, unknown>, string | undefined]> = [
+      [{ session_prompt_status: 'matches' }, undefined],
+      [{ system_prompt: '', session_prompt_status: 'matches' }, ''],
+      [{ system_prompt: 'you are terse', session_prompt_status: 'no_session' }, 'you are terse']
+    ]
+    return Promise.all(
+      rows.map(async ([payload, expectedPrompt]) => {
+        const { sink, drivers, replyTo } = await requested()
+        drivers[0].emit({ type: 'message', plaintext: systemPromptPlaintext(payload, replyTo) })
+        const event = emitted(sink).find((e) => e.type === 'systemPromptReceived')
+        expect(event).toBeDefined()
+        expect(event && 'systemPrompt' in event ? event.systemPrompt : 'MISSING').toBe(expectedPrompt)
+      })
+    )
+  })
+
+  it('carries the status independently of the prompt, deriving neither from the other', async () => {
+    // The two rows that look wrong and are not: text beside `no_session` is "configured, applies at
+    // the next session start", and an ABSENT prompt beside `matches` is a conversation holding nothing
+    // whose session spawned with nothing (the daemon compares the COLLAPSED stored value).
+    for (const [payload, status] of [
+      [{ system_prompt: 'x', session_prompt_status: 'no_session' }, 'no_session'],
+      [{ session_prompt_status: 'matches' }, 'matches']
+    ] as const) {
+      const { sink, drivers, replyTo } = await requested()
+      drivers[0].emit({ type: 'message', plaintext: systemPromptPlaintext(payload, replyTo) })
+      const event = emitted(sink).find((e) => e.type === 'systemPromptReceived')
+      expect(event).toMatchObject({ sessionPromptStatus: status })
+    }
+  })
+
+  it('emits nothing for a system_prompt carrying no in_reply_to', async () => {
+    // The unsolicited frame: a daemon that broadcasts this reply, or one impersonating it. There is
+    // nothing to attribute it to, so it reaches no consumer — and the outstanding request stays
+    // outstanding, which the follow-up reply below proves by still correlating.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'matches' }, null)
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([])
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'matches' }, replyTo)
+    })
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toHaveLength(1)
+  })
+
+  it('emits nothing for a system_prompt whose in_reply_to matches no outstanding request', async () => {
+    const { sink, drivers, replyTo } = await requested()
+
+    // One past the real id — a plausible-looking neighbour rather than an obviously absurd value, so
+    // an off-by-one in the recorded id would be caught by this test rather than passing it.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'matches' }, replyTo + 1)
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([])
+  })
+
+  it('emits nothing for a second reply re-using an already-matched in_reply_to', async () => {
+    // The entry is deleted on match, so a duplicate — or a daemon replaying an old reply — finds
+    // nothing. Without the delete this is the arm that would let one request answer forever.
+    const { sink, drivers, replyTo } = await requested()
+
+    const reply = systemPromptPlaintext({ session_prompt_status: 'matches' }, replyTo)
+    drivers[0].emit({ type: 'message', plaintext: reply })
+    drivers[0].emit({ type: 'message', plaintext: reply })
+
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toHaveLength(1)
+  })
+
+  it('keys the correlation by envelope id, so two interleaved asks each draw their own conversation back', async () => {
+    // Replies OUT OF REQUEST ORDER, deliberately: a FIFO would hand each reply the other's id and
+    // still emit two events, so only crossing the order distinguishes a keyed map from a queue.
+    const ctx = await connected()
+    ctx.connection.requestSystemPrompt('conv-first')
+    const first = lastRequestId(ctx)
+    ctx.connection.requestSystemPrompt('conv-second')
+    const second = lastRequestId(ctx)
+    expect(second).not.toBe(first)
+
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ system_prompt: 'B', session_prompt_status: 'matches' }, second)
+    })
+    ctx.drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ system_prompt: 'A', session_prompt_status: 'differs' }, first)
+    })
+
+    expect(
+      emitted(ctx.sink)
+        .filter((e) => e.type === 'systemPromptReceived')
+        .map((e) => ('conversationId' in e ? e.conversationId : null))
+    ).toEqual(['conv-second', 'conv-first'])
+  })
+
+  it('drops a malformed system_prompt without emitting, and records no diagnostic for it', async () => {
+    // Fail-closed at the decode: an off-contract `session_prompt_status` throws in
+    // parseSystemPromptPayload, daemonConnection's catch drops the frame AND the caught error, and the
+    // outstanding entry survives — proven by the well-formed follow-up still correlating.
+    const { sink, drivers, replyTo } = await requested()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext(
+        { system_prompt: 'be terse', session_prompt_status: 'not-a-status' },
+        replyTo
+      )
+    })
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([])
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'matches' }, replyTo)
+    })
+    expect(emitted(sink).filter((e) => e.type === 'systemPromptReceived')).toHaveLength(1)
+  })
+
+  it('clears outstanding asks on reconnect, so a stale id cannot correlate on the new connection', async () => {
+    // The fresh connection recycles envelope ids from 2, so a surviving entry would report one
+    // conversation's stored prompt as another's — which #1078 then offers the operator to edit.
+    const ctx = await requested()
+    const staleId = ctx.replyTo
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({
+      type: 'message',
+      plaintext: systemPromptPlaintext({ session_prompt_status: 'matches' }, staleId)
+    })
+
+    expect(emitted(ctx.sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([])
+  })
+})

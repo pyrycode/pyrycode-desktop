@@ -1098,6 +1098,24 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `historyPageReceived`/`historyRequestFailed` even past #1223 — that ticket draws a page through a
   fifth channel subscriber instead, never by claiming these two arms.
 
+- [System prompt send](features/system-prompt-send.md) — the **transport-only** read half of a
+  conversation's system prompt: an outbound `request_system_prompt` ask
+  (`RequestSystemPromptPayload{conversation_id}`, required scalar id) and the decoded `system_prompt`
+  reply (`SystemPromptPayload{system_prompt?,session_prompt_status}`), over pyrycode#2152's read verb
+  — the write half, pyrycode#2151, is not this client's yet. Two facts shape every piece: the reply
+  carries no `conversation_id` at all — `daemonConnection`'s new `pendingSystemPromptRequests` map
+  resolves it from the envelope id the request named, the `pendingConfigRequests`/`runConfigReceived`
+  pattern reused verbatim, and the omission is a **security property** (an unhosted conversation's
+  reply is byte-identical to a hosted-but-quiet one, so the verb cannot be a membership probe) — and
+  this verb mints **no error frame at all**, so an unroutable id must be refused before the send, at
+  the routing lookup, rather than by an emptiness check in the guard or builder. `system_prompt` is a
+  tri-state (absent/`''`/text) that must survive a round trip unchanged; `session_prompt_status` is a
+  closed three-value enum, independent of the prompt and never derived from it. (#1230,
+  security-sensitive, builder self-review PASS, one SHOULD FIX closed by a dedicated test — the
+  emitted `conversationId` must come from the correlation map, not the decoded payload.) Split from
+  #1078. Ships with **no renderer consumer**: #1231 stores it and fires the ask, #1078 renders it; all
+  four exhaustive bridges take a dormant no-op arm.
+
 ## Architecture
 
 _None yet._

@@ -253,6 +253,19 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // workspace-authored name, argument hint, description and alias on the frame there, embedded
       // newlines included. This case is what keeps them out of it.
       return null
+    case 'systemPromptReceived':
+      // No session-store action (#1230). The transport owns the ask, the correlation and the decode; the store that
+      // holds a conversation's system prompt is #1231's, in the announcedModelBridge /
+      // historyPageBridge posture, and the editor surface is #1078. So this arm is DORMANT rather
+      // than permanently no-op — but nothing in THIS file is waiting to claim it.
+      //
+      // Present for the assertNever guard, and that guard is NOT a formality here: it stringifies the
+      // WHOLE event into an Error message, and `systemPrompt` is untrusted operator-authored text that
+      // reaches no other sink on any path — not the decode's content-free log line, not the
+      // decode-failure catch (which drops its caught error), not emitDaemonEvent. A missing case would
+      // be the ONE route by which it lands in an Error message, a stack trace and a crash reporter.
+      // This case is what keeps it out.
+      return null
     case 'modelList':
       // No session-store action: the #974 store holds the menu of identities claude will accept, not the
       // session store — which holds no model-menu state at all. PERMANENTLY a no-op, NOT dormant like

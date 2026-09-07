@@ -29,7 +29,8 @@ import type {
   WireModalOption,
   WireQuestion,
   WireSlashCommand,
-  WireModelOption
+  WireModelOption,
+  SessionPromptStatus
 } from '../wire/types'
 
 /**
@@ -1217,6 +1218,61 @@ export type DaemonEvent =
       conversationId: string
       reason: HistoryRequestFailure
       retryable: boolean
+    }
+  // The system-prompt read arm (#1230): what prompt a conversation holds, and whether the running
+  // session was started with a different one. It crosses from the background process, which owns the
+  // ask, the correlation and the decode; NOTHING IN THE WINDOW CONSUMES IT YET — the store is #1231
+  // and the editor surface #1078 — so all four exhaustive bridges take a no-op arm.
+  //
+  // `conversationId` IS THE FIELD THE DAEMON DID NOT ASSERT, and the provenance is `runConfigReceived`'s
+  // and `historyPageReceived`'s exactly: a `system_prompt` reply carries NO conversation id, so it is
+  // resolved in the background process, which records each `request_system_prompt`'s envelope id
+  // against the conversation that request named and matches the reply back by `Envelope.in_reply_to`.
+  // What crosses is CLIENT-OWNED — the id this app put in its own outbound frame, held in main-process
+  // memory and handed back — never a string parsed out of an inbound payload. Do not generalise that
+  // from here to the daemon-asserted ids on assistantDelta / modelAnnounced / toolUse; their warnings
+  // are theirs. What it DOES share with them is required-ness and the reason: an optional routing key
+  // invites `?? openConversation` fallbacks, which is the misattribution the correlation exists to
+  // remove, so a consumer that cannot resolve it drops the event rather than guessing. It is a routing
+  // key and not rendered text — never markup, an attribute, a URL, a filename, a cache key or a lookup
+  // path — and it reaches no log sink. The numeric `in_reply_to` it was resolved from is deliberately
+  // NOT carried: the window receives the id it supplied.
+  //
+  // HERE THE MISSING CONVERSATION ID IS ALSO A SECURITY PROPERTY UPSTREAM, not just an inconvenience:
+  // it is what makes an unhosted conversation's reply byte-identical to a hosted-but-quiet one, so the
+  // verb cannot be used as a conversation-membership probe. A consumer must not try to recover the
+  // distinction; `sessionPromptStatus: 'no_session'` merges five daemon states and is ONE reading.
+  //
+  // SECURITY — `systemPrompt` IS UNTRUSTED OPERATOR TEXT arriving over the network, and the most
+  // sensitive string on this union after the timeline's replayed content. It is a value to be RENDERED
+  // (#1078) and edited, and nothing else: never into a raw-markup sink (no innerHTML /
+  // dangerouslySetInnerHTML), never into an attribute or a URL, and never a filename, a cache key or a
+  // lookup path — the `runConfigReceived` / `permissionMode` rule, restated because this field is
+  // longer, operator-authored and round-trips back to the daemon as a write. It reaches NO LOG SINK on
+  // any path: the decode arm logs byte length and a one-way hash only, the decode-failure catch drops
+  // its caught error rather than quoting it, and `emitDaemonEvent` is log-free by construction. THE
+  // ONE SINK LEFT IS THE BRIDGES' `assertNever`, which stringifies the whole event into an `Error`
+  // message — which is why every exhaustive switch over this union takes an explicit arm for this
+  // type rather than relying on a `default`.
+  //
+  // THE TRI-STATE CROSSES INTACT AND MUST KEEP CROSSING INTACT. `undefined` means no prompt is stored,
+  // `''` means an explicitly empty prompt IS stored, and any other string is the stored text; a
+  // consumer that collapses the first two cannot write the value back without changing it. Declared as
+  // a REQUIRED key of type `string | undefined` rather than an optional property, so no consumer can
+  // forget it and no producer can omit it; `undefined` is a structured-clone-supported value, so the
+  // distinction survives the IPC bridge as written.
+  //
+  // `sessionPromptStatus` is INDEPENDENT of it and neither is derived from the other. Text beside
+  // `no_session` is the ordinary "configured, applies at the next session start" reading; an absent
+  // prompt beside `matches` is a conversation holding nothing whose session spawned with nothing,
+  // because the daemon compares the COLLAPSED stored value. The spawned-with text is deliberately not
+  // carried — `differs` says the two disagree and stops there. The status is a CLIENT-OWNED literal
+  // narrowed at the decode boundary against constants, so no daemon string crosses on that field.
+  | {
+      type: 'systemPromptReceived'
+      conversationId: string
+      systemPrompt: string | undefined
+      sessionPromptStatus: SessionPromptStatus
     }
 
 /**

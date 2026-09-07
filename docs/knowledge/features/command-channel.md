@@ -145,6 +145,26 @@ ask](model-list-wire-types.md#outbound-ask-1165) for the frame this command asks
 rule that governs it, and [Daemon connection — methods](daemon-connection-methods.md) for the connection
 method + registry delegate it drives.
 
+The union gained a `requestSystemPrompt` member in [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230):
+a **payload-carrying** command (`RequestSystemPromptPayload{conversation_id}`, reused verbatim from the
+wire types) that asks the daemon what system prompt a conversation holds and whether the running
+session was started with a different one. Sited beside `requestModelList` and its structural clone —
+`isRequestSystemPromptPayload` is `isRequestModelListPayload` with the key unchanged and the name
+changed, one present-and-string `conversation_id` check, type not emptiness — but the reasoning for
+checking type only diverges sharply from that neighbour's, and is worth reading before "hardening" it.
+`requestModelList` tolerates `''` because an unresolvable id there draws the daemon's visible
+`conversation.not_found`. **This verb has no error frame at all**, so an empty id reaching the wire
+would draw an ordinary-looking `no_session` reply with an absent prompt, and the correlation map would
+file that false "no prompt, no session" reading against a real conversation — a reading nothing
+downstream can tell from a true one. The refusal that keeps such a frame off the wire is nonetheless
+**not** this guard: it is the routing lookup at `src/main/index.ts`'s dispatch case
+(`router.route(id)?.…`), which already refuses and logs an id no server has claimed and refuses far
+more than emptiness alone. Ships with **no renderer sender** in the slice that declares it —
+[#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) adds the trigger, on conversation
+open. See [System prompt send](system-prompt-send.md) for the frame this command asks for and the
+no-retry rule that governs it, and [Daemon connection — methods](daemon-connection-methods.md) for the
+connection method + registry delegate it drives.
+
 The union gained a `newSession` member in [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217):
 asks the daemon to **kill** claude and spawn a fresh one in the conversation it names — not the `/clear`
 the Actions menu's Reset session already sends as ordinary message text, which clears context in place
@@ -353,5 +373,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Model-list wire types § Outbound ask](model-list-wire-types.md#outbound-ask-1165) / [#1165](https://github.com/pyrycode/pyrycode-desktop/issues/1165) — the payload-carrying `requestModelList` member + `isRequestModelListPayload` guard this channel's union gained, required from the start; ships with no renderer sender, consumer is #1166.
 - [New session envelope](new-session-envelope.md) / [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) — the payload-carrying `newSession` member + `isNewSessionPayload` guard this channel's union gained, the only member whose payload type *tightens* its wire type (`Required<NewSessionPayload>`) and the only guard in this file that rejects an empty string; ships with no renderer sender, consumer is the sibling ticket.
 - [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) — the payload-carrying `requestHistory` member + `isRequestHistoryPayload` guard this channel's union gained, checking type only on all three fields (an empty `cursor` is the normal opening value of a walk, not a rejectable one); the first member carrying a value this app did not mint — the daemon-minted `cursor` — which stays opaque end to end; ships with no renderer sender, consumer is #1224.
+- [System prompt send](system-prompt-send.md) / [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) — the payload-carrying `requestSystemPrompt` member + `isRequestSystemPromptPayload` guard this channel's union gained, `isRequestModelListPayload`'s clone checking type not emptiness; the only member whose verb has no error frame at all, so the id's refusal rides the routing lookup one layer up rather than this guard; ships with no renderer sender, consumer is #1231.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

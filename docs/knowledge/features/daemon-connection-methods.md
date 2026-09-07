@@ -32,6 +32,7 @@ export interface DaemonConnection {
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   requestModelList(conversationId: string): void  // #1165: encrypt a request_model_list onto the live session; the id is REQUIRED, unlike its bare-optional sibling above
   requestHistory(payload: RequestHistoryPayload): void  // #1222: encrypt a request_history onto the live session, asking for one backward step of a scroll-back walk; takes the WHOLE payload (three fields), unlike its two neighbours above; answered by history_page → historyPageReceived or error → historyRequestFailed, correlated by envelope id since the reply names no conversation
+  requestSystemPrompt(conversationId: string): void  // #1230: encrypt a request_system_prompt onto the live session, asking what system prompt a conversation holds and whether the running session was started with a different one; the id is REQUIRED, requestModelList's rule; answered by ONE system_prompt → systemPromptReceived, correlated by envelope id since the reply names no conversation, and by NOTHING ELSE — this verb has no error frame at all, so nothing retries and an unroutable id must be refused before the send
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
@@ -304,3 +305,25 @@ gained one delegate line, the same tsc-only break shape as #1165's/#1217's addit
 renderer sender at all and no render consumer — #1223 draws a page through the timeline reducer, #1224
 walks, #1225 joins a page to the live stream; all four exhaustive bridges take null arms. See [Request
 history send](request-history-send.md) for the full contract.
+
+**`requestSystemPrompt(conversationId)` was added in [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)**
+— asks the daemon what system prompt a conversation holds, and whether the running session was started
+with a different one (pyrycode#2152's read verb; the write half, pyrycode#2151, shipped first). Takes
+the conversation id as a **scalar**, `requestModelList`'s rule rather than `requestHistory`'s
+whole-payload one, and the id is **required**: an unnamed request has nothing to ask about. Faithful
+`requestModelList` send mechanics (inert no-op when `driver === null`, sharing the one
+`nextEnvelopeId` counter, advancing the id only on a successful build, a content-free `catch {}`, no
+retry). **It also records what it asked**, `requestHistory`'s reason exactly: `system_prompt` names no
+conversation at all, so this method is the sole place "which conversation does this reply describe"
+exists — recorded in a new `pendingSystemPromptRequests: Map<number, string>` after a successful send
+and matched back by the reply's `Envelope.in_reply_to`. Routed by conversation through `router.route`
+in `src/main/index.ts`'s dispatch case, exactly like `requestModelList`/`requestHistory`. **The sharpest
+divergence from every method above it: this verb has no error frame at all.** Every unresolvable case
+comes back as an ordinary `no_session` reading, so nothing retries or blocks on the reply, and — unlike
+`requestHistory`, whose unroutable id at least draws a client-visible refusal via `daemon-error` — an id
+this client cannot route must be refused **before the send**, at the routing lookup, because an empty
+or unroutable id on the wire would draw a false "no prompt, no session" reply the correlation map could
+not tell from a true one. `connectionRegistry.ts`'s `viewOf` gained one delegate line, the same
+tsc-only break shape as #1165's/#1217's/#1222's additions. Ships with no renderer sender and no render
+consumer — #1231 fires the ask and stores the reply, #1078 renders it; all four exhaustive bridges take
+a dormant no-op arm. See [System prompt send](system-prompt-send.md) for the full contract.

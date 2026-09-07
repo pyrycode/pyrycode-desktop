@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildRequestModelList } from './transport/requestModelListEnvelope'
+import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildRequestHistory } from './transport/requestHistoryEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -279,6 +280,28 @@ export interface DaemonConnection {
    * refusal. Inert no-op when not connected, like send.
    */
   requestHistory(payload: RequestHistoryPayload): void
+  /**
+   * Ask the daemon what system prompt one conversation holds, and whether the running session was
+   * started with a different one (#1230). Takes the conversation id as a SCALAR, like
+   * `requestModelList` and unlike `requestHistory`, and the id is REQUIRED: an unnamed request has
+   * nothing to ask about.
+   *
+   * IT RECORDS WHAT IT ASKED, like `requestHistory` and `requestSessionSettings`. The `system_prompt`
+   * reply names no conversation — the omission is what makes an unhosted conversation's answer
+   * byte-identical to a hosted-but-quiet one, so the verb cannot be used as a membership probe — so
+   * this connection keeps the envelope id it just spent against the conversation the request named and
+   * matches the reply back by `Envelope.in_reply_to`.
+   *
+   * ANSWERED ONLY BY ONE `system_prompt` → `systemPromptReceived`, and NEVER by an error frame: this
+   * verb mints no wire code and has no failure branch, so every unresolvable case comes back as an
+   * ordinary `no_session` reading. Two things follow. Nothing retries and nothing may block on the
+   * reply — the daemon also answers a conn that never negotiated the interactive capability with
+   * nothing at all. And an id no server has claimed must be refused BEFORE the send, at the IPC arm's
+   * routing lookup, because an empty or unroutable id on the wire draws a false "no prompt, no
+   * session" reply that nothing downstream can distinguish from a true one. Inert no-op when not
+   * connected, like send.
+   */
+  requestSystemPrompt(conversationId: string): void
   /**
    * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
    * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
@@ -724,6 +747,30 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // conversation's history to another. Single-writer — every mutation runs to completion inside a
   // synchronous requestHistory / onDriverEvent body, no await between a read and a write.
   const pendingHistoryRequests = new Map<number, string>()
+  // envelopeId → the conversation id that request_system_prompt named, for a system-prompt read's
+  // attribution (#1230). THE SAME PROBLEM the two maps above solve, on a third reply that names no
+  // conversation of its own — and here the omission is a SECURITY PROPERTY upstream rather than a
+  // shape decision: it is what makes an unhosted conversation's answer byte-identical to a
+  // hosted-but-quiet one, so the verb cannot be used as a conversation-membership probe. This map is
+  // therefore the ONLY place the reply's conversation exists, and no future wire change will supply
+  // one.
+  //
+  // A MAP for pendingConfigRequests' reasons exactly: a value to carry per entry, a lookup by one key
+  // as the whole query, and a key this client MINTED (nextEnvelopeId) rather than a daemon-supplied
+  // string — so no prototype setter is reachable through it under any inbound frame, and a later
+  // widening that keys this by anything daemon-supplied must keep the Map.
+  //
+  // Set after a SUCCESSFUL send in requestSystemPrompt, matched by the reply's Envelope.in_reply_to
+  // and deleted in onDriverEvent, and cleared on each dial(). The ordering is load-bearing for the
+  // reason pendingConfigRequests states: a build or send that throws advances no envelope id, so an
+  // entry left under an unspent id would answer whichever request re-mints it — here handing one
+  // conversation's system prompt to another. Nothing bounds the map's size, deliberately, on
+  // pendingHistoryRequests' argument: an entry costs one number and one string, every match deletes
+  // one, every dial clears all, so the only way to accumulate is for this client to send asks a daemon
+  // never answers — a rate this client controls, not a remote one. Single-writer — every mutation runs
+  // to completion inside a synchronous requestSystemPrompt / onDriverEvent body, no await between a
+  // read and a write.
+  const pendingSystemPromptRequests = new Map<number, string>()
   // Attachment transfers currently on the wire (#861). A SET, not the debug bundle's single slot: two
   // files can be attached in one session, and a lone slot would have to abandon the first to admit the
   // second. Membership plus a scan is the whole query — the success reply is looked up by
@@ -1093,6 +1140,51 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens
+            })
+            return
+          }
+          case 'system-prompt': {
+            // CORRELATION-GATED, fail-closed, in the shape the two arms below it use and for the same
+            // reason: the reply names no conversation, so the one it describes is the one this client
+            // asked about under the envelope id it answers. An absent in_reply_to short-circuits
+            // BEFORE the lookup; a reply matching no outstanding entry — a stale reply from a
+            // connection whose ids were cleared, a duplicate of one already matched, or a hostile
+            // daemon forging a prompt for a request this client never sent — is ignored entirely, with
+            // no coercion and no partial event. Both branches are SILENT: the only values a diagnostic
+            // could carry are the conversation id and the wire routing id, and neither may reach a
+            // sink.
+            //
+            // The drop is deliberately total rather than "emit without the id", and on this frame the
+            // reason is sharper than on its neighbours. The reply carries NO conversation id BY
+            // DESIGN, upstream, so that an unhosted conversation's answer is byte-identical to a
+            // hosted-but-quiet one and the verb cannot be used as a membership probe. A consumer
+            // handed an unattributed prompt would have to guess a conversation — and #1078 then offers
+            // that guess to the operator as editable text, writing one conversation's prompt over
+            // another's on save.
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo === undefined) return
+            const conversationId = pendingSystemPromptRequests.get(inReplyTo)
+            if (conversationId === undefined) return
+            pendingSystemPromptRequests.delete(inReplyTo)
+            // A fresh literal with named fields, never a spread of inbound.systemPrompt — so a future
+            // decoder that grew a field cannot smuggle it across. snake→camel per this channel's
+            // convention.
+            //
+            // `systemPrompt` CROSSES AS DECODED, and the three states stay apart: `undefined` (no
+            // prompt stored), `''` (an explicitly empty prompt stored) and any other string. No `??`,
+            // no `||`, no truthiness read — any of them is the collapse that would stop a consumer
+            // writing the value back unchanged. `sessionPromptStatus` is the client-owned literal the
+            // decode narrowed against constants, and is INDEPENDENT of the prompt: neither is inferred
+            // from the other here or anywhere downstream.
+            //
+            // `conversationId` is the map's value, never a field of the decoded payload — the reply
+            // has none — and the numeric in_reply_to it was resolved from is NOT placed on the event:
+            // the window receives the id it supplied, not the wire routing id.
+            emitDaemonEvent(sink, {
+              type: 'systemPromptReceived',
+              conversationId,
+              systemPrompt: inbound.systemPrompt.system_prompt,
+              sessionPromptStatus: inbound.systemPrompt.session_prompt_status
             })
             return
           }
@@ -2150,6 +2242,39 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestSystemPrompt(conversationId: string): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A prompt read has no consumer to fail; a request sent while
+    // disconnected simply produces no reply, and nothing may block on this frame anyway.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestSessionSettings — no second counter
+      // — so ids stay unique across interleaved calls, which is what makes them usable as the
+      // correlation key below (the daemon correlates the system_prompt reply by in_reply_to).
+      //
+      // ONE local for the envelope id, read three times (the #1176 rule), so the id sent, the id
+      // counted and the id recorded can never be three different expressions. The conversation id is
+      // forwarded verbatim to the builder, which rebuilds a fresh literal, so no renderer-supplied key
+      // reaches the wire. Nothing is logged — not the id, and the catch below drops its caught object
+      // without adding a line.
+      const envelopeId = nextEnvelopeId
+      const bytes = buildRequestSystemPrompt({ id: envelopeId, ts: now(), conversationId })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+      // Record AFTER the send, so a build or send that throws leaves no entry under an id the next
+      // request will re-mint. The value is the conversation this app named, held here and handed back
+      // when the reply lands — the reply itself names none, deliberately, so this is where that fact
+      // lives and the only place it can live.
+      pendingSystemPromptRequests.set(envelopeId, conversationId)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited
+      // #62). NO RETRY, here or anywhere on this verb: it has no error frame, so a missing reply is
+      // indistinguishable from a slow one, and a retry against a relay withholding the frame is the
+      // self-inflicted spin requestModelList's catch forbids.
+    }
+  }
+
   function requestRecentWorkspaces(): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
@@ -2833,6 +2958,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // would inherit the dead connection's, and the recycled envelope ids make that a live misdelivery
     // rather than a theoretical one.
     pendingHistoryRequests.clear()
+    // Reset the system-prompt request correlation map (#1230): the pendingConfigRequests rationale
+    // applied to the prompt read, and the consequence of skipping it is the worst of the three — a
+    // reply inheriting a dead connection's conversation would report one conversation's stored prompt
+    // as another's, which #1078 then offers the operator to edit.
+    pendingSystemPromptRequests.clear()
     // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
     // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
     // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
@@ -2876,6 +3006,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSessionSettings,
     requestModelList,
+    requestSystemPrompt,
     requestHistory,
     requestConversations,
     requestRecentWorkspaces,

@@ -245,6 +245,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     requestSessionSettings: (conversationId) => resolve().requestSessionSettings(conversationId),
     requestModelList: (conversationId) => resolve().requestModelList(conversationId),
     requestHistory: (payload) => resolve().requestHistory(payload),
+    requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),
     requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),
     createConversation: (payload) => resolve().createConversation(payload),

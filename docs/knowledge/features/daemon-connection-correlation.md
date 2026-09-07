@@ -308,3 +308,44 @@ once.
 send](request-history-send.md) for the full design, including the outbound builder, the fail-closed
 decode, the sibling `HistoryRejectReason` narrower, and the two `DaemonEvent` arms this correlation
 feeds.
+
+# System-prompt read correlation (#1230)
+
+An eighth correlation store, the `pendingConfigRequests` shape exactly:
+`pendingSystemPromptRequests: Map<number, string>`, mapping a sent `request_system_prompt`'s
+`envelopeId` to the conversation id that request named. It exists for the same reason
+`pendingConfigRequests` does — `SystemPromptPayload` carries no `conversation_id` at all — but here
+the omission is a **security property** upstream rather than a shape decision: it is what makes an
+unhosted conversation's answer byte-identical to a hosted-but-quiet one, so the verb cannot be used as
+a conversation-membership probe. This map is therefore the **only** place the reply's conversation
+exists, and no future wire change is expected to add one.
+
+- **Set — after the send, `pendingConfigRequests`' order.** `envelopeId` is captured into one local,
+  read by the build, the counter advance, and the `set` alike, and the map is written only *after*
+  `driver.sendMessage` returns — a build/send throw leaves no entry under an unspent id, which matters
+  more here than on any sibling: a phantom entry would answer whichever request next re-mints that id,
+  handing one conversation's stored system prompt to another.
+- **Match + delete — inside `case 'system-prompt':`, gating a success reply, not a rejection.**
+  `inbound.inReplyTo === undefined` short-circuits before the map lookup (no event); a
+  `pendingSystemPromptRequests.get` miss short-circuits the same way (a stale reply from a cleared
+  connection, a duplicate of an already-matched reply, or a hostile daemon forging a prompt for a
+  request this client never sent); a hit `delete`s the entry and emits `systemPromptReceived` carrying
+  the recorded conversation id and the decoded tri-state prompt beside its independent status — never
+  the numeric `in_reply_to` itself. Both silent branches: the only values a diagnostic could carry are
+  the conversation id and the wire routing id, and neither may reach a sink.
+- **No `daemon-error` tier member.** Unlike every other map in this file, this one is checked in
+  exactly one inbound arm — this verb mints no error code and has no failure branch, so there is no
+  rejection to correlate against.
+- **Reset — `dial()` clears the map next to its siblings.** A reconnect recycles envelope ids from 2,
+  so a surviving entry would attribute the new connection's first reply to a dead one's conversation —
+  handing one conversation's system prompt to another, the worst misattribution this file's maps guard
+  against.
+- **No cap**, the same evidence-based, no-observed-failure posture as every sibling store in this file.
+  An entry costs one number and one short string, deleted on every match; the only way to accumulate
+  them is this client sending asks a daemon never answers, a rate this client controls.
+
+`security-sensitive`, builder self-review **PASS**, one SHOULD FIX (the emitted `conversationId` must
+come from this map and not the decoded payload — closed by a dedicated test attributing a reply to the
+requested conversation against a second, open one). See [System prompt send](system-prompt-send.md)
+for the full design, including the outbound builder, the fail-closed decode, and the one
+`DaemonEvent` arm this correlation feeds.

@@ -8221,3 +8221,211 @@ describe('parseInboundMessage — history_page diagnostics (#1222)', () => {
     expect(lines).toHaveLength(0)
   })
 })
+
+/** A `system_prompt` envelope's plaintext bytes, wrapping an arbitrary payload (#1230). `null` OMITS
+ *  the `in_reply_to` key — a sentinel rather than `undefined`, because an explicitly-passed
+ *  `undefined` would take the default and silently build the correlated frame instead. */
+function encodeSystemPrompt(payload: unknown, inReplyTo: number | null = 907): Uint8Array {
+  return encodeEnvelope({
+    id: 51,
+    type: 'system_prompt',
+    ts: FIXED_TS,
+    ...(inReplyTo === null ? {} : { in_reply_to: inReplyTo }),
+    payload
+  })
+}
+
+describe('parseInboundMessage — system_prompt recognition (#1230)', () => {
+  it('narrows a full system_prompt into { kind: system-prompt } carrying the in_reply_to', () => {
+    expect(
+      parseInboundMessage(
+        encodeSystemPrompt({ system_prompt: 'be terse', session_prompt_status: 'matches' })
+      )
+    ).toEqual({
+      kind: 'system-prompt',
+      systemPrompt: { system_prompt: 'be terse', session_prompt_status: 'matches' },
+      inReplyTo: 907
+    })
+  })
+
+  it('keeps the three stored states apart: absent, "", and text', () => {
+    // THE WHOLE POINT OF THE TRI-STATE (AC2). The daemon encodes `*string` with `omitempty`, which
+    // tests the pointer rather than the pointee, so an omitted key means "no prompt stored" and an
+    // emitted `""` means "an explicitly empty prompt IS stored". A client must be able to read this
+    // value and write it straight back without collapsing one state into the other.
+    //
+    // Asserted FIELD BY FIELD rather than with one `toEqual` per case, deliberately: `toEqual`
+    // ignores an undefined property, so an absent-key expectation would pass against a decoder that
+    // wrote `system_prompt: undefined` AND against one that collapsed `''` — this form cannot.
+    const absent = parseInboundMessage(encodeSystemPrompt({ session_prompt_status: 'no_session' }))
+    const empty = parseInboundMessage(
+      encodeSystemPrompt({ system_prompt: '', session_prompt_status: 'matches' })
+    )
+    const text = parseInboundMessage(
+      encodeSystemPrompt({ system_prompt: 'you are a helpful assistant', session_prompt_status: 'differs' })
+    )
+
+    if (absent?.kind !== 'system-prompt') throw new Error('expected system-prompt')
+    if (empty?.kind !== 'system-prompt') throw new Error('expected system-prompt')
+    if (text?.kind !== 'system-prompt') throw new Error('expected system-prompt')
+    expect(absent.systemPrompt.system_prompt).toBeUndefined()
+    expect(empty.systemPrompt.system_prompt).toBe('')
+    expect(text.systemPrompt.system_prompt).toBe('you are a helpful assistant')
+  })
+
+  it('carries each of the three published statuses verbatim, independent of the prompt', () => {
+    // The two fields are INDEPENDENT and neither is derived from the other. The two rows that look
+    // wrong and are not: text beside `no_session` is "configured, applies at the next session start",
+    // and an ABSENT key beside `matches` is a conversation holding nothing whose session spawned with
+    // nothing — the daemon compares the COLLAPSED stored value, so both no-bytes states read as
+    // `matches`. A decoder that inferred one field from the other reddens here.
+    const rows: Array<[Record<string, unknown>, string | undefined, string]> = [
+      [{ system_prompt: 'x', session_prompt_status: 'no_session' }, 'x', 'no_session'],
+      [{ session_prompt_status: 'matches' }, undefined, 'matches'],
+      [{ system_prompt: '', session_prompt_status: 'differs' }, '', 'differs']
+    ]
+    for (const [payload, prompt, status] of rows) {
+      const decoded = parseInboundMessage(encodeSystemPrompt(payload))
+      if (decoded?.kind !== 'system-prompt') throw new Error('expected system-prompt')
+      expect(decoded.systemPrompt.system_prompt).toBe(prompt)
+      expect(decoded.systemPrompt.session_prompt_status).toBe(status)
+    }
+  })
+
+  it('drops unknown server keys, keeping only the two known fields (forward-compat)', () => {
+    // A `conversation_id` is the extra worth naming: the reply deliberately carries none, and a
+    // future daemon that grew one must not be able to smuggle a routing key past the correlation.
+    expect(
+      parseInboundMessage(
+        encodeSystemPrompt({
+          system_prompt: 'be terse',
+          session_prompt_status: 'matches',
+          conversation_id: 'conv-evil',
+          extra: 'ignore-me'
+        })
+      )
+    ).toEqual({
+      kind: 'system-prompt',
+      systemPrompt: { system_prompt: 'be terse', session_prompt_status: 'matches' },
+      inReplyTo: 907
+    })
+  })
+
+  it('carries an absent in_reply_to as undefined rather than failing the decode', () => {
+    // Optional here for `history-page`'s stated reason: a reply with no correlation handle is
+    // UNCORRELATABLE, not malformed, and the fail-closed drop belongs one layer up in daemonConnection
+    // where the outstanding-request map lives.
+    expect(
+      parseInboundMessage(
+        encodeSystemPrompt({ session_prompt_status: 'no_session' }, null)
+      )
+    ).toEqual({
+      kind: 'system-prompt',
+      systemPrompt: { session_prompt_status: 'no_session' },
+      inReplyTo: undefined
+    })
+  })
+})
+
+describe('parseInboundMessage — system_prompt fail-closed (#1230)', () => {
+  it('throws on an explicit system_prompt: null, which the daemon never emits', () => {
+    // OFF-CONTRACT (AC2). `*string` with `omitempty` omits the key for nil; it never writes null. A
+    // decoder that read null as absence or as `''` would fold an off-contract frame into one of the
+    // three legitimate states, and the value would then round-trip back to the daemon as a write.
+    expect(() =>
+      parseInboundMessage(encodeSystemPrompt({ system_prompt: null, session_prompt_status: 'matches' }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws when system_prompt is present but not a string', () => {
+    for (const bad of [42, true, [], {}]) {
+      expect(() =>
+        parseInboundMessage(encodeSystemPrompt({ system_prompt: bad, session_prompt_status: 'matches' }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on a session_prompt_status outside the three published values', () => {
+    // A CLOSED SET here, unlike `permission_mode`'s deliberately un-allowlisted read (#1020). That
+    // field's read half carries one mode its write half refuses, so narrowing it would fail-close
+    // valid traffic; this one is a published three-value enum the daemon sets on every path, never
+    // `''`, so a fourth value is an off-contract frame with no legitimate reading.
+    for (const bad of ['', 'MATCHES', 'unknown', 'no-session', 'stale']) {
+      expect(() =>
+        parseInboundMessage(encodeSystemPrompt({ session_prompt_status: bad }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when session_prompt_status is missing or non-string', () => {
+    const bad: unknown[] = [
+      { system_prompt: 'x' },
+      { session_prompt_status: null },
+      { session_prompt_status: 3 },
+      { session_prompt_status: ['matches'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSystemPrompt(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when the system_prompt payload is not an object', () => {
+    for (const payload of ['matches', 42, null, [], true]) {
+      expect(() => parseInboundMessage(encodeSystemPrompt(payload))).toThrow(WireDecodeError)
+    }
+  })
+})
+
+describe('parseInboundMessage — system_prompt log discipline (#1230)', () => {
+  const SECRET_PROMPT = 'secret-operator-system-prompt-text'
+
+  it('logs a system_prompt content-free, never the prompt text', () => {
+    // AC4, success half. No field of this payload reaches a log line: the arm emits the byte length
+    // and a one-way hash only, reusing the existing allowlisted field set. The prompt is asserted
+    // with a sentinel that cannot collide with anything else in the record, so a leak through ANY
+    // field fails this.
+    const { log, lines } = captureLog()
+    const plaintext = encodeSystemPrompt({
+      system_prompt: SECRET_PROMPT,
+      session_prompt_status: 'differs'
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('system_prompt')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_PROMPT)
+  })
+
+  it('does NOT log on a malformed system_prompt throw path, and the thrown error quotes no prompt', () => {
+    // AC4, reject half, and the half the daemon side's own overview names as the one worth pinning:
+    // the check is against what a CAUGHT OR WRAPPED ERROR CAN QUOTE, not only the fields a new log
+    // line names. The arm narrows BEFORE logging, so a rejected frame leaves no record at all; and
+    // the narrower's message names the client-owned field constant only, so the prompt cannot reach a
+    // stack trace, a crash reporter, or anything that catches and logs either.
+    const { log, lines } = captureLog()
+    let thrown: unknown
+    try {
+      parseInboundMessage(
+        encodeSystemPrompt({ system_prompt: SECRET_PROMPT, session_prompt_status: 'nonsense' }),
+        log
+      )
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(WireDecodeError)
+    expect(lines).toHaveLength(0)
+    expect(String((thrown as Error).message)).not.toContain(SECRET_PROMPT)
+    // Non-vacuity: the sentinel really is in the frame this rejected, so the two assertions above are
+    // about suppression rather than about a prompt that was never there.
+    expect(new TextDecoder().decode(
+      encodeSystemPrompt({ system_prompt: SECRET_PROMPT, session_prompt_status: 'nonsense' })
+    )).toContain(SECRET_PROMPT)
+  })
+})

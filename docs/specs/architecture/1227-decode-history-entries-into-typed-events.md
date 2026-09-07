@@ -271,6 +271,39 @@ the fake relay driver, unchanged.
    a stored `type` is daemon-authored and AC4 forbids naming it. If implementation shows the count alone is
    unactionable, the answer is still not to log the type; note it for #1223 instead.
 
+## Revisions
+
+**2026-09-07, during implementation.** Four departures from the plan above, recorded rather than folded
+in silently.
+
+1. **`decodeHistoryPage` returns `{ page, skipped }`, not a bare `DecodedHistoryPage`.** The plan gave it
+   the page as its only result, which left the skip count — required by the § Error handling diagnostic —
+   with nowhere to come from short of counting the difference between the served and surviving lengths at
+   the call site. Returning the count the loop already has is the honest shape. No type crosses IPC because
+   of it: `parseInboundMessage` reads `skipped` for the log line and returns only `page`.
+
+2. **The shipped 1200-entry no-count-bound test drops to 800 entries.** Its entries were minimal precisely
+   so the count could go as high as `MAX_PLAINTEXT_BYTES` allows, and a *decodable* entry is necessarily
+   larger than the original `{"id":0,"type":"m","payload":{},"ts":"t"}`, which now skips. Rewriting them as
+   the cheapest decodable type (`stall`, one payload field) put 1200 over the byte cap and threw at encode.
+   800 keeps every entry surviving the decode — which is what preserves the test's meaning as a count-bound
+   test rather than letting it pass vacuously as an all-skipped page — and still sits far above any
+   client-side number anyone would have invented.
+
+3. **Both Open Questions resolved as planned, no design change.** `messageReceived` stayed nested
+   (`message: Omit<MessagePayload, 'conversation_id'>`), which read cleanly against the mutual-assignability
+   guard; the skip diagnostic stayed count-only.
+
+4. **The size estimate was low. Stating the actual rather than the estimate:** 1011 lines across the six
+   source files plus ~290 of plan, against the ~750–850 total this plan predicted and the refiner's ~700.
+   The production half landed near the estimate; the test half did not — the per-type table alone is ~160
+   lines because each of the thirteen rows carries a full payload and a full expected event, and the
+   fixture rewrites in the two shipped describes cost more than a constant swap. This overshoots the
+   800-line boundary the § Sizing section had already recorded as exceeded on the call-site row, so the
+   conclusion there is unchanged and the measurement behind it is now the real one: **a ticket of this
+   shape — one dispatch over eleven types, each needing its own round-trip fixture — is a ~1000-line
+   ticket, and the eleven-way fan-out is what makes it one, not the size of the production change.**
+
 ## Security review
 
 **Verdict:** PASS (first pass FAIL — three MUST FIX findings, all fixed in the plan above before this

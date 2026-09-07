@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { parseInboundMessage } from './inboundMessage'
+import {
+  parseInboundMessage,
+  type DecodedHistoryEntry,
+  type DecodedHistoryPage
+} from './inboundMessage'
 import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
 import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
 import {
@@ -7445,11 +7449,13 @@ function encodeHistoryPage(payload: unknown, inReplyTo?: number): Uint8Array {
   })
 }
 
-/** One well-formed history entry — the daemon's committed example, shape for shape (#1222). */
+/** One well-formed history entry — the daemon's committed example, shape for shape (#1222).
+ *  Its payload carries `conversation_id` since #1227: every live-lane parser requires it, so an entry
+ *  without one is skipped at the decode and this fixture would silently stand for an EMPTY page. */
 const HISTORY_ENTRY: HistoryEntry = {
   id: 412,
   type: 'assistant_delta',
-  payload: { turn_id: 't1', seq: 3, text: 'hello' },
+  payload: { conversation_id: 'c1', turn_id: 't1', seq: 3, text: 'hello' },
   ts: FIXED_TS
 }
 
@@ -7460,11 +7466,38 @@ const HISTORY_PAGE: HistoryPagePayload = {
   at_start: false
 }
 
+/** What HISTORY_ENTRY decodes to (#1227): the entry's own `id`/`ts` kept, the payload replaced by the
+ *  typed event, and the payload's daemon-asserted `conversation_id` GONE. */
+const DECODED_ENTRY: DecodedHistoryEntry = {
+  id: 412,
+  ts: FIXED_TS,
+  event: { type: 'assistantDelta', turnId: 't1', seq: 3, text: 'hello' }
+}
+
+/** What HISTORY_PAGE decodes to (#1227) — `cursor`/`at_start` still exactly as served. */
+const DECODED_PAGE: DecodedHistoryPage = {
+  entries: [DECODED_ENTRY],
+  cursor: HISTORY_PAGE.cursor,
+  at_start: false
+}
+
+/** One history entry of an arbitrary stored type, payload and id — the AC2/AC3 table driver. */
+function historyEntry(type: string, payload: Record<string, unknown>, id = 1): HistoryEntry {
+  return { id, type, payload, ts: FIXED_TS }
+}
+
+/** Decode one single-entry page and hand back its entries — the per-type assertions' whole subject. */
+function decodedEntries(entries: HistoryEntry[]): readonly DecodedHistoryEntry[] {
+  const result = parseInboundMessage(encodeHistoryPage({ entries, cursor: 'c', at_start: false }))
+  if (result?.kind !== 'history-page') throw new Error('expected a history-page kind')
+  return result.historyPage.entries
+}
+
 describe('parseInboundMessage — history_page recognition (#1222, additive)', () => {
   it('narrows a full history_page into { kind: history-page }', () => {
     expect(parseInboundMessage(encodeHistoryPage(HISTORY_PAGE))).toEqual({
       kind: 'history-page',
-      historyPage: HISTORY_PAGE
+      historyPage: DECODED_PAGE
     })
   })
 
@@ -7473,7 +7506,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     // it answers. Losing this field would make every page unattributable.
     expect(parseInboundMessage(encodeHistoryPage(HISTORY_PAGE, 140))).toEqual({
       kind: 'history-page',
-      historyPage: HISTORY_PAGE,
+      historyPage: DECODED_PAGE,
       inReplyTo: 140
     })
   })
@@ -7490,7 +7523,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: terminal
+      historyPage: { entries: [], cursor: '', at_start: true }
     })
   })
 
@@ -7500,15 +7533,16 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     const terminal: HistoryPagePayload = { entries: [HISTORY_ENTRY], cursor: '', at_start: true }
     expect(parseInboundMessage(encodeHistoryPage(terminal))).toEqual({
       kind: 'history-page',
-      historyPage: terminal
+      historyPage: { entries: [DECODED_ENTRY], cursor: '', at_start: true }
     })
   })
 
-  it('carries an entry whose type this client does not recognise, never rejecting it', () => {
+  it('SKIPS an entry whose type this client does not recognise, never rejecting the page', () => {
     // `type` is a STORED STRING NOTHING RE-VALIDATES, so a client MUST tolerate one it does not know
-    // rather than treating it as a protocol violation. A closed-set check here would fail-close a
-    // valid future frame — and the set spans the whole live-lane vocabulary plus session_transition
-    // plus the operator's own message.
+    // rather than treating it as a protocol violation. #1222 expressed that tolerance by carrying the
+    // entry opaquely; since #1227 nothing untyped crosses IPC, so tolerance means SKIP — still not a
+    // rejection, and still not a cost to the page. `cursor`/`at_start` survive untouched, which is
+    // what lets #1224's walk step past a page it could decode nothing from.
     const exotic: HistoryPagePayload = {
       entries: [{ ...HISTORY_ENTRY, type: 'a_frame_type_from_a_later_daemon' }],
       cursor: 'c',
@@ -7516,13 +7550,14 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(exotic))).toEqual({
       kind: 'history-page',
-      historyPage: exotic
+      historyPage: { entries: [], cursor: 'c', at_start: false }
     })
   })
 
-  it('carries an entry payload verbatim, including nesting, arrays and an empty object', () => {
-    // The payload is OPAQUE here: #1222 interprets it nowhere and #1223 owns the reduction. Anything
-    // that narrowed, flattened or key-filtered it would redden this.
+  it('SKIPS an entry whose payload cannot be the shape its type promises', () => {
+    // #1222 carried these verbatim because it interpreted nothing. Since #1227 the payload is decoded
+    // against the live-lane parser for its type, so a nested blob under `assistant_delta` and a bare
+    // `{}` are both payload-decode failures — skipped one by one (AC4), never throwing the page.
     const nested: HistoryPagePayload = {
       entries: [
         { ...HISTORY_ENTRY, payload: { a: { b: [1, 2, { c: null }] }, d: '' } },
@@ -7533,13 +7568,14 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(nested))).toEqual({
       kind: 'history-page',
-      historyPage: nested
+      historyPage: { entries: [], cursor: 'c', at_start: false }
     })
   })
 
   it('drops unknown server keys on the page and on an entry', () => {
-    // Fresh literals at both levels, so a decoder that grew a field cannot smuggle one across and a
-    // page-borne extra property cannot ride along.
+    // Fresh literals at every level, so a decoder that grew a field cannot smuggle one across and a
+    // page-borne extra property cannot ride along. The entry-level `conversation_id` here is the
+    // sharpest case: an id the daemon never promised, sitting beside the correlation-resolved one.
     const withExtras = {
       ...HISTORY_PAGE,
       entries: [{ ...HISTORY_ENTRY, event_id: 99, conversation_id: 'other' }],
@@ -7547,7 +7583,7 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     }
     expect(parseInboundMessage(encodeHistoryPage(withExtras))).toEqual({
       kind: 'history-page',
-      historyPage: HISTORY_PAGE
+      historyPage: DECODED_PAGE
     })
   })
 
@@ -7560,13 +7596,390 @@ describe('parseInboundMessage — history_page recognition (#1222, additive)', (
     // ceiling is the bound which actually applies, and it is the reason a count bound would be
     // redundant as well as wrong. The daemon's own two narrowings (4096 entries, and ~1365 for what
     // can serialise inside the cap) both sit above any client-side number anyone would have invented.
-    const many = Array.from({ length: 1200 }, (_, i) => ({ id: i, type: 'm', payload: {}, ts: 't' }))
+    // Every entry is well-formed and of a drawn type, so all 800 SURVIVE the #1227 decode — which is
+    // what keeps this a count-bound test rather than an accidental skip-matrix one. `stall` is the
+    // cheapest decodable entry there is (one field), so the count stays as high as the byte cap allows.
+    const many = Array.from({ length: 800 }, (_, i) => ({
+      id: i,
+      type: 'stall',
+      payload: { conversation_id: 'c' },
+      ts: 't'
+    }))
     const result = parseInboundMessage(encodeHistoryPage({ ...HISTORY_PAGE, entries: many }))
-    expect(result?.kind === 'history-page' && result.historyPage.entries).toHaveLength(1200)
+    expect(result?.kind === 'history-page' && result.historyPage.entries).toHaveLength(800)
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {
     expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — history entry payload decode (#1227)', () => {
+  const OCCURRED = '2026-08-01T09:30:00.000000001Z'
+
+  // AC2: every type the timeline draws, with the render fields its LIVE frame carries and the payload's
+  // daemon-asserted `conversation_id` dropped. `toEqual` is exact on own properties, so a smuggled id or
+  // an extra field reddens the row rather than shipping.
+  it.each([
+    [
+      'assistant_delta',
+      { conversation_id: 'c1', turn_id: 't1', seq: 3, text: 'hello' },
+      { type: 'assistantDelta', turnId: 't1', seq: 3, text: 'hello' }
+    ],
+    [
+      'turn_end',
+      { conversation_id: 'c1', turn_id: 't1', stop_reason: 'end_turn' },
+      { type: 'turnEnd', turnId: 't1', stopReason: 'end_turn' }
+    ],
+    [
+      'turn_state',
+      { conversation_id: 'c1', state: 'thinking' },
+      { type: 'turnState', state: 'thinking' }
+    ],
+    [
+      'tool_use',
+      {
+        conversation_id: 'c1',
+        turn_id: 't1',
+        tool_use_id: 'u1',
+        name: 'Read',
+        input_summary: 'a.ts'
+      },
+      {
+        type: 'toolUse',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'Read',
+        inputSummary: 'a.ts',
+        input: undefined
+      }
+    ],
+    [
+      'tool_use',
+      {
+        conversation_id: 'c1',
+        turn_id: 't1',
+        tool_use_id: 'u1',
+        name: 'Read',
+        input_summary: 'a.ts',
+        input: { file_path: 'a.ts' }
+      },
+      {
+        type: 'toolUse',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'Read',
+        inputSummary: 'a.ts',
+        input: { file_path: 'a.ts' }
+      }
+    ],
+    [
+      'tool_result',
+      {
+        conversation_id: 'c1',
+        turn_id: 't1',
+        tool_use_id: 'u1',
+        is_error: false,
+        result_summary: 'ok'
+      },
+      {
+        type: 'toolResult',
+        turnId: 't1',
+        toolUseId: 'u1',
+        isError: false,
+        resultSummary: 'ok',
+        resultDetail: undefined
+      }
+    ],
+    [
+      'tool_result',
+      {
+        conversation_id: 'c1',
+        turn_id: 't1',
+        tool_use_id: 'u1',
+        is_error: true,
+        result_summary: 'boom',
+        result_detail: ''
+      },
+      {
+        type: 'toolResult',
+        turnId: 't1',
+        toolUseId: 'u1',
+        isError: true,
+        resultSummary: 'boom',
+        resultDetail: ''
+      }
+    ],
+    [
+      'session_transition',
+      {
+        conversation_id: 'c1',
+        previous_session_id: 's0',
+        new_session_id: 's1',
+        reason: 'workspace_change',
+        occurred_at: OCCURRED,
+        workspace_cwd: '/w/one'
+      },
+      {
+        type: 'sessionTransition',
+        newSessionId: 's1',
+        reason: 'workspace_change',
+        occurredAt: OCCURRED,
+        workspaceCwd: '/w/one'
+      }
+    ],
+    [
+      'session_transition',
+      {
+        conversation_id: 'c1',
+        previous_session_id: 's0',
+        new_session_id: 's1',
+        reason: 'clear',
+        occurred_at: OCCURRED,
+        workspace_cwd: null
+      },
+      {
+        type: 'sessionTransition',
+        newSessionId: 's1',
+        reason: 'clear',
+        occurredAt: OCCURRED,
+        workspaceCwd: null
+      }
+    ],
+    ['stall', { conversation_id: 'c1' }, { type: 'stallDetected' }],
+    [
+      'api_retry',
+      { conversation_id: 'c1', active: true, current: 0, total: 0 },
+      { type: 'apiRetry', active: true, current: 0, total: 0 }
+    ],
+    [
+      'compacting',
+      { conversation_id: 'c1', active: false },
+      { type: 'compacting', active: false }
+    ],
+    [
+      'unrecognized_message',
+      {
+        conversation_id: 'c1',
+        site: 'line_type',
+        message_type: 'later_frame',
+        raw: '{"t":1}',
+        truncated: false
+      },
+      {
+        type: 'unrecognizedMessage',
+        site: 'line_type',
+        messageType: 'later_frame',
+        raw: '{"t":1}',
+        truncated: false
+      }
+    ],
+    [
+      'message',
+      { conversation_id: 'c1', message_id: 'm1', role: 'user', text: 'ship it' },
+      { type: 'messageReceived', message: { message_id: 'm1', role: 'user', text: 'ship it' } }
+    ]
+  ])('decodes a stored %s into its typed timeline event', (type, payload, event) => {
+    expect(decodedEntries([historyEntry(type, payload, 7)])).toEqual([
+      { id: 7, ts: FIXED_TS, event }
+    ])
+  })
+
+  it('drops the payload conversation_id on EVERY arm that carries one', () => {
+    // The one value that could contradict the correlation-resolved id on `historyPageReceived`. A
+    // consumer handed both would have a routing decision it must never be given, so no arm keeps it.
+    const entries = [
+      historyEntry('assistant_delta', { conversation_id: 'other', turn_id: 't', seq: 0, text: '' }),
+      historyEntry('turn_state', { conversation_id: 'other', state: 'idle' }),
+      historyEntry('stall', { conversation_id: 'other' }),
+      historyEntry('compacting', { conversation_id: 'other', active: true }),
+      historyEntry('message', {
+        conversation_id: 'other',
+        message_id: 'm',
+        role: 'user',
+        text: 't'
+      })
+    ]
+    for (const decoded of decodedEntries(entries)) {
+      expect(JSON.stringify(decoded)).not.toContain('other')
+    }
+  })
+
+  it('drops previous_session_id on session_transition, matching the live emit', () => {
+    const [decoded] = decodedEntries([
+      historyEntry('session_transition', {
+        conversation_id: 'c1',
+        previous_session_id: 'SHOULD-NOT-CROSS',
+        new_session_id: 's1',
+        reason: 'idle_evict',
+        occurred_at: OCCURRED,
+        workspace_cwd: null
+      })
+    ])
+    expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
+  })
+
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first six this
+  // client DOES decode on the live lane and never draws in the thread; `thinking_progress` and
+  // `rate_limited` it has no parser for at all; the last is a type it has never seen.
+  it.each([
+    'background_task_started',
+    'background_task_updated',
+    'background_task_roster',
+    'model_announced',
+    'model_list',
+    'slash_command_list',
+    'thinking_progress',
+    'rate_limited',
+    'a_frame_type_from_a_later_daemon'
+  ])('skips a stored %s — undrawn, and not an error', (type) => {
+    expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
+  })
+
+  it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {
+    // The sharp version of AC3. This payload satisfies parseUnrecognizedMessagePayload AND
+    // parseModelAnnouncedPayload (unknown keys are tolerated by both), so the two rows differ only in
+    // the stored type. The drawn one decodes; the undrawn one skips because the dispatch has no arm
+    // for it at all — not because anything about its payload failed.
+    const both = {
+      conversation_id: 'c1',
+      site: 'undecodable',
+      message_type: '',
+      raw: 'r',
+      truncated: false,
+      model: 'claude-opus-5'
+    }
+    expect(decodedEntries([historyEntry('unrecognized_message', both)])).toHaveLength(1)
+    expect(decodedEntries([historyEntry('model_announced', both)])).toEqual([])
+  })
+
+  it('lets NO modal_shown or question_shown reach the window as something answerable', () => {
+    // Stated outright because it is the sharpest threat on this path: a replayed prompt that arrived
+    // as answerable would let an operator resolve a modal that closed hours ago, and a hostile daemon
+    // could plant one in a page. Neither type has an arm in the dispatch, so no payload can produce an
+    // event — this holds for a future daemon that starts LOGGING them just as much as for a hostile one.
+    const page = decodedEntries([
+      historyEntry('modal_shown', {
+        conversation_id: 'c1',
+        modal_id: 'md1',
+        class: 'permission',
+        source: 'claude',
+        title: 'Allow?',
+        options: [{ id: 'yes', label: 'Yes' }]
+      }),
+      historyEntry('question_shown', {
+        conversation_id: 'c1',
+        question_batch_id: 'q1',
+        questions: []
+      })
+    ])
+    expect(page).toEqual([])
+  })
+
+  // AC4: a payload that fails to parse costs its own entry and nothing more.
+  it.each([
+    ['a missing conversation_id', { turn_id: 't1', seq: 3, text: 'hello' }],
+    ['a mistyped field', { conversation_id: 'c1', turn_id: 't1', seq: '3', text: 'hello' }],
+    ['an empty payload', {}],
+    ['a null field', { conversation_id: 'c1', turn_id: 't1', seq: 3, text: null }]
+  ])('skips an entry with %s while a well-formed sibling still crosses', (_label, payload) => {
+    expect(decodedEntries([historyEntry('assistant_delta', payload, 1), HISTORY_ENTRY])).toEqual([
+      DECODED_ENTRY
+    ])
+  })
+
+  it('skips an out-of-set closed enum without failing the page', () => {
+    // The enum arms fail through their own check rather than through a require* helper, so they get
+    // their own row: `state`, `reason`, `site` and `role` each fail-close one entry.
+    const entries = [
+      historyEntry('turn_state', { conversation_id: 'c1', state: 'daydreaming' }),
+      historyEntry('session_transition', {
+        conversation_id: 'c1',
+        previous_session_id: 's0',
+        new_session_id: 's1',
+        reason: 'something_later',
+        occurred_at: OCCURRED,
+        workspace_cwd: null
+      }),
+      historyEntry('unrecognized_message', {
+        conversation_id: 'c1',
+        site: 'somewhere_else',
+        message_type: 'x',
+        raw: 'r',
+        truncated: false
+      }),
+      historyEntry('message', {
+        conversation_id: 'c1',
+        message_id: 'm1',
+        role: 'system',
+        text: 't'
+      }),
+      HISTORY_ENTRY
+    ]
+    expect(decodedEntries(entries)).toEqual([DECODED_ENTRY])
+  })
+
+  it('preserves served order among the survivors of both skips', () => {
+    // AC5. Newest-first as served, never reordered — and the skipped rows leave no hole and shift
+    // nothing, so #1225's join on `ts` still sees the page the daemon sent.
+    const entries = [
+      historyEntry('turn_state', { conversation_id: 'c1', state: 'thinking' }, 1),
+      historyEntry('model_list', { conversation_id: 'c1' }, 2), // undrawn — AC3 skip
+      historyEntry('compacting', { conversation_id: 'c1', active: true }, 3),
+      historyEntry('turn_end', { conversation_id: 'c1' }, 4), // malformed — AC4 skip
+      historyEntry('stall', { conversation_id: 'c1' }, 5)
+    ]
+    expect(decodedEntries(entries).map((e) => e.id)).toEqual([1, 3, 5])
+  })
+
+  it('crosses a page whose every entry was skipped as an EMPTY page, never a failure', () => {
+    // The whole page must still settle #1224's outstanding ask: a walk that dropped it would stall
+    // with no terminal and no way to step past the entries it could not draw. `cursor`/`at_start`
+    // therefore survive an all-skipped page exactly as served.
+    const page: HistoryPagePayload = {
+      entries: [
+        historyEntry('model_announced', { conversation_id: 'c1', model: 'm', truncated: false }),
+        historyEntry('assistant_delta', { nothing: 'valid' })
+      ],
+      cursor: 'still-usable',
+      at_start: false
+    }
+    expect(parseInboundMessage(encodeHistoryPage(page))).toEqual({
+      kind: 'history-page',
+      historyPage: { entries: [], cursor: 'still-usable', at_start: false }
+    })
+  })
+
+  it('is inert against a __proto__ key in an entry payload and in a tool input map', () => {
+    // The payload is held by reference off the JSON.parse result, so `__proto__` is present as an
+    // ORDINARY OWN DATA PROPERTY. Reading it is inert; an Object.assign or a `target[k] = v` copy loop
+    // would not be. `input` is the one daemon-KEYED map on this path, and optionalStringMap drops the
+    // three reserved keys AFTER type-checking every value — verified, not assumed.
+    // Built through JSON.parse, NOT an object literal: `{__proto__: x}` in a literal is prototype-set
+    // syntax and produces no own property at all, so the literal form would pin nothing.
+    const hostile = JSON.parse(
+      `{"conversation_id":"c1","turn_id":"t1","tool_use_id":"u1","name":"Bash",` +
+        `"input_summary":"ls","__proto__":"polluted",` +
+        `"input":{"__proto__":"polluted","constructor":"polluted","prototype":"polluted","cmd":"ls"}}`
+    ) as Record<string, unknown>
+    expect(Object.prototype.hasOwnProperty.call(hostile, '__proto__')).toBe(true)
+    const decoded = decodedEntries([historyEntry('tool_use', hostile)])
+    expect(decoded).toEqual([
+      {
+        id: 1,
+        ts: FIXED_TS,
+        event: {
+          type: 'toolUse',
+          turnId: 't1',
+          toolUseId: 'u1',
+          name: 'Bash',
+          inputSummary: 'ls',
+          input: { cmd: 'ls' }
+        }
+      }
+    ])
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted')).toBe(false)
   })
 })
 
@@ -7747,7 +8160,9 @@ describe('parseInboundMessage — history_page diagnostics (#1222)', () => {
 
     parseInboundMessage(plaintext, log)
 
-    expect(lines).toHaveLength(1)
+    // TWO lines since #1227: the page line, then the skip line — this entry's type is one the timeline
+    // does not draw, so it is skipped, and every planted sentinel is checked against BOTH.
+    expect(lines).toHaveLength(2)
     const record = JSON.parse(lines[0])
     expect(record.event).toBe('inbound-decoded')
     expect(record.code).toBe('history_page')
@@ -7755,8 +8170,47 @@ describe('parseInboundMessage — history_page diagnostics (#1222)', () => {
     expect(record.hash).toMatch(HEX64)
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
     for (const secret of [SECRET_CURSOR, SECRET_TEXT, SECRET_TYPE, '412']) {
-      expect(lines[0]).not.toContain(secret)
+      for (const line of lines) expect(line).not.toContain(secret)
     }
+  })
+
+  it('logs ONE content-free skip line per page, carrying a count and never an entry type (#1227)', () => {
+    // At most one line per page, NEVER one per entry: a page holds ~1200 entries inside one frame and
+    // a hostile daemon can send them all malformed and repeat the frame, so a per-entry line would be
+    // a three-orders-of-magnitude log-write amplifier. `count` is this client's own reading, not
+    // daemon content; the `hash` is the page line's, so the two correlate.
+    const { log, lines } = captureLog()
+    const SECRET_TYPE = 'secret-undrawn-type'
+    const SECRET_TEXT = 'secret-malformed-payload-value'
+    const plaintext = encodeHistoryPage({
+      entries: [
+        { id: 1, type: SECRET_TYPE, payload: { conversation_id: 'c1' }, ts: FIXED_TS },
+        { id: 2, type: 'assistant_delta', payload: { text: SECRET_TEXT }, ts: FIXED_TS },
+        HISTORY_ENTRY
+      ],
+      cursor: 'c',
+      at_start: false
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(2)
+    const record = JSON.parse(lines[1])
+    expect(record.event).toBe('inbound-decode-skipped')
+    expect(record.code).toBe('history_page_entry')
+    expect(record.count).toBe(2)
+    expect(record.hash).toBe(JSON.parse(lines[0]).hash)
+    expect(Object.keys(record).sort()).toEqual(['code', 'count', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_TYPE, SECRET_TEXT]) {
+      expect(lines[1]).not.toContain(secret)
+    }
+  })
+
+  it('logs NO skip line when every entry of the page decoded (#1227)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeHistoryPage(HISTORY_PAGE), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).toBe('inbound-decoded')
   })
 
   it('does NOT log on a malformed history_page throw path (narrow before logging)', () => {

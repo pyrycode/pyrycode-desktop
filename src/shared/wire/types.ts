@@ -1903,14 +1903,27 @@ export interface RequestHistoryPayload {
  *
  * DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT, and the type system carries no signal for
  * that — the `RetrievedAttachmentChunk` warning, and it lands harder here. `type` and `payload` are
- * REPLAYED CONTENT: operator-authored for a stored `send_message`, `claude`-authored for a stored
+ * REPLAYED CONTENT: operator-authored for a stored `message`, `claude`-authored for a stored
  * assistant frame. An entry carries EXACTLY the trust class of the live frame it mirrors, so the
  * daemon's § Security model threat 1 lands on this shape and a client applies exactly the sanitisation
  * it applies on the live lane. NOTHING ABOUT AN ENTRY IS MORE TRUSTED FOR HAVING BEEN STORED.
  *
- * `payload` crosses VERBATIM as opaque data — `#1222` interprets it nowhere, and #1223 owns the
- * reduction. It is typed as an open record rather than a union of the wire payloads because it can hold
- * a type this client does not recognise. Two rules bind the consumer that eventually reads it. It is
+ * THE OPERATOR'S OWN STORED MESSAGE IS TYPED `message`, NOT `send_message`, and the SSOT prose is stale
+ * on exactly this point: its § A history entry says "operator-authored for a stored `send_message`" and
+ * its worked example shows `"type": "send_message"`, but the daemon's third history producer
+ * (`cmd/pyry/operator_message_history.go`, pyrycode#2115) appends `protocol.TypeMessage` carrying a
+ * `MessagePayload`. `message` is the string a client matches on; the two sentences above and below that
+ * say so are the correct ones. This type appears only in history — the daemon pushes no `message` frame
+ * on the interactive lane.
+ *
+ * `payload` crosses VERBATIM as opaque data AT THIS TYPE, which is the pre-decode wire shape. #1227
+ * added the background-process stage that reads it: `decodeHistoryEvent` narrows each entry against the
+ * same payload parser the live lane uses, so what crosses IPC is `HistoryTimelineEntry`
+ * (shared/ipc/events.ts) and not this. Nothing in the window ever holds one of these. It is typed as an
+ * open record rather than a union of the wire payloads because it can hold a type this client does not
+ * recognise — which the decode SKIPS rather than rejecting, so the tolerance this docblock demands is
+ * still exactly what happens. Two rules bind the consumer that reads it, and after #1227 that consumer
+ * is the decoder alone. It is
  * held BY REFERENCE off the `JSON.parse` result, so a `__proto__` key is present as an ORDINARY OWN DATA
  * PROPERTY: reading it, spreading it (`{...payload}` uses CreateDataProperty and triggers no setter) and
  * `structuredClone`-ing it across IPC are all inert, while `Object.assign(target, payload)` and a

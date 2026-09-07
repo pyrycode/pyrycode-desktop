@@ -67,7 +67,10 @@ import type {
   ModelListPayload,
   WireModelOption,
   AttachmentStoredPayload,
-  AttachmentChunkPayload
+  AttachmentChunkPayload,
+  WireTurnState,
+  WireSessionTransitionReason,
+  WireUnrecognizedSite
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -597,7 +600,11 @@ export type InboundDaemonMessage =
   | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
   | {
       kind: 'history-page'
-      historyPage: HistoryPagePayload
+      // ALREADY-DECODED since #1227: `entries` holds typed timeline events, not the wire's
+      // `{ type, payload }` pairs. `parseHistoryPagePayload` still narrows the wire shape one step
+      // earlier and still fails the WHOLE page closed on a malformed entry envelope; what this field
+      // carries is what survived the second, per-entry payload-decode stage.
+      historyPage: DecodedHistoryPage
       // OPTIONAL, like `session-settings`' and unlike `attachment-chunk`'s required one — and for the
       // opposite reason to that neighbour's. A retrieval chunk cannot legitimately arrive unsolicited,
       // so one without a correlation handle is MALFORMED; a page without one is merely uncorrelatable,
@@ -1006,11 +1013,16 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
  * recognise; an allowlist here would fail-close a valid future frame. That is the same
  * no-cross-validate posture parseQueuedItem states, applied to a type name rather than to a bound.
  *
- * `payload` goes through requireRecord and is then CARRIED BY REFERENCE, unparsed and uninterpreted —
- * #1222 reads nothing out of it and #1223 owns the reduction. Validating its shape is all this boundary
- * can do: what is IN it is replayed content carrying exactly the trust class of the live frame it
- * mirrors, and nothing about it is more trusted for having been stored. See HistoryEntry for the two
- * rules a consumer inherits.
+ * `payload` goes through requireRecord and is then CARRIED BY REFERENCE, unparsed and uninterpreted at
+ * THIS stage. Validating its shape is all this boundary can do: what is IN it is replayed content
+ * carrying exactly the trust class of the live frame it mirrors, and nothing about it is more trusted for
+ * having been stored. See HistoryEntry for the two rules a consumer inherits.
+ *
+ * #1227 adds the SECOND stage that reads it — `decodeHistoryPage`, running after this one — so the
+ * reference this function returns no longer reaches IPC: every decoded arm is a fresh literal of scalars,
+ * and nothing off the `JSON.parse` result survives into the emitted event. What this function still owns
+ * is the ENVELOPE posture, and it is unchanged: one malformed entry envelope throws the WHOLE page. Do
+ * not relax it to a skip to match the payload stage's — that would silently drop a shipped guarantee.
  */
 function parseHistoryEntry(raw: unknown): HistoryEntry {
   if (!isRecord(raw)) {
@@ -1066,6 +1078,269 @@ function parseHistoryPagePayload(payload: unknown): HistoryPagePayload {
   const cursor = requireString(payload, 'cursor')
   const at_start = requireBoolean(payload, 'at_start')
   return { entries, cursor, at_start }
+}
+
+/**
+ * ONE STORED HISTORY ENTRY, DECODED (#1227) — the typed timeline event a page entry became, beside the
+ * entry's own durable log `id` and its `ts`. Both survive the decode because #1225 joins a loaded page to
+ * the live stream on `ts` and cannot recover one lost here; `id` is the on-disk log id and is NEVER joined
+ * against an `event_id` (see HistoryEntry).
+ *
+ * The wire `{ type, payload }` pair does NOT survive. `HistoryEntry` stays the pre-decode wire type,
+ * mirroring the daemon field-for-field; this is what crosses IPC instead of it.
+ */
+export interface DecodedHistoryEntry {
+  id: number
+  ts: string
+  event: DecodedHistoryEvent
+}
+
+/**
+ * A stored entry's payload decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) — one arm
+ * per type the timeline draws, which is the set of non-null arms in the renderer's
+ * `translateTimelineEvent` minus its client-side `connected` edge, plus the operator's own `message`.
+ * A consumer can therefore run the window's existing live-lane mapping over one of these unchanged.
+ *
+ * NO ARM CARRIES A `conversationId`, and that is the point rather than an omission. Every one of the
+ * eleven parsers requires the payload's `conversation_id` — on the live lane it is the routing key, and
+ * the fail-closed read is what makes `?? ''` misattribution impossible there — but the value it reads is
+ * DAEMON-ASSERTED, while a page is attributed by CORRELATION to the conversation this client asked
+ * about. Carrying both would hand a consumer two ids that can disagree and a routing decision it must
+ * never be given, which is the misattribution #1222's correlation exists to remove. So the id is dropped
+ * here, one layer earlier than `translateTimelineEvent` drops it on every live arm — a filter plus a
+ * fresh named-field literal, never a pass-through of the parsed payload. `session_transition`'s
+ * `previous_session_id` is dropped on the same terms the live emit drops it: no consumer.
+ *
+ * DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT, and the type system carries no signal for that.
+ * `assistantDelta.text`, `toolUse.name` / `inputSummary` and BOTH the keys and the values of its `input`
+ * map, `toolResult.resultSummary` / `resultDetail`, `unrecognizedMessage.raw` / `messageType`,
+ * `sessionTransition.workspaceCwd` and `message.text` are all replayed daemon-, claude- or
+ * operator-authored strings carrying EXACTLY the trust class of the live frame they mirror — nothing about
+ * one is more trusted for having been stored. Every one is PLAIN TEXT ONLY at the render boundary: never
+ * into a raw-markup sink (no innerHTML / dangerouslySetInnerHTML), never into an attribute or a URL, and
+ * never a filename, a cache key or a lookup path. `workspaceCwd` is the trap worth naming twice — it is a
+ * daemon-supplied filesystem path and this client never resolves, joins or opens it. #1223 owns the DOM
+ * sink and inherits this contract through the mirrored `HistoryTimelineEvent` in shared/ipc/events.ts.
+ *
+ * `toolUse.input` and `toolResult.resultDetail` stay OPTIONAL, so absence keeps meaning "the wire omitted
+ * it" (an older daemon) rather than collapsing into an empty map or an empty string, which are different
+ * facts — the contract their live arms already state.
+ */
+export type DecodedHistoryEvent =
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnState'; state: WireTurnState }
+  | {
+      type: 'toolUse'
+      turnId: string
+      toolUseId: string
+      name: string
+      inputSummary: string
+      input?: Readonly<Record<string, string>>
+    }
+  | {
+      type: 'toolResult'
+      turnId: string
+      toolUseId: string
+      isError: boolean
+      resultSummary: string
+      resultDetail?: string
+    }
+  | {
+      type: 'sessionTransition'
+      newSessionId: string
+      reason: WireSessionTransitionReason
+      occurredAt: string
+      workspaceCwd: string | null
+    }
+  | { type: 'stallDetected' }
+  | { type: 'apiRetry'; active: boolean; current: number; total: number }
+  | { type: 'compacting'; active: boolean }
+  | {
+      type: 'unrecognizedMessage'
+      site: WireUnrecognizedSite
+      messageType: string
+      raw: string
+      truncated: boolean
+    }
+  // The operator's own message, the one type that appears ONLY in history — the daemon pushes no
+  // `message` frame on the interactive lane. Nested and snake-cased, mirroring the live
+  // `messageReceived` arm's reuse of the wire payload verbatim, with the drop expressed in the type
+  // itself: `Omit` is what makes "the conversation id does not cross" a compile-time fact rather than a
+  // convention the emit has to remember.
+  | { type: 'messageReceived'; message: Omit<MessagePayload, 'conversation_id'> }
+
+/**
+ * A served page whose entries have been decoded (#1227). `cursor` and `at_start` keep their WIRE names
+ * and their values — the snake→camel flip stays at the IPC emit, this channel's convention — and both
+ * cross exactly as served: `at_start` is the only termination signal, and nothing here infers either from
+ * the other or from how many entries survived the decode.
+ */
+export interface DecodedHistoryPage {
+  entries: readonly DecodedHistoryEntry[]
+  cursor: string
+  at_start: boolean
+}
+
+/**
+ * Decode ONE stored entry's payload against the live-lane parser for its type (#1227), or return `null`
+ * when the timeline does not draw that type.
+ *
+ * IT MIRRORS `parseInboundMessage`'s type-to-parser pairing AND SHARES NONE OF ITS BODY, deliberately.
+ * That switch is bound to raw plaintext and interleaved with per-case diagnostics keyed on the frame's
+ * bytes; refactoring it to be reachable from here would be a large mechanical change to a
+ * security-sensitive file for no gain. The pairing is duplicated; the parsers are not.
+ *
+ * A `switch` STATEMENT, NEVER AN OBJECT-LITERAL DISPATCH TABLE, and that is a security constraint rather
+ * than a style choice. `type` is a stored, daemon-authored string that nothing re-validates, so
+ * `TABLE[type]` would be a LOOKUP PATH on untrusted input: `'__proto__'` resolves to `Object.prototype`
+ * (truthy, and then called) and `'constructor'` is worse. A switch compares values and touches no
+ * prototype chain. The same rule binds any later "which types do we draw?" set — a `Set`, never a bare
+ * object used as a map.
+ *
+ * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the six
+ * this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
+ * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`), the two it has no parser
+ * for at all (`thinking_progress`, `rate_limited`), any type a later daemon invents — and `modal_shown` /
+ * `question_shown`. THAT LAST PAIR IS THE SHARPEST CASE: no prompt may ever reach the window from history
+ * as something answerable, because resolving a modal that closed hours ago is a real action taken on a
+ * replayed frame. Having no arm is what guarantees it, for a future daemon that starts logging one and for
+ * a hostile one that plants one alike. Do not add an arm for either.
+ *
+ * THROWS on a payload that does not fit its type — the parser's own fail-closed behaviour, unchanged. The
+ * caller turns that into a skip; nothing is caught here, so no arm can accidentally half-decode.
+ */
+function decodeHistoryEvent(
+  type: string,
+  payload: Record<string, unknown>
+): DecodedHistoryEvent | null {
+  switch (type) {
+    case 'assistant_delta': {
+      const p = parseAssistantDeltaPayload(payload)
+      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text }
+    }
+    case 'turn_end': {
+      const p = parseTurnEndPayload(payload)
+      return { type: 'turnEnd', turnId: p.turn_id, stopReason: p.stop_reason }
+    }
+    case 'turn_state': {
+      const p = parseTurnStatePayload(payload)
+      return { type: 'turnState', state: p.state }
+    }
+    case 'tool_use': {
+      const p = parseToolUsePayload(payload)
+      return {
+        type: 'toolUse',
+        turnId: p.turn_id,
+        toolUseId: p.tool_use_id,
+        name: p.name,
+        inputSummary: p.input_summary,
+        // Assigned unconditionally, never a conditional spread — the live emit's discipline. An absent
+        // map stays absent rather than becoming `{}`, which is the different fact that the daemon sent
+        // no fields for this call.
+        input: p.input
+      }
+    }
+    case 'tool_result': {
+      const p = parseToolResultPayload(payload)
+      return {
+        type: 'toolResult',
+        turnId: p.turn_id,
+        toolUseId: p.tool_use_id,
+        isError: p.is_error,
+        resultSummary: p.result_summary,
+        resultDetail: p.result_detail
+      }
+    }
+    case 'session_transition': {
+      const p = parseSessionTransitionPayload(payload)
+      return {
+        type: 'sessionTransition',
+        newSessionId: p.new_session_id,
+        reason: p.reason,
+        occurredAt: p.occurred_at,
+        // Wire nullability preserved, never coerced to ''.
+        workspaceCwd: p.workspace_cwd
+      }
+    }
+    case 'stall': {
+      // Parsed for its fail-closed effect and nothing else: a stored `stall` whose payload names no
+      // conversation is malformed and is skipped, exactly as the live lane refuses one.
+      parseStallPayload(payload)
+      return { type: 'stallDetected' }
+    }
+    case 'api_retry': {
+      const p = parseApiRetryPayload(payload)
+      return { type: 'apiRetry', active: p.active, current: p.current, total: p.total }
+    }
+    case 'compacting': {
+      const p = parseCompactingPayload(payload)
+      return { type: 'compacting', active: p.active }
+    }
+    case 'unrecognized_message': {
+      const p = parseUnrecognizedMessagePayload(payload)
+      return {
+        type: 'unrecognizedMessage',
+        site: p.site,
+        messageType: p.message_type,
+        raw: p.raw,
+        truncated: p.truncated
+      }
+    }
+    case 'message': {
+      // The SSOT's prose says a stored operator message is typed `send_message`; the daemon's third
+      // history producer appends `protocol.TypeMessage` — `"message"` — carrying a MessagePayload, so
+      // this is the right pairing and the prose is stale (pyrycode#2115).
+      const p = parseMessagePayload(payload)
+      return {
+        type: 'messageReceived',
+        message: { message_id: p.message_id, role: p.role, text: p.text }
+      }
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * Decode one served page's entries (#1227), dropping the ones that cannot cross.
+ *
+ * TWO FAIL POSTURES COEXIST ON THIS PATH AND NEITHER MAY BE COLLAPSED INTO THE OTHER.
+ * `parseHistoryPagePayload` / `parseHistoryEntry` above fail the WHOLE page closed when an entry's
+ * ENVELOPE (`id`, `type`, `payload`, `ts`) is malformed — #1222's shipped guarantee, unchanged. The skip
+ * here belongs to the payload-decode stage only, and its reason is different in kind: an undrawn type and
+ * a payload that does not fit its type are both ORDINARY, since a page is a replay of everything the log
+ * holds and this client draws a subset of it. One bad entry must never cost the page, and a page every
+ * entry of which was skipped crosses as an EMPTY page rather than as a failure — #1224's walk must still
+ * be able to step past it, and a dropped page would stall the walk with no terminal.
+ *
+ * NEVER THROWS, which is what lets `parseInboundMessage` run it AFTER the diagnostic line without
+ * breaking its narrow-before-logging invariant.
+ *
+ * The catch binds NO error. That is deliberate and is the AC4 half about logs: the parsers' messages name
+ * a failure CATEGORY only, but a caught error that nothing can name is a stronger guarantee than one that
+ * merely happens not to be interpolated today. Nothing daemon-authored — not the failure text, not the
+ * entry's `type`, `id`, `ts` or any payload field — reaches a message, an event or a log line from here.
+ *
+ * Order is preserved among the survivors; skipped entries leave no hole and shift nothing.
+ */
+function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage; skipped: number } {
+  const entries: DecodedHistoryEntry[] = []
+  let skipped = 0
+  for (const entry of page.entries) {
+    let event: DecodedHistoryEvent | null
+    try {
+      event = decodeHistoryEvent(entry.type, entry.payload)
+    } catch {
+      event = null
+    }
+    if (event === null) {
+      skipped += 1
+      continue
+    }
+    entries.push({ id: entry.id, ts: entry.ts, event })
+  }
+  return { page: { entries, cursor: page.cursor, at_start: page.at_start }, skipped }
 }
 
 /**
@@ -2479,13 +2754,34 @@ export function parseInboundMessage(
       // the one worth naming: the daemon's own reject messages are static and echo nothing from the
       // request, and logging what came back would undo that from this side. Mirrors the
       // session_settings arm above.
-      const historyPage = parseHistoryPagePayload(envelope.payload)
+      const wirePage = parseHistoryPagePayload(envelope.payload)
+      const pageHash = hashPlaintext(plaintext)
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'history_page',
         bytes: plaintext.length,
-        hash: hashPlaintext(plaintext)
+        hash: pageHash
       })
+      // The second, per-entry stage (#1227): decode each entry's payload against the live-lane parser
+      // for its type and drop the ones the timeline cannot draw. It runs AFTER the line above and never
+      // throws, so the narrow-before-logging invariant is untouched — the throwing narrow is still the
+      // one on the line before the log.
+      const { page: historyPage, skipped } = decodeHistoryPage(wirePage)
+      if (skipped > 0) {
+        // ONE AGGREGATED LINE PER PAGE, NEVER ONE PER ENTRY, and that is a security constraint. A page
+        // holds ~1200 entries inside one frame, a hostile daemon can send them all malformed and repeat
+        // the frame, and a per-entry line would hand it a three-orders-of-magnitude log-write amplifier
+        // against a disk-backed sink. Every field is content-free and already in the allowlisted set:
+        // `count` is this client's own reading of how many rows it could not draw — not daemon content —
+        // and `hash` is the page line's, so an operator can correlate the two. Deliberately absent: the
+        // skipped entries' `type`, `id`, `ts`, any payload field, and any parser message.
+        diagnosticLog?.event({
+          event: 'inbound-decode-skipped',
+          code: 'history_page_entry',
+          count: skipped,
+          hash: pageHash
+        })
+      }
       // Propagate the ALREADY-decoded Envelope.in_reply_to — the page's ONLY correlation handle, since
       // it names no conversation. `undefined` when the frame omits it, which makes the consumer's
       // lookup fail closed and drop the page rather than attribute it to a guess.

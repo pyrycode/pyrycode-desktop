@@ -189,6 +189,75 @@ export interface ConversationSlice {
    * `TimelineState` is the render model the whole screen and thirty-odd specs build.
    */
   prependedRows: number
+  /**
+   * The (`type`, `ts`) keys this conversation's LIVE lane has already DRAWN (#1225) — the live half of
+   * the history join, read by `withoutLiveEntries` when a served page arrives so an entry both lanes
+   * carry draws once instead of twice.
+   *
+   * ⭐ A KEY IS RECORDED ONLY WHERE THE FOLD CHANGED SOMETHING. `dispatchFor`'s same-reference
+   * short-circuit — an orphan or duplicate `toolResult` is the live example — records nothing, and that
+   * is the whole safety argument of the join rather than an optimisation: a dedup on remote input is a
+   * suppression primitive, so a key must never exist for an event the operator was never shown. It is
+   * also why the key rides `dispatchFor` instead of being written by a second store path, which could
+   * not see whether the fold took.
+   *
+   * BOUNDED AT `MAX_LIVE_JOIN_KEYS`, OLDEST EVICTED FIRST. A `Set` preserves insertion order, so the
+   * oldest key is the first one it yields. Oldest-first is the right direction because the NEWEST page —
+   * the one the opening ask draws — overlaps the NEWEST live keys, and every consequence of evicting too
+   * eagerly is a duplicate row rather than a dropped one.
+   *
+   * A `Set`, NEVER a bare object: half of every key is a daemon-supplied string, and a `__proto__`-shaped
+   * one would write through `Object.prototype` on a plain-object index. It lives on the SLICE for the
+   * reason `history` and `prependedRows` beside it do — it must die with the timeline it describes, and
+   * membership of the slice makes that structural rather than four separate deletions to keep in step.
+   * No key of it becomes a lookup path, a filename, a URL, a React key or a log field.
+   */
+  liveKeys: ReadonlySet<string>
+}
+
+/**
+ * How many live join keys one conversation retains (#1225). Chosen to comfortably exceed the entry count
+ * of any single page this client asks for — it sends `limit: 0`, "you choose", and the daemon's answer
+ * is bounded by its own frame cap — so the opening ask's page can be fully joined against what the live
+ * lane drew while it was in flight.
+ *
+ * IT IS A MEMORY BOUND ON REMOTE-KEYED STATE, and the number is a trade rather than a limit the protocol
+ * imposes: `MAX_RETAINED_TIMELINES` slices each holding this many keys of at most
+ * `MAX_JOIN_TS_CHARS` + a type tag is the whole footprint this join adds. Set it too low and a page
+ * overlapping older live rows draws some of them twice; set it too high and a conversation streaming in
+ * the background retains keys nothing will ever join against. Both failures are cosmetic, and the low
+ * side is the one that fails OPEN.
+ */
+export const MAX_LIVE_JOIN_KEYS = 512
+
+/** The empty key set every fresh slice starts from — one frozen reference, safe for the same reason
+ *  `emptySlice` below shares one: `withJoinKey` REPLACES rather than mutating. */
+const NO_LIVE_KEYS: ReadonlySet<string> = new Set()
+
+/**
+ * `held` plus `joinKey`, bounded at `MAX_LIVE_JOIN_KEYS` by dropping the OLDEST key (#1225). Hands back
+ * the SAME reference when there is no key to add, so a fold that carries none allocates nothing and
+ * `dispatchFor`'s slice spread stays cheap on the streaming path.
+ *
+ * A `Set` yields its keys in insertion order, so the first one it yields is the oldest — which is why the
+ * eviction needs no separate queue. Re-adding a key already held is a no-op on the set and therefore does
+ * NOT refresh its position; that is harmless here, because the daemon mints one timestamp per logical
+ * event, so a repeat is a duplicate rather than a fresh fact. Replaced, never mutated: the store's write
+ * paths all copy-on-write, and a mutated set would alias every slice that shares this reference.
+ */
+function withJoinKey(
+  held: ReadonlySet<string>,
+  joinKey: string | undefined
+): ReadonlySet<string> {
+  if (joinKey === undefined || held.has(joinKey)) return held
+  const next = new Set(held)
+  next.add(joinKey)
+  while (next.size > MAX_LIVE_JOIN_KEYS) {
+    const oldest = next.values().next()
+    if (oldest.done === true) break
+    next.delete(oldest.value)
+  }
+  return next
 }
 
 /** A slice for a conversation nothing is yet held for: an empty thread and no ask. Sharing one frozen
@@ -197,7 +266,8 @@ export interface ConversationSlice {
 const emptySlice: ConversationSlice = {
   timeline: initialTimelineState,
   history: null,
-  prependedRows: 0
+  prependedRows: 0,
+  liveKeys: NO_LIVE_KEYS
 }
 
 /** The whole state. A key ABSENT from the map means "nothing is held for that conversation" — no event
@@ -251,7 +321,12 @@ export interface ConversationTimelineState {
  *  reducer for the reason the four above are: they are independent operations, and a discriminated
  *  action set would be ceremony. All three are ABSENT-KEY NO-OPS — see their implementations. */
 export type ConversationTimelineStore = ConversationTimelineState & {
-  dispatchFor: (conversationId: string, event: ThreadEvent) => void
+  // #1225 adds the OPTIONAL trailing `joinKey` — the live half of the history join key, recorded on the
+  // slice only when the fold below actually changes the timeline. Optional and trailing for
+  // `subscribeTimeline`'s own #756/#1013 reason: a required parameter cascades over every existing call
+  // site, an optional one over none. Absent means this event contributes no key, which is the correct
+  // reading for an arm the emit did not stamp and the fail-open default everywhere else.
+  dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
   markHistoryRequested: (conversationId: string) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
@@ -476,7 +551,7 @@ export function createConversationTimelineStore(
 ) {
   return createStore<ConversationTimelineStore>((set) => ({
     ...init,
-    dispatchFor: (conversationId, event) =>
+    dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
         const held = s.timelines.get(conversationId)
         if (held === undefined) {
@@ -484,14 +559,22 @@ export function createConversationTimelineStore(
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: reduceTimeline(initialTimelineState, event),
               history: null,
-              prependedRows: 0
+              prependedRows: 0,
+              liveKeys: withJoinKey(NO_LIVE_KEYS, joinKey)
             })
           }
         }
         const folded = reduceTimeline(held.timeline, event)
+        // #1225 — the same-reference short-circuit ALSO declines to record the join key, and that
+        // ordering is the guard rather than a side effect: a fold that changed nothing drew nothing, so
+        // a key minted here could suppress a served page's copy of a row neither lane ever showed.
         if (folded === held.timeline) return s
         const next = new Map(s.timelines)
-        next.set(conversationId, { ...held, timeline: folded })
+        next.set(conversationId, {
+          ...held,
+          timeline: folded,
+          liveKeys: withJoinKey(held.liveKeys, joinKey)
+        })
         return { timelines: next }
       }),
     // #1223 — a page's rows land AHEAD of the rows already held. Three branches, mirroring
@@ -526,6 +609,9 @@ export function createConversationTimelineStore(
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: { ...initialTimelineState, items },
               history: null,
+              // A page drew these rows, the live lane did not, so there is no live key to seed: the
+              // join's whole premise is that a key names something the operator has ALREADY seen.
+              liveKeys: NO_LIVE_KEYS,
               // A create-at-head prepend lands on nothing, so these rows are the conversation's first
               // and their keys count from zero exactly as an appended row's would. Counting them here
               // would offset a list they are the whole of.
@@ -695,6 +781,18 @@ export const selectHistoryRequestFor =
  * A bare `Map.get` again, so an unknown id is an explicit no-match that can never resolve onto a
  * neighbour's count, and the hostile-key property of the keyspace carries over untouched.
  */
+/**
+ * #1225's read surface — the (`type`, `ts`) keys this conversation's live lane has drawn, for the join
+ * `withoutLiveEntries` performs when a served page arrives. An absent key reads as the EMPTY set rather
+ * than `null`, and that collapse is right where `selectTimelineFor`'s would be wrong: "nothing is held"
+ * and "nothing has been drawn" both mean the same thing to the join — suppress nothing — so there is no
+ * distinction for a consumer to lose. The hostile-key property of the keyspace carries over untouched.
+ */
+export const selectLiveJoinKeysFor =
+  (conversationId: string) =>
+  (s: ConversationTimelineState): ReadonlySet<string> =>
+    s.timelines.get(conversationId)?.liveKeys ?? NO_LIVE_KEYS
+
 export const selectPrependedRowsFor =
   (conversationId: string) =>
   (s: ConversationTimelineState): number =>

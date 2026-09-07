@@ -20,6 +20,64 @@ function assertNever(event: never): never {
 }
 
 /**
+ * The longest daemon-supplied `ts` this client will build a join key from (#1225). An RFC3339 timestamp
+ * with nanoseconds and a numeric offset is under 40 characters, so this is lossless for any timestamp a
+ * daemon legitimately mints, with room for a form we have not seen.
+ *
+ * IT IS A MEMORY BOUND, NOT A FORMAT CHECK — nothing here parses, validates or dates the value. The
+ * frame cap `MAX_PLAINTEXT_BYTES` is 65519, so a hostile daemon may legitimately decode a ~64KB `ts`;
+ * unbounded, a stream of those would pin `MAX_LIVE_JOIN_KEYS` of them per retained conversation. An
+ * over-length value yields NO key rather than a truncated one, which matters: truncation would MERGE
+ * distinct timestamps onto one key, and a key that matches more than it should is a suppressor. No key
+ * means the entry draws — the fail-open direction.
+ */
+const MAX_JOIN_TS_CHARS = 64
+
+/**
+ * The (`type`, `ts`) key both lanes join on (#1225), or `undefined` when this client declines to key the
+ * pair. The one composer for the whole join: the live lane reaches it through `liveJoinKeyFor` below and
+ * the page lane through `withoutLiveEntries`, so neither can drift into its own spelling.
+ *
+ * WHY THIS KEY. The daemon mints one timestamp per logical event, hoisted above its per-connection
+ * fan-out, and hands that same value to the conversation-log entry and to every outbound envelope for
+ * that event. Nothing else joins: the entry's `id` is the durable on-disk log id and the live lane has no
+ * such field; `event_id` belongs to the in-memory replay ring, is per-process and reset by a restart, and
+ * `session_transition` skips that ring entirely; `turn_id` + `seq` exists only on turn-scoped payloads,
+ * and the five status types — `turn_state`, `stall`, `api_retry`, `compacting`, `session_transition` —
+ * carry no `turn_id` at all. Never text.
+ *
+ * THE SPACE IS AN UNAMBIGUOUS SEPARATOR here, though it would not be in general. The TYPE half is always
+ * a client-owned literal from `DaemonEvent`'s closed discriminant set and provably contains no space, so
+ * no `(type, ts)` pair can be spelled by a different pair however hostile the `ts` is — the ambiguity a
+ * concatenated key normally invites needs BOTH halves to be attacker-shaped.
+ *
+ * The composed key is a COMPARAND and nothing else: it reaches a `Set` membership test and is discarded.
+ * It never becomes a lookup path on a bare object (a `__proto__`-shaped `ts` would write through
+ * `Object.prototype`), a filename, a URL, an attribute, a React key or a log field.
+ */
+export function joinKeyFor(type: string, ts: string): string | undefined {
+  if (ts.length === 0 || ts.length > MAX_JOIN_TS_CHARS) return undefined
+  return `${type} ${ts}`
+}
+
+/**
+ * The join key one live daemon event contributes, or `undefined` when it contributes none (#1225).
+ *
+ * NO ENUMERATION OF ARMS, DELIBERATELY. The set of stamped arms was decided at the ten emit sites in
+ * `daemonConnection.ts`, and re-listing it here would be a second copy to drift from the first. An arm
+ * with no `daemonTs` — `connected`, which stands behind no envelope, and `messageReceived`, whose
+ * operator-authored row the daemon never pushes on the interactive lane — yields no key, so its page
+ * twin can never be suppressed. That is what keeps the operator's own message a matter for
+ * `removeUserEcho`'s `message_id` key and not for this one; neither widens to cover the other's case.
+ *
+ * `event.type` is this client's own discriminant, not a daemon string: the decode already narrowed the
+ * wire type to a closed set and the emit wrote a literal. Only the `ts` half is remote.
+ */
+export function liveJoinKeyFor(event: DaemonEvent): string | undefined {
+  return event.daemonTs === undefined ? undefined : joinKeyFor(event.type, event.daemonTs)
+}
+
+/**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
  * timeline state. Owns exactly the twelve timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
@@ -548,13 +606,37 @@ export function timelineWriteTarget(
  */
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ThreadEvent, conversationId: string | null) => void,
+  dispatch: (event: ThreadEvent, conversationId: string | null, joinKey?: string) => void,
   now?: () => number
 ): () => void {
   return onDaemonEvent((event) => {
     const threadEvent = translateTimelineEvent(event, now)
-    if (threadEvent) dispatch(threadEvent, timelineTargetFor(event))
+    if (!threadEvent) return
+    // #1225 — the ARITY widens a third time, for #756's own arithmetic: a function of arity 2 is
+    // assignable to a parameter typed at arity 3, so the twenty existing call sites keep compiling.
+    const conversationId = timelineTargetFor(event)
+    dispatch(threadEvent, conversationId, joinKeyToRecord(event, conversationId))
   })
+}
+
+/**
+ * The join key this event may contribute TO THE SLICE IT WILL BE FILED INTO, or `undefined` (#1225).
+ *
+ * ⭐ ONLY AN EVENT'S OWN ATTRIBUTION MAY MINT A KEY, and this guard is the reason the key is computed
+ * here rather than at the fan-out. `timelineTargetFor` returns `null` for `sessionTransition` and
+ * `connected`, and `timelineWriteTarget` then files those into the conversation ON SCREEN (#785) — which
+ * need not be the conversation the event belongs to. A key recorded against that slice could suppress
+ * THAT conversation's own page entry whenever the daemon minted the two the same instant with the same
+ * type, and a dropped row is the one direction this join refuses. So a key whose conversation was
+ * inferred rather than asserted is never minted at all.
+ *
+ * The cost is that `sessionTransition` contributes no live key and its page twin always draws: a
+ * duplicate `Session reset` divider, which is the fail-open side. Routing the delimiter by the
+ * `conversation_id` #1192 added to that frame is that ticket's stated second deliverable; when it lands,
+ * `timelineTargetFor` returns a real id and this function starts keying it with no edit here.
+ */
+function joinKeyToRecord(event: DaemonEvent, conversationId: string | null): string | undefined {
+  return conversationId === null ? undefined : liveJoinKeyFor(event)
 }
 
 /**
@@ -598,11 +680,15 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
     () =>
       subscribeTimeline(
         window.pyry.onDaemonEvent,
-        (event, conversationId) => {
+        (event, conversationId, joinKey) => {
           timelineStore.getState().dispatch(event)
           const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
           if (target !== null) {
-            conversationTimelineStore.getState().dispatchFor(target, event)
+            // #1225 — the join key rides the SAME write as the fold it describes, so the store can
+            // decline to record it when the fold turns out to change nothing. `subscribeTimeline` has
+            // already withheld it for an event whose slice was resolved from the screen rather than
+            // from the event; nothing here re-derives that.
+            conversationTimelineStore.getState().dispatchFor(target, event, joinKey)
           }
         },
         Date.now

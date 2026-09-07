@@ -400,3 +400,42 @@ loses a message rather than merely repeating one.
 **Date:** 2026-09-08
 </content>
 </invoke>
+
+## Revisions
+
+### 2026-09-08 — the ⭐ attribution guard moved from `useTimelineBridge` to `subscribeTimeline`
+
+**What changed.** The security review's finding 9b — only an event's own attribution may mint a join key
+— was planned as a conditional inside `useTimelineBridge`'s fan-out callback. It is implemented one layer
+down instead, as `joinKeyToRecord` called from `subscribeTimeline`, which passes `undefined` as the
+dispatch's third argument whenever `timelineTargetFor(event)` returned `null`.
+
+**Why.** The guard is the load-bearing half of the finding, so it needs a test, and `useTimelineBridge`
+is structurally untestable in this repo: `vitest.config.ts` is `environment: 'node'`, renderer specs
+render through `renderToStaticMarkup`, and no effect ever runs. A guard living there could only have been
+asserted by reading the source. `subscribeTimeline` already computes `timelineTargetFor(event)` for the
+second argument, so the same decision is available one call earlier at a seam plain spies reach — and
+`timelineBridge.test.ts` now pins it directly on a stamped `sessionTransition`. Behaviour is identical;
+only its reachability changed. The fan-out callback still forwards the key it is handed and re-derives
+nothing.
+
+### 2026-09-08 — the two Open Questions, resolved
+
+- **`MAX_LIVE_JOIN_KEYS` = 512** (`conversationTimelineStore.ts`). Comfortably above any single page this
+  client's `limit: 0` ask draws, and bounded memory on remote-keyed state at
+  `MAX_RETAINED_TIMELINES` × 512 keys. Both directions of a wrong value are cosmetic and the low side
+  fails open, which is why a precise number was not worth chasing.
+- **`MAX_JOIN_TS_CHARS` = 64** (`timelineBridge.ts`). An RFC3339 timestamp with nanoseconds and a numeric
+  offset is under 40 characters. An over-length value yields NO key rather than a truncated one:
+  truncation would merge distinct timestamps onto one key, and a key matching more than it should is a
+  suppressor.
+- **`withoutLiveEntries`' placement** resolved as planned — `historyPageBridge.ts`, beside the fold it
+  runs ahead of. Nothing forced the alternative.
+
+### 2026-09-08 — test-fixture cascades, as predicted
+
+Three `toHaveBeenCalledWith` argument pins in `timelineBridge.test.ts` name the third argument now; that
+call widens the arity a third time and the seam is the one #756's own note marks. ~62 `toEqual` literals
+across `inboundMessage.test.ts` and `daemonConnection.test.ts` gained the stamp. Four key-list guards in
+`daemonConnection.test.ts` (`Object.keys(event).sort()`) gained `'daemonTs'`, and three of their names'
+property counts moved with them. No production behaviour rides on any of it.

@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { ThreadItem } from './threadTimeline'
 import {
+  MAX_LIVE_JOIN_KEYS,
   MAX_RETAINED_TIMELINES,
   createConversationTimelineStore,
   initialConversationTimelineState,
   selectHistoryRequestFor,
+  selectLiveJoinKeysFor,
   selectPrependedRowsFor,
   selectTimelineFor,
   type HistoryRequestState
@@ -754,7 +756,12 @@ describe('conversationTimelineStore', () => {
       timelines: new Map([
         [
           'c1',
-          { timeline: { ...emptyTimeline, compacting: true }, history: null, prependedRows: 0 }
+          {
+            timeline: { ...emptyTimeline, compacting: true },
+            history: null,
+            prependedRows: 0,
+            liveKeys: new Set()
+          }
         ]
       ])
     })
@@ -986,5 +993,89 @@ describe('conversationTimelineStore', () => {
       expect(timelineFor(store, 'c1')?.items).toEqual([replayed])
       expect(historyFor(store, 'c1')).toEqual({ status: 'loaded', cursor: 'cur', atStart: false })
     })
+  })
+})
+
+// #1225 — the live half of the history join. A slice remembers the (`type`, `ts`) keys its LIVE lane has
+// drawn, so a served page can drop the entries it would otherwise draw a second time. The keys live on
+// the slice, beside `history` and `prependedRows`, so they die with the timeline they describe.
+describe('conversationTimelineStore — the live join keys (#1225)', () => {
+  const keysFor = (store: Store, conversationId: string): ReadonlySet<string> =>
+    selectLiveJoinKeysFor(conversationId)(store.getState())
+
+  it('records the key handed to a fold that CREATED the slice', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'a'), 'assistantDelta T1')
+
+    expect([...keysFor(store, 'c1')]).toEqual(['assistantDelta T1'])
+  })
+
+  it('accumulates keys across folds, in arrival order', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'a'), 'assistantDelta T1')
+    store.getState().dispatchFor('c1', delta('t1', 'b'), 'assistantDelta T2')
+
+    expect([...keysFor(store, 'c1')]).toEqual(['assistantDelta T1', 'assistantDelta T2'])
+  })
+
+  it('records NOTHING for a fold that changed the timeline in no way', () => {
+    // ⭐ The load-bearing guard. An orphan `toolResult` draws nothing, so the live lane never showed the
+    // operator anything for it — and a key recorded here would let the served page's copy be suppressed,
+    // dropping a row that was never drawn on either lane. A key exists only where a row does.
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'a'), 'assistantDelta T1')
+    store.getState().dispatchFor('c1', orphanResult, 'toolResult T2')
+
+    expect([...keysFor(store, 'c1')]).toEqual(['assistantDelta T1'])
+  })
+
+  it('records nothing when no key is passed — every existing call site keeps its meaning', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'a'))
+
+    expect(keysFor(store, 'c1').size).toBe(0)
+  })
+
+  it('bounds the set at MAX_LIVE_JOIN_KEYS, evicting the OLDEST first', () => {
+    // Oldest-first is the correct direction: the NEWEST page — the one the opening ask draws — overlaps
+    // the NEWEST live keys, and an evicted key costs a duplicate row, never a dropped one.
+    const store = createConversationTimelineStore()
+    for (let i = 0; i < MAX_LIVE_JOIN_KEYS + 2; i++) {
+      store.getState().dispatchFor('c1', delta('t1', `x${i}`), `assistantDelta ${i}`)
+    }
+
+    const held = keysFor(store, 'c1')
+    expect(held.size).toBe(MAX_LIVE_JOIN_KEYS)
+    expect(held.has('assistantDelta 0')).toBe(false)
+    expect(held.has('assistantDelta 1')).toBe(false)
+    expect(held.has(`assistantDelta ${MAX_LIVE_JOIN_KEYS + 1}`)).toBe(true)
+  })
+
+  it('reads as EMPTY for a conversation nothing is held for, on a hostile key as on any other', () => {
+    const store = createConversationTimelineStore()
+    for (const key of hostileKeys) expect(keysFor(store, key).size).toBe(0)
+  })
+
+  it('dies with the timeline it describes — eviction, clearTimelineFor and clearAllTimelines', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'a'), 'assistantDelta T1')
+    store.getState().clearTimelineFor('c1')
+    expect(keysFor(store, 'c1').size).toBe(0)
+
+    store.getState().dispatchFor('c2', delta('t1', 'a'), 'assistantDelta T2')
+    store.getState().clearAllTimelines()
+    expect(keysFor(store, 'c2').size).toBe(0)
+
+    // Eviction. A fold-created slice enters at the HEAD and the head is the next victim (rule 2 of the
+    // eviction invariant), so the slice to watch has to be created while the map is already at the bound
+    // and then outlived by one more creation — not written first, which would leave it safe at the tail.
+    for (const id of ids(MAX_RETAINED_TIMELINES)) {
+      store.getState().dispatchFor(id, delta('t1', 'a'), `assistantDelta ${id}`)
+    }
+    store.getState().dispatchFor('victim', delta('t1', 'a'), 'assistantDelta victim')
+    expect(keysFor(store, 'victim').size).toBe(1)
+
+    store.getState().dispatchFor('next', delta('t1', 'a'), 'assistantDelta next')
+    expect(keysFor(store, 'victim').size).toBe(0)
   })
 })

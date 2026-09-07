@@ -25,14 +25,59 @@
 import { useEffect } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
-import { translateTimelineEvent } from './timelineBridge'
+import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
 import { reduceTimeline, initialTimelineState } from './threadTimeline'
 import type { ThreadItem } from './threadTimeline'
 import {
   conversationTimelineStore,
   selectHistoryRequestFor,
+  selectLiveJoinKeysFor,
   type HistoryRequestState
 } from './conversationTimelineStore'
+
+/**
+ * Drop the entries this conversation's LIVE lane has already drawn (#1225), joined on the (`type`, `ts`)
+ * key `joinKeyFor` composes. Pure over its two inputs, so the whole join is unit-testable with no store,
+ * no DOM and nothing to click.
+ *
+ * IT RUNS ON ENTRIES, AHEAD OF THE FOLD, because rows carry no `ts` and the fold is not one-to-one — a
+ * turn's deltas coalesce into a single bubble, so there is no row to attribute back to an entry once
+ * `reduceTimeline` has run. The entry is the only place the key exists.
+ *
+ * IT DROPS ON THE PAGE SIDE, NEVER THE LIVE SIDE, and that is AC3 rather than an implementation
+ * convenience: the live row stays exactly where the live stream put it, and the page's copy — which
+ * `prependHistoryFor` would otherwise put at the HEAD, above rows that came before it — never becomes a
+ * row at all. Suppressing the live row instead would move the message.
+ *
+ * ⭐ AN AMBIGUOUS KEY SUPPRESSES NOTHING (AC4). An entry is dropped only when its key occurs EXACTLY ONCE
+ * among this page's entries: the daemon mints one timestamp per logical event, so two entries sharing a
+ * key are two entries this client cannot tell apart, and a comparison that cannot separate them must
+ * draw both rather than guess which one the live row was. That is the same posture every other
+ * degradation here takes — an entry whose `ts` will not key (`joinKeyFor` returns `undefined`), a key
+ * evicted from the bounded live set, an event whose live fold changed nothing so no key was ever
+ * recorded: all of them draw. A duplicated row is a cosmetic fault, a silently dropped one is a lost
+ * message, and this is a dedup on entirely remote-supplied input.
+ *
+ * The counting pass is bounded by the page, which arrived inside one `MAX_PLAINTEXT_BYTES` frame, so no
+ * daemon-chosen number sizes an allocation here. Returns the SAME array reference when nothing was
+ * dropped — `withoutHeldEchoes`' no-churn idiom — so an unchanged page reduces to the identical rows.
+ */
+export function withoutLiveEntries(
+  entries: readonly HistoryTimelineEntry[],
+  liveKeys: ReadonlySet<string>
+): readonly HistoryTimelineEntry[] {
+  if (liveKeys.size === 0) return entries
+  const seen = new Map<string, number>()
+  for (const entry of entries) {
+    const key = joinKeyFor(entry.event.type, entry.ts)
+    if (key !== undefined) seen.set(key, (seen.get(key) ?? 0) + 1)
+  }
+  const next = entries.filter((entry) => {
+    const key = joinKeyFor(entry.event.type, entry.ts)
+    return key === undefined || seen.get(key) !== 1 || !liveKeys.has(key)
+  })
+  return next.length === entries.length ? entries : next
+}
 
 /**
  * Fold one served page into the rows it draws (#1223) — a pure function of the page, so it stays
@@ -57,19 +102,30 @@ import {
  *
  * NO CLOCK IS PASSED, and that is AC5: `translateTimelineEvent` reads its optional `now` on the
  * `assistantDelta` arm and its stated contract is that an absent clock means no stamp, so no replayed
- * row is dated with the moment it was drawn and the same page reduced an hour later is identical. An
- * entry's own `ts` is the daemon's real timestamp, but no typed event in this app carries a wire
- * timestamp and wiring one is a separate change — history rows carrying no creation stamp is the
- * correct outcome here, not a workaround.
+ * row is dated with the moment it was drawn and the same page reduced an hour later is identical.
+ *
+ * #1225 IS THE SEPARATE CHANGE this paragraph used to defer, and it changed nothing about the clock. A
+ * typed daemon event now DOES carry the wire timestamp (`daemonTs`), but only as the live half of the
+ * join key `withoutLiveEntries` reads above — it is a comparand, never a creation stamp, so replayed
+ * rows still carry no `createdAt` and `now` is still the only thing that mints one.
+ *
+ * `liveKeys` IS OPTIONAL AND TRAILING, `subscribeTimeline`'s `now` arithmetic applied a third time: a
+ * required parameter cascades over every existing call site, an optional one over none. Absent means
+ * nothing is suppressed, which is both the pre-#1225 behaviour and the fail-open default the whole join
+ * is built around.
  *
  * Total over its input: an entry the translator does not own folds to nothing, so an empty page and a
  * page of undrawn entries both yield `[]` and neither is an error. Nothing is parsed here — #1227
  * decoded the payloads main-side and fail-closed — and no prompt can arrive to be re-raised, because
  * that decode has no arm for `modal_shown` or `question_shown`.
  */
-export function reduceHistoryPage(entries: readonly HistoryTimelineEntry[]): readonly ThreadItem[] {
+export function reduceHistoryPage(
+  entries: readonly HistoryTimelineEntry[],
+  liveKeys?: ReadonlySet<string>
+): readonly ThreadItem[] {
   let state = initialTimelineState
-  for (const entry of [...entries].reverse()) {
+  const drawable = liveKeys === undefined ? entries : withoutLiveEntries(entries, liveKeys)
+  for (const entry of [...drawable].reverse()) {
     const event = translateTimelineEvent(entry.event)
     if (event) state = reduceTimeline(state, event)
   }
@@ -119,13 +175,14 @@ export function subscribeHistoryPage(
     conversationId: string,
     reason: HistoryRequestFailure,
     retryable: boolean
-  ) => void
+  ) => void,
+  getLiveKeys?: (conversationId: string) => ReadonlySet<string>
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'historyPageReceived') {
       applyPage(
         event.conversationId,
-        reduceHistoryPage(event.entries),
+        reduceHistoryPage(event.entries, getLiveKeys?.(event.conversationId)),
         event.cursor,
         event.atStart
       )
@@ -303,7 +360,13 @@ export function useHistoryPageBridge(): void {
           conversationTimelineStore
             .getState()
             .recordHistoryFailure(conversationId, reason, retryable)
-        }
+        },
+        // #1225 — the live keys for the page's OWN conversation, read afresh per page (the bridge
+        // idiom) rather than snapshotted at subscribe time: one app-lifetime listener outlives any
+        // number of chat switches, and a captured reading would join every later page against whatever
+        // the store held when this effect ran.
+        (conversationId) =>
+          selectLiveJoinKeysFor(conversationId)(conversationTimelineStore.getState())
       ),
     []
   )

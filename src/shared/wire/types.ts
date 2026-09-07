@@ -985,15 +985,22 @@ export interface BackgroundTaskRosterPayload {
  * drop, made visible. It is deliberately NOT emitted for `system/*` or `rate_limit_event`, which would
  * otherwise put a row on every turn.
  *
- * WHAT THE DAEMON FORWARDS TODAY. That unreachability holds BY MATCHING rather than by list membership,
- * and it is the whole of what "the daemon ignores these" still means — it does NOT mean the lines go
- * nowhere. Measured 2026-09-07 against pyrycode `internal/streamsup/parser.go` (`consumeLine`,
- * `emitSystemSubtype`, `emitRateLimit`); do not size work against the 2026-07-27 census the older
- * wording came from:
+ * WHAT THE DAEMON FORWARDS TODAY. The two reach that unreachability by DIFFERENT routes, and the
+ * distinction is the daemon's own. `system` is the single member of its `ignoredLineTypes` map, so
+ * `consumeLine`'s `default` returns before `emitUnrecognized` for a system line whatever its subtype —
+ * a guarantee held BY LIST MEMBERSHIP, and the reason keeping `system` whole on that list is what makes
+ * the unrecognized lane structurally unreachable from any of them. `rate_limit_event` is not on the
+ * list at all; it has an arm of its own, so its unreachability holds BY MATCHING, which the daemon
+ * documents as the stronger of the two. Either way, unreachable here is the whole of what "the daemon
+ * ignores these" still means — it does NOT mean the lines go nowhere. Measured 2026-09-07 against
+ * pyrycode `internal/streamsup/parser.go` (`consumeLine`, `emitSystemSubtype`, `emitRateLimit`); do not
+ * size work against the 2026-07-27 census the older wording came from:
  *
  *   - Five `system` subtypes MAP to frames. `task_started`, `task_updated` and
  *     `background_tasks_changed` become `background_task_started` / `background_task_updated` /
- *     `background_task_roster`; `thinking_tokens` becomes `thinking_progress`; `init` becomes
+ *     `background_task_roster`; `thinking_tokens` becomes `thinking_progress` when its reported delta
+ *     is positive AND reaches the daemon's coalescing floor, so it is not a frame per line (a
+ *     non-positive delta is dropped, a below-floor one accumulates into the next); `init` becomes
  *     `model_announced` carrying the model and nothing else (a model-less `init` is consumed silently).
  *     Every other subtype, `status` among them, is still dropped silently.
  *   - Top-level `rate_limit_event` MAPS to `rate_limited` for every reading whose status is not
@@ -1004,7 +1011,7 @@ export interface BackgroundTaskRosterPayload {
  *     mapped to no frame at all.
  *
  * WHAT THIS CLIENT DECODES of the six frames above: four. `background_task_started` / `_updated` /
- * `_roster` and `model_announced` have arms in `parseInboundEnvelope`. `thinking_progress` and
+ * `_roster` and `model_announced` have arms in `parseInboundMessage`. `thinking_progress` and
  * `rate_limited` have none, so they reach its `default`, which logs `inbound-unmodeled` content-free and
  * returns null; separate tickets add those arms.
  *

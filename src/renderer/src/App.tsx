@@ -6,6 +6,7 @@ import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
 import { useQuestionBridge } from './store/questionBridge'
+import { useHistoryPageBridge } from './store/historyPageBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
@@ -127,7 +128,16 @@ function App(): JSX.Element {
   // only for whichever chat happened to be open when the daemon asked. It derefs window.pyry only inside
   // its effect, so the <App/> server-render test stays ''. This mount is what ends the vertical's dormant
   // period: #899's store and #900's bridge both shipped with nothing calling them.
-  useQuestionBridge()
+  // #1223: the history-page bridge is the fifth independent subscriber on the one daemon-event channel
+  // (#202), folding a served page of past entries into rows at the head of that conversation's held
+  // timeline. App-lifetime and unconditional like its four twins, and for the reason the question bridge
+  // states: a page names its own conversation and may arrive for one the operator is not looking at, so
+  // a screen-scoped mount would drop it. It takes no `openConversationId` — unlike `useTimelineBridge`
+  // above, which needs one for the two arms carrying no id of their own — because a page's
+  // `conversationId` is required and client-owned, so there is nothing to fall back to and nothing to
+  // resolve. It derefs window.pyry only inside its effect, so the <App/> server-render test stays ''.
+  // Live and idle until #1224 asks for a page.
+  useHistoryPageBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
   useEffect(() => {

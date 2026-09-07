@@ -375,6 +375,68 @@ describe('translateTimelineEvent — the two owned arms', () => {
   })
 })
 
+// #1223: the operator's own turn. The daemon stores it as a `message` frame with role `user` and pushes
+// none on the interactive lane, so a served page is the only thing that produces one — which is why the
+// arm is claimed for the HISTORY shape and gated on the role rather than on where the event came from.
+describe('translateTimelineEvent — the messageReceived arm (#1223)', () => {
+  it('maps a role-user message to a userText event, over both the live and the history shape', () => {
+    const userText = { type: 'userText', text: 'why did that fail?', messageId: 'm-9' }
+
+    // The history shape: #1227 drops `conversation_id` at the decode, so the arm must not read one.
+    expect(
+      translateTimelineEvent({
+        type: 'messageReceived',
+        message: { message_id: 'm-9', role: 'user', text: 'why did that fail?' }
+      })
+    ).toEqual(userText)
+
+    // The live shape translates identically — the same arm, the conversation id simply dropped.
+    expect(
+      translateTimelineEvent({
+        type: 'messageReceived',
+        message: { ...message, message_id: 'm-9', role: 'user', text: 'why did that fail?' }
+      })
+    ).toEqual(userText)
+  })
+
+  it('carries no createdAt even when a clock is injected', () => {
+    // AC5's bridge half: the clock is read on `assistantDelta` and nowhere else, so a replayed row can
+    // never be stamped with the time it was drawn even on the live path, which does inject one.
+    const event = translateTimelineEvent(
+      { type: 'messageReceived', message: { message_id: 'm', role: 'user', text: 'q' } },
+      () => 12345
+    )
+
+    expect(event).toEqual({ type: 'userText', text: 'q', messageId: 'm' })
+  })
+
+  it('draws no row for a role-assistant message, and none for the bulk arm', () => {
+    // Assistant content reaches the timeline through `assistantDelta`; a stored assistant `message` is
+    // not a user row and must not become one.
+    expect(
+      translateTimelineEvent({
+        type: 'messageReceived',
+        message: { message_id: 'm', role: 'assistant', text: 'because' }
+      })
+    ).toBeNull()
+    expect(translateTimelineEvent({ type: 'messagesReceived', messages: [message] })).toBeNull()
+  })
+
+  it('resolves no keyed write target, so the live lane draws exactly what it drew before', () => {
+    const live: DaemonEvent = {
+      type: 'messageReceived',
+      message: { ...message, role: 'user' }
+    }
+
+    // `timelineTargetFor` is deliberately NOT widened: routing a live `message` frame by its
+    // daemon-asserted `message.conversation_id` is a separate decision with its own detector.
+    expect(timelineTargetFor(live)).toBeNull()
+    expect(
+      timelineWriteTarget({ type: 'userText', text: 't' }, null, () => 'open-conversation')
+    ).toBeNull()
+  })
+})
+
 describe('translateTimelineEvent — every other arm returns null (the inverse filter)', () => {
   it('returns null for all non-stream DaemonEvent arms', () => {
     const others: DaemonEvent[] = [
@@ -382,6 +444,8 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // connected is no longer here — #538 flips it to a `reconnected` ThreadEvent (asserted above).
       { type: 'disconnected' },
       { type: 'failed', error: wireErr },
+      // #1223 claimed this arm, but only for role `user`; the shared fixture's role is `assistant`, so
+      // it still maps to null here. Flipping that fixture's role would break this assertion, not a bug.
       { type: 'messageReceived', message },
       { type: 'messagesReceived', messages: [message] },
       { type: 'debugBundleProgress', chunksReceived: 3 },

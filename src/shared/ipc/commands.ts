@@ -26,6 +26,7 @@ import type {
   DeleteConversationPayload,
   RenameConversationPayload,
   ChangeWorkspacePayload,
+  SetSystemPromptPayload,
   CreateWorkspaceFolderPayload,
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
@@ -223,6 +224,17 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * rather than a refusal a client can see, so an unroutable id must be stopped BEFORE the send — which
  * is `main/index.ts`'s routing lookup, not this guard, which checks type as its siblings do. It has NO
  * renderer sender in the slice that declares it — #1231 adds the trigger.
+ * And `setSystemPrompt` (#1249), the WRITE half of the pair above: it reuses the wire
+ * SetSystemPromptPayload (a required `conversation_id` beside a TRI-STATE `system_prompt`) to store,
+ * replace or clear what a conversation spawns its sessions with. Payload-REQUIRED like the four above,
+ * and its divergence from all of them is the nullable second field: `null` clears, `''` is an
+ * explicitly-empty stored state and text is stored verbatim, so this is the one member whose guard
+ * checks a field is PRESENT-and-(string-or-null) rather than merely present-and-a-string. It is also
+ * the file's first member carrying UNTRUSTED OPERATOR TEXT on its way to the network — never a log
+ * argument, never a path component, never a cache key — and the first whose over-length refusal is
+ * this client's own verdict rather than the daemon's, raised in the connection method so it can be
+ * reported rather than dropped. It has NO renderer sender in the slice that declares it — #1250 adds
+ * the trigger, and #1078 the editor surface.
  * And `newSession` (#1217), which asks the daemon to KILL claude and spawn a fresh one in the
  * conversation it names — not the `/clear` the Actions menu's Reset session already sends as ordinary
  * message text, which clears context in place and keeps the process. It is the only member whose
@@ -285,6 +297,7 @@ export type RendererCommand =
   | { type: 'deleteConversation'; payload: DeleteConversationPayload }
   | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
+  | { type: 'setSystemPrompt'; payload: SetSystemPromptPayload }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
@@ -468,6 +481,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isRenameConversationPayload(value.payload)
     case 'changeWorkspace':
       return 'payload' in value && isChangeWorkspacePayload(value.payload)
+    case 'setSystemPrompt':
+      // Payload-required (#1249) — the neighbours' idiom verbatim, including why the
+      // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.
+      return 'payload' in value && isSetSystemPromptPayload(value.payload)
     case 'createWorkspaceFolder':
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
@@ -884,6 +901,41 @@ function isRequestModelListPayload(value: unknown): value is RequestModelListPay
 function isRequestSystemPromptPayload(value: unknown): value is RequestSystemPromptPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the setSystemPrompt payload (#1249) — the WRITE
+ *  half's guard, and the only one in this file that checks a NULLABLE field.
+ *
+ *  THREE CHECKS WHERE EVERY SIBLING HAS ONE, and the third is the reason. `conversation_id` present
+ *  and a string is the usual routing-id check. `system_prompt` must then be PRESENT, and must be a
+ *  `string` or exactly `null` — nothing else. The presence half is load-bearing rather than tidy: the
+ *  field is a TRI-STATE (`null` clears, `''` is an explicitly-empty stored state, text is stored), and
+ *  admitting an absent key would give it a fourth inhabitant, `undefined`, with no defined reading and
+ *  a standing invitation to a `?? ''` downstream — which is the collapse that folds "clear" into
+ *  "explicitly empty" and makes the clear path unreachable. Requiring the key makes the renderer SAY
+ *  which of the three it means. The `=== null` half is not redundant with it either: structured clone
+ *  PRESERVES an explicitly-undefined property across the IPC bridge, so `'system_prompt' in value`
+ *  alone would pass `undefined` straight through to the wire, where JSON.stringify would then drop the
+ *  key — a clear the caller never asked for.
+ *
+ *  CHECKS TYPE, NOT EMPTINESS, and NOT LENGTH — the two bounds this guard deliberately does not own.
+ *  An unroutable `conversation_id` is refused by the ROUTING LOOKUP at the IPC arm, as it is for every
+ *  conversation-routed verb. An over-length `system_prompt` is refused by the CONNECTION METHOD, which
+ *  measures MAX_SYSTEM_PROMPT_BYTES of UTF-8 and emits a rejection the operator can see; putting that
+ *  bound here would make it silent, since a guard rejection drops the command at the boundary and
+ *  produces no outcome at all — the "thrown away" refusal the ticket forbids.
+ *
+ *  Both values are untrusted renderer input. `conversation_id` reaches exactly two sinks past here —
+ *  `conversationRouter.route`, a read-only `Map` lookup, and the connection method's fresh literal —
+ *  and `system_prompt` reaches exactly one, that same literal, on its way to `encodeEnvelope`. Neither
+ *  is ever a log line, a path, an attribute or a cache key, and the prompt's LENGTH is not logged
+ *  either. Structural minimum: an extra field is not rejected here, and cannot reach the wire because
+ *  the connection method's rebuild bounds the frame to these two. Pure; never throws. */
+function isSetSystemPromptPayload(value: unknown): value is SetSystemPromptPayload {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('conversation_id' in value) || typeof value.conversation_id !== 'string') return false
+  if (!('system_prompt' in value)) return false
+  return typeof value.system_prompt === 'string' || value.system_prompt === null
 }
 
 /** The untrusted renderer→main boundary guard for the requestHistory payload (#1222). The guard above

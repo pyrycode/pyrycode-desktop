@@ -8577,3 +8577,378 @@ describe('createDaemonConnection — requestSystemPrompt + the correlated reply 
     expect(emitted(ctx.sink).filter((e) => e.type === 'systemPromptReceived')).toEqual([])
   })
 })
+
+describe('createDaemonConnection — setSystemPrompt + its correlated ack and refusals (#1249)', () => {
+  const CONV = 'conv-written'
+
+  /** A well-formed conversation_updated record — the ack this write verb reuses. Its `id` is a THIRD
+   *  distinct conversation on purpose: the emitted outcome must never come from this field. */
+  const ACK_RECORD = {
+    id: 'conv-the-record-names',
+    is_promoted: true,
+    name: 'weekly sync',
+    cwd: '/home/user/project',
+    last_used_at: '2026-07-12T00:00:00Z'
+  }
+
+  /** A `conversation_updated` plaintext, `null` OMITTING the correlation key (a sentinel rather than
+   *  `undefined`, which a default parameter would swallow). */
+  function ackPlaintext(inReplyTo: number | null): Uint8Array {
+    return encodeEnvelope({
+      id: 61,
+      type: 'conversation_updated',
+      ts: FIXED_TS,
+      ...(inReplyTo === null ? {} : { in_reply_to: inReplyTo }),
+      payload: ACK_RECORD
+    })
+  }
+
+  /** An `error` plaintext carrying an arbitrary code, plus a static daemon message that must not cross. */
+  function refusalPlaintext(code: string, inReplyTo: number): Uint8Array {
+    return encodeEnvelope({
+      id: 62,
+      type: 'error',
+      ts: FIXED_TS,
+      in_reply_to: inReplyTo,
+      payload: { code, message: 'static daemon text that must never cross', retryable: false }
+    })
+  }
+
+  async function connected(
+    overrides: Parameters<typeof build>[0] = {}
+  ): Promise<ReturnType<typeof build>> {
+    const ctx = build(overrides)
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** Every set_system_prompt frame this connection has put on the wire. */
+  function writes(ctx: ReturnType<typeof build>): ReturnType<typeof decodeEnvelope>[] {
+    return ctx.drivers[0].sent
+      .map((bytes) => decodeEnvelope(bytes))
+      .filter((e) => e.type === 'set_system_prompt')
+  }
+
+  /** The envelope id of the LAST set_system_prompt this connection sent. */
+  function lastWriteId(ctx: ReturnType<typeof build>): number {
+    const sent = writes(ctx)
+    return sent[sent.length - 1].id
+  }
+
+  /**
+   * Connected, with one outstanding write naming `conversationId`. Its envelope id is read off the
+   * frame ACTUALLY SENT rather than assumed, so a change to the client's numbering cannot silently
+   * make every reply below uncorrelatable-and-therefore-dropped while the assertions still read as if
+   * the gate were exercised.
+   */
+  async function wrote(
+    conversationId: string = CONV,
+    systemPrompt: string | null = 'be terse'
+  ): Promise<ReturnType<typeof build> & { replyTo: number }> {
+    const ctx = await connected()
+    ctx.connection.setSystemPrompt({
+      conversation_id: conversationId,
+      system_prompt: systemPrompt
+    })
+    return { ...ctx, replyTo: lastWriteId(ctx) }
+  }
+
+  const confirmations = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'systemPromptWriteConfirmed')
+  const refusals = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'systemPromptWriteRejected')
+  const broadcasts = (sink: ReturnType<typeof build>['sink']): DaemonEvent[] =>
+    emitted(sink).filter((e) => e.type === 'conversationUpdated')
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
+    const { connection, drivers, sink } = build()
+    expect(() =>
+      connection.setSystemPrompt({ conversation_id: CONV, system_prompt: 'be terse' })
+    ).not.toThrow()
+    expect(drivers).toHaveLength(0)
+    // No outcome either: the value was never refused by anyone, and reporting a rejection here would
+    // be indistinguishable from a daemon verdict.
+    expect(refusals(sink)).toEqual([])
+    expect(confirmations(sink)).toEqual([])
+  })
+
+  it('sends exactly one set_system_prompt frame carrying the payload it was handed', async () => {
+    const ctx = await connected()
+
+    ctx.connection.setSystemPrompt({ conversation_id: 'conv-42', system_prompt: 'answer in Finnish' })
+
+    // Exactly one: nothing on this verb retries, on any path.
+    expect(writes(ctx)).toHaveLength(1)
+    expect(writes(ctx)[0].payload).toEqual({
+      conversation_id: 'conv-42',
+      system_prompt: 'answer in Finnish'
+    })
+  })
+
+  it('keeps the three states apart on the wire: text, "", and a present null', async () => {
+    // AC1. The clear arm is asserted with `'system_prompt' in payload` rather than a bare equality:
+    // JSON.stringify DROPS a key whose value is `undefined`, so a `?? undefined` anywhere on this path
+    // would emit a one-field envelope and still satisfy a `toBeNull()` read of a missing key.
+    for (const [systemPrompt, expected] of [
+      ['be terse', 'be terse'],
+      ['', ''],
+      [null, null]
+    ] as const) {
+      const ctx = await connected()
+      ctx.connection.setSystemPrompt({ conversation_id: CONV, system_prompt: systemPrompt })
+      const payload = writes(ctx)[0].payload as Record<string, unknown>
+      expect('system_prompt' in payload).toBe(true)
+      expect(payload.system_prompt).toBe(expected)
+    }
+  })
+
+  it('emits the conversationUpdated broadcast AND one confirmation for a correlated ack', async () => {
+    // THE TICKET'S NAMED TRAP, and the reason this arm is not the `daemon-error` tier's shape. The ack
+    // frame has a second, live consumer: the conversation-list refresh treats every conversationUpdated
+    // as a trigger. A correlation that consumed the frame entirely — the shape every sibling in the
+    // daemon-error tier correctly uses — would stop the requester's OWN write from refreshing their own
+    // row, a regression no other test in this file would catch.
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(replyTo) })
+
+    expect(broadcasts(sink)).toEqual([
+      { type: 'conversationUpdated', conversation: ACK_RECORD }
+    ])
+    expect(confirmations(sink)).toEqual([
+      { type: 'systemPromptWriteConfirmed', conversationId: CONV }
+    ])
+  })
+
+  it('attributes the confirmation to the conversation WRITTEN, never to the id the record names', async () => {
+    // The provenance rule, and unlike the read half's reply this record DOES name a conversation —
+    // which makes the wrong choice available and typecheck cleanly. A daemon answering write A with a
+    // record naming conversation B would report the write as landing on B. Non-vacuous by construction:
+    // ACK_RECORD.id is a third value, distinct from both the written conversation and any other string
+    // on the frame, so an emit reading `inbound.conversationUpdated.id` fails here and passes a
+    // single-conversation test.
+    const { sink, drivers, replyTo } = await wrote('conv-asked-to-write')
+
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(replyTo) })
+
+    expect(confirmations(sink)).toHaveLength(1)
+    expect(confirmations(sink)[0]).toMatchObject({ conversationId: 'conv-asked-to-write' })
+    // Stated explicitly so the assertion above cannot be read as incidental.
+    expect(ACK_RECORD.id).not.toBe('conv-asked-to-write')
+  })
+
+  it('emits the broadcast and NO confirmation for an ack carrying no in_reply_to', async () => {
+    // The ordinary unsolicited case, not a degraded one: the daemon pushes this same record with no
+    // handle when a host-side `pyry channel new` mints a conversation. The write stays outstanding,
+    // which the correlated follow-up proves by still settling.
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(null) })
+    expect(broadcasts(sink)).toHaveLength(1)
+    expect(confirmations(sink)).toEqual([])
+
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(replyTo) })
+    expect(confirmations(sink)).toHaveLength(1)
+  })
+
+  it('emits the broadcast and NO confirmation for an ack matching no outstanding write', async () => {
+    // One past the real id — a plausible-looking neighbour rather than an obviously absurd value, so an
+    // off-by-one in the recorded id is caught here rather than passing.
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(replyTo + 1) })
+
+    expect(broadcasts(sink)).toHaveLength(1)
+    expect(confirmations(sink)).toEqual([])
+  })
+
+  it('emits no second confirmation for an ack re-using an already-settled in_reply_to', async () => {
+    // The entry is deleted on match, so a duplicate — or a daemon replaying an old ack — finds nothing.
+    // The broadcast fires BOTH times, because it is not gated on the correlation at all.
+    const { sink, drivers, replyTo } = await wrote()
+
+    const ack = ackPlaintext(replyTo)
+    drivers[0].emit({ type: 'message', plaintext: ack })
+    drivers[0].emit({ type: 'message', plaintext: ack })
+
+    expect(confirmations(sink)).toHaveLength(1)
+    expect(broadcasts(sink)).toHaveLength(2)
+  })
+
+  it.each([
+    ['protocol.malformed', 'protocol-malformed'],
+    ['conversation.not_found', 'conversation-not-found']
+  ])('settles a correlated %s refusal as exactly one rejection carrying %s', async (code, reason) => {
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: refusalPlaintext(code, replyTo) })
+
+    expect(refusals(sink)).toEqual([
+      { type: 'systemPromptWriteRejected', conversationId: CONV, reason }
+    ])
+    expect(confirmations(sink)).toEqual([])
+  })
+
+  it('settles a correlated refusal whose code is outside the published two as unclassified', async () => {
+    // A correlated refusal must ALWAYS settle the write. Dropping one would leave the consumer
+    // reporting a refused write as permanently in flight, which is strictly worse than reporting it
+    // refused for a reason this client could not name.
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: refusalPlaintext('message.too_long', replyTo) })
+
+    expect(refusals(sink)).toEqual([
+      {
+        type: 'systemPromptWriteRejected',
+        conversationId: CONV,
+        reason: 'unclassified',
+      }
+    ])
+  })
+
+  it('emits nothing for a refusal matching no outstanding write', async () => {
+    const { sink, drivers, replyTo } = await wrote()
+
+    drivers[0].emit({ type: 'message', plaintext: refusalPlaintext('protocol.malformed', replyTo + 1) })
+
+    expect(refusals(sink)).toEqual([])
+  })
+
+  it('settles each write EXACTLY ONCE when the daemon sends both an ack and a refusal', async () => {
+    // Both arms consume the SAME correlation entry, which is what makes "exactly one outcome per
+    // write" structural rather than promised: whichever frame arrives first deletes it, and the other
+    // matches nothing. Driven in both orders, since a per-arm entry would pass one and fail the other.
+    for (const ackFirst of [true, false]) {
+      const { sink, drivers, replyTo } = await wrote()
+      const frames = [ackPlaintext(replyTo), refusalPlaintext('protocol.malformed', replyTo)]
+      for (const plaintext of ackFirst ? frames : [...frames].reverse()) {
+        drivers[0].emit({ type: 'message', plaintext })
+      }
+      expect(confirmations(sink).length + refusals(sink).length).toBe(1)
+    }
+  })
+
+  it('keys the correlation by envelope id, so two interleaved writes each settle their own', async () => {
+    // Settled OUT OF SEND ORDER, deliberately: a FIFO would hand each reply the other's id and still
+    // emit two events, so only crossing the order distinguishes a keyed map from a queue. One settles
+    // as a confirmation and the other as a refusal, so a shared-arm bug shows as a swapped id.
+    const ctx = await connected()
+    ctx.connection.setSystemPrompt({ conversation_id: 'conv-first', system_prompt: 'A' })
+    const first = lastWriteId(ctx)
+    ctx.connection.setSystemPrompt({ conversation_id: 'conv-second', system_prompt: null })
+    const second = lastWriteId(ctx)
+    expect(second).not.toBe(first)
+
+    ctx.drivers[0].emit({ type: 'message', plaintext: refusalPlaintext('conversation.not_found', second) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: ackPlaintext(first) })
+
+    expect(refusals(ctx.sink)).toMatchObject([
+      { conversationId: 'conv-second', reason: 'conversation-not-found' }
+    ])
+    expect(confirmations(ctx.sink)).toMatchObject([{ conversationId: 'conv-first' }])
+  })
+
+  it('refuses a prompt over 8192 BYTES of UTF-8 before the wire, measuring bytes not code units', async () => {
+    // AC2, and the assertion that makes it non-vacuous: the fixture is under the cap in UTF-16 code
+    // units and over it in bytes, so a `.length` bound would send this frame and pass a test built on
+    // ASCII. Each '€' is 3 bytes, so 3000 of them are 9000 bytes at 3000 code units.
+    const multiByte = '€'.repeat(3000)
+    expect(multiByte.length).toBeLessThan(8192)
+    expect(Buffer.byteLength(multiByte, 'utf8')).toBeGreaterThan(8192)
+
+    const ctx = await connected()
+    ctx.connection.setSystemPrompt({ conversation_id: CONV, system_prompt: multiByte })
+
+    // Nothing was built and nothing reached any wire.
+    expect(writes(ctx)).toEqual([])
+    expect(refusals(ctx.sink)).toEqual([
+      {
+        type: 'systemPromptWriteRejected',
+        conversationId: CONV,
+        reason: 'prompt-too-long',
+      }
+    ])
+  })
+
+  it('sends a prompt of exactly 8192 bytes — the bound is inclusive, like the daemon’s', async () => {
+    // The off-by-one guard on the other side of the boundary. A `>=` here would fail-close a prompt the
+    // daemon accepts, which is the failure mode a client-side bound most easily introduces.
+    const atCap = 'x'.repeat(8192)
+    const ctx = await connected()
+
+    ctx.connection.setSystemPrompt({ conversation_id: CONV, system_prompt: atCap })
+
+    expect(writes(ctx)).toHaveLength(1)
+    expect(refusals(ctx.sink)).toEqual([])
+  })
+
+  it('reports the over-length refusal even when not connected, and records no diagnostic', async () => {
+    // The bound runs BEFORE the connected guard on purpose: the verdict is about the value, not the
+    // link, and a disconnected over-length write that vanished silently is the "thrown away" refusal
+    // AC2 forbids — the operator would see nothing and retype the same text.
+    //
+    // AND IT LOGS NOTHING. This is the one branch where an implementer reaches for a helpful
+    // diagnostic, and its two obvious fields — the prompt and its length — are exactly what AC5
+    // forbids. Asserted as "no record at all" rather than "no prompt substring", so a record carrying
+    // only the length still reddens.
+    const cap = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: cap.log })
+
+    connection.setSystemPrompt({ conversation_id: CONV, system_prompt: 'y'.repeat(9000) })
+
+    expect(drivers).toHaveLength(0)
+    expect(refusals(sink)).toMatchObject([{ reason: 'prompt-too-long', conversationId: CONV }])
+    expect(cap.records).toEqual([])
+  })
+
+  it('never carries a prompt byte, nor its length, onto any emitted event', async () => {
+    // AC5 at the IPC boundary, on both settle paths and the client-side refusal. The prompt is the most
+    // sensitive string this slice handles, and neither outcome has a field for it — the ack record does
+    // not carry it back, and the refusal echoes no supplied byte. Serialised and searched rather than
+    // key-checked, so a field added later on any arm reddens here.
+    const SECRET = 'the-operator-private-prompt-text'
+    const { sink, drivers, replyTo } = await wrote(CONV, SECRET)
+    drivers[0].emit({ type: 'message', plaintext: ackPlaintext(replyTo) })
+
+    const ctx2 = await connected()
+    ctx2.connection.setSystemPrompt({ conversation_id: CONV, system_prompt: SECRET.repeat(400) })
+
+    for (const events of [emitted(sink), emitted(ctx2.sink)]) {
+      expect(JSON.stringify(events)).not.toContain(SECRET)
+    }
+  })
+
+  it('clears outstanding writes on reconnect, so a stale id cannot settle on the new connection', async () => {
+    // The fresh connection recycles envelope ids from 2, so a surviving entry would settle a NEW
+    // write against a dead one's conversation — reporting a prompt as stored on a conversation that was
+    // never written to.
+    const ctx = await wrote()
+    const staleId = ctx.replyTo
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.drivers[1].emit({ type: 'message', plaintext: ackPlaintext(staleId) })
+    ctx.drivers[1].emit({ type: 'message', plaintext: refusalPlaintext('protocol.malformed', staleId) })
+
+    expect(confirmations(ctx.sink)).toEqual([])
+    expect(refusals(ctx.sink)).toEqual([])
+  })
+
+  it('records no correlation entry when the send throws, so an unspent id settles nothing', async () => {
+    // The record-AFTER-send ordering. A build or send that throws advances no envelope id, so an entry
+    // left under the unspent id would settle whichever write next re-mints it — reporting one
+    // conversation's write as another's.
+    const ctx = await connected({ throwOnSend: true })
+    ctx.connection.setSystemPrompt({ conversation_id: CONV, system_prompt: 'be terse' })
+
+    // The id the throwing send would have used is the one the next write re-mints; nothing may answer
+    // to it. Driven with the ack rather than a refusal because a stale confirmation is the worse lie.
+    ctx.drivers[0].emit({ type: 'message', plaintext: ackPlaintext(2) })
+    ctx.drivers[0].emit({ type: 'message', plaintext: ackPlaintext(3) })
+
+    expect(confirmations(ctx.sink)).toEqual([])
+  })
+})

@@ -143,6 +143,7 @@ function createFactoryFake() {
       deleteConversation: noop,
       renameConversation: noop,
       changeWorkspace: noop,
+      setSystemPrompt: noop,
       setSessionSettings: noop,
       answerModal: noop,
       cancelModal: noop,

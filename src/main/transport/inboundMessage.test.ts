@@ -950,7 +950,12 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
     expect(parseInboundMessage(bytes)).toEqual({
       kind: 'daemon-error',
       inReplyTo: 7,
-      outcome: 'unclassified'
+      outcome: 'unclassified',
+      // `protocol.malformed` is unclassified for THIS union and classified for the system-prompt
+      // write verb's (#1249) — the per-verb separation working as designed. Named here because
+      // `toEqual` ignores an undefined property but fails on a defined one, so a sibling narrowed
+      // field must be stated once it starts firing.
+      systemPromptReject: 'protocol-malformed'
     })
   })
 
@@ -1030,10 +1035,20 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
     // this keeps proving that a neighbouring code the daemon genuinely sends does not accidentally
     // classify. It held `attachment.not_found` / `attachment.stream_aborted` until #999 moved both into
     // LEG — the RED that slice inverted.
-    for (const code of ['server.binary_offline', 'session.not_found', 'protocol.malformed']) {
+    // `protocol.malformed` carries a sibling expectation since #1249: it is unclassified for THIS
+    // union and classified for the system-prompt write verb's, which is the per-verb separation
+    // working rather than a leak. Stated per-code because `toEqual` fails on a DEFINED property it
+    // does not name, so a silently-added narrowed field would surface here rather than pass.
+    const expectations: ReadonlyArray<readonly [string, string | undefined]> = [
+      ['server.binary_offline', undefined],
+      ['session.not_found', undefined],
+      ['protocol.malformed', 'protocol-malformed']
+    ]
+    for (const [code, systemPromptReject] of expectations) {
       expect(parseInboundMessage(encodeReject(code))).toEqual({
         kind: 'daemon-error',
-        outcome: 'unclassified'
+        outcome: 'unclassified',
+        systemPromptReject
       })
     }
   })
@@ -8427,5 +8442,143 @@ describe('parseInboundMessage — system_prompt log discipline (#1230)', () => {
     expect(new TextDecoder().decode(
       encodeSystemPrompt({ system_prompt: SECRET_PROMPT, session_prompt_status: 'nonsense' })
     )).toContain(SECRET_PROMPT)
+  })
+})
+
+// The set_system_prompt WRITE leg's two inbound halves (#1249). Neither is a new payload parser: the
+// ack REUSES the already-decoded `conversation_updated` record, gaining only a correlation handle, and
+// the refusal reuses the `error` frame, gaining a third client-owned narrowed field beside `outcome`
+// and `historyReject`.
+describe('parseInboundMessage — set_system_prompt correlation + reject narrowing (#1249)', () => {
+  const FIXED_TS = '2026-09-07T12:00:00.000Z'
+
+  /** A well-formed conversation_updated record — the ack this write verb reuses. */
+  const UPDATED = {
+    id: 'conv-9',
+    is_promoted: true,
+    name: 'weekly sync',
+    cwd: '/home/user/project',
+    last_used_at: '2026-07-12T00:00:00Z'
+  }
+
+  /** A `conversation_updated` plaintext, `null` OMITTING the correlation key (a sentinel rather than
+   *  `undefined`, which a default parameter would swallow). */
+  function encodeUpdated(inReplyTo: number | null): Uint8Array {
+    return encodeEnvelope({
+      id: 31,
+      type: 'conversation_updated',
+      ts: FIXED_TS,
+      ...(inReplyTo === null ? {} : { in_reply_to: inReplyTo }),
+      payload: UPDATED
+    })
+  }
+
+  /** An `error` envelope carrying an arbitrary code, plus a static daemon message that must not cross. */
+  function encodeErrorCode(code: unknown, inReplyTo = 77): Uint8Array {
+    return encodeEnvelope({
+      id: 901,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { code, message: 'static daemon text that must never cross' },
+      in_reply_to: inReplyTo
+    })
+  }
+
+  it('carries the Envelope in_reply_to onto the conversation-updated kind', () => {
+    // The handle this record carried nowhere until a write needed to correlate on it. Every existing
+    // consumer reads `conversationUpdated` only, so this is strictly additive to them.
+    const result = parseInboundMessage(encodeUpdated(41))
+    expect(result).toEqual({
+      kind: 'conversation-updated',
+      conversationUpdated: UPDATED,
+      inReplyTo: 41
+    })
+  })
+
+  it('leaves inReplyTo undefined when a conversation_updated omits it, and still decodes the record', () => {
+    // Absence is the ORDINARY case here, not a degraded one: the daemon also pushes this record
+    // genuinely unsolicited when a host-side `pyry channel new` mints a conversation. So it must decode
+    // exactly as before rather than failing closed at this layer — the fail-closed drop is one layer
+    // up, where a write's correlation cannot resolve.
+    const result = parseInboundMessage(encodeUpdated(null))
+    expect(result).toEqual({ kind: 'conversation-updated', conversationUpdated: UPDATED })
+    expect(result?.kind === 'conversation-updated' && result.inReplyTo).toBeUndefined()
+  })
+
+  it('logs the same content-free record whether or not the ack is correlated', () => {
+    // The handle is a routing id and is NOT logged: no new DiagnosticEvent field, so the renderer-side
+    // allowlist pin is untouched, and a correlated ack leaves the same record an uncorrelated one does.
+    for (const inReplyTo of [41, null] as const) {
+      const { log, lines } = captureLog()
+      parseInboundMessage(encodeUpdated(inReplyTo), log)
+      expect(lines).toHaveLength(1)
+      const record = JSON.parse(lines[0])
+      expect(record.event).toBe('inbound-decoded')
+      expect(record.code).toBe('conversation_updated')
+      expect(record.in_reply_to).toBeUndefined()
+      expect(lines[0]).not.toContain('41')
+    }
+  })
+
+  it.each([
+    ['protocol.malformed', 'protocol-malformed'],
+    ['conversation.not_found', 'conversation-not-found']
+  ])('narrows %s onto the client-owned %s', (code, expected) => {
+    const result = parseInboundMessage(encodeErrorCode(code))
+    expect(result?.kind === 'daemon-error' && result.systemPromptReject).toBe(expected)
+  })
+
+  it('leaves systemPromptReject undefined for a code outside the published two', () => {
+    // Not a hole: the single consumer maps the absence onto `'unclassified'`, so a correlated refusal
+    // always settles the write. What must NOT happen is a code from another verb's set narrowing here.
+    for (const code of ['history.unavailable', 'attachment.not_found', 'message.too_long']) {
+      const result = parseInboundMessage(encodeErrorCode(code))
+      expect(result?.kind === 'daemon-error' && result.systemPromptReject).toBeUndefined()
+    }
+  })
+
+  it('leaves systemPromptReject undefined for an absent, non-string or unknown code', () => {
+    for (const code of [undefined, null, 42, {}, [], 'system_prompt.something_later']) {
+      const result = parseInboundMessage(encodeErrorCode(code))
+      expect(result?.kind === 'daemon-error' && result.systemPromptReject).toBeUndefined()
+    }
+  })
+
+  it('narrows the three fields off one code INDEPENDENTLY, with no field shadowing another', () => {
+    // `conversation.not_found` is the one code both per-verb narrowers claim, and the overlap is the
+    // separation working rather than duplication to fold: the same wire code means "no conversation to
+    // read a page from" on one verb and "no conversation to write a prompt to" on this one. A shared
+    // narrower, or one arm returning early, would show up here as a missing sibling field.
+    const result = parseInboundMessage(encodeErrorCode('conversation.not_found'))
+    expect(result?.kind === 'daemon-error' && result.systemPromptReject).toBe('conversation-not-found')
+    expect(result?.kind === 'daemon-error' && result.historyReject).toBe('conversation-not-found')
+    expect(result?.kind === 'daemon-error' && result.outcome).toBe('unclassified')
+  })
+
+  it('never throws on a mangled error payload — the reject narrower must not become a kill switch', () => {
+    // AN ERROR FRAME IS TERMINAL BECAUSE IT ARRIVED, NOT BECAUSE ITS PAYLOAD PARSED. A throw in the new
+    // narrower would silently kill every consumer of this kind, this slice's own write correlation
+    // included, and hand a hostile daemon a one-frame kill switch.
+    for (const payload of [null, 42, 'nope', [], {}]) {
+      const result = parseInboundMessage(
+        encodeEnvelope({ id: 901, type: 'error', ts: FIXED_TS, payload, in_reply_to: 77 })
+      )
+      expect(result?.kind).toBe('daemon-error')
+      expect(result?.kind === 'daemon-error' && result.systemPromptReject).toBeUndefined()
+    }
+  })
+
+  it('keeps the logged code a client-owned literal, never the daemon string it narrowed', () => {
+    // ADR 0007's allowlist is over field NAMES, not values, so `code: payload.code` would typecheck
+    // and ship daemon-controlled text into a log an operator can send off-box in a debug bundle.
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeErrorCode('protocol.malformed'), log)
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('error')
+    // Neither the daemon's code nor its static message crosses into the record.
+    expect(lines[0]).not.toContain('protocol.malformed')
+    expect(lines[0]).not.toContain('static daemon text')
   })
 })

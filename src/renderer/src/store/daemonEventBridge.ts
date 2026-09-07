@@ -253,6 +253,21 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // workspace-authored name, argument hint, description and alias on the frame there, embedded
       // newlines included. This case is what keeps them out of it.
       return null
+    case 'systemPromptWriteConfirmed':
+    case 'systemPromptWriteRejected':
+      // No session-store action (#1249) — the write half's two outcomes, the read arm's counterpart directly
+      // below. The transport owns the send, the byte bound, the correlation and the two settle paths;
+      // the store that holds a write's outcome is #1250's, in the read arm's posture, and the editor
+      // surface is #1078. So these arms are DORMANT rather than permanently no-op — but nothing in
+      // THIS file is waiting to claim them. Two arms, not one: the confirmation and the refusal are
+      // separate members, and a `default` covering either would defeat the guard below.
+      //
+      // Present for the assertNever guard, and that guard is not a formality here even though neither
+      // member carries a prompt byte — the ack record does not carry the prompt back and the refusal
+      // echoes no supplied byte. What they carry is `conversationId`, a routing key that reaches no
+      // other sink on any path, and `reason`, a client-owned literal. A missing case would put the
+      // former into an Error message, a stack trace and a crash reporter. These cases keep it out.
+      return null
     case 'systemPromptReceived':
       // No session-store action (#1230). The transport owns the ask, the correlation and the decode; the store that
       // holds a conversation's system prompt is #1231's, in the announcedModelBridge /

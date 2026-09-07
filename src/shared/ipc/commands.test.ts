@@ -475,6 +475,107 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(namedPrompt)).toBe(true)
   })
 
+  it('accepts a setSystemPrompt on ALL THREE arms of the tri-state (#1249)', () => {
+    // The write half's guard, and the only one in this file checking a NULLABLE field. Text, `''` and
+    // `null` are three distinct stored states daemon-side — stored verbatim, stored explicitly empty,
+    // and cleared — so a guard that admitted only two of them would make one unreachable from the
+    // window. `''` for the conversation id passes for the siblings' reason (type, not emptiness), and
+    // a structurally extra field is harmless: the connection method's fresh literal bounds the wire.
+    for (const system_prompt of ['be terse', '', null]) {
+      expect(
+        isRendererCommand({
+          type: 'setSystemPrompt',
+          payload: { conversation_id: 'conv-1', system_prompt }
+        })
+      ).toBe(true)
+    }
+    expect(
+      isRendererCommand({ type: 'setSystemPrompt', payload: { conversation_id: '', system_prompt: 'x' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'setSystemPrompt',
+        payload: { conversation_id: 'conv-1', system_prompt: 'x', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('accepts a setSystemPrompt whose prompt is far over the daemon cap — length is NOT this guard (#1249)', () => {
+    // Deliberate, and the one place a reader might expect a bound and find none. A guard rejection
+    // drops the command at the boundary and produces NO outcome at all, which is the "thrown away"
+    // refusal the ticket forbids; the bound that reports lives in the connection method, which emits
+    // systemPromptWriteRejected('prompt-too-long') so the operator learns why nothing was saved.
+    expect(
+      isRendererCommand({
+        type: 'setSystemPrompt',
+        payload: { conversation_id: 'conv-1', system_prompt: 'x'.repeat(20000) }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a setSystemPrompt that OMITS system_prompt, or sets it explicitly undefined (#1249)', () => {
+    // The divergence from every sibling guard, and the reason it is three checks rather than one. The
+    // field is a TRI-STATE: admitting an absent key would give it a fourth inhabitant, `undefined`,
+    // with no defined reading and a standing invitation to a `?? ''` downstream — the collapse that
+    // folds "clear" into "explicitly empty". The explicitly-undefined arm is refused BY VALUE, not by
+    // the `in` check: structured clone PRESERVES an explicitly-undefined property across the IPC
+    // bridge, and JSON.stringify would then DROP the key on the wire — a clear the caller never asked
+    // for.
+    expect(isRendererCommand({ type: 'setSystemPrompt', payload: { conversation_id: 'conv-1' } })).toBe(
+      false
+    )
+    expect(
+      isRendererCommand({
+        type: 'setSystemPrompt',
+        payload: { conversation_id: 'conv-1', system_prompt: undefined }
+      })
+    ).toBe(false)
+  })
+
+  it('rejects setSystemPrompt with no payload, and one whose payload is a type lie (#1249)', () => {
+    expect(isRendererCommand({ type: 'setSystemPrompt' })).toBe(false)
+    expect(isRendererCommand({ type: 'setSystemPrompt', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'setSystemPrompt', payload: null })).toBe(false)
+    expect(isRendererCommand({ type: 'setSystemPrompt', payload: {} })).toBe(false)
+    // A non-string id, and a system_prompt that is neither a string nor null — a number, a boolean and
+    // an object all reach encodeEnvelope's bare JSON.stringify if this guard lets them through.
+    expect(
+      isRendererCommand({ type: 'setSystemPrompt', payload: { conversation_id: 42, system_prompt: 'x' } })
+    ).toBe(false)
+    for (const system_prompt of [42, true, {}, []]) {
+      expect(
+        isRendererCommand({
+          type: 'setSystemPrompt',
+          payload: { conversation_id: 'conv-1', system_prompt }
+        })
+      ).toBe(false)
+    }
+  })
+
+  it('types setSystemPrompt as payload-REQUIRED with a REQUIRED system_prompt (#1249)', () => {
+    // Compile-time half, the one the runtime guard cannot prove; see the requestModelList twin for
+    // why an unused expect-error directive is itself a failure and why this prose line may not open
+    // with the directive's own name. The second directive is the one that matters here: an OPTIONAL
+    // `system_prompt` would compile the bare form, and the clear path would then be expressible as an
+    // omission — which is the state the tri-state has no reading for.
+    // @ts-expect-error payload is required — a write with no conversation has nothing to set
+    const bareWrite: RendererCommand = { type: 'setSystemPrompt' }
+    const promptless: RendererCommand = {
+      type: 'setSystemPrompt',
+      // The directive sits on the PROPERTY line, not on the declaration: a missing nested field is
+      // reported where it is missing, so a directive one line up would go unused — itself a failure.
+      // @ts-expect-error system_prompt is required — `null` clears, and the caller must say so
+      payload: { conversation_id: 'conv-1' }
+    }
+    const cleared: RendererCommand = {
+      type: 'setSystemPrompt',
+      payload: { conversation_id: 'conv-1', system_prompt: null }
+    }
+    expect(isRendererCommand(bareWrite)).toBe(false)
+    expect(isRendererCommand(promptless)).toBe(false)
+    expect(isRendererCommand(cleared)).toBe(true)
+  })
+
   it('accepts a requestHistory carrying all three fields, EMPTY cursor included (#1222)', () => {
     // The empty cursor is not a tolerated edge here — it is the NORMAL OPENING VALUE of every walk
     // ("start at the newest"), so a non-empty clause on that field would refuse the first ask of every

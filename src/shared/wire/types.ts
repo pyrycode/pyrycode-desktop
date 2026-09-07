@@ -29,6 +29,25 @@ export const MAX_FRAME_BYTES = 256 * 1024 // 262144
  */
 export const MAX_PLAINTEXT_BYTES = 65519
 
+/**
+ * The daemon's write-side cap on a conversation's stored system prompt, in BYTES OF UTF-8 (#1249).
+ * Mirrors `internal/conversations.MaxSystemPromptBytes` (pyrycode#2149); a value above it is refused
+ * with `protocol.malformed` and nothing is stored.
+ *
+ * MEASURE IT WITH `Buffer.byteLength(value, 'utf8')`, NEVER `value.length`. JavaScript's `.length`
+ * counts UTF-16 code units, and the two disagree for every multi-byte prompt — an emoji-heavy prompt
+ * well under 8192 code units can be several thousand bytes over the daemon's bound, which would spend
+ * a non-retryable refusal on text this client could have refused for free.
+ *
+ * A PRE-FLIGHT BOUND ON ONE FIELD, never a substitute for MAX_PLAINTEXT_BYTES above, which remains the
+ * only frame-level size gate on either direction. It is deliberately NOT applied to the INBOUND prompt
+ * (#1230 argued that case and declined): the daemon caps it write-side, so a second inbound bound would
+ * either defend an unreachable failure or, set below the daemon's, fail-close a valid prompt. This is
+ * the OUTBOUND direction, where the operator's own text is bounded before a refusal is spent on it.
+ * Source: pyrycode docs/protocol-mobile.md § Setting a conversation's system prompt.
+ */
+export const MAX_SYSTEM_PROMPT_BYTES = 8192
+
 /** Inner frame carried inside the Noise-encrypted channel (InnerFrameV2). */
 export interface InnerFrameV2 {
   v: 2
@@ -224,6 +243,23 @@ export type EnvelopeType =
   | 'delete_conversation'
   | 'rename_conversation'
   | 'change_workspace'
+  // The write half of a conversation's system prompt (#1249) — phone → binary, map-dispatched by the
+  // daemon like its neighbours in this group, and carrying NO interactive-capability gate, unlike its
+  // read half `request_system_prompt`. That asymmetry is the daemon's and needs nothing here.
+  //
+  // KEYED BY CONVERSATION, NOT BY SESSION. The prompt must be settable when nothing is running, and it
+  // outlives every session the conversation has. The session-keyed `set_session_settings` is a
+  // different verb with different semantics; do NOT model this on it.
+  //
+  // Carries SetSystemPromptPayload — a required `conversation_id` beside a TRI-STATE `system_prompt`.
+  // Answered by the reused `conversation_updated` record correlated by `in_reply_to`, which
+  // deliberately does NOT carry the prompt back (that record is broadcast-shaped, and only the
+  // requester asked about the value). Refused with `protocol.malformed` (payload will not decode, or
+  // the value exceeds MAX_SYSTEM_PROMPT_BYTES) or `conversation.not_found`; both are NON-RETRYABLE,
+  // both echo no supplied byte, and nothing is stored on either. SSOT pyrycode
+  // docs/protocol-mobile.md § Setting a conversation's system prompt / internal/protocol/codes.go.
+  // Declared and answered by pyrycode#2151.
+  | 'set_system_prompt'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
   | 'conversation_updated'
@@ -2448,6 +2484,46 @@ export interface RenameConversationPayload {
 export interface ChangeWorkspacePayload {
   conversation_id: string
   cwd: string
+}
+
+/**
+ * Outbound `set_system_prompt` request body (client → daemon, #1249). Mirrors the daemon's
+ * SetSystemPromptPayload{ConversationID string, SystemPrompt *string} field-for-field
+ * (pyrycode#2151), wire order `conversation_id, system_prompt`. Kept a DISTINCT type — not an alias of
+ * ChangeWorkspacePayload or ArchiveConversationPayload despite the shared first field — so the verb
+ * owns its own wire surface, the daemon's own standing rule in this neighbourhood.
+ *
+ * `conversation_id` is a REQUIRED value-string, the sibling posture: a routing id (an existing row's
+ * id), not a secret, and not emptiness-checked here — an id no server hosts is refused by the routing
+ * lookup at the IPC arm before any frame is built.
+ *
+ * **`system_prompt` IS A TRI-STATE, AND IT IS `string | null` RATHER THAN `string | undefined`.** The
+ * daemon declares it `*string` with **no** `omitempty`, so a nil pointer serializes as a literal
+ * `null` and never as an absent key — exactly the mirroring ConversationUpdatedPayload.name already
+ * uses in this file. The three states, and all three must survive the whole chain intact:
+ *
+ * | Value | Meaning |
+ * |---|---|
+ * | `null` | CLEAR. The conversation returns to spawning with the daemon's own prompt alone. |
+ * | `''` | Explicitly empty — a DISTINCT stored state, which spawns identically to cleared. |
+ * | any string | Stored verbatim, up to MAX_SYSTEM_PROMPT_BYTES inclusive. |
+ *
+ * DECLARED AS A REQUIRED KEY, not an optional property, and that is load-bearing rather than
+ * stylistic. An optional property would give the tri-state a fourth inhabitant (`undefined`) with no
+ * defined reading, and it invites the `?? ''` / `|| undefined` collapse that would fold "clear" into
+ * "explicitly empty" — the exact collapse SystemPromptPayload's read-half contract forbids, and the
+ * reason a value read back through `system_prompt` can be written straight back through this one
+ * unchanged. A plain `string` at ANY hop on this path makes the clear path unreachable.
+ *
+ * SECURITY: `system_prompt` is UNTRUSTED OPERATOR TEXT on its way to the network — the mirror of the
+ * read half's inbound rule, and it binds just as hard outbound. It is never a log argument (nor is its
+ * length), never a path component, never a filename or a cache key, and the envelope payload is a
+ * FRESH LITERAL naming exactly these two fields rather than a spread of a caller's object. Do NOT
+ * drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile change. See #1249.
+ */
+export interface SetSystemPromptPayload {
+  conversation_id: string
+  system_prompt: string | null
 }
 
 /**

@@ -144,23 +144,33 @@ link points at the right file.
   confirm per row, a re-read of the collection so the departed row leaves without a relaunch, and a
   route flip to the pairing screen conditional on no records remaining — see [How it
   works](settings-screen-how-it-works.md#the-server-rows-serverrowtsx-334-widened-to-a-list-by-1148-given-an-unpair-action-by-1162)
-  for the mechanism. What #1162 deliberately does **not** do: scope the app-wide state clear to the
-  departed server ([#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) owns that).
+  for the mechanism. What #1162 deliberately did **not** do: scope the app-wide state clear to the
+  departed server — split off as [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150), then
+  [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196), which closed it (see below).
   [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) migrated the composer's Re-pair
   control onto the same per-server mechanism and deleted the whole-collection channel outright — see
   [Unpair channel](unpair-channel.md).
+- **Forgetting one of several paired servers now takes that machine's conversation rows, retained
+  threads and open chat with it ([#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)).**
+  Both the Settings row's Unpair and the composer's Re-pair reach the fix through one shared
+  implementation, `clearServerScopedState` — see [Unpair channel § The two renderer
+  callers](unpair-channel.md#the-two-renderer-callers). From the Settings row, the operator stays on the
+  Settings screen: the clear fires, but there is no navigation, since `nextPairedRoute`'s only exit from
+  `settings` is the already-absolute `back`.
 - **A failed per-server unpair has no visible affordance — the row just returns to idle.** No banner,
   no row-local error copy, no session-store degradation (the deliberate reason for the last point).
   Retrying is the affordance: the Unpair button is right there, un-armed. Reddening a richer surface
   needs a main-side throw the fake e2e tier cannot currently drive, so nothing was built for a failure
   that has not been observed — revisit if one is.
-- **Whether the surviving server's channel list repopulates after the first of two unpairs is
-  deliberately unasserted.** `clearPairingScopedState` does not run on the "records remain" path (see
-  [Paired shell § data flow](paired-shell-routing.md)), and whether the surviving connection's rows are
-  re-listed depends on a session-status re-assertion this ticket neither owns nor drives. AC3 for #1162
-  is worded against the Settings rows and the shell route, both owned outright, rather than against the
-  channel list — [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150) is what would make
-  the channel-list question answerable.
+- **Resolved by [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196): what the channel list
+  does after the first of two unpairs is answerable, and it needed no session-status re-assertion.** The
+  surviving server's rows never had to "repopulate" — `clearPairingScopedState` still does not run on
+  the "records remain" path, and no slot of the surviving server's is ever dropped, so its rows were
+  never disturbed. The residue this doc used to leave open was the *departed* machine's rows, still
+  rendering (since [#1070](channel-list-host-row.md) under no host row at all, in the sidebar's
+  `unattributed` run) because nothing dropped its `conversationListStore` slot — see [Unpair channel §
+  The two renderer callers](unpair-channel.md#the-two-renderer-callers) for the fix,
+  `clearServerScopedState`.
 - **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
   already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
   and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
@@ -231,6 +241,11 @@ link points at the right file.
   (#1090's decision), wiring the row action, the confirm, the list refresh and the conditional route
   flip; see [How it works](settings-screen-how-it-works.md) for the mechanism. Split from #1152, which
   is otherwise exhausted as a parent (split depth capped at #1090 → #1152 → #1162).
+- [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196) · Spec:
+  `docs/specs/architecture/1196-scoped-clear-on-per-server-unpair.md` — the scoped clear #1162 named as
+  out of scope, split via #1150: forgetting one of several servers now drops that machine's conversation
+  rows, threads and open chat, from one implementation both this row's Unpair and the composer's Re-pair
+  share — see [Unpair channel](unpair-channel.md#the-two-renderer-callers).
 - [#403 codebase notes](../codebase/403.md) · Spec: `docs/specs/architecture/403-default-workspace-persist-apply.md`
   — the data half of the Defaults section: the persisted store and its read/write seam, no UI.
 - [#404 codebase notes](../codebase/404.md) · Spec: `docs/specs/architecture/404-default-workspace-row.md`

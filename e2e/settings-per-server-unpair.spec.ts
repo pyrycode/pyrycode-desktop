@@ -15,12 +15,27 @@ import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID } from './fixtures/laun
 // store's order (oldest-paired first) in one read. Rows are addressed for clicking by POSITION, never
 // by a text filter. This is `multi-server-launch.spec.ts`'s own assertion, reused deliberately.
 //
-// WHAT THIS SPEC DELIBERATELY DOES NOT ASSERT: the channel list after the first unpair.
-// `clearPairingScopedState` stays whole-app in this slice (scoping it to the departed server is
-// #1150), and whether the surviving server's rows come back depends on a session-status re-assertion
-// this slice neither owns nor drives. AC3 is worded against the Settings rows and the shell route —
-// both of which this slice owns outright — for exactly that reason. Pinning an outcome the app may
-// not realize is the #440 discipline.
+// #1196 GAVE THE CHANNEL LIST BACK TO THIS SPEC, and the paragraph that used to stand here — "what this
+// spec deliberately does not assert: the channel list after the first unpair" — is retired rather than
+// softened. It was right while `clearPairingScopedState` stayed whole-app and the per-server path
+// reached no clear at all, and its stated reason (the surviving rows "depend on a session-status
+// re-assertion this slice neither owns nor drives") turned out to be answering the wrong question: no
+// slot of the surviving server's is ever dropped, so nothing of its has to come back. The residue was
+// the DEPARTED machine's, and #1196 drops it at the source.
+//
+// ASSERT AGAINST THE WHOLE SIDEBAR, NEVER ONE SUBTREE. Since #1070 the list is drawn one subtree per
+// paired machine from `serverInfoStore` — which the unpair already refreshes — so the departed machine's
+// HOST ROW leaves with or without the fix, while its conversation rows, still stamped with a server no
+// longer on that list, fall into `groupByServer`'s `unattributed` bucket and render LAST under no host
+// row at all. A departed row that survives the fix therefore still renders; it only moves. An assertion
+// scoped to the departed machine's subtree would pass vacuously the moment its host row went, so every
+// row read below is over the APP-WIDE `.channel-list__title` set.
+//
+// AC2 (every departed conversation's retained thread is dropped, not only the open one) is NOT asserted
+// here and that is deliberate: the fake tier seeds one row per server and no thread rows at all, so
+// there is nothing on screen whose absence could distinguish the fix from its absence.
+// `clearServerScopedState.test.ts` drives it directly, over a departed set of three with a different one
+// on screen — the case an id-gated exit cannot reach.
 //
 // SECRET HYGIENE, inherited from the fixture: both pasted payloads carry synthetic keys and synthetic
 // tokens, and nothing below ever reaches one. Every assertion reads DOM text or a small integer, so a
@@ -73,9 +88,39 @@ test('each Settings row unpairs its own server, and only the last one routes to 
   await expect(settings).toBeVisible()
   await expect(pairingBox).toHaveCount(0)
 
+  // --- #1196 AC1 + AC3: the departed machine's conversation rows are gone from the WHOLE sidebar, and
+  // the survivor's are exactly where they were. Read back on the Channel List, which `.settings__back`
+  // reaches because `nextPairedRoute`'s `back` is absolute to `list`. ---
+  await page.locator('.settings__back').click()
+  const titles = page.locator('.channel-list__title')
+  // The array form, so the count, each row's exact text and their order are one read. `toHaveText`
+  // matches the WHOLE string, unlike the substring-matching `hasText` this file's header warns about.
+  await expect(titles).toHaveText(['Server two chat'])
+  // AC3's first half. The fixture opens the FIRST server's seeded row as its connected gate, so the
+  // conversation on screen at launch belongs to the machine just forgotten; `aria-current` is how an
+  // open row marks itself. Coupled to the row read above by construction — a row that is gone cannot
+  // be current — and asserted anyway, because it is the only on-screen trace of the active-conversation
+  // clear that the row drop does not already state.
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveCount(0)
+
+  // NO FURTHER INTERACTION BEFORE THE READS ABOVE, and that is a fixture constraint rather than a
+  // preference: BOTH fake servers are started with the same default `buildReply: () =>
+  // seedConversationsFrame()`, which answers ANY request with a one-row `conversations` frame built from
+  // SEEDED_ROW. The second server's own row reaches the app only through `pushFrame`. So any click that
+  // sends a command — opening a conversation fires `requestSessionSettings` and `requestModelList` —
+  // draws a reply that overwrites the SURVIVING server's slot with the DEPARTED row's name, and the
+  // sidebar reads 'Seeded discussion' again with nothing wrong in the app. Measured here: an earlier
+  // draft re-opened the survivor's row at this point and read exactly that.
+  //
+  // So AC3's second half (a chat belonging to a still-paired server stays open, thread intact) is the
+  // unit tier's, in `clearServerScopedState.test.ts` — which drives it directly, with the open
+  // conversation belonging to a server that is NOT the one departing.
+
   // --- AC4: unpairing the LAST paired server routes to the pairing screen, as the whole-collection
   // path does. `rows.nth(0)` is the survivor now — addressed by position, so the substring-shared ids
   // cannot select the wrong one. ---
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await expect(settings).toBeVisible()
   const lastRow = rows.nth(0)
   await lastRow.getByRole('button', { name: 'Unpair', exact: true }).click()
   await lastRow.getByRole('button', { name: 'Confirm', exact: true }).click()

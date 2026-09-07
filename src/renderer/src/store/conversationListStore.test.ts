@@ -7,6 +7,7 @@ import {
   selectConversations,
   selectConversationIdsFor,
   selectConversationsFor,
+  selectExclusiveConversationIdsFor,
   EMPTY_CONVERSATION_IDS,
   type ConversationListOrigin,
   type ConversationListState,
@@ -293,6 +294,104 @@ describe('selectConversationIdsFor', () => {
     // prototype instead of adding an own key, so the id would vanish from an enumeration entirely
     // rather than merely being unreadable. Asserting the whole membership, not just the lookup.
     expect([...ids]).toEqual(['__proto__'])
+  })
+})
+
+// selectExclusiveConversationIdsFor (#1196) — the departed set MINUS whatever another slot also claims.
+// The ids are the departing daemon's own, so this is the one input on the per-server unpair path that a
+// hostile or confused daemon controls; feeding it unfiltered to a thread clear would let it destroy
+// another machine's retained threads. Honest daemons are unaffected — ids are UUIDv4.
+describe('selectExclusiveConversationIdsFor', () => {
+  it('answers the whole slot when no other server claims any of its ids', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'a1' }), stamped('srv-a', { id: 'a2' })]],
+      ['srv-b', [stamped('srv-b', { id: 'b1' })]]
+    ])
+    expect([...selectExclusiveConversationIdsFor('srv-a')(s)].sort()).toEqual(['a1', 'a2'])
+  })
+
+  it('EXCLUDES an id another server also holds, and keeps that server’s other ids', () => {
+    // The cross-machine erase: srv-a lists srv-b's conversation. Dropping it would clear a thread the
+    // operator's OTHER machine owns, with no backfill to bring it back.
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: 'a1' }), stamped('srv-a', { id: 'shared' })]],
+      ['srv-b', [stamped('srv-b', { id: 'shared' })]]
+    ])
+    expect([...selectExclusiveConversationIdsFor('srv-a')(s)]).toEqual(['a1'])
+    // Symmetric: neither server can use the collision to reach into the other.
+    expect([...selectExclusiveConversationIdsFor('srv-b')(s)]).toEqual([])
+  })
+
+  it('collapses not-loaded, loaded-empty and fully-claimed to the SAME stable empty set', () => {
+    const empty = state([['srv-a', []]])
+    expect(selectExclusiveConversationIdsFor('srv-a')(empty)).toBe(EMPTY_CONVERSATION_IDS)
+    expect(selectExclusiveConversationIdsFor('srv-unknown')(empty)).toBe(EMPTY_CONVERSATION_IDS)
+    const claimed = state([
+      ['srv-a', [stamped('srv-a', { id: 'shared' })]],
+      ['srv-b', [stamped('srv-b', { id: 'shared' })]]
+    ])
+    expect(selectExclusiveConversationIdsFor('srv-a')(claimed)).toBe(EMPTY_CONVERSATION_IDS)
+  })
+
+  it('holds a __proto__ id as an ordinary member on both sides of the comparison', () => {
+    const s = state([
+      ['srv-a', [stamped('srv-a', { id: '__proto__' })]],
+      ['srv-b', [stamped('srv-b', { id: 'b1' })]]
+    ])
+    expect([...selectExclusiveConversationIdsFor('srv-a')(s)]).toEqual(['__proto__'])
+  })
+})
+
+// clearConversationsFor (#1196) — the KEYED sibling of clearAllConversations: forgetting one of several
+// servers must drop that server's rows and leave every other server's exactly where they were.
+describe('clearConversationsFor', () => {
+  it('drops the named server’s rows and leaves the survivor’s BY REFERENCE', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([row({ id: 'a1' })], 'srv-a')
+    store.getState().setConversations([row({ id: 'b1' })], 'srv-b')
+    const survivor = selectConversationsFor('srv-b')(store.getState())
+
+    store.getState().clearConversationsFor('srv-a')
+
+    expect(selectConversationsFor('srv-a')(store.getState())).toBeNull()
+    // Object.is true for the untouched slot — a component watching srv-b does not re-render.
+    expect(selectConversationsFor('srv-b')(store.getState())).toBe(survivor)
+  })
+
+  it('recomputes the union so the departed rows stop rendering app-wide (AC1)', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([row({ id: 'a1' })], 'srv-a')
+    store.getState().setConversations([row({ id: 'b1' })], 'srv-b')
+
+    store.getState().clearConversationsFor('srv-a')
+
+    expect(selectConversations(store.getState())).toEqual([stamped('srv-b', { id: 'b1' })])
+  })
+
+  it('dropping the only held slot returns the not-loaded state, not a loaded-empty one', () => {
+    // `null` is "no server has reported yet", which is what a lone survivor with no reply in hand is —
+    // ChannelList shows its loading affordance rather than a false "zero conversations".
+    const store = createConversationListStore()
+    store.getState().setConversations([row()], 'srv-a')
+    store.getState().clearConversationsFor('srv-a')
+    expect(store.getState().conversations).toBeNull()
+    expect(store.getState().byServer.size).toBe(0)
+  })
+
+  it('hands the state OBJECT back for a server it holds nothing for (the subscriber short-circuit)', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([row()], 'srv-a')
+    const before = store.getState()
+    store.getState().clearConversationsFor('srv-never-paired')
+    expect(store.getState()).toBe(before)
+  })
+
+  it('leaves a later reply for the SAME server free to refill its slot', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([row({ id: 'old' })], 'srv-a')
+    store.getState().clearConversationsFor('srv-a')
+    store.getState().setConversations([row({ id: 'new' })], 'srv-a')
+    expect(selectConversations(store.getState())).toEqual([stamped('srv-a', { id: 'new' })])
   })
 })
 

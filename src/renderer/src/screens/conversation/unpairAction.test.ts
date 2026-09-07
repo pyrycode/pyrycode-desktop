@@ -27,11 +27,15 @@ function deps(
   refreshServers: ReturnType<typeof vi.fn>
   onLastServerUnpaired: ReturnType<typeof vi.fn>
   dispatch: ReturnType<typeof vi.fn>
+  clearServerScopedState: ReturnType<typeof vi.fn>
 } {
   return {
     unpairServer: vi.fn(async (): Promise<UnpairResult> => ({ result: 'ok' })),
     refreshServers: vi.fn(async (): Promise<ServerInfoValue[]> => [SURVIVOR]),
     onLastServerUnpaired: vi.fn(),
+    // #1196: inherited through `UnpairDeps extends UnpairServerDeps`, not re-declared there — which is
+    // exactly what AC4 asks for, and what this file exists to pin on the composer's side of the hop.
+    clearServerScopedState: vi.fn(),
     dispatch: vi.fn(),
     ...overrides
   } as never
@@ -71,6 +75,24 @@ describe('runUnpair', () => {
     // #531's rule survives the migration: the session reset is owned by clearPairingScopedState, which
     // the flip reaches through PairedShell — never dispatched from here on a success path.
     expect(d.dispatch).not.toHaveBeenCalled()
+    // #1196, AC4: the Re-pair path drops the departed server's rows and threads exactly as the Settings
+    // row's Unpair does, because it composes with the SAME helper rather than carrying a second copy.
+    // Pinned here as well as next door: a clear implemented in `ServerRowControl` alone would satisfy
+    // every other criterion while leaving this path broken, and that is the half-fix AC4 exists to
+    // catch. The id is the erased one, forwarded through the hop unchanged.
+    expect(d.clearServerScopedState).toHaveBeenCalledTimes(1)
+    expect(d.clearServerScopedState).toHaveBeenCalledWith('fake-daemon')
+  })
+
+  it('a null serverId erases nothing and therefore clears nothing (#1196)', async () => {
+    // The refusal arm: the open conversation could not be attributed to exactly one server, so nothing
+    // is invoked at all — and the new effect inherits that fail-safe rather than sitting outside it.
+    const d = deps()
+
+    expect(await runUnpair(d, null)).toBe('error')
+
+    expect(d.unpairServer).not.toHaveBeenCalled()
+    expect(d.clearServerScopedState).not.toHaveBeenCalled()
   })
 
   it('ok with an empty refreshed list → flips exactly once, dispatches nothing', async () => {

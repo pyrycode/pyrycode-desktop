@@ -110,6 +110,28 @@ export type ConversationListStore = ConversationListState & {
    * its rows. That is the one regression keying introduces, and this is its fix.
    */
   clearAllConversations: () => void
+  /**
+   * ONE SERVER's rows, dropped (#1196) — the keyed sibling of the clear above, and the other half of
+   * what keying by server owes: forgetting one of several paired machines must take that machine's rows
+   * off the sidebar and leave every other machine's exactly where they were. Until now the per-server
+   * unpair path reached no clear at all unless it happened to forget the LAST server, so a departed
+   * machine's rows went on rendering out of the union — since #1070 under no host row at all, because
+   * the sidebar draws its subtrees from `serverInfoStore`, which the unpair already refreshes.
+   *
+   * IT TAKES AN ID WHERE ITS SIBLING REFUSES ONE, and the two are the same rule at different
+   * boundaries. `clearAllConversations` is nullary because a pairing ending invalidates EVERY server's
+   * rows at once, so an id parameter could only ever let a daemon-supplied value steer which server
+   * survives. Here the whole act is "one named server", so the id IS the argument — but typed `string`,
+   * NARROWER than `ConversationListOrigin`, so the `null` (bound, no paired record) and `undefined`
+   * (never bound) slots are unreachable from this entry point by the TYPE rather than by a rule. And it
+   * must be called with a CLIENT-HELD id, exactly as `selectConversationsFor`'s docblock requires of
+   * the read side: the only production caller passes the id `runUnpairServer` just erased, which comes
+   * from this client's own paired collection and never from a wire field.
+   *
+   * Dropping the last held slot flattens to `conversations: null` — the not-loaded state, which is the
+   * honest answer for a surviving server that has not replied yet, rather than a false loaded-empty.
+   */
+  clearConversationsFor: (serverId: string) => void
 }
 
 export const initialConversationListState: ConversationListState = {
@@ -217,7 +239,24 @@ export function createConversationListStore(
         // sole write path that keeps the two fields derived together. There is no side-effect guard to
         // want: nothing here reaches outside memory, so this clear cannot throw.
         s.conversations === null && s.byServer.size === 0 ? s : initialConversationListState
-      )
+      ),
+    clearConversationsFor: (serverId) =>
+      set((s) => {
+        // The same SUBSCRIBER SHORT-CIRCUIT its nullary sibling carries, against the condition that
+        // matters here: an id naming no held slot hands the state OBJECT straight back, so zustand's
+        // `Object.is(next, state)` fires and a redundant clear wakes NO listener. Reachable in
+        // production whenever a server is forgotten before its list reply ever landed.
+        if (!s.byServer.has(serverId)) return s
+        // Copy-on-write, the discipline `setConversations` above documents: a new Map, never a mutation
+        // of the one the store already handed out. Every surviving slot is carried across BY REFERENCE,
+        // so a component watching another server sees `Object.is` true and does not re-render.
+        const byServer = new Map(s.byServer)
+        byServer.delete(serverId)
+        // The union is recomputed in the SAME `set` that writes the map — what makes the two fields
+        // derived together by construction rather than by convention, and what actually takes the
+        // departed rows off the app-wide read.
+        return { conversations: flattenByServer(byServer), byServer }
+      })
   }))
 }
 
@@ -307,6 +346,53 @@ export const selectConversationIdsFor =
     const rows = selectConversationsFor(origin)(s)
     if (rows === null || rows.length === 0) return EMPTY_CONVERSATION_IDS
     return new Set(rows.map((row) => row.id))
+  }
+
+/**
+ * THE DEPARTED SET, MINUS WHAT ANOTHER MACHINE CLAIMS (#1196) — the ids held for `origin` that appear
+ * under NO other slot.
+ *
+ * WHY A STRICTER SIBLING EXISTS AT ALL. On the per-server unpair path the `serverId` is this client's
+ * own (main stamps every event with it through `bindServerOrigin`, and `stampRows`' spread-first order
+ * stops a daemon's own `serverId` field from overwriting the stamp), but the conversation IDS are the
+ * departing daemon's: they are whatever it listed in its own `conversationsReceived` reply. Nothing
+ * stops a confused or hostile paired daemon from listing ids belonging to ANOTHER paired machine, and
+ * fed to a thread clear unfiltered that turns "forget machine A" into "destroy machine B's retained
+ * threads and close the chat the operator is reading on B" — destructive with no way back, because
+ * neither timeline store has any history backfill. Excluding a claimed id turns that into a no-op.
+ *
+ * It is `serverIdForOpenConversation`'s shipped discipline applied to a SET rather than to one id: that
+ * function refuses an ambiguous match with `filter` and a length check rather than `find`, for this
+ * exact reason, and its docblock records that two servers reporting the same conversation id "is a
+ * condition the app does not otherwise prevent". Honest daemons pay nothing — the daemon mints
+ * conversation ids as UUIDv4 from the system random source, so a real collision cannot occur and this
+ * answers the same set `selectConversationIdsFor` does.
+ *
+ * A SIBLING OF `selectConversationIdsFor`, NOT A WIDENING OF IT. That selector is the shared answer the
+ * three reconnect-reset bridges (#1138, #1139, #1140) ride, where an over-broad set costs a reset that
+ * self-heals; here it costs destruction with no backfill, so this path buys the stricter answer for
+ * itself rather than changing the meaning of a read three other consumers depend on.
+ *
+ * Same three properties as its sibling: a `Set` and never a bare object (these ids are the daemon's, and
+ * a `__proto__` id would write through `Object.prototype` on a `Record<string, …>`); the one shared
+ * `EMPTY_CONVERSATION_IDS` reference for a not-loaded, loaded-empty OR fully-claimed slot; and NOT a
+ * `useConversationListStore` read surface, since a non-empty result is a fresh `Set` per call — the one
+ * consumer calls it inside an event handler against `getState()`.
+ */
+export const selectExclusiveConversationIdsFor =
+  (origin: ConversationListOrigin) =>
+  (s: ConversationListState): ReadonlySet<string> => {
+    const rows = selectConversationsFor(origin)(s)
+    if (rows === null || rows.length === 0) return EMPTY_CONVERSATION_IDS
+    const claimedElsewhere = new Set<string>()
+    for (const [key, kept] of s.byServer) {
+      // `!==` on the origin itself, so each of the three key kinds is compared as itself and a slot is
+      // never treated as foreign to itself.
+      if (key === origin) continue
+      for (const kept_row of kept) claimedElsewhere.add(kept_row.id)
+    }
+    const exclusive = rows.filter((r) => !claimedElsewhere.has(r.id)).map((r) => r.id)
+    return exclusive.length === 0 ? EMPTY_CONVERSATION_IDS : new Set(exclusive)
   }
 
 /** The archived-conversation count for the Settings Storage row (#351). Passes `null` (not yet loaded)

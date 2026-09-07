@@ -73,6 +73,7 @@ import { isAtBottom } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair, serverIdForOpenConversation } from './unpairAction'
+import { clearServerScopedState, serverScopedClearDeps } from '../../clearServerScopedState'
 import { conversationListStore, selectConversations } from '../../store/conversationListStore'
 import { serverInfoStore } from '../../store/serverInfoStore'
 import { loadServerInfo } from '../../store/serverInfoLoader'
@@ -399,7 +400,7 @@ export function ConversationScreen({
           separate block beneath the composer is gone. */}
       <ComposerStatusArea
         isRunning={isTurnRunning(phase)}
-        trailing={<ComposerErrorSlotControl onUnpaired={onUnpaired} />}
+        trailing={<ComposerErrorSlotControl onUnpaired={onUnpaired} onBack={onBack} />}
       >
         <ThinkingIndicator
           state={workingIndicatorStateWithLocalSend(
@@ -3415,7 +3416,21 @@ export function ComposerErrorSlot({
 // Neither populated branch is reachable in a server render — zustand v5's useStore reads
 // getInitialState() there, which is `disconnected` — so both container tests stage that initial snapshot
 // with a getInitialState spy rather than a setState, which cannot reach a non-initial arm at all.
-function ComposerErrorSlotControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element | null {
+//
+// #1196: it also drops the state the departed server authored, through the shared
+// `clearServerScopedState`. `onBack` is threaded in for its ONE effect — the return to the Channel List
+// when the erase leaves other servers paired. That case is unconditional here, unlike at the Settings
+// row: `serverIdForOpenConversation` names the server of the conversation ON SCREEN, so the chat this
+// control is mounted inside is always one of the departing machine's, and staying on it would leave the
+// operator reading a thread whose conversation has just been cleared. Optional and gated exactly like
+// `onUnpaired`, so a bare `<ConversationScreen />` outside the shell still navigates nowhere.
+function ComposerErrorSlotControl({
+  onUnpaired,
+  onBack
+}: {
+  onUnpaired?: () => void
+  onBack?: () => void
+}): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   const dispatch = useSessionStore((s) => s.dispatch)
 
@@ -3434,6 +3449,16 @@ function ComposerErrorSlotControl({ onUnpaired }: { onUnpaired?: () => void }): 
         // rather than assumed: reaching it means nothing is paired any more, so it may run the
         // thirteen-store clear and flip the route.
         onLastServerUnpaired: () => onUnpaired?.(),
+        // #1196: the OTHER arm — servers remain, so the app stays in the paired shell and only the
+        // departed machine's state goes. The clear set and its store wiring live in
+        // `clearServerScopedState`; this site supplies only the nav, which is the one effect the two
+        // callers legitimately differ on. Spread rather than re-listed, so the Settings row and this
+        // control can never enumerate two different clear sets (AC4).
+        clearServerScopedState: (departedServerId) =>
+          clearServerScopedState(
+            { ...serverScopedClearDeps, navigateToList: () => onBack?.() },
+            departedServerId
+          ),
         dispatch
       },
       serverId

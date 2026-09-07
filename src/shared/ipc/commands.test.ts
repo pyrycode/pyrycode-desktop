@@ -155,16 +155,27 @@ describe('dequeueMessageCommand (#300)', () => {
   })
 })
 
-describe('interruptCommand (#306)', () => {
-  it('constructs a bare interrupt command with no payload (fire-and-forget stop-the-turn)', () => {
-    const command = interruptCommand()
+describe('interruptCommand (#306, named by #1092)', () => {
+  it('constructs an interrupt command naming exactly the conversation whose turn to stop', () => {
+    const command = interruptCommand({ conversation_id: 'c-1' })
 
     // Discriminant comes from the module, not a bare literal a rename could silently pass.
-    expect(command).toEqual({ type: 'interrupt' })
+    expect(command).toEqual({ type: 'interrupt', payload: { conversation_id: 'c-1' } })
     if (command.type === 'interrupt') {
-      // Bare member: no payload — nothing to parameterise, no token/key/raw-frame field (AC5).
-      expect(command).not.toHaveProperty('payload')
+      // ONE field and nothing else — no token, key or raw-frame field, and no `serverId`: the
+      // conversation id already selects the connection, so a second address could disagree with it.
+      expect(Object.keys(command.payload)).toEqual(['conversation_id'])
+      expect(command).not.toHaveProperty('serverId')
     }
+  })
+
+  it('cannot be constructed naming nothing — the bare form is a compile error, not a runtime case', () => {
+    // `InterruptCommandPayload` is `Required<InterruptPayload>`, so `interruptCommand()` and
+    // `interruptCommand({})` do not type-check. That is what makes AC4's "unreachable by construction
+    // rather than by discipline" true; there is no runtime assertion that could prove it, so this test
+    // exists to hold the @ts-expect-error, which reddens the moment the payload goes optional again.
+    // @ts-expect-error — the empty payload is exactly the form this ticket makes unreachable.
+    expect(() => interruptCommand({})).not.toThrow()
   })
 })
 
@@ -497,17 +508,38 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(command)).toBe(true)
   })
 
-  it('accepts the bare interrupt command (no payload — stops the running turn) (#306)', () => {
-    // The interrupt frame carries nothing to parameterise, so its guard case is a bare `return true`.
-    // A structurally-extra field is harmless (structural minimum), like requestConversations.
-    expect(isRendererCommand({ type: 'interrupt' })).toBe(true)
-    expect(isRendererCommand({ type: 'interrupt', extra: 'ignored' })).toBe(true)
+  it('accepts an interrupt command naming a conversation (#1092)', () => {
+    expect(isRendererCommand({ type: 'interrupt', payload: { conversation_id: 'c-1' } })).toBe(true)
+    // Structural minimum, like every sibling: an extra field is not rejected here, and cannot reach
+    // the wire because `buildInterrupt` rebuilds a fresh literal bounded to the one id.
+    expect(
+      isRendererCommand({ type: 'interrupt', payload: { conversation_id: 'c-1' }, extra: 'ignored' })
+    ).toBe(true)
   })
 
-  it('types the bare interrupt member as part of the union (#306)', () => {
-    // Compile-time proof the bare member is in RendererCommand, hence reachable through the existing
+  it('refuses an interrupt command that names no conversation (#1092)', () => {
+    // The BARE form the frame carried until pyrycode#2103 is now a boundary rejection, and the
+    // refusal is the point rather than strictness for its own sake: on this verb an absent or empty
+    // id is not an unresolvable id, it is the daemon's process-wide follow-active cursor — some other
+    // conversation's turn stopped mid-work. A refused command is dropped in silence, so the failure
+    // mode is Stop doing nothing rather than Stop hitting the wrong chat.
+    expect(isRendererCommand({ type: 'interrupt' })).toBe(false)
+    expect(isRendererCommand({ type: 'interrupt', payload: {} })).toBe(false)
+    // Explicitly-undefined is refused BY isInterruptPayload rather than by the `in` check: structured
+    // clone PRESERVES an own property holding `undefined` across the IPC bridge, so `'payload' in
+    // value` alone would pass one straight through to the wire.
+    expect(isRendererCommand({ type: 'interrupt', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'interrupt', payload: null })).toBe(false)
+    expect(isRendererCommand({ type: 'interrupt', payload: { conversation_id: '' } })).toBe(false)
+    for (const conversation_id of [42, null, {}, ['c-1'], true, undefined]) {
+      expect(isRendererCommand({ type: 'interrupt', payload: { conversation_id } })).toBe(false)
+    }
+  })
+
+  it('types the named interrupt member as part of the union (#1092)', () => {
+    // Compile-time proof the member is in RendererCommand, hence reachable through the existing
     // generic sendCommand bridge — no new preload method or IPC channel exists to test.
-    const command: RendererCommand = interruptCommand()
+    const command: RendererCommand = interruptCommand({ conversation_id: 'c-1' })
     expect(isRendererCommand(command)).toBe(true)
   })
 
@@ -1153,16 +1185,20 @@ describe('isRendererCommand', () => {
   })
 })
 
-// The optional server id (#1120). Six members are SERVER-SCOPED: they are about a whole server and
+// The optional server id (#1120). FIVE members are SERVER-SCOPED: they are about a whole server and
 // carry no id of any kind to route by, so the window names the server it means. The field is a
 // top-level sibling of `payload`, never a field inside it — `setSessionSettings`' `changeId` shape —
 // so the envelope builders, which consume `payload` alone, cannot put it on the wire.
+//
+// `interrupt` WAS THE SIXTH AND IS NOT ONE ANY MORE (#1092). It joined this set because it carried no
+// id of any kind; now that the frame names the conversation whose turn to stop, that conversation id
+// IS the address, and a `serverId` beside it would be a second one that could disagree. It routes
+// through #1118's conversation index instead, like every other conversation-scoped command.
 describe('the server-scoped commands name their server (#1120)', () => {
   // Every arm in the table, with a shape-valid payload where one is owed.
   const arms: Array<[string, Record<string, unknown>]> = [
     ['requestConversations', {}],
     ['requestRecentWorkspaces', {}],
-    ['interrupt', {}],
     ['requestDebugBundle', {}],
     ['createConversation', { payload: { is_promoted: null, name: null, cwd: null } }],
     ['createWorkspaceFolder', { payload: { parent: '/home/op', name: 'notes' } }]
@@ -1199,11 +1235,10 @@ describe('the server-scoped commands name their server (#1120)', () => {
     ).toBe(true)
   })
 
-  it('types the optional field on each of the six members', () => {
+  it('types the optional field on each of the five members', () => {
     const commands: RendererCommand[] = [
       { type: 'requestConversations', serverId: 'pyrybox' },
       { type: 'requestRecentWorkspaces', serverId: 'pyrybox' },
-      { type: 'interrupt', serverId: 'pyrybox' },
       { type: 'requestDebugBundle', serverId: 'pyrybox' },
       { type: 'createConversation', payload: { is_promoted: null, name: null, cwd: null }, serverId: 'pyrybox' },
       { type: 'createWorkspaceFolder', payload: { parent: '/home/op', name: 'notes' }, serverId: 'pyrybox' }
@@ -1214,13 +1249,16 @@ describe('the server-scoped commands name their server (#1120)', () => {
     expect(isRendererCommand(bare)).toBe(true)
   })
 
-  it('mints an interrupt for a named server, and a bare one when no id is resolved (#306)', () => {
-    expect(interruptCommand('pyrybox')).toEqual({ type: 'interrupt', serverId: 'pyrybox' })
-    // The zero-arg call keeps its shipped meaning: assigned unconditionally, so the own property is
-    // present and undefined — which the guard reads as absent and the router resolves to the sole
-    // connection.
-    const bare = interruptCommand()
-    expect(isRendererCommand(bare)).toBe(true)
-    expect(bare).toEqual({ type: 'interrupt' })
+  it('leaves interrupt out of the set entirely, serverId and all (#1092)', () => {
+    // Not merely "no longer validated": the field is GONE from the member, so a command carrying one
+    // is an ordinary extra field the structural minimum ignores — it reaches no router and no wire.
+    // The named payload is the whole address now.
+    expect(interruptCommand({ conversation_id: 'c-1' })).toEqual({
+      type: 'interrupt',
+      payload: { conversation_id: 'c-1' }
+    })
+    expect(
+      isRendererCommand({ type: 'interrupt', payload: { conversation_id: 'c-1' }, serverId: 42 })
+    ).toBe(true)
   })
 })

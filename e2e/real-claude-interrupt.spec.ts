@@ -16,14 +16,29 @@ test.use({ interactiveRunner: 'stream-json' })
 // and swaps only the turn body: start a deliberately-long turn, interrupt it while it streams, and prove
 // the turn quiesces.
 //
-// The client wiring is already shipped and fake-stack-proven; this adds NO production `src/` change. The
-// fake-stack twins (#307 InterruptButton render, #427 the queued-backlog-interrupt chain) prove the client
-// WIRING — the button is gated on `isTurnRunning(phase)` (thinking || responding), `sendInterrupt` fires a
-// bare `interrupt` command and does NO local dispatch (non-optimistic), and the controls retract only when
-// the daemon's `turn_state{idle}` arrives while the streaming cursor `.bubble__cursor` clears on `turn_end`.
-// But in #427 that retraction is driven by `daemon.pushFrame` — a scripted state, not claude actually
-// stopping. This spec is the liveness proof: on the real stack the retraction must come from the REAL
-// daemon ending a REAL, streaming turn in response to the interrupt.
+// The fake-stack twins (#307 InterruptButton render, #427 the queued-backlog-interrupt chain) prove the
+// client WIRING — the button is gated on `isTurnRunning(phase)` (thinking || responding), `sendInterrupt`
+// fires one `interrupt` command and does NO local dispatch (non-optimistic), and the controls retract only
+// when the daemon's `turn_state{idle}` arrives while the streaming cursor `.bubble__cursor` clears on
+// `turn_end`. But in #427 that retraction is driven by `daemon.pushFrame` — a scripted state, not claude
+// actually stopping. This spec is the liveness proof: on the real stack the retraction must come from the
+// REAL daemon ending a REAL, streaming turn in response to the interrupt.
+//
+// #1092 GAVE IT A SECOND JOB WITHOUT CHANGING A LINE OF ITS DRIVE, and that is why the ticket extended
+// this spec rather than minting one. The frame used to be bare, and the daemon stopped whichever
+// conversation its own follow-active cursor pointed at; it now carries the open conversation's
+// `conversation_id`, which the daemon validates against its registry. A wrong id is SILENTLY INERT
+// daemon-side — no stop, no reply, no error — and passes every fake-tier assertion, because those assert
+// the captured frame and cannot ask the daemon whether it resolved. So this spec is now the only proof
+// that the id this client sends is one the daemon's registry resolves: it drives the NAMED path by
+// construction, and a name the daemon cannot act on shows up as the quiesce gate timing out. (That spec
+// no longer "adds no production `src/` change" — #1092 changed the whole path underneath it.)
+//
+// WHAT IT STILL CANNOT DO is separate the named path from the bare one, and no cheap edit gives it that.
+// The cursor is stamped only by a routed `send_message`, and this drive sends exactly one message, to the
+// conversation it then interrupts — so bare and named agree here by construction. Discriminating would
+// need a second conversation messaged to move the cursor, i.e. two real claude turns inside this spec's
+// timeout. #1092 weighed that and declined it; do not add it here without re-doing that trade.
 //
 // REAL-CLAUDE DIVERGENCES from the fake twin #427 (the only deltas — mirrors the real-daemon-workspace.spec.ts
 // doc discipline):
@@ -180,6 +195,13 @@ test('real claude quiesces a genuinely running turn when interrupted', async ({
   // after the interrupt lands — the count may still tick up here, which is why the settled baseline is
   // captured AFTER this gate, not at the click. A timeout here is the exact gap this ticket exists to catch
   // (the daemon received the interrupt but did not end the turn); file it separately, do NOT soften it.
+  //
+  // SINCE #1092 IT IS ALSO THE REGISTRY-RESOLUTION GATE, and that is the whole of this spec's second job.
+  // The frame now names the open conversation, and an id the daemon cannot resolve is silently inert — it
+  // stops nothing, answers nothing, and every fake-tier assertion still passes. Here it does not: no stop
+  // means no turn_state{idle} and no turn_end, so this gate times out. That makes it the only place in the
+  // repo where a wrong id is observable, which is why the timeout must be read as "the daemon did not
+  // resolve or did not act on the id we sent" before it is read as flake.
   await expect(interruptButton).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 

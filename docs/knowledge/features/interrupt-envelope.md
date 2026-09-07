@@ -18,26 +18,38 @@ standalone control is gone; the stop button is now a variant of the composer's o
 type, the builder, and the command pathway (#305/#306) are untouched — only where the click originates
 changed. See § The render affordance below for the current shape.
 
+**[#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092) then named the conversation.** The
+frame was bare from #305 through #1120: the daemon stopped whichever conversation its process-wide
+follow-active cursor pointed at — the last one any client routed a message to — so Stop on one chat could
+silently kill another's turn. pyrycode#2103 published an optional `conversation_id` on `interrupt`,
+validated against the daemon's registry, with the absent form kept as the pre-#2103 compatibility promise.
+\#1092 threads it end to end, mirroring the `new_session` twin (#1217/#1218) at every layer, and re-routes
+the command from #1120's server-scoped path onto #1118's conversation-to-server index — see § Naming the
+conversation (#1092) below for the current shape. The historical "bare, no payload" description below is
+what #305/#306/#307/#678 shipped; it no longer describes what this client sends.
+
 ## What it does
 
-Defines the byte-exact shape of a **bare** control frame the desktop sends to the daemon to stop the
-current turn, and the pure function that serializes it:
+Defines the shape of the control frame the desktop sends to the daemon to stop the current turn, and the
+pure function that serializes it:
 
-- `interrupt` — no payload, no `conversation_id`, no nonce, no answer token, no idempotency key. The
-  daemon intercepts it before `dispatch.Route` (like `request_debug_bundle` / `dequeue_message`) and
-  maps it to a single Esc keystroke into the supervised `claude`, stopping the current turn (daemon
-  SSOT pyrycode #707).
+- `interrupt` — as of #1092, carries the open conversation's `conversation_id` and nothing else: no
+  nonce, no answer token, no idempotency key. The daemon validates the id against its registry and maps
+  the frame to a single Esc keystroke into that conversation's supervised `claude`, stopping its current
+  turn (daemon SSOT pyrycode #707, widened by pyrycode#2103). The wire field itself stays **optional** —
+  the absent form is the pre-#2103 compatibility promise for a client that cannot name a conversation —
+  but this app always can, so it always sends one; see § Naming the conversation (#1092).
 
 Unlike the [modal resolution envelope](modal-resolution-envelope.md)'s `modal_answer`, this frame
 carries no correlation state at all — not even the ungated-but-payload-bearing shape of
-[`dequeue_message`](dequeue-message-envelope.md). It is **bare by construction**: a replayed
+[`dequeue_message`](dequeue-message-envelope.md). It is **fire-and-forget by construction**: a replayed
 `interrupt` is a benign extra Esc, and an Esc with no running turn is a no-op in `claude`, so no
-nonce or dedup key is needed (#707). The daemon does not `ack` an `interrupt` — it is
-**fire-and-forget**; the turn-stopped signal reaches the desktop through the existing interactive
-stream (`turn_state{idle}` / `turn_end`), never as a reply correlated to this frame. The daemon
-routes it to an Esc only for a connection that negotiated the `interactive` capability — the desktop
-already advertises it (#179) — and that gate is entirely daemon-side; the builder does nothing about
-it.
+nonce or dedup key is needed (#707) — naming the conversation didn't change this, since the id is a
+routing address, not a correlation token. The daemon does not `ack` an `interrupt`; the turn-stopped
+signal reaches the desktop through the existing interactive stream (`turn_state{idle}` / `turn_end`),
+never as a reply correlated to this frame. The daemon routes it to an Esc only for a connection that
+negotiated the `interactive` capability — the desktop already advertises it (#179) — and that gate is
+entirely daemon-side; the builder does nothing about it.
 
 ## How it works
 
@@ -47,49 +59,100 @@ it.
 export type EnvelopeType =
   | ...
   | 'dequeue_message'
-  // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
-  // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
-  // `interactive` capability; fire-and-forget (no reply). SSOT pyrycode #707.
+  // v2-only phone→binary control frame — maps to a single claude Esc (stops the current turn) in
+  // the conversation `conversation_id` names. daemon-gated on the `interactive` capability;
+  // fire-and-forget (no reply). The field is OPTIONAL because absent is the pre-#2103 compatibility
+  // promise (the daemon's process-wide follow-active cursor); a client that can name a conversation
+  // should always name one (#1092). SSOT pyrycode #707, widened pyrycode#2103.
   | 'interrupt'
   | ...
+
+export interface InterruptPayload {
+  conversation_id?: string
+}
 ```
 
-No payload interface exists for `interrupt` — deliberately (AC5). The documentary role a payload
-type would otherwise carry (e.g. `ListConversationsPayload = Record<string, never>` for
-`list_conversations`) lives instead as the inline comment above; `interrupt` goes one step further
-than `list_conversations` by not even naming a `Record<string, never>` type.
+**Until [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), no payload interface existed
+for `interrupt`** — deliberately (#305's AC5), because the frame was bare. `InterruptPayload` is now
+sited beside `NewSessionPayload` for the same reason that one is optional: it answers to the daemon,
+which publishes the field optional so pre-#2103 clients keep working. Tightening it here would be a wire
+drift (CLAUDE.md no-drift) — the tightening happens one layer up, in the command payload.
 
-### The builder (`src/main/transport/interruptEnvelope.ts`, new, MAIN-PROCESS ONLY)
+### The command (`src/shared/ipc/commands.ts`)
+
+`InterruptCommandPayload = Required<InterruptPayload>` — the `NewSessionCommandPayload` idiom: derive
+from the wire type so the two cannot drift, tightening the one field rather than excluding one. A frame
+naming nothing is unreachable by construction: `interruptCommand(fields: InterruptCommandPayload)`
+replaced #306's zero-arg constructor, and `isInterruptPayload` — co-located with
+`isNewSessionPayload`, whose `''`-refusal rationale it repeats word for word — refuses a missing key,
+`null`, an explicitly-`undefined` payload, a non-string id, and `''`. `''` is the one that matters here:
+the protocol gives no payload, `{}`, an absent id and an explicitly empty one one wire meaning, so
+`isInterruptPayload` is what turns a wrong-chat Stop into a Stop that does nothing rather than a
+cross-conversation misfire. See [Command channel](command-channel.md) for the union member's full
+growth-log entry.
+
+### The builder (`src/main/transport/interruptEnvelope.ts`, MAIN-PROCESS ONLY)
 
 ```ts
-export interface InterruptInput { id: number; ts: string }
+export interface InterruptInput { id: number; ts: string; conversationId: string }
 export function buildInterrupt(input: InterruptInput): Uint8Array
-// → Envelope{ id, type: 'interrupt', ts, payload: {} } → encodeEnvelope(); MAY throw WireEncodeError
+// → Envelope{ id, type: 'interrupt', ts, payload: { conversation_id: input.conversationId } }
+//   → encodeEnvelope(); MAY throw WireEncodeError
 ```
 
-A structural clone of `buildRequestDebugBundle` / `buildListConversations` — the module's two
-existing **bare**-frame builders — not `buildDequeueMessage` (which the ticket body named as the
-mirror but which carries a real payload; see [#305 codebase notes](../codebase/305.md) for the
-correction). Pure, synchronous, caller-injects `id`/`ts` (no clock/counter read, no side effects). The
-serialized `payload` is **present-and-empty (`{}`), never omitted or `null`**: the daemon tolerates
-an absent payload for a bare control type (intercepted before dispatch), but the desktop's own
-`decodeEnvelope` throws on one (see [wire codec](wire-codec.md), `codec.ts:133`), and
-`Envelope.payload` is a required field — relaxing it to optional would be a wire-type drift touching
-every consumer. `{}` (not `null`) also upholds the module's never-emit-null posture. `encodeEnvelope`
-throws `WireEncodeError` above `MAX_PLAINTEXT_BYTES`; unreachable in practice for a fixed-shape
-~60-byte empty-payload envelope, but the builder propagates it unchanged for symmetry with every
-sibling builder. No barrel — never re-exported through the renderer; raw bytes stay in main.
+Until #1092 this was a structural clone of `buildRequestDebugBundle` / `buildListConversations` — the
+module's **bare**-frame builders. #1092 gave `InterruptInput` a **required** `conversationId` and made
+`buildInterrupt` rebuild a **fresh literal** — never a spread of caller input — so a field smuggled past
+`isInterruptPayload`'s structural-minimum guard is dropped rather than sent; the module header and this
+docblock were rewritten rather than patched, since the old "no payload struct, no conversation_id"
+framing is now false. Pure, synchronous, caller-injects `id`/`ts`/`conversationId` (no clock/counter
+read, no side effects). `encodeEnvelope` throws `WireEncodeError` above `MAX_PLAINTEXT_BYTES`;
+unreachable in practice for a fixed-shape ~60-byte envelope, but the builder propagates it unchanged for
+symmetry with every sibling builder. No barrel — never re-exported through the renderer; raw bytes stay
+in main. `buildRequestDebugBundle` is now the module's sole present-but-empty-`payload: {}` builder — its
+own docblock carries the "why `{}` and not an omitted/`null` payload" rationale this file used to cite
+`buildInterrupt` for (corrected during #1092's stale-prose sweep, since `interrupt` stopped being bare).
 
 ## Configuration and usage
 
-[#306](../codebase/306.md) added
-`daemonConnection.interrupt(): void` (no payload arg, since the frame is nullary — the `driver === null`
-inert-when-disconnected twin of `requestConversations`) plus a bare `{ type: 'interrupt' }`
-`RendererCommand` member and its `interruptCommand()` factory, routed through `main/index.ts`'s
-`onCommand` switch (`case 'interrupt': connection.interrupt(); return`). The dispatcher does no
-liveness check of its own — `interrupt()` itself is the inert-when-disconnected guard, so the frame is
-silently dropped rather than the connection ever asked to confirm liveness. No preload change: the
-generic `sendCommand(command: RendererCommand)` pipe already carries the new member.
+[#306](../codebase/306.md) added `daemonConnection.interrupt(): void` (no payload arg, since the frame
+was nullary — the `driver === null` inert-when-disconnected twin of `requestConversations`) plus a bare
+`{ type: 'interrupt' }` `RendererCommand` member and its `interruptCommand()` factory, routed through
+`main/index.ts`'s `onCommand` switch. [#1120](https://github.com/pyrycode/pyrycode-desktop/issues/1120)
+later gave the command an optional `serverId`, since a bare frame carried no id of its own to route by,
+and dispatched it through `serverRouter.ts` — the same path as the other server-scoped commands. See
+[Daemon connection — routing § Server-scoped command routing (#1120)](daemon-connection-server-scoped-routing.md).
+
+### Naming the conversation (#1092)
+
+[#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092) widened the connection method to
+`daemonConnection.interrupt(conversationId: string): void` — a required scalar, like `newSession` and
+`requestModelList` and unlike the payload-bearing `dequeueMessage` — and re-routed the command off
+`serverId` entirely: `serverRouter.ts`'s header now records `interrupt` as a member that **left** its
+server-scoped set, the only one #1120 shipped with. Once the payload names a conversation, a server id
+beside it is a second address free to disagree with the first, so the dispatch arm in `main/index.ts`
+became the `newSession` arm's shape — one local read twice, so the id routed by and the id sent cannot
+diverge:
+
+```ts
+const conversationId = command.payload.conversation_id
+router.route(conversationId)?.interrupt(conversationId)
+```
+
+`router` is [#1118's conversation-to-server index](daemon-connection-conversation-routing.md) (`conversationRouter.ts`)
+— learned off stamped daemon events, refused if never seen, never falling through to another connection.
+The `?.` is the whole of the inert-no-op path for an id no connection holds: no frame, no error, no
+crash. `connectionRegistry.ts`'s `viewOf` forwards the argument through unchanged.
+
+The renderer helper, `sendInterrupt(conversationId: string | null, deps)`
+(`src/renderer/src/screens/conversation/sendInterrupt.ts`), refuses both `null` (the composer footer with
+no conversation open) and `''` (`sendNewSession`'s posture, copied verbatim) before ever constructing a
+command — the boundary guard (`isInterruptPayload`) stays load-bearing regardless, as defence in depth at
+the untrusted IPC hop. Both call sites inside `Composer` — the Escape branch of `handleKeyDown` (#1072)
+and `ComposerSendButton`'s `onInterrupt` — pass the same `activeConversationId` expression the send path
+and `startNewSession` already read, which is what stops the three ever naming different chats. No
+preload change: the generic `sendCommand(command: RendererCommand)` pipe already carries the widened
+member.
 
 ### The render affordance (#307, merged into the send button by #678)
 
@@ -215,12 +278,18 @@ without an observed failure.
   response to this frame at all. `daemonConnection.interrupt()` (#306) accumulates no pending-request
   state for it — the turn-stopped signal is read off the pre-existing `turn_state`/`turn_end` decode
   path.
-- **Ungated by design, and lower-severity than `dequeue_message`.** No token, no nonce, and — unlike
-  `dequeue_message` — no payload for the `isRendererCommand` boundary guard to even validate beyond the
-  `type` discriminant; the daemon-side `interactive` gate (already satisfied via #179) is the only gate.
-  A compromised renderer's worst case is self-inflicted: stopping the user's own running turn,
-  equivalent to a button the user can already click (architect security review, #305 and #306, both
-  PASS).
+- **Ungated on token or nonce, and lower-severity than `dequeue_message`, but no longer payload-free at
+  the boundary.** Until #1092, the frame had no payload for `isRendererCommand` to validate beyond the
+  `type` discriminant; `isInterruptPayload` now checks the `conversation_id`'s presence, type and
+  non-emptiness, with no length cap (deliberately matching `isNewSessionPayload` exactly). The id is
+  client-owned (this app's own conversation state, not network input) and reaches exactly two sinks:
+  `conversationRouter.route`, a read-only `Map` lookup (no prototype chain for an untrusted key to
+  reach), and `buildInterrupt`'s fresh-literal rebuild. The daemon-side `interactive` gate (already
+  satisfied via #179) is unchanged. A compromised renderer's worst case is still self-inflicted — it can
+  now *address* any conversation to interrupt rather than only whichever the daemon's cursor pointed at,
+  but not a privilege widening: that same renderer already holds `sendMessage` for any conversation, and
+  a routed send is exactly what stamps the cursor, so the two-frame dance was always available to a
+  compromised renderer (architect security review, #305/#306 and #1092, all PASS).
 - **Zero `EnvelopeType` consumer cascade.** Same as every other outbound-only member — no exhaustive
   `switch` over `EnvelopeType` exists, so the new member needed no companion `assertNever` fix-up.
 - **Auditing e2e `Send`-click sites for a running-turn hazard: check `phase` at that line, not send
@@ -232,6 +301,16 @@ without an observed failure.
   assertion) without ever starting or ending that turn through the UI —
   `e2e/thread-scroll-pin.spec.ts` did exactly this and was missed by #678's own architecture-spec audit,
   caught only in code review (PR #804). The correct predicate is "what is `phase` at this line."
+- **A real-claude gate can gain a second job with no line of its drive changing (#1092).** A wrong
+  `conversation_id` is silently inert daemon-side — no stop, no reply, no error — so it passes every
+  fake-tier assertion, which reads the captured frame and cannot ask the daemon whether it resolved.
+  `e2e/real-claude-interrupt.spec.ts`'s pre-existing quiesce gate (`interruptButton` /
+  `CURSOR_SELECTOR` → `toHaveCount(0)`) is now the only place in the repo where a wrong id is
+  observable, so a timeout there must be read as "the daemon did not resolve the id" before it is read
+  as flake. The spec cannot discriminate the named path from the bare one within its own timeout — that
+  needs a second conversation messaged to move the daemon's cursor, i.e. two real claude turns inside
+  one spec timeout — so this was declined deliberately rather than by omission; the by-construction
+  coverage (the client only ever sends the named form) is what the AC asked for instead.
 - **A drive proving two independent keyboard bindings needs two independent mutations, not one**
   ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072)). `e2e/escape-interrupt.spec.ts`'s
   four legs pass green whether one binding exists or both do; disabling either one alone — the message
@@ -290,3 +369,9 @@ without an observed failure.
   genuinely running turn (real daemon + real claude), proving the retract-on-`turn_state{idle}` /
   clear-on-`turn_end` contract against a real turn lifecycle, not the fake-stack twins' (#307, #427)
   scripted `daemon.pushFrame`.
+- [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092) — named the conversation on the
+  wire and re-routed the command from #1120's server-scoped path onto #1118's conversation-to-server
+  index; see § Naming the conversation (#1092) above. [New session envelope](new-session-envelope.md) /
+  [#1217](https://github.com/pyrycode/pyrycode-desktop/issues/1217) is the twin this ticket mirrors at
+  every layer. [Daemon connection — routing](daemon-connection-routing.md) § Server-scoped command
+  routing (#1120) records `interrupt` as the one member that later left that set.

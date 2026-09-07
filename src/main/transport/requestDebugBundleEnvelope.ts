@@ -27,8 +27,10 @@ export interface RequestDebugBundleInput {
  * Build the `request_debug_bundle` early-data bytes: a bare `request_debug_bundle` Envelope,
  * serialized to UTF-8 via encodeEnvelope. Same field order as buildSendMessage.
  *
- * The daemon never reads Payload for this bare control type (it is intercepted before dispatch,
- * mirroring `interrupt`), so it tolerates an absent, `{}`, or `null` payload. The binding
+ * The daemon never reads Payload for this bare control type (it is intercepted before dispatch, as
+ * `interrupt` and `new_session` are — but this is the only one of the three still BARE: #1092 gave
+ * `interrupt` a conversation to name, so it is no longer the sibling to point at for the empty-payload
+ * case, only for the interception), so it tolerates an absent, `{}`, or `null` payload. The binding
  * constraint is the desktop's OWN decodeEnvelope, which requires a present `payload` (codec.ts:133
  * throws otherwise), and Envelope.payload is required — not relaxed to optional (that would be a
  * wire-type drift touching every consumer; CLAUDE.md no-drift). So we emit a present-but-empty

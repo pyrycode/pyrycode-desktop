@@ -3056,7 +3056,10 @@ function Composer({
     // reason (#650's localSendPending would arm an interrupt for a turn the daemon has not started), and
     // `window.pyry` is dereferenced HERE, at interaction time, never during render.
     if (shouldInterruptOnKeyDown(keystroke, isTurnRunning(phase))) {
-      sendInterrupt({ sendCommand: window.pyry.sendCommand })
+      // #1092: `activeConversationId` is the SAME expression the send and `startNewSession` read,
+      // which is what stops the three ever naming different chats; `sendInterrupt` refuses a null or
+      // empty id and sends nothing.
+      sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
       return
     }
     // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
@@ -3120,12 +3123,16 @@ function Composer({
             render — hoisting it (or the deps object) would move that dereference into the render path,
             where `window.pyry` does not exist under renderToStaticMarkup, and every container smoke test
             would throw. No optimistic state: the button returns to send on the daemon's next
-            turn_state{idle}, which the live store subscription renders. */}
+            turn_state{idle}, which the live store subscription renders. #1092: it names
+            `activeConversationId`, the same expression the Escape branch above reads, so the two Stop
+            affordances cannot address different chats. */}
         <ComposerSendButton
           isRunning={isTurnRunning(phase)}
           canSend={canSend}
           onSend={handleSubmit}
-          onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
+          onInterrupt={() =>
+            sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+          }
         />
         {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
             item of this row and moves neither the box nor the button; `null` when the type-ahead is

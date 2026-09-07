@@ -249,7 +249,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     createConversation: (payload) => resolve().createConversation(payload),
     createWorkspaceFolder: (payload) => resolve().createWorkspaceFolder(payload),
     dequeueMessage: (payload) => resolve().dequeueMessage(payload),
-    interrupt: () => resolve().interrupt(),
+    interrupt: (conversationId) => resolve().interrupt(conversationId),
     newSession: (conversationId) => resolve().newSession(conversationId),
     promoteConversation: (payload) => resolve().promoteConversation(payload),
     archiveConversation: (payload) => resolve().archiveConversation(payload),

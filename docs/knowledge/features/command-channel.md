@@ -42,13 +42,18 @@ case gained `'changeId' in value && typeof value.changeId === 'string'` — the 
 for the second command to carry a client-minted correlation string. No other member changed shape.
 
 The union grew an eleventh member in [#306](../codebase/306.md): a second **bare** command, `interrupt`
-(no payload — the frame is nullary; the daemon maps it to a single claude Esc, no field to
+(no payload — the frame was nullary; the daemon mapped it to a single claude Esc, no field to
 parameterise) — the renderer-invokable trigger for the [interrupt envelope](interrupt-envelope.md)
-feature's now-complete command pathway. Its guard case is the same bare `return true` posture
+feature's now-complete command pathway. Its guard case was the same bare `return true` posture
 `requestDebugBundle`/`requestConversations` established; unlike every other command added since
 `requestConversations`, it has no daemon reply to correlate — `daemonConnection.interrupt()` records no
 outstanding-request state, mirroring `dequeueMessage`'s (#300) fire-and-forget posture rather than any
-payload shape.
+payload shape. [#1120](https://github.com/pyrycode/pyrycode-desktop/issues/1120) then gave it an
+optional top-level `serverId?: string`, one of six server-scoped members — see [Daemon connection —
+routing § Server-scoped command routing (#1120)](daemon-connection-server-scoped-routing.md) for that shape, which
+this file never restated. [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092) replaced
+both: `interrupt` stopped being bare, gained a **required** `InterruptCommandPayload{conversation_id}`,
+and dropped `serverId` entirely. See the growth-log entry further down for the current shape.
 
 The union grew a twelfth member in [#391](../codebase/391.md): a **payload-carrying** `notify`
 command (`NotifyPayload{kind}`, `kind: 'turn-complete' | 'prompt'`) — the renderer-invokable trigger
@@ -155,6 +160,24 @@ daemon's shared cursor to a renderer that read a not-yet-loaded conversation id.
 envelope](new-session-envelope.md) for the full frame, the builder, and why the wire type stays optional
 regardless (CLAUDE.md no-drift). Ships with **no renderer sender** in the slice that declares it, like
 `requestModelList` before it — the sibling ticket adds the trigger.
+
+**The `interrupt` member (#306, eleventh) was widened twice more, most recently in
+[#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), which mirrors `newSession`'s tightening
+shape exactly.** `interrupt` was bare from #306 through [#1120](https://github.com/pyrycode/pyrycode-desktop/issues/1120)
+(which gave it, like five siblings, an optional top-level `serverId?: string` — see [Daemon connection —
+routing § Server-scoped command routing (#1120)](daemon-connection-server-scoped-routing.md)). #1092 replaced both:
+`serverId` is gone, and the member is now `{ type: 'interrupt'; payload: InterruptCommandPayload }` with
+`InterruptCommandPayload = Required<InterruptPayload>` — the same tightens-the-wire-type idiom
+`NewSessionCommandPayload` established, so the bare (or server-addressed) form is a compile error
+instead of a runtime possibility. `interruptCommand(fields: InterruptCommandPayload)` replaced the
+zero-arg constructor, and the guard's `case 'interrupt':` arm is now `'payload' in value &&
+isInterruptPayload(value.payload)` — `isInterruptPayload` repeats `isNewSessionPayload`'s `''`-refusal
+rationale word for word, since on this verb an empty id is the same cross-conversation misfire an absent
+one is. Once `interrupt` left it, [#1120](https://github.com/pyrycode/pyrycode-desktop/issues/1120)'s
+server-scoped set is down to five members, and `hasValidServerId`'s docblock (and every comment counting
+"the six") was corrected to match. See [Interrupt envelope § Naming the conversation
+(#1092)](interrupt-envelope.md#naming-the-conversation-1092) for the full frame, the connection method,
+and the re-route from #1120's server-scoped dispatch onto #1118's conversation-to-server index.
 
 **Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
 guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
@@ -323,7 +346,7 @@ sendCommand: (command: RendererCommand): void => {
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the payload-carrying `createConversation` member + `isCreateConversationPayload` guard this channel's union gained, and the `conversationCreated` [daemon-event channel](daemon-event-channel.md) member that reports the reply
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the payload-carrying `setSessionSettings` member + `isSetSessionSettingsPayload` guard (the first optional-absent, rather than nullable-present, presence check) this channel's union gained; ships dormant, consumer is #257
 - [#261 codebase notes](../codebase/261.md) — widened `setSessionSettings` with the top-level-sibling `changeId: string` field + its untrusted-boundary guard clause, the renderer-minted correlation key the [daemon connection](daemon-connection.md) matches replies against
-- [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
+- [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the `interrupt` member this channel's union gained, bare from #306 through #1120 and tightened to a required `InterruptCommandPayload{conversation_id}` by [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092); unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
 - [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.

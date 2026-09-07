@@ -90,9 +90,12 @@ export type EnvelopeType =
   // internal/protocol/codes.go TypeModelAnnounced; binary → phone only.
   | 'model_announced'
   | 'dequeue_message'
-  // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
-  // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
-  // `interactive` capability; fire-and-forget (no reply). SSOT pyrycode #707.
+  // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
+  // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
+  // claude's own interrupt. Carries InterruptPayload (one optional conversation_id) and NO nonce,
+  // answer token or idempotency key; daemon-gated on the `interactive` capability; fire-and-forget
+  // (no reply — the stop is observed through the existing turn_end marker). SSOT pyrycode #707,
+  // widened by pyrycode#2103.
   | 'interrupt'
   // v2-only phone→binary control frame — asks the daemon to KILL claude and spawn a fresh one under a
   // new session id in the conversation it names. Grouped with `interrupt` above rather than with the
@@ -1095,6 +1098,56 @@ export interface QueueStatePayload {
 export interface DequeueMessagePayload {
   conversation_id: string
   queued_msg_id: number
+}
+
+/**
+ * Outbound `interrupt` payload (client → daemon). Mirrors the daemon SSOT (pyrycode#2103,
+ * docs/protocol-mobile.md § Interrupt (v2)) field-for-field: ONE field and nothing else. Asks the
+ * daemon to stop the running turn in the conversation it names — the remote equivalent of pressing
+ * Esc at the local terminal, mapped to the neutral `turnevent.Cancel` and routed to that
+ * conversation's bound runner.
+ *
+ * UNGATED BY TOKEN and carrying NO nonce, answer token, idempotency key or correlation key: the frame
+ * is fire-and-forget with no reply at all, and the daemon documents a replay as harmless (it simply
+ * stops the turn again, and an interrupt with no running turn is a no-op), so there is nothing to
+ * dedup and nothing to correlate. The daemon's `interactive` capability gate is the only gate, and it
+ * is daemon-side — naming a conversation is not a way around it.
+ *
+ * `conversation_id` IS OPTIONAL BECAUSE THE DAEMON PUBLISHES IT SO, NOT BECAUSE THIS CLIENT OMITS IT.
+ * The frame carried no payload at all from pyrycode#707 until #2103, so upstream keeps the absent form
+ * meaningful as a compatibility promise: no payload, `{}`, an absent id and an explicitly EMPTY one
+ * are ONE wire meaning — stop the turn in whichever conversation the daemon's process-wide
+ * follow-active cursor points at, a cursor only a routed `send_message` stamps and every connection
+ * shares.
+ *
+ * THIS APP NEVER SENDS THAT FORM, and the asymmetry is deliberate rather than a mismatch to reconcile.
+ * The protocol's own rule is that a client which CAN name a conversation must always name one, and
+ * this one always can: the sidebar makes switching chats without sending the ordinary path, so the
+ * cursor points at the last chat ANY client messaged rather than at the one on screen — Stop pressed
+ * on chat B stopped chat A's turn, the defect #1092 closes. So the id is REQUIRED on
+ * `InterruptCommandPayload` (a `Required` derivative of this interface) and on `InterruptInput`, and
+ * `isInterruptPayload` refuses `''`. Do NOT tighten it HERE to match them: this interface answers to
+ * the daemon, and narrowing it would be a wire drift (CLAUDE.md no-drift). `types.test.ts` pins the
+ * optionality.
+ *
+ * WHERE THIS DIVERGES FROM ITS `new_session` TWIN, and it is one state only: a conversation whose
+ * child is not running is a NO-OP here rather than a refusal — the daemon attempts the stop, the write
+ * finds no live child, and nothing happens. There is nothing to protect, because an interrupt mutates
+ * no state before it discovers the child is gone, so the named and bare paths agree on that state
+ * where `new_session` refuses the named form and rotates the bare one.
+ *
+ * The id is a REGISTRY-VALIDATED LOOKUP KEY, never authorization and never a path component — the rule
+ * this protocol already publishes for `request_attachment`, `attachment_chunk` and `new_session`.
+ * Naming a conversation is not a widening of trust: a device could already route a message to any
+ * conversation to move the cursor there and then send the bare frame, so what the field removes is a
+ * two-frame dance only a BENIGN client was unable to perform. A named id the daemon cannot act on (not
+ * canonical, not hosted, no bound session) is SILENTLY INERT — no stop, no reply, and never a
+ * fall-through to another conversation, so the frame answers no question about which conversation ids
+ * exist. The observable effect, when there is one, is the existing `turn_end` marker
+ * (`stop_reason: cancelled`) for that conversation.
+ */
+export interface InterruptPayload {
+  conversation_id?: string
 }
 
 /**

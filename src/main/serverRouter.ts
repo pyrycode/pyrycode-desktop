@@ -1,9 +1,15 @@
 // The server router (#1120): a command that is about a WHOLE server — list its conversations, create
-// a chat on it, interrupt its running turn, pull its debug bundle — reaches the server it names, and
-// no other. #1117 made the number of connections follow the number of stored paired records; #1118
-// and #1119 then routed everything carrying an id of its own. What was left on `registry.active` is
-// everything with NO id of any kind to route by, and with two servers paired each of those reached
-// whichever host was paired most recently.
+// a chat on it, create a folder on its filesystem, pull its debug bundle — reaches the server it
+// names, and no other. #1117 made the number of connections follow the number of stored paired
+// records; #1118 and #1119 then routed everything carrying an id of its own. What was left on
+// `registry.active` is everything with NO id of any kind to route by, and with two servers paired
+// each of those reached whichever host was paired most recently.
+//
+// `interrupt` WAS IN THAT SET AND IS NOT ANY MORE (#1092), which is how a member leaves it. It
+// qualified only for want of an id: the frame was bare, so the server was the only thing that could
+// address it. pyrycode#2103 gave it a conversation to name, that conversation id became the address,
+// and it moved to #1118's index — a second address beside the first is a way for the two to disagree,
+// not a redundancy. Nothing here changed to accommodate the departure; the arm simply left.
 //
 // THIS IS NOT A THIRD INDEX, AND THAT IS THE WHOLE DIFFERENCE FROM ITS TWO SIBLINGS.
 // `conversationRouter.ts` and `correlationRouter.ts` learn a server id off a STAMPED DAEMON EVENT and

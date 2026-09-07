@@ -209,6 +209,28 @@ discarding a running turn's context. See [New session envelope](new-session-enve
 wire contract, the builder, and why the wire type's `conversation_id` stays optional while every layer
 above it makes the id required.
 
+**`interrupt()` was added bare in [#306](../codebase/306.md) and widened to `interrupt(conversationId)`
+in [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092).** From #306 through
+[#1120](https://github.com/pyrycode/pyrycode-desktop/issues/1120) it took no argument at all — the
+daemon stopped whichever conversation its process-wide follow-active cursor pointed at, and #1120 routed
+it by *server* (`serverId?`) purely for want of an id of its own. pyrycode#2103 published an optional
+`conversation_id` on the frame, validated against the daemon's registry, and #1092 threads it end to
+end: the **same** required-scalar shape as `newSession` immediately above, for the same reason — an
+unnamed interrupt is the shared cursor, which is another conversation's turn as often as it is this
+one's. Faithful `newSession` send mechanics otherwise (inert no-op when `driver === null`, sharing the
+one `nextEnvelopeId` counter, advancing the id only on a successful build, a content-free `catch {}`
+whose caught object is dropped because it could now echo the id — the old "nothing sensitive on this
+bare path" rationale is gone). **Unlike `newSession`, this method predates #1092 and had a caller
+already** — the composer's two Stop affordances — so #1092 is a widening of an existing signature, not a
+new method with a not-yet-built trigger. Routed by conversation through `router.route` in
+`src/main/index.ts`'s dispatch case, exactly like `newSession`, replacing #1120's `serverRouter.ts` path
+entirely — `interrupt` is the one member #1120 shipped that later left its server-scoped set (see
+[Daemon connection — routing § Server-scoped command routing (#1120)](daemon-connection-server-scoped-routing.md)).
+No reply of any kind, as before: the turn-stopped signal still rides the pre-existing
+`turn_state`/`turn_end` stream, not a correlation this method owns. See [Interrupt
+envelope](interrupt-envelope.md) for the full wire contract, the builder, and the render affordance
+this method serves.
+
 **`answerQuestions(payload)`/`refuseQuestions(payload)` were added in
 [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)** — the resolution half of the question
 vertical, one dial after [#919](https://github.com/pyrycode/pyrycode-desktop/issues/919) landed the

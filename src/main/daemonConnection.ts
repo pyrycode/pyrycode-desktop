@@ -313,17 +313,20 @@ export interface DaemonConnection {
    */
   dequeueMessage(payload: DequeueMessagePayload): void
   /**
-   * Encrypt a BARE `interrupt` control envelope onto the live session — the "stop the running turn"
-   * signal the daemon maps to a single claude Esc keystroke (daemon SSOT pyrycode #707). Bare: NO
-   * payload argument (the twin of `requestConversations`, not the payload-bearing `dequeueMessage`);
-   * the #305 builder takes only `{ id, ts }`. The `send` TWIN, not `requestDebugBundle`: an inert no-op
-   * when not connected (`driver === null` → return), never a `consumer.fail`. FIRE-AND-FORGET — no
-   * answer token, no reply, and NO correlation memory to leave dangling; the turn stops via the ordinary
-   * end-of-turn events (`turn_end` / `turn_state{idle}`) the timeline already handles, not this leg. Its
-   * caller is the interrupt affordance (#307); this slice only wires the command path. NEVER throws out
-   * of the module (parity #490).
+   * Encrypt a payload-carrying `interrupt` control envelope onto the live session — the "stop the
+   * running turn in the conversation it names" signal, which the daemon maps to the neutral
+   * `turnevent.Cancel` and routes to that conversation's bound runner (daemon SSOT pyrycode #707,
+   * widened by #2103). Takes the conversation id as a SCALAR, like `newSession` and `requestModelList`
+   * and unlike the payload-bearing `dequeueMessage` — the builder rebuilds a fresh literal, so no
+   * renderer-supplied key reaches the wire — and it is REQUIRED (#1092): an unnamed interrupt is the
+   * daemon's process-wide follow-active cursor, which is another conversation's turn as often as it is
+   * this one's. The `send` TWIN, not `requestDebugBundle`: an inert no-op when not connected
+   * (`driver === null` → return), never a `consumer.fail`. FIRE-AND-FORGET — no answer token, no reply,
+   * and NO correlation memory to leave dangling; the turn stops via the ordinary end-of-turn events
+   * (`turn_end` / `turn_state{idle}`) the timeline already handles, not this leg. Its callers are the
+   * two Stop affordances in the composer. NEVER throws out of the module (parity #490).
    */
-  interrupt(): void
+  interrupt(conversationId: string): void
   /**
    * Encrypt a payload-carrying `new_session` control envelope onto the live session — asks the daemon
    * to KILL claude in the named conversation and spawn a fresh one under a newly minted session id, so
@@ -2102,22 +2105,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function interrupt(): void {
+  function interrupt(conversationId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
-    // mid-bootstrap, or bootstrap-failed). A bare interrupt has no consumer to fail and is
+    // mid-bootstrap, or bootstrap-failed). An interrupt has no consumer to fail and is
     // fire-and-forget; a frame sent while disconnected simply stops nothing (no session, no reply).
     if (driver === null) return
     try {
-      // Bare control frame — no payload arg (the requestConversations shape, not dequeueMessage's
-      // fresh-literal payload). Shares the one monotonic nextEnvelopeId with send / requestConversations —
-      // no second counter — so ids stay unique across interleaved calls.
-      const bytes = buildInterrupt({ id: nextEnvelopeId, ts: now() })
+      // Shares the one monotonic nextEnvelopeId with send / newSession — no second counter — so ids
+      // stay unique across interleaved calls, though nothing correlates a reply to this one: the
+      // daemon never answers this frame.
+      // The id is forwarded verbatim to the builder, which rebuilds a fresh literal, so no
+      // renderer-supplied key reaches the wire. Never logged: the catch below drops its caught object
+      // and adds no line, and the routing refusal one layer up logs a static code with no id in it.
+      const bytes = buildInterrupt({ id: nextEnvelopeId, ts: now(), conversationId })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
     } catch {
-      // Never throw out of the module (parity #490): the fixed-shape empty-payload envelope cannot
-      // over-cap, but driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward,
-      // inherited #62) — nothing sensitive on this bare path, and the affordance (#307) is optimistic.
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the conversation id;
+      // no log, no event (classify-don't-forward, inherited #62). #1092 REPLACED the old rationale
+      // here ("nothing sensitive on this bare path"), which stopped being true the moment the frame
+      // started naming a conversation. NO RETRY: a resend is a second interrupt rather than a second
+      // attempt at the first — benign on this verb, but uniform with newSession beside it.
     }
   }
 

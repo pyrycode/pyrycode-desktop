@@ -44,6 +44,7 @@ import type {
   QueuedItem,
   QueueStatePayload,
   DequeueMessagePayload,
+  InterruptPayload,
   NewSessionPayload,
   AttachmentChunkPayload,
   AttachmentStoredPayload,
@@ -1988,6 +1989,31 @@ describe('model-list wire vocabulary (#971)', () => {
     expect(missingConversation.dropped_models).toBe(0)
     expect(missingModels.conversation_id).toBe('c1')
     expect(missingDropped.conversation_id).toBe('c1')
+  })
+})
+
+describe('interrupt wire vocabulary (#1092)', () => {
+  it('shapes InterruptPayload as a lone conversation_id and nothing else', () => {
+    // Mirrors the daemon SSOT (pyrycode#2103, docs/protocol-mobile.md § Interrupt (v2)): ONE field.
+    // No nonce, no idempotency key and no correlation key — the frame is fire-and-forget with no
+    // reply, and the daemon documents a replay as simply stopping the turn again.
+    const payload: InterruptPayload = { conversation_id: 'conv-1' }
+    expect(payload).toEqual({ conversation_id: 'conv-1' })
+    expect(Object.keys(payload)).toEqual(['conversation_id'])
+  })
+
+  it('keeps conversation_id OPTIONAL — the no-drift pin against tightening it to match the guard', () => {
+    // The `new_session` twin's pin, and for the same reason. The wire type mirrors the DAEMON, which
+    // publishes the field optional because a bare frame is a compatibility promise: from pyrycode#707
+    // until #2103 the frame carried no payload at all, so no payload, `{}`, an absent id and an
+    // explicitly empty one are one wire meaning (the process-wide follow-active cursor).
+    //
+    // This app never sends that form — its command payload is a `Required` derivative and its boundary
+    // guard refuses `''` — but the fix for that asymmetry is NEVER to tighten this interface. Doing so
+    // would be a wire drift against the mobile/daemon contract (CLAUDE.md no-drift), and this line is
+    // what reddens if someone tries: a required field makes the empty literal a TS2741.
+    const bare: InterruptPayload = {}
+    expect(bare.conversation_id).toBeUndefined()
   })
 })
 

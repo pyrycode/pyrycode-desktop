@@ -5826,7 +5826,7 @@ describe('createDaemonConnection — dequeueMessage (dequeue_message request, un
   })
 })
 
-describe('createDaemonConnection — interrupt (bare interrupt control frame, fire-and-forget, #306)', () => {
+describe('createDaemonConnection — interrupt (named interrupt control frame, fire-and-forget, #306/#1092)', () => {
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
   async function connected(): Promise<ReturnType<typeof build>> {
     const ctx = build()
@@ -5839,29 +5839,44 @@ describe('createDaemonConnection — interrupt (bare interrupt control frame, fi
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
     const { connection, drivers } = build()
 
-    expect(() => connection.interrupt()).not.toThrow()
+    expect(() => connection.interrupt('conv-42')).not.toThrow()
     expect(drivers).toHaveLength(0)
   })
 
-  it('after handshake-complete, forwards one bare interrupt envelope with id 2 and the fixed ts', async () => {
+  it('after handshake-complete, forwards one interrupt envelope with id 2, the fixed ts and the id it was handed', async () => {
     const { connection, drivers } = await connected()
 
-    connection.interrupt()
+    connection.interrupt('conv-42')
 
     expect(drivers[0].sent).toHaveLength(1)
     const envelope = decodeEnvelope(drivers[0].sent[0])
     expect(envelope.type).toBe('interrupt')
     expect(envelope.id).toBe(2)
     expect(envelope.ts).toBe(FIXED_TS)
-    // Bare control frame: a present-but-empty payload — no token, no nonce, no selector (AC5, #305).
-    expect(envelope.payload).toEqual({})
+    // Decoding the BYTES rather than spying on the builder is what makes this a measurement: a method
+    // that dropped its argument, or forwarded a stale one, still calls the builder. No token, no
+    // nonce, no correlation key — the one modeled field and nothing else (AC5, #1092 AC1).
+    expect(envelope.payload).toEqual({ conversation_id: 'conv-42' })
+  })
+
+  it('sends the id it was handed on each call, never a remembered one', async () => {
+    // The two Stop affordances read `activeConversationId` at interaction time, so consecutive presses
+    // in different chats must produce different frames. A method holding the first id would pass the
+    // single-call assertion above and stop the wrong chat here.
+    const { connection, drivers } = await connected()
+
+    connection.interrupt('conv-a')
+    connection.interrupt('conv-b')
+
+    expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual({ conversation_id: 'conv-a' })
+    expect(decodeEnvelope(drivers[0].sent[1]).payload).toEqual({ conversation_id: 'conv-b' })
   })
 
   it('shares the one envelope-id counter with send (no second counter)', async () => {
     const { connection, drivers } = await connected()
 
     connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
-    connection.interrupt()
+    connection.interrupt('c1')
 
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
     expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
@@ -5873,7 +5888,7 @@ describe('createDaemonConnection — interrupt (bare interrupt control frame, fi
     await tick()
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
-    expect(() => connection.interrupt()).not.toThrow()
+    expect(() => connection.interrupt('conv-42')).not.toThrow()
   })
 })
 

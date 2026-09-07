@@ -415,11 +415,12 @@ app.whenReady().then(() => {
   // slices emptied it and this line's removal is the last of them:
   //
   //   #1118 — the ten entry points carrying a CONVERSATION id → `router.route(...)`, reaching the
-  //           server that owns that conversation.
+  //           server that owns that conversation. #1092 later moved `interrupt` into this set, once
+  //           the frame acquired a conversation to name.
   //   #1119 — the five carrying a modal, question-batch or session id → `correlations.route*(...)`,
   //           reaching the server that RAISED the thing being answered.
   //   #1120 — the six about a WHOLE server, carrying no id of any kind → `servers.route(...)` /
-  //           `servers.resolve(...)`, reaching the server the window named.
+  //           `servers.resolve(...)`, reaching the server the window named. Five of them today.
   //   #1129 — the attachment upload, which arrives on its own IPC channel behind two request guards of
   //           its own rather than through the `onCommand` switch, and now routes through `servers` as
   //           well. See `attachmentUploadListener` below.
@@ -689,18 +690,23 @@ app.whenReady().then(() => {
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
         router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
         return
-      case 'interrupt':
-        // ROUTED BY SERVER (#1120), mirrors requestConversations — a bare fire-and-forget stop-the-turn
-        // frame, so the id is the only thing that could address it. No reply is expected (the turn stops
-        // via the ordinary turn_end / turn_state{idle} events). Inert no-op when not connected (#306).
-        //
-        // EXPECT THIS FIELD TO BECOME VESTIGIAL. #1092 would put the open conversation's id on the frame
-        // and re-route it through #1118's index instead; it is natively blocked on a daemon change
-        // (pyrycode#2103) that has not landed, so it will not ship first. Nothing is built around the
-        // field that would be expensive to unwind — it is one arm of the shared resolver, like its five
-        // siblings.
-        servers.route(command.serverId)?.interrupt()
+      case 'interrupt': {
+        // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —
+        // an interrupt stops the turn in ONE conversation, so the conversation id is the address and
+        // the `serverId` this arm carried since #1120 would be a second one that could disagree with
+        // it. That field predicted its own removal here and is gone from the command entirely. ONE
+        // local, read twice, so the id routed by and the id sent can never be two different
+        // expressions. No `?.` on `payload`: it is required, and `isInterruptPayload` has already
+        // proven it a NON-EMPTY string at the boundary — an empty id would be the daemon's
+        // process-wide follow-active cursor, i.e. some other conversation's turn. Direct to the
+        // connection method — an interrupt has no orchestrator and no consumer, and no reply is
+        // expected (the turn stops via the ordinary turn_end / turn_state{idle} events). Inert no-op
+        // when nothing is connected, and when the id names a conversation no connection holds the
+        // `?.` is the refusal, so no frame reaches any wire.
+        const conversationId = command.payload.conversation_id
+        router.route(conversationId)?.interrupt(conversationId)
         return
+      }
       case 'newSession': {
         // ROUTED BY CONVERSATION (#1217), mirroring requestModelList and NOT the interrupt arm above
         // — a restart kills claude in one conversation, so the conversation id is the address and a

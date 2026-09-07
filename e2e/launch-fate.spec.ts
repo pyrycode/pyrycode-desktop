@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type TestInfo } from '@playwright/test'
 import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
@@ -7,8 +7,7 @@ import {
   attachLaunchFate,
   createLaunchFateLog,
   launchIsolatedApp,
-  type LaunchFateLog,
-  type LaunchFateSink
+  type LaunchFateLog
 } from './fixtures/desktopIsolation'
 
 // #1127's cover. The fake tier reddens intermittently — a different spec each run, once on an untouched
@@ -42,24 +41,21 @@ const TEST_TIMEOUT_MS = 60_000
 // diagnostic the operator cannot read in `reporter: 'list'` output buys nothing.
 const REPORTER_INLINE_BODY_LIMIT = 300
 
-/** A `TestInfo` double that records what was attached. The status is the whole point: `attachLaunchFate`
- *  gates on it, and a real passing test cannot exhibit the failing branch from inside itself. Everything
- *  else about the function under test is real. */
-function recordingSink(status: LaunchFateSink['status']): LaunchFateSink & {
-  attached: Array<{ name: string; body: string; contentType: string }>
-} {
-  const attached: Array<{ name: string; body: string; contentType: string }> = []
-  return {
-    status,
-    attached,
-    async attach(name, options) {
-      attached.push({
-        name,
-        body: String(options?.body ?? ''),
-        contentType: options?.contentType ?? ''
-      })
-    }
-  }
+/**
+ * The launch-fate attachments this test has accumulated, read back off the REAL `TestInfo`.
+ *
+ * #1202 deleted the `recordingSink` double this file used to attach through. The double was a
+ * hand-written `{ status, attach }` pair, and it stood in for exactly the part that turned out to be
+ * broken: the status it carried was a constant the test chose, while the real `TestInfo.status` is
+ * `'passed'` until something calls `_failWithError` — which Playwright can do LATER than the fixture
+ * epilogue that attaches. Every assertion in this file passed while a real red carried nothing. So the
+ * tests below drive the real `testInfo`, and read what a real failing run would have carried.
+ *
+ * Filtered by name because a future Playwright default (a trace, a screenshot) could put something else
+ * in the list, and this file's subject is one attachment.
+ */
+function attachedFates(testInfo: TestInfo): TestInfo['attachments'] {
+  return testInfo.attachments.filter((attachment) => attachment.name === LAUNCH_FATE_ATTACHMENT)
 }
 
 /** Launch the built app in its own throwaway user-data dir, hand it to `run`, and reap the dir after.
@@ -83,7 +79,7 @@ async function withLaunch(
   }
 }
 
-test('a killed launch reports not-running, no exit code, and the signal that took it', async () => {
+test('a killed launch reports not-running, no exit code, and the signal that took it', async ({}, testInfo) => {
   test.setTimeout(TEST_TIMEOUT_MS)
 
   const log = createLaunchFateLog()
@@ -120,18 +116,21 @@ test('a killed launch reports not-running, no exit code, and the signal that too
   expect(fate.exitCode).toBe(null)
   expect(fate.signal).toBe('SIGKILL')
 
-  // AC3, against a REAL `--user-data-dir` this run actually launched with — the path that embeds the
-  // run's secret store, and the reason `smoke.spec.ts` discards close errors unlogged. Asserting the
+  // #1127's AC3, against a REAL `--user-data-dir` this run actually launched with — the path that embeds
+  // the run's secret store, and the reason `smoke.spec.ts` discards close errors unlogged. Asserting the
   // absence of any `/` at all is the structural form: no path and no argv entry can survive it.
-  const sink = recordingSink('failed')
-  await attachLaunchFate(sink, log)
-  expect(sink.attached).toHaveLength(1)
-  const body = sink.attached[0].body
+  //
+  // #1202 moved this onto the real `testInfo`, which is the channel that actually carries the body to
+  // the operator. It is the strongest hygiene evidence in the file — a real launch, a real secret path,
+  // and the real sink — and it was the one place the double was weakest.
+  await attachLaunchFate(testInfo, log)
+  expect(attachedFates(testInfo)).toHaveLength(1)
+  const attachment = attachedFates(testInfo)[0]
+  const body = attachment.body?.toString() ?? ''
   expect(userDataDir).not.toBe('')
   expect(body).not.toContain(userDataDir)
   expect(body).not.toContain('/')
-  expect(sink.attached[0].name).toBe(LAUNCH_FATE_ATTACHMENT)
-  expect(sink.attached[0].contentType).toBe('text/plain')
+  expect(attachment.contentType).toBe('text/plain')
   expect(body.length).toBeLessThan(REPORTER_INLINE_BODY_LIMIT)
 })
 
@@ -160,34 +159,55 @@ test('a launch still running when the test ends reports running, then a settled 
   expect(fate.exitCode).not.toBe(null)
 })
 
-test('a teardown step that throws is named, and only a failing test carries the diagnostic', async () => {
+// #1202's cover, and the seam #1127's own tests structurally could not reach. The diagnostic did not
+// fire on the one red it was built for (`question-picks.spec.ts`, a bare `socket hang up` on PR #1195):
+// `attachLaunchFate` gated on `sink.status`, and a fixture epilogue reads that BEFORE the test's status
+// is final. `TestInfoImpl.status` is `'passed'` until `_failWithError` runs, and Playwright runs that
+// later than the epilogue in two ways this tier hits — a teardown that drains after `launchPairedApp`'s,
+// and `WorkerMain.unhandledError`, which routes an `uncaughtException`/`unhandledRejection` to the
+// current test for as long as it is open. Both were reproduced against `main` before the fix.
+//
+// So the gate is gone, and this test is what holds it gone: it drives the real `TestInfo` at the one
+// moment the old code returned empty-handed — while the test is still passing. Restore the gate and the
+// count assertion below reddens.
+//
+// Suppression on a green run did not disappear; it moved to where it was always enforced. Playwright's
+// terminal reporter prints an attachment only from `formatFailure`, reached only for a result carrying
+// errors — so a passing test's attachment exists and is never printed. That is why the `text/plain`
+// content type, the un-underscored name and the inline length bound are still asserted here and above:
+// they are the reporter's actual conditions for showing the body to an operator.
+test('the report reaches a real TestInfo while the test is still passing, and names the steps that threw', async ({}, testInfo) => {
   const log = createLaunchFateLog()
 
-  // AC2's subject. Two steps, recorded in drain order — the body must name WHICH step threw, never the
-  // error, which can carry the launch argv.
+  // #1127's AC2 subject, unchanged. Two steps, recorded in drain order — the body must name WHICH step
+  // threw, never the error, which can carry the launch argv.
   log.recordTeardownFailure('daemon')
   log.recordTeardownFailure('user-data-dir')
 
-  const failed = recordingSink('failed')
-  await attachLaunchFate(failed, log)
-  expect(failed.attached).toHaveLength(1)
-  expect(JSON.parse(failed.attached[0].body).teardownFailures).toEqual(['daemon', 'user-data-dir'])
+  // The premise, asserted rather than assumed: this test is passing right now, so the old gate's
+  // `status !== 'failed' && …` branch is the one being taken. Without this the test could silently stop
+  // testing what it claims — a status that had somehow become a failure would make it pass vacuously.
+  expect(testInfo.status).toBe('passed')
+  expect(attachedFates(testInfo)).toHaveLength(0)
 
-  // A timed-out test is the other observed failure class (`attachment-file-row.spec.ts` at 1.0m), so it
-  // must carry the diagnostic too — the gate is the failure SET, not equality with 'failed'.
-  const timedOut = recordingSink('timedOut')
-  await attachLaunchFate(timedOut, log)
-  expect(timedOut.attached).toHaveLength(1)
+  // The kept early return, and this test's non-vacuity control: a log with no launches and no teardown
+  // failures still attaches nothing, so the count below is a real transition rather than a constant.
+  await attachLaunchFate(testInfo, createLaunchFateLog())
+  expect(attachedFates(testInfo)).toHaveLength(0)
 
-  // AC1's second half: a green run's output is unchanged. Same log, same content — only the status
-  // differs, so this reddens the moment the gate is dropped.
-  const passed = recordingSink('passed')
-  await attachLaunchFate(passed, log)
-  expect(passed.attached).toHaveLength(0)
+  await attachLaunchFate(testInfo, log)
+  expect(attachedFates(testInfo)).toHaveLength(1)
 
-  const skipped = recordingSink('skipped')
-  await attachLaunchFate(skipped, log)
-  expect(skipped.attached).toHaveLength(0)
+  const attachment = attachedFates(testInfo)[0]
+  const body = attachment.body?.toString() ?? ''
+  expect(JSON.parse(body).teardownFailures).toEqual(['daemon', 'user-data-dir'])
+  expect(attachment.contentType).toBe('text/plain')
+  // Still an in-memory `body` attachment, never a `path` one: no file is written, so calling this from a
+  // teardown epilogue cannot reintroduce #517's hazard of a throwing `finally` replacing the causal
+  // error — and no string of ours reaches a filesystem path.
+  expect(attachment.path).toBe(undefined)
+  expect(body).not.toContain('/')
+  expect(body.length).toBeLessThan(REPORTER_INLINE_BODY_LIMIT)
 })
 
 // The deterministic guard for the one gap the four tests above structurally cannot cover: a site that

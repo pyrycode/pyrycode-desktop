@@ -452,8 +452,14 @@ export const test = base.extend<PairedAppFixtures>({
       }
     }
 
-    // Last, after the drain: the exit codes only settle once the closes have run. Attaches on a failing
-    // test only, so a green run carries nothing.
+    // Last, after the drain: the exit codes only settle once the closes have run.
+    //
+    // #1202: this attaches UNCONDITIONALLY now. It used to gate on `testInfo.status`, and this epilogue
+    // is exactly where that gate is unsound — the status here is not the test's final one, so a failure
+    // established after this point (a teardown that drains later, or an unhandled `socket hang up` the
+    // worker attributes to the still-open test) left the red carrying no diagnostic at all. Which is the
+    // bug #1202 fixed. A green run's terminal output is still unchanged: Playwright prints an attachment
+    // only inside a failing result's block.
     await attachLaunchFate(testInfo, fate)
   }
 })

@@ -78,9 +78,13 @@ const test = base.extend<{ launched: { page: Page; app: ElectronApplication } }>
       } catch {
         fate.recordTeardownFailure('user-data-dir')
       }
-      // Last, after both closes: the exit code only settles once the app has been closed. Attaches on a
-      // failing test only, so a green run carries nothing. No filesystem I/O, so it does not reintroduce
-      // the #517 hazard this nest exists to avoid.
+      // Last, after both closes: the exit code only settles once the app has been closed. Writes no
+      // file, so it does not reintroduce the #517 hazard this nest exists to avoid.
+      //
+      // #1202: unconditional now. The old `testInfo.status` gate read a status that is not final in a
+      // teardown epilogue, so a failure established after this point carried no diagnostic. A green run's
+      // terminal output is still unchanged — Playwright prints an attachment only inside a failing
+      // result's block.
       await attachLaunchFate(testInfo, fate)
     }
   }

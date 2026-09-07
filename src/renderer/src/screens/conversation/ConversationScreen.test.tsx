@@ -21,7 +21,6 @@ import {
   ToolRow,
   TOOL_RESULT_EMPTY_COPY,
   shouldShowThinking,
-  QueuedBacklog,
   StatusSheet,
   ComposerErrorSlot,
   ConnectionBanner,
@@ -1557,17 +1556,31 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).not.toContain('clipPath')
   })
 
-  it('draws NO meta row on the queued row — it has no time and nothing sent yet to copy', () => {
+  // #1214 re-pointed this off the deleted QueuedBacklog onto the merged row, keeping the assertion's
+  // subject exactly: a message the daemon reports queued still draws no meta row. That is now this
+  // ticket's own ruling as much as #969's — the row is the timeline's own item and DOES carry a
+  // createdAt, and the meta row is suppressed anyway, because a queued message has not been delivered
+  // and because its unmatched sibling (synthesized from a wire item) has no time to show either.
+  it('draws NO meta row while a row is queued — it has no delivery time and nothing sent yet to copy', () => {
     const markup = renderToStaticMarkup(
-      <QueuedBacklog
-        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z' }]}
-        onDrop={() => {}}
+      <Timeline
+        items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z', message_id: 'm1' }]}
       />
     )
     // It DOES take the new geometry — same .bubble and .bubble--user, restyled by CSS alone.
     expect(markup).toContain('bubble bubble--user')
+    expect(markup).toContain('data-thread-role="queued"')
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
+    // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
+    const delivered = renderToStaticMarkup(
+      <Timeline
+        items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+      />
+    )
+    expect(delivered).toContain(META)
+    expect(delivered).toContain(COPY)
   })
 
   it('draws NO meta row on the unmounted MessageBubble residue, whose markup stays byte-identical', () => {
@@ -1714,14 +1727,15 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     )
     expect(markup).not.toContain(TIME_SLOT)
 
+    // #1214: the queued row is a merged timeline row now, so this reads it through Timeline. The wire `ts`
+    // a queued message carries has never reached the renderer and this ticket does not start — and the
+    // whole meta row is suppressed while queued, so neither the slot nor a formatted time appears.
     const queued = renderToStaticMarkup(
-      <QueuedBacklog
-        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
-        onDrop={() => {}}
+      <Timeline
+        items={[]}
+        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
       />
     )
-    // The wire `ts` a queued message carries has never reached the renderer, and this ticket does not
-    // start: nothing here reads it, so no formatted time appears.
     expect(queued).not.toContain(TIME_SLOT)
     expect(queued).not.toContain(DRAWN)
   })
@@ -1894,10 +1908,12 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     expect(rowCount(markup)).toBe(0)
     expect(markup).not.toContain(ROW)
 
+    // #1214: an UNMATCHED queued row is synthesized from a wire item that carries no attachments at all,
+    // so it can draw no file row — the strongest form of this assertion, and structural.
     const queued = renderToStaticMarkup(
-      <QueuedBacklog
-        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
-        onDrop={() => {}}
+      <Timeline
+        items={[]}
+        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
       />
     )
     expect(queued).not.toContain(ROW)
@@ -2979,68 +2995,133 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
   })
 })
 
-// #294: the held queued backlog. QueuedBacklog is the pure, exported view (the ThinkingIndicator
-// pattern) — server-render it with an injected QueuedItem[] to prove the empty→null posture and the
-// populated rows without touching the queue store. Its items come from ConversationScreen's own
-// selectBacklogFor read (the active conversation's id, #448; hoisted out of the retired container by #1009 so
-// a queue_state re-renders the screen and re-asserts the scroll pin); that populated branch is NOT
-// server-render-reachable
-// (zustand v5's useStore reads getInitialState() = empty backlog), so the populated assertions live
-// here, exactly like Timeline / ThinkingIndicator; the empty container smoke lives in the block below.
-describe('QueuedBacklog — the held queued backlog (#294)', () => {
-  const item = (queued_msg_id: number, text: string): QueuedItem => ({
+// #294, re-pointed onto the merged row by #1214: the daemon's queued backlog, drawn INSIDE the thread.
+// #294 drew it as a separate `.conversation__queued` region below the timeline, which meant a message sent
+// mid-turn appeared twice — the composer's optimistic echo here and a near-identical queued copy there.
+// The rows are folded now (foldQueuedRows → Timeline), so these assertions render Timeline with a `queued`
+// backlog instead of the deleted QueuedBacklog view. Every one of #294/#296's original subjects survives:
+// enqueue order, the queued-vs-delivered seam, the untrusted-text posture and one drop control per queued
+// row. The correlation itself is proven exhaustively in foldQueuedRows.test.ts; what lives here is what
+// the MARKUP does with it. The container's own empty-store branch stays in the block below.
+describe('the merged queued row — the backlog folded into the thread (#1214)', () => {
+  const item = (queued_msg_id: number, text: string, message_id?: string): QueuedItem => ({
     queued_msg_id,
     text,
-    ts: '2026-07-12T00:00:00Z'
+    ts: '2026-07-12T00:00:00Z',
+    ...(message_id === undefined ? {} : { message_id })
   })
 
-  // #296: the drop affordance made onDrop a REQUIRED prop (the "a view that cannot answer is a bug"
-  // rule). These render calls don't exercise the click path (renderToStaticMarkup can't fire clicks —
-  // the id→command proof lives in dropQueuedMessage.test.ts), so a no-op onDrop satisfies the type.
-  const noopDrop = (): void => {}
+  const echo = (text: string, messageId: string): ThreadItem => ({ kind: 'userText', text, messageId })
 
-  it('renders nothing for an empty backlog — no region, no chrome (AC4)', () => {
-    // Contrast the Timeline's empty-thread invitation: an empty backlog is silent, not an empty state.
-    // With no rows there is no drop affordance either (#296 AC4) — a structural guarantee of empty→null.
-    expect(renderToStaticMarkup(<QueuedBacklog items={[]} onDrop={noopDrop} />)).toBe('')
+  // renderToStaticMarkup cannot fire clicks (the id→command proof lives in dropQueuedMessage.test.ts and
+  // the click itself in e2e/), so these renders pass no handler at all — which is also the assertion that
+  // `onDropQueued` really is optional and a handler-less render draws the control rather than throwing.
+
+  it('renders no thread region at all when both the timeline and the backlog are empty', () => {
+    // The empty-thread invitation, not a silent region: EmptyThread is a distinct surface.
+    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[]} />)
+    expect(markup).not.toContain('conversation__thread')
+    expect(markup).not.toContain('queued-row__drop')
   })
 
-  it('renders one row per queued item, in enqueue order, each showing its text (AC1)', () => {
+  it('draws the queued rows and NOT the empty state when the timeline is empty but the backlog is not', () => {
+    // Reachable from a reconnect into another device's backlog, and from a conversation opened fresh in
+    // this window. Before the fold this drew the empty-state invitation with queued rows underneath it.
+    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, 'somebody else queued this')]} />)
+    expect(markup).toContain('conversation__thread')
+    expect(markup).toContain('somebody else queued this')
+    expect(markup).not.toContain('conversation__empty')
+  })
+
+  it('renders one row per queued item, in snapshot order, each showing its text (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} onDrop={noopDrop} />
+      <Timeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
     )
-    expect(markup).toContain('conversation__queued')
     expect(markup).toContain('first queued')
     expect(markup).toContain('second queued')
-    // Array position IS enqueue order: the first item precedes the second in the rendered markup.
+    // Array position IS snapshot order: the first item precedes the second in the rendered markup.
     expect(markup.indexOf('first queued')).toBeLessThan(markup.indexOf('second queued'))
   })
 
-  it('is visually distinct from delivered messages — the queued role, reusing the user bubble (AC2)', () => {
-    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, 'waiting to run')]} onDrop={noopDrop} />)
-    // The dimmed region + the queued thread role are the distinctness seams…
-    expect(markup).toContain('conversation__queued')
+  it('draws a mid-turn send ONCE — one row, wearing the queued treatment, never a second copy (AC1)', () => {
+    // The bug this ticket fixes: the echo and the backlog item are the same message, so they are one row.
+    const markup = renderToStaticMarkup(
+      <Timeline items={[echo('sent mid turn', 'm1')]} queued={[item(1, 'sent mid turn', 'm1')]} />
+    )
+    expect(markup.match(/sent mid turn/g)?.length ?? 0).toBe(1)
+    expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(1)
     expect(markup).toContain('data-thread-role="queued"')
-    // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends)…
-    expect(markup).toContain('bubble--user')
-    // …but never the delivered user role, so a queued row is never counted as a delivered message.
     expect(markup).not.toContain('data-thread-role="user"')
+  })
+
+  it('distinguishes the not-yet-run state by an attribute and a class, never by container (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[echo('already ran', 'm1'), echo('still waiting', 'm2')]}
+        queued={[item(1, 'still waiting', 'm2')]}
+      />
+    )
+    // Both rows sit in the SAME container — the distinctness is the role attribute and the modifier…
+    expect(markup.match(/conversation__thread/g)?.length ?? 0).toBe(1)
+    expect(markup).not.toContain('conversation__queued')
+    expect(markup).toContain('data-thread-role="user">already ran')
+    expect(markup).toContain('data-thread-role="queued">still waiting')
+    // …with the modifier APPENDED to the shared class run, never prepended (the whole-run assertion at
+    // the userText row's own test matches the `message-row message-row--user` prefix).
+    expect(markup).toContain('class="message-row message-row--user message-row--queued"')
+    expect(markup.match(/class="message-row message-row--user"/g)?.length ?? 0).toBe(1)
+    // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends).
+    expect(markup.match(/bubble bubble--user/g)?.length ?? 0).toBe(2)
+  })
+
+  it('keeps the row where it is and lifts the treatment when the message runs (AC3)', () => {
+    // The SAME timeline, folded against a backlog that no longer names the message: same index, same
+    // text, no jump to the tail and no second row — only the treatment goes.
+    const items: ThreadItem[] = [echo('ran', 'm1'), { kind: 'assistantText', turnId: 't1', text: 'a reply' }]
+    const whileQueued = renderToStaticMarkup(<Timeline items={items} queued={[item(1, 'ran', 'm1')]} />)
+    const afterRunning = renderToStaticMarkup(<Timeline items={items} queued={[]} />)
+    expect(whileQueued.indexOf('ran')).toBeLessThan(whileQueued.indexOf('a reply'))
+    expect(afterRunning.indexOf('ran')).toBeLessThan(afterRunning.indexOf('a reply'))
+    expect(afterRunning).toContain('data-thread-role="user">ran')
+    expect(afterRunning).not.toContain('queued')
+    expect(afterRunning.match(/class="message-row/g)?.length ?? 0).toBe(2)
+  })
+
+  it('keeps two identical texts queued back to back as two distinct rows (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[echo('same words', 'm1'), echo('same words', 'm2')]}
+        queued={[item(7, 'same words', 'm1'), item(8, 'same words', 'm2')]}
+      />
+    )
+    expect(markup.match(/same words/g)?.length ?? 0).toBe(2)
+    expect(markup.match(/data-thread-role="queued"/g)?.length ?? 0).toBe(2)
+  })
+
+  it('draws a queued item matching no local echo as its own row, never attached to another (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline items={[echo('mine', 'm1')]} queued={[item(9, 'from another device', 'zz')]} />
+    )
+    expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(2)
+    expect(markup).toContain('data-thread-role="user">mine')
+    expect(markup).toContain('data-thread-role="queued">from another device')
   })
 
   it('renders untrusted text as plain text, never live markup (load-bearing)', () => {
     // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (a prior desktop lesson).
-    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, '<b>x</b>')]} onDrop={noopDrop} />)
+    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, '<b>x</b>')]} />)
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
   })
 
   // #296: every queued row carries a drop / cancel affordance (AC1) — an icon-only button whose
-  // accessible name is a client-owned aria-label. Exactly one per row (never on a delivered row — AC4/
-  // AC5 are structural: only QueuedBacklog renders this button, and Timeline — which draws the delivered
-  // rows — is untouched). The click→command wiring is proven in dropQueuedMessage.test.ts.
-  it('carries one drop affordance per queued row, each with an accessible name (AC1)', () => {
+  // accessible name is a client-owned aria-label. #1214 turned "no delivered row can reach this button"
+  // from a structural fact (only QueuedBacklog drew it) into a CONDITION on the folded row, so it is
+  // asserted head-on here rather than left to the shape of the file. The click→command wiring is proven
+  // in dropQueuedMessage.test.ts.
+  it('carries one drop affordance per queued row, each with an accessible name (AC2)', () => {
     const markup = renderToStaticMarkup(
-      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} onDrop={noopDrop} />
+      <Timeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
     )
     // The accessible name is a client-owned aria-label (icon-only control), never a daemon string.
     expect(markup).toContain('aria-label="Drop queued message"')
@@ -3048,6 +3129,34 @@ describe('QueuedBacklog — the held queued backlog (#294)', () => {
     // closing quote excludes the .queued-row__drop-icon svg class, which shares the prefix).
     expect(markup.match(/class="queued-row__drop"/g)?.length ?? 0).toBe(2)
     expect(markup.match(/aria-label="Drop queued message"/g)?.length ?? 0).toBe(2)
+  })
+
+  it('rides the queued rows and ONLY those — never a delivered row of any kind (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          echo('a delivered send', 'm1'),
+          { kind: 'assistantText', turnId: 't1', text: 'a reply' },
+          { kind: 'toolCall', turnId: 't1', toolUseId: 'u1', name: 'Read', inputSummary: 'a file', result: null }
+        ]}
+        queued={[item(1, 'the only queued one', 'm2')]}
+      />
+    )
+    expect(markup.match(/class="queued-row__drop"/g)?.length ?? 0).toBe(1)
+    expect(markup.match(/data-thread-role="queued"/g)?.length ?? 0).toBe(1)
+    // The drop control precedes its own bubble and follows every delivered row — it is inside the queued
+    // row, not loose in the thread.
+    expect(markup.indexOf('a delivered send')).toBeLessThan(markup.indexOf('queued-row__drop'))
+    expect(markup.indexOf('queued-row__drop')).toBeLessThan(markup.indexOf('the only queued one'))
+  })
+
+  it('draws no queued treatment anywhere when the backlog prop is omitted entirely', () => {
+    // The optional-prop contract the 72 existing `<Timeline` render sites depend on: absent `queued`
+    // folds against an empty backlog and yields today's rows.
+    const markup = renderToStaticMarkup(<Timeline items={[echo('plain send', 'm1')]} />)
+    expect(markup).toContain('class="message-row message-row--user"')
+    expect(markup).toContain('data-thread-role="user"')
+    expect(markup).not.toContain('queued')
   })
 })
 
@@ -4474,13 +4583,17 @@ describe('ConversationScreen — store binding', () => {
   // reach a folded state at all.
 
   // #294: the screen's queued-backlog read mounts against the empty queue store (getInitialState backlogs:
-  // empty Map → selectBacklogFor returns EMPTY_BACKLOG), so QueuedBacklog returns null and no queued
-  // region renders (AC4). This also keeps the #179 AC4 split-brain guard green — the region class is
-  // `conversation__queued`, never the `conversation__thread` substring, and it emits no data-thread-role
-  // when empty. The populated path is proven on the pure QueuedBacklog describe above.
-  it('mounts the empty queue store with no queued backlog region (the inert render slice, AC4)', () => {
+  // empty Map → selectBacklogFor returns EMPTY_BACKLOG), so the fold marks nothing and no queued row
+  // renders. The populated path is proven on the merged-row describe above.
+  //
+  // #1214: `.conversation__queued` is GONE as a region — this assertion is now a permanent guard that it
+  // never comes back, which is AC5's other half. It cannot go vacuous by accident: the class exists
+  // nowhere in `src/` any more, so a re-introduced region would have to re-add it deliberately.
+  it('mounts the empty queue store with no queued row and no queued region at all (AC5)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__queued')
+    expect(markup).not.toContain('data-thread-role="queued"')
+    expect(markup).not.toContain('queued-row__drop')
   })
 
   // #307/#678: the composer mounts against the idle timeline store (getInitialState phase: 'idle'), so

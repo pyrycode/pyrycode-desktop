@@ -1,9 +1,11 @@
 // The drop-queued-message effect — framework-free and React-free, co-located with the screen and
 // mirroring composerSend.ts / modalResolution.ts: the effects (the guarded outbound command and the two
 // timeline writes) are injected, so the helper is a pure, deterministic function tested with plain spies
-// (no React, no store, no Electron). Its caller is the `onDrop` closure `ConversationScreen` binds onto
-// `QueuedBacklog` — thin glue over this, and since #1009 written inline at that mount rather than in a
-// container of its own.
+// (no React, no store, no Electron). Its caller is the `onDropQueued` closure `ConversationScreen` binds
+// onto `Timeline` — thin glue over this, and since #1009 written inline at that mount rather than in a
+// container of its own. It hung on the separate `QueuedBacklog` view until #1214 folded the queued rows
+// into the thread; nothing about this helper's contract changed with it, including the two positional
+// values it takes.
 //
 // ⭐ #1213 SPLIT THIS HELPER'S POSTURE IN TWO, and the split is what the ticket is. Until now this was a
 // strict subset of cancelPrompt — the same guarded send and NO local dispatch, because #296 AC3 made the

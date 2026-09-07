@@ -79,6 +79,7 @@ import { conversationListStore, selectConversations } from '../../store/conversa
 import { serverInfoStore } from '../../store/serverInfoStore'
 import { loadServerInfo } from '../../store/serverInfoLoader'
 import { dropQueuedMessage } from './dropQueuedMessage'
+import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { attachmentExtensionLabel } from './attachmentExtensionLabel'
@@ -230,21 +231,26 @@ export function ConversationScreen({
   //   localSendPending — #650: the locally-opened working-indicator window — the one renderer-sourced
   //                      scalar of the five, opened by the operator's own send.
   const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
-  // #1009: the open conversation's queued backlog, read HERE rather than inside the region's own control.
-  // The region mounts between the thread and the composer, so its appearance and its growth both shrink
-  // `.conversation__thread`'s viewport — and the pin's re-assert below is a dep-free layout effect that runs on
-  // THIS component's renders. Read one level down (the shape this was until #1009), a `queue_state` push
-  // re-rendered that leaf alone, the viewport shrank with no re-assert, and a thread resting at the bottom was
-  // left short of it until something unrelated re-rendered this screen — 132px with a two-item backlog,
-  // measured on the failing e2e before the fix (#967 measured 116px on the same setup before #969 redrew the
-  // bubble; the magnitude is the region's height, so it tracks whatever a queued row costs).
+  // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
+  // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
+  // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
+  // effect that runs on THIS component's renders. Read one level down (the shape this was until #1009), a
+  // `queue_state` push re-rendered that leaf alone, the viewport shrank with no re-assert, and a thread
+  // resting at the bottom was left short of it until something unrelated re-rendered this screen — 132px with
+  // a two-item backlog, measured on the failing e2e before the fix.
+  //
+  // #1214 KEPT THE READ AND CHANGED WHAT IT FEEDS. There is no region any more: the backlog folds into the
+  // timeline below, so this value is now an INPUT to what the thread draws rather than a sibling of it. Both
+  // reasons to read it here still hold — the fold needs it at this level, and a queue_state still re-renders
+  // this screen and re-asserts the pin (see useThreadScrollPin's inventory for what that re-assert now covers).
   //
   // The two neighbouring store-bound leaves are documented as deliberately NOT hoisted (ComposerSlot's
   // question batch, ComposerErrorSlotControl's connection status) and this read is not a reversal of either.
   // Both of those arguments are about traffic this screen has no use for — a keystroke in the question panel,
   // a connection-status flap — where waking the timeline buys nothing. A queue snapshot is the opposite on all
   // three axes: it is operator-paced (a message enqueued behind a busy turn, or dropped), the screen NEEDS the
-  // render because the event changes the height of a region this screen lays out around a pin it owns, and it
+  // render because the fold below is what draws the snapshot at all (and, before #1214, because the event
+  // changed the height of a region this screen laid out around a pin it owns), and it
   // is free for every other conversation — selectBacklogFor hands back the same array reference (or the shared
   // EMPTY_BACKLOG) when another conversation's snapshot lands, so `Object.is` short-circuits and nothing here
   // re-renders. The useMemo-stable selector per id is the timeline read's own idiom, for its reason: a fresh
@@ -265,8 +271,9 @@ export function ConversationScreen({
   // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
   // through (#756) — the flat store for the open thread, the keyed holder for the conversation it was sent
   // to — and both identities are stable, so selecting them here adds no re-render churn (the argument
-  // `Composer`'s own reads already make). Read at the container rather than inside `QueuedBacklog`: the
-  // view stays pure props-in/markup-out and store-free, as #1009 left it.
+  // `Composer`'s own reads already make). Read at the container rather than inside the view that draws the
+  // row: `Timeline` stays pure props-in/markup-out and store-free, as it has been since #203 (and as the
+  // deleted `QueuedBacklog` was until #1214 folded its rows into it).
   const dispatchTimeline = useTimelineStore((s) => s.dispatch)
   const dispatchTimelineFor = useConversationTimelineStore((s) => s.dispatchFor)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
@@ -338,40 +345,23 @@ export function ConversationScreen({
         isEmpty={items.length === 0}
         onChange={() => setPickerOpen(true)}
       />
-      <Timeline items={items} scrollPin={scrollPin} />
-      {/* #967: the region between Timeline and the queued backlog is EMPTY, and that emptiness is the
-          design. #493's api-retry, #496's compaction and #317's stall statuses each mounted their own
-          null-at-rest bubble block here until this ticket folded all three into the status row's single
-          label below — the design draws one row with one label and nothing else in this region. Their
-          precedence against the working label was never DOM adjacency (it lived in workingIndicatorState,
-          which is why #796 could move that label away without touching it), so the fold moved the three
-          labels and left the rule where it always was — now widened there from a two-way supersede to the
-          four-way order the one slot forces. */}
-      {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
-          working indicator, above the status area and composer (it sat above the run-config row too
-          until #962 retired it). Renders nothing when empty.
-          #1009 retired its store-bound container and mounts the pure view straight from this screen's own
-          backlog read above (the WorkspaceChip / Timeline / ThinkingIndicator shape), because that read is
-          what makes the region's mount and growth a render of THIS component and therefore a re-assert of
-          the pin. Nothing else moved: the container's only remaining input was the active conversation's id,
-          which this screen already reads for the timeline, the chip, the composer slot and three sheets, so
-          keeping it would have been a second subscription to the same slice behind a name that no longer
-          described it. `items` is passed straight through — no field of any item is read here, and the
-          `queued_msg_id` the drop sends back is the row's own.
+      {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
+          queueStore and never written through the timeline reducer — the fold is render-time, per
+          foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
+          sent mid-turn draws once. `queuedBacklog` is the same read #1009 hoisted here, unmoved; the drop
+          closure below is #1213's, unchanged, only re-hung on this prop.
           window.pyry.sendCommand stays dereferenced INSIDE the click closure (interaction time, never
           render), which is what keeps a container smoke render bridge-free; the null-id guard is
-          belt-and-braces, since a populated row implies an active id (the daemon queues under real ids). */}
-      {/* #1213: the drop now also takes the message's TIMELINE ECHO out. `submitMessage` writes that
-          echo optimistically for every send and has no idea whether the daemon ran the message or parked
-          it, so a cancelled message used to leave a delivered-looking bubble claude was never handed —
-          permanently. The row's `message_id` (pyrycode#2092) is the correlation key, forwarded from the
-          view; the two timeline writes below are the same pair the echo was written through (#756), so a
-          removal reaches both the open thread and the keyed holder. Everything else here is unchanged:
-          the queued row itself is still non-optimistic (#296 AC3) and still leaves on the daemon's next
-          queue_state snapshot. */}
-      <QueuedBacklog
-        items={queuedBacklog}
-        onDrop={(queuedMsgId, messageId) => {
+          belt-and-braces, since a populated row implies an active id (the daemon queues under real ids).
+          The drop's two clocks — the echo leaves at the click (#1213), the queued item leaves on the
+          daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
+          an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
+          the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
+      <Timeline
+        items={items}
+        scrollPin={scrollPin}
+        queued={queuedBacklog}
+        onDropQueued={(queuedMsgId, messageId) => {
           if (openConversationId === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
             sendCommand: window.pyry.sendCommand,
@@ -380,11 +370,16 @@ export function ConversationScreen({
           })
         }}
       />
-      {/* #962: the region between the queued backlog and the status area is EMPTY, and that emptiness is
-          the design (Figma 102:4 stacks the message area straight onto the input area). The run-config
-          row (#177) and the background-task trigger (#581) that used to mount here are both retired —
-          the row's controls live in the input footer now (#682/#683/#811) and its connection dots on the
-          sidebar host row (#672/#718), and neither overlay ever had a drawn home here. */}
+      {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
+          design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
+          #496's compaction and #317's stall each mounted their own null-at-rest bubble block here until
+          #967 folded all three into the status row's single label below; the run-config row (#177) and the
+          background-task trigger (#581) are retired, their controls now in the input footer
+          (#682/#683/#811) and their dots on the sidebar host row (#672/#718); and #1214 folded the queued
+          backlog region into the thread above. Their precedence against the working label was never DOM
+          adjacency (it lived in workingIndicatorState, which is why #796 could move that label away
+          without touching it), so #967's fold moved the three labels and left the rule where it always
+          was — widened there from a two-way supersede to the four-way order the one slot forces. */}
       {/* #796: the desktop layout's status area (Figma 111:3525) — a fixed-height row directly above the
           message box, so there is one line telling the operator what is happening and it never moves the
           composer under their cursor. It hosted the working indicator's text and nothing else that slice;
@@ -635,10 +630,14 @@ function useThreadScrollPin(): ThreadPin {
   // property of the region. #1009 corrected this paragraph, which used to claim all of it did: the inventory
   // of the strip between the thread and the composer, as this file stands, is
   //
-  //   - the queued backlog (.conversation__queued) — SCREEN RENDER. `queuedBacklog` is read in the container
-  //     above, so a queue_state that mounts or GROWS the region re-renders this screen and this effect
-  //     re-asserts. That read exists for this effect; before #1009 the region owned its own queue
-  //     subscription and mounted without one, leaving a bottom-resting thread 132px short (measured).
+  //   - #1214 REMOVED THIS INVENTORY'S FIRST ENTRY. The queued backlog (.conversation__queued) was chrome in
+  //     this strip: a region that mounted and grew between the thread and the composer, SHRINKING the
+  //     thread's viewport, which is why #1009 hoisted the queue read into the container so a queue_state
+  //     would re-render this screen and re-assert the pin (before that, a bottom-resting thread was left
+  //     132px short — measured). The queued rows are now folded INTO the timeline, so their growth is the
+  //     thread's own CONTENT growth below the reader: the #1049 observer's case, not this strip's. The
+  //     container read stays exactly where #1009 put it and a queue_state still re-renders this screen, so
+  //     the re-assert still happens — what changed is the reason, from the region's height to the rows'.
   //   - the status row and its label (ComposerStatusArea / ThinkingIndicator) — SCREEN RENDER, and moot:
   //     every fact it shows is derived from the `thread` slice the container destructures, and since #796 the
   //     row is fixed-height and mounted at all times, so it swaps a label inside an already-present element
@@ -815,33 +814,73 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // explicitly below rather than spread, so the both-or-neither wiring is visible in the markup.
 // #690 removed `now`: the sessionBoundary row was its only consumer and that row no longer draws a
 // relative time, so this subtree is once again a pure function of `items` with no clock in it at all.
+//
+// #1214: `queued` and `onDropQueued` FOLD THE DAEMON'S BACKLOG INTO THIS LIST. A message sent while claude
+// is working used to draw twice — the composer's unconditional optimistic echo here, and a second,
+// near-identical row in the `.conversation__queued` region below the thread, which this ticket deletes.
+// `foldQueuedRows` joins the two on #1213's `message_id` correlation and yields one row per message; the
+// contract, including what an unmatched item does, lives on that function and is not restated here.
+//
+// BOTH ARE OPTIONAL, for exactly the reason `scrollPin` above already records: a required prop is a
+// 72-site edit cascade in ConversationScreen.test.tsx alone, seven times the size table's call-site
+// ceiling. Absent `queued` folds against an empty backlog and yields today's rows byte-for-byte, so every
+// existing render site stays green untouched. `onDropQueued` is optional on the same terms and is what a
+// row's drop control calls; a render that supplies queued rows without it draws them undroppable rather
+// than throwing, which is the honest degradation for a view whose container owns the conversation id.
+//
+// Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
+// during render, holding no state between renders. That is what makes a replacement snapshot free (see
+// foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
 export function Timeline({
   items,
-  scrollPin
+  scrollPin,
+  queued,
+  onDropQueued
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
+  queued?: readonly QueuedItem[]
+  onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
 }): JSX.Element {
-  if (items.length === 0) return <EmptyThread />
+  const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
+  // #1214: the empty branch tests the FOLDED rows, not `items`. Before the fold, a window holding no
+  // echoes but a non-empty backlog drew the empty-state invitation with queued rows underneath it —
+  // reachable from a reconnect into another device's backlog and from a conversation opened fresh here.
+  // After it, that combination draws the queued rows, which is the only reading consistent with "the
+  // backlog is part of this thread".
+  if (rows.length === 0) return <EmptyThread />
   const lastIndex = items.length - 1
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
-      {items.map((item, index) => (
-        // Array index as key. The list is append-only with tail-mutation and never inserts or
-        // reorders mid-list (threadTimeline.ts: appendDelta grows the tail assistantText in place;
-        // every other arm appends a new tail; fillResult replaces a toolCall at its own index), so
+      {rows.map((row, index) => (
+        // Array index as key for the ITEM rows. The list is append-only with tail-mutation and never
+        // inserts or reorders mid-list (threadTimeline.ts: appendDelta grows the tail assistantText in
+        // place; every other arm appends a new tail; fillResult replaces a toolCall at its own index), so
         // index identity is stable per logical item — the usual index-key hazard is absent here.
         // turnId alone is not collision-safe (a tool can split one turn into two assistantText items,
         // post-#205), and any text-bearing key would change every delta and remount the growing bubble.
+        //
+        // #1214: the fold preserves that property for item rows (it never reorders or drops one), but its
+        // TAIL rows are a different list whose membership and order follow a replacement snapshot. They
+        // key on `queued_msg_id` — a real per-conversation unique integer, the key the deleted
+        // QueuedBacklog already used — in a `q`-prefixed string namespace that cannot collide with a
+        // numeric index. NEVER `message_id`: that field is compared and never used as an identifier,
+        // which is its contract (#1213 § Security review 1).
         <TimelineRow
-          key={index}
-          item={item}
-          inProgress={index === lastIndex && item.kind === 'assistantText'}
+          key={index < items.length ? index : `q${row.queued?.queuedMsgId ?? index}`}
+          item={row.item}
+          queued={row.queued}
+          onDropQueued={onDropQueued}
+          inProgress={index === lastIndex && row.item.kind === 'assistantText'}
         />
       ))}
     </div>
   )
 }
+
+// The stable empty backlog for a `<Timeline>` render that passes none — module scope so the fold's input
+// identity does not churn per render (the EMPTY_BACKLOG idiom from queueStore).
+const EMPTY_QUEUED: readonly QueuedItem[] = []
 
 // #969: the accessible name on the meta row's copy control — a CLIENT-OWNED constant, beside
 // DROP_QUEUED_LABEL's precedent below. Never interpolated with the message text: `Copy: ${text}` would
@@ -870,10 +909,12 @@ const COPY_MESSAGE_LABEL = 'Copy message'
 // .bubble__meta carries a min-height rather than taking its 16px from the text — see conversation.css;
 // that is also what makes the fill purely additive, with no CSS change and no reflow either way.
 //
-// NO INJECTED EFFECT, unlike QueuedBacklog's required `onDrop`. That injection exists because a queued
-// row cannot see the conversation id its send needs; a copy needs the row's own text and nothing else,
-// so the handler is a closure over that one value calling the module helper directly. Timeline's prop
-// surface is unchanged, which is what keeps the ~30 existing `<Timeline` render sites untouched. The
+// NO INJECTED EFFECT, unlike the drop control's `onDropQueued` (Timeline's optional prop, formerly
+// QueuedBacklog's required `onDrop`). That injection exists because a queued row cannot see the
+// conversation id its send needs; a copy needs the row's own text and nothing else, so the handler is a
+// closure over that one value calling the module helper directly. This row therefore added nothing to
+// Timeline's prop surface, which is what kept the ~30 existing `<Timeline` render sites untouched — the
+// same optionality argument #1214's two props had to make when they DID need to reach the container. The
 // promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
 function BubbleMeta({
   text,
@@ -1016,17 +1057,69 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
   )
 }
 
+// #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
+// idiom). An icon-only button has no visible text, so aria-label supplies its accessible name (the
+// .composer__send / .status-sheet__close pattern already in this file). Never a daemon string.
+// #1214 moved it up here with the control itself, off the deleted QueuedBacklog.
+const DROP_QUEUED_LABEL = 'Drop queued message'
+
+// #296, moved onto the timeline row by #1214: the drop / cancel affordance a queued row carries — an
+// icon-only button, a LEADING sibling of the bubble inside the right-aligned .message-row--user, so it
+// sits at the row's inner edge. Unchanged markup; only its home moved off the deleted region.
+//
+// It rides a row ONLY while the daemon's last snapshot reported that message queued, which is what
+// `queued !== null` means. Before this ticket "no delivered row can reach this button" was structural
+// (only QueuedBacklog rendered it); it is now a condition, so it is asserted directly in the renderer
+// spec rather than left to the shape of the file. The compensating structural guard is one level up:
+// foldQueuedRows marks `userText` items alone, so no daemon-authored row can acquire this control no
+// matter what a `queue_state` claims.
+function QueuedRowDrop({
+  queued,
+  onDropQueued
+}: {
+  queued: QueuedRowHandle
+  onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="queued-row__drop"
+      aria-label={DROP_QUEUED_LABEL}
+      onClick={() => onDropQueued?.(queued.queuedMsgId, queued.messageId)}
+    >
+      <svg
+        className="queued-row__drop-icon"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+      </svg>
+    </button>
+  )
+}
+
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
 // over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
 // while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing. That
 // guard did its job on the unrecognizedMessage row below: the arm arrived as a compile error here.
+//
+// #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
+// message queued. Only the `userText` arm reads it — foldQueuedRows can mark no other kind — and the
+// whole visual difference is that arm's fork.
 function TimelineRow({
   item,
-  inProgress
+  inProgress,
+  queued = null,
+  onDropQueued
 }: {
   item: ThreadItem
   inProgress: boolean
+  queued?: QueuedRowHandle | null
+  onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -1122,9 +1215,38 @@ function TimelineRow({
       // two test-count seams stay separate) and reuses .message-row--user / .bubble--user (no CSS
       // change). `text` is auto-escaped React children — never dangerouslySetInnerHTML — so any markup
       // renders as visible characters (this is the least-trusted of the row sources: local user input).
+      //
+      // #1214: THE ONE ROW A MESSAGE GETS, delivered or waiting. While the daemon reports it queued the
+      // row wears .message-row--queued and data-thread-role="queued" and carries the drop control; when
+      // the message runs the treatment simply lifts and the same row, at the same index, becomes an
+      // ordinary delivered one. The distinction is an ATTRIBUTE and a CLASS — never position, never text,
+      // never which container the row sits in, which is AC1 and the reason the deleted region could not
+      // have been kept as a "queued container" instead.
+      //
+      // THE MODIFIER IS APPENDED, NEVER PREPENDED. ConversationScreen.test.tsx asserts the whole class run
+      // `message-row message-row--user` with toContain, which survives a suffix and breaks on a prefix.
+      //
+      // THE META ROW IS SUPPRESSED WHILE QUEUED, and that is this ticket's ruling on a question #969 left
+      // to whoever merged the two rows. #969 draws none on a queued row — "nothing sent yet to copy, and
+      // no time" — and that sentence stays true here: a queued message has not been delivered, so a
+      // delivered-at timestamp would be a claim the row cannot make. It also makes the two merged forms
+      // identical in chrome, which is the point: a MATCHED row is this window's own echo and carries a
+      // `createdAt`, while an UNMATCHED one is synthesized from a wire item that has none, so drawing the
+      // row either way would ship two things that look different for no reason the operator can see.
+      // e2e/user-whitespace.spec.ts depends on this ("a queued bubble carries no meta row, so its box is a
+      // different constant height from a delivered bubble's") and needs no edit because of it.
+      //
+      // ATTACHMENTS STILL DRAW while queued. They are message CONTENT, not chrome: the files are uploaded
+      // and the message is queued with them, so drawing what this window knows is honest. An unmatched row
+      // draws none because the wire item carries none — a difference in what is known, not in treatment.
       return (
-        <div className="message-row message-row--user">
-          <div className="bubble bubble--user" data-thread-role="user">
+        <div
+          className={
+            queued ? 'message-row message-row--user message-row--queued' : 'message-row message-row--user'
+          }
+        >
+          {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
+          <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
                 header reserved. The read is `=== undefined`, never `'attachments' in item`, which is always
@@ -1149,8 +1271,9 @@ function TimelineRow({
               )
             )}
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
-                132:4435). The copy source is the echo the composer wrote — the text as sent. */}
-            <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />
+                132:4435). The copy source is the echo the composer wrote — the text as sent.
+                #1214 suppresses it while the message is queued — see the arm's header for why. */}
+            {!queued && <BubbleMeta text={item.text} side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )
@@ -2259,83 +2382,15 @@ export function isTurnRunning(phase: TurnPhase): boolean {
   return phase === 'thinking' || phase === 'responding'
 }
 
-// #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
-// idiom). An icon-only button has no visible text, so aria-label supplies its accessible name (the
-// .composer__send / .status-sheet__close pattern already in this file). Never a daemon string.
-const DROP_QUEUED_LABEL = 'Drop queued message'
-
-// #294: the held queued backlog view — the messages queued while the daemon is busy (#293's
-// replacement-truth queue store), rendered as the not-yet-run tail below the delivered thread. Pure
-// props-in/markup-out and exported so tests server-render an injected QueuedItem[] with no store (the
-// Timeline / ThinkingIndicator split). Reads `readonly QueuedItem[]` — the wire type held verbatim by
-// the store (snake_case, no camelCase remap), so `item.text` / `item.queued_msg_id` are read directly.
-//
-// items empty → null (the ThinkingIndicator posture): no region, no empty-state chrome (AC4), distinct
-// from the Timeline's empty-thread invitation. Live reactivity (AC3) is free from the store
-// subscription in the container: a fresh queue_state snapshot replaces the backlog and re-renders here.
-//
-// Queued messages are the user's own pending sends, so each row reuses the right-aligned user treatment
-// (.message-row--user / .bubble--user) unchanged, carrying its own thread role data-thread-role="queued"
-// — distinct from the delivered userText row's "user", the AC2 "distinct from delivered" seam. The
-// region's 50% dimming (the .tool-row pending precedent) is the within-token "waiting / not yet run"
-// signal. `text` is UNTRUSTED, client-originated transit content rendered as auto-escaped React children
-// — never dangerouslySetInnerHTML (the wire type's own comment mandates plain-text render; load-bearing
-// even though this slice is not security-sensitive). React key = queued_msg_id, a real per-conversation
-// unique integer (better than an array index).
-//
-// #296: each row gains a drop / cancel affordance — an icon-only button, a leading sibling of the bubble
-// inside the right-aligned .message-row--user, so it sits at the row's inner edge. `onDrop` is a REQUIRED
-// injected effect (the PermissionModalView "a view that cannot answer is a bug" rule) taking only the
-// row's queued_msg_id — the CONTAINER owns the conversation id (the conversation-id wall: QueuedItem
-// carries none), so the view never sees it. The button appears ONLY here; the delivered rows are drawn by
-// Timeline (untouched), so "affordance only on queued rows" (AC4) and "delivered rows unaffected" (AC5)
-// are structural, not conventions — no code path reaches a delivered row with this button.
-//
-// #1213: `onDrop` gains the row's `message_id` — the id pyrycode#2092 put on every queue_state item,
-// naming the `send_message` that produced it. It is the correlation key the container needs to take this
-// message's TIMELINE ECHO out alongside the queued row; without it a drop leaves a delivered-looking
-// bubble for a message claude was never handed. Two positional values rather than the whole `QueuedItem`,
-// so the container is handed exactly what it needs and never `text` or `ts`, and `string | undefined`
-// rather than `string` because a pre-#2092 daemon sends none (which correlates with nothing — the
-// container decides that, not this view). The conversation-id wall is unchanged: the view still never
-// sees a conversation id and the container still owns it.
-export function QueuedBacklog({
-  items,
-  onDrop
-}: {
-  items: readonly QueuedItem[]
-  onDrop: (queuedMsgId: number, messageId: string | undefined) => void
-}): JSX.Element | null {
-  if (items.length === 0) return null
-  return (
-    <div className="conversation__queued">
-      {items.map((item) => (
-        <div className="message-row message-row--user" key={item.queued_msg_id}>
-          <button
-            type="button"
-            className="queued-row__drop"
-            aria-label={DROP_QUEUED_LABEL}
-            onClick={() => onDrop(item.queued_msg_id, item.message_id)}
-          >
-            <svg
-              className="queued-row__drop-icon"
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
-          <div className="bubble bubble--user" data-thread-role="queued">
-            {item.text}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
+// #1214 DELETED `QueuedBacklog` AND ITS `.conversation__queued` REGION. #294 drew the backlog as a
+// separate dimmed tail below the thread, which meant a message sent mid-turn was drawn twice — once as
+// the composer's optimistic echo in the timeline and once here. The rows are now folded into the thread
+// (foldQueuedRows → Timeline → TimelineRow's userText arm), so there is one row per message and the
+// "waiting" treatment is a modifier on that row rather than a container around a copy of it. Everything
+// this view owned survived the move: the queued thread role, the reused right-aligned user bubble, the
+// 50% dimming (now .message-row--queued, which is the smallest element containing both the bubble and the
+// drop button the region's opacity used to dim as one group) and the drop control itself (QueuedRowDrop,
+// above). `DROP_QUEUED_LABEL` moved with the control.
 
 // A stable id tying the dialog's aria-labelledby to its title element.
 const STATUS_SHEET_TITLE_ID = 'status-sheet-title'

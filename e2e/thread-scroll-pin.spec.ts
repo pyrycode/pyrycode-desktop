@@ -198,9 +198,10 @@ const stallFrame = (): Uint8Array =>
   })
 
 /** A replacement-truth queue snapshot (#293/#294) — the whole current backlog, not a delta. Taken verbatim
- *  from queued-backlog-interrupt.spec.ts's own builder. #967 made this the fourth criterion's subject: the
- *  backlog is a region of dimmed rows that mounts between the thread and the composer, so it shrinks the
- *  thread's viewport by tens of pixels, which is the magnitude that criterion needs. */
+ *  from queued-backlog-interrupt.spec.ts's own builder. #967 made this the fourth criterion's subject when
+ *  the backlog was a region of dimmed rows mounting between the thread and the composer, shrinking the
+ *  thread's viewport. #1214 folded those rows INTO the thread, so this frame now GROWS the thread's content
+ *  below the reader instead — see the criterion itself for what that changed and what it left uncovered. */
 const queueStateFrame = (items: readonly QueuedItem[]): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
@@ -209,7 +210,15 @@ const queueStateFrame = (items: readonly QueuedItem[]): Uint8Array =>
     payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
   })
 
-/** Two queued messages, so the region is unambiguously tens of pixels tall rather than one row's worth.
+/** The floor the two queued rows' growth must clear for the fourth criterion to be testing anything
+ *  (#1214). Not the exact height: a row's box is a bubble's padding plus a line of text plus the thread's
+ *  gap, which the type scale and the spacing tokens both move, and pinning the exact value would make this
+ *  spec fail on a restyle that broke nothing. 50 is comfortably under two rows and comfortably over the
+ *  zero a fold that silently drew nothing would produce, which is the failure the gate is for. The
+ *  historical magnitude for the same two rows, when they were a region below the thread, was 116px. */
+const QUEUED_GROWTH_FLOOR_PX = 50
+
+/** Two queued messages, so the growth is unambiguously tens of pixels rather than one row's worth.
  *  Their text is display-only here — this spec asserts geometry, not queue contents. */
 const QUEUED_BACKLOG: readonly QueuedItem[] = [
   { queued_msg_id: 1, text: 'First queued task', ts: FIXED_TS },
@@ -221,8 +230,8 @@ const QUEUED_BACKLOG: readonly QueuedItem[] = [
  *  enqueued behind the same busy turn.
  *
  *  #1009's growth criterion turns on the pair: a fix keyed on "the backlog is non-empty" passes the mount above
- *  and fails here, because that boolean does not change while the region gains a row and shrinks the thread's
- *  viewport again. Growing an ALREADY-MOUNTED region is also the case a `null`-at-rest mount check cannot see. */
+ *  and fails here, because that boolean does not change while the backlog gains a row. Growing an
+ *  ALREADY-DRAWN backlog is also the case a `null`-at-rest mount check cannot see. */
 const GROWN_BACKLOG: readonly QueuedItem[] = [
   ...QUEUED_BACKLOG,
   { queued_msg_id: 3, text: 'Third queued task', ts: FIXED_TS }
@@ -289,10 +298,12 @@ interface ThreadMetrics {
   scrollHeight: number
 }
 
-/** The queued backlog's rows — the arrival gate for every `queue_state` push below, and the region whose height
- *  is the shrink under test. Scoped to `.conversation__queued` so it can never match a delivered user bubble
- *  in the thread above. */
-const queuedRows = (page: Page): Locator => page.locator('.conversation__queued .message-row--user')
+/** The queued backlog's rows — the arrival gate for every `queue_state` push below, and the growth under
+ *  test. #1214 folded the backlog INTO the thread, so `.conversation__queued` no longer exists: a queued row
+ *  is a `.message-row--queued` inside `.conversation__thread`. Scoped to the modifier, which a delivered user
+ *  bubble never wears, so it can still never match one. */
+const queuedRows = (page: Page): Locator =>
+  page.locator('.conversation__thread .message-row--queued')
 
 /** The three live metrics off the real scroll container — the whole reason this proof lives in e2e. */
 const readThreadMetrics = (page: Page): Promise<ThreadMetrics> =>
@@ -398,43 +409,57 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   await expect(page.locator('.session-delimiter')).toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)
 
-  // The fourth criterion. Chrome mounting between the thread and the composer shrinks the thread's
-  // VIEWPORT by tens of pixels while its scrollTop and scrollHeight are untouched. A shrinking viewport
-  // raises the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires —
-  // the tracked flag is untouched by construction, and the re-assert returns the view to the new bottom.
-  // A raw re-measurement at arrival time would instead read "not at bottom" and silently un-pin here.
+  // The fourth criterion, AND #1214 CHANGED WHAT IT IS. Read the history before re-pointing it again.
   //
-  // #796 MOVED THIS ONTO THE STALL INDICATOR and #967 MOVED IT AGAIN, onto the queued backlog. The swap
-  // is the whole point of the criterion rather than a cosmetic one, and it has now happened twice for the
-  // same reason. The working indicator used to be this region's shrinking chrome; #796 made its text the
-  // label of a status row mounted at all times, so `turn_state{thinking}` mounts a label INSIDE an
-  // already-present row and shrinks nothing. The stall block inherited the job because it kept its bubble
-  // and its null-at-rest posture — and #967 folded that block into the same row, so it shrinks nothing
-  // either. Left pointing at either, this criterion would still pass, against a viewport that never
-  // moved, testing nothing.
+  // AS WRITTEN THROUGH #1009 it was the CHROME SHRINK: something mounting between the thread and the
+  // composer shrinks the thread's VIEWPORT by tens of pixels while its scrollTop and scrollHeight are
+  // untouched. A shrinking viewport raises the maximum scroll offset, so the browser never clamps
+  // scrollTop and no scroll event fires — the tracked flag is untouched by construction, and the
+  // re-assert returns the view to the new bottom. A raw re-measurement at arrival time would instead read
+  // "not at bottom" and silently un-pin. That criterion moved twice for the same reason: #796 made the
+  // working indicator's text the label of an always-mounted row (so it shrinks nothing), #967 folded the
+  // stall block into that same row (so it shrinks nothing either), and each time the criterion was
+  // re-pointed rather than deleted, because left on a subject that no longer moves it passes against a
+  // viewport that never moved, testing nothing.
   //
-  // THE QUEUED BACKLOG (#294) is the subject now: a `queue_state` push mounts a region of dimmed rows
-  // between the thread and the composer, so the shrink is tens of pixels — 116px measured here, the
-  // magnitude this criterion's reasoning above depends on. Deliberately NOT #963's row growth, the other
-  // candidate: that is 8px, and driving it needs a terminal connection error this spec has no reason to
-  // stage.
+  // #1214 TOOK ITS THIRD SUBJECT AWAY AND LEFT NO REPLACEMENT. The queued backlog (#294) was the last
+  // occupant of that strip — a `queue_state` push mounted a region of dimmed rows between the thread and
+  // the composer, 116px measured here. Those rows are now folded INTO the thread, so a `queue_state` grows
+  // the thread's CONTENT below the reader instead of shrinking its viewport. Of what remains in the strip,
+  // the status row is fixed-height and mounted at all times, and #963's error slot is 8px and needs a
+  // terminal connection error this spec has no reason to stage — so the chrome-shrink category is
+  // UNCOVERED by this suite as of #1214, deliberately and on the record. Re-pointing this at either would
+  // have been the vacuity the paragraph above warns about; a ticket that wants the category back should
+  // stage #963's error rather than re-use these lines.
   //
-  // #1009 CLOSED THE GAP #967 COULD ONLY MEASURE AND COMMENT, so this is asserted IMMEDIATELY — as soon as
-  // the queued rows are on screen, with no other frame pushed and no send in between. `QueuedBacklogControl`
-  // used to hold its own queue-store subscription, so a `queue_state` push re-rendered THAT control and not
-  // this screen; the pin's dep-free layout effect runs on SCREEN renders, so it had not run when the region
-  // appeared and the thread rested 116px off the bottom until something unrelated re-rendered the screen.
-  // `ConversationScreen` now reads the open conversation's backlog itself, so the rows and the re-pin land in
-  // one commit — which is also what makes the plain (non-polling) assertion correct rather than racy, per
+  // WHAT IT IS NOW is the same push proving the pin against the growth it actually causes: queued rows
+  // appended inside `.conversation__thread`, below the reader. That is #1049's case and it is real — it is
+  // the one growth anchoring is indifferent to, and it is what the ResizeObserver's row-level observation
+  // exists for. The assertion is still IMMEDIATE, with no other frame pushed and no send in between: the
+  // container reads the backlog itself (#1009, kept by #1214 for the fold), so the rows and the re-pin
+  // land in one commit, which is what makes a plain non-polling assertion correct rather than racy per
   // expectPinnedToBottom's contract.
+  const beforeQueued = await readThreadMetrics(page)
   daemon.pushFrame(queueStateFrame(QUEUED_BACKLOG))
   await expect(queuedRows(page)).toHaveCount(QUEUED_BACKLOG.length, { timeout: STREAM_TIMEOUT_MS })
+  // The rows really are in the thread — without this the count above would keep passing if a future change
+  // put them back in a region of their own, and the growth this criterion now tests would be gone again.
+  await expect(page.locator('.conversation__queued')).toHaveCount(0)
+  // THE NON-VACUITY GATE FOR THE RE-POINTED CRITERION, and the reason it is here rather than asserted in
+  // prose. What #967/#1009 tested was a viewport SHRINK, which changes clientHeight and leaves scrollHeight
+  // alone; what #1214 leaves is content GROWTH, which does the opposite. Reading the wrong one would be a
+  // criterion that passes against a thread nothing happened to — the failure this whole comment block
+  // exists to avoid — so the growth is measured rather than assumed, and the bound is a magnitude (two
+  // dimmed rows, tens of pixels) rather than "changed at all".
+  const afterQueued = await readThreadMetrics(page)
+  expect(afterQueued.scrollHeight - beforeQueued.scrollHeight).toBeGreaterThan(QUEUED_GROWTH_FLOOR_PX)
+  expect(afterQueued.clientHeight).toBe(beforeQueued.clientHeight)
   await expectPinnedToBottom(page)
 
-  // The SAME criterion one snapshot later, on a region that is already mounted: a backlog that GROWS shrinks
-  // the viewport again by exactly one row while every "is there a backlog" boolean stays true. A fix keyed on
-  // emptiness passes the assertion above and fails this one, which is why the growth is asserted separately
-  // rather than folded into the mount.
+  // The SAME criterion one snapshot later, against rows that are already on screen: a backlog that GROWS
+  // adds exactly one more row while every "is there a backlog" boolean stays true. A fix keyed on emptiness
+  // passes the assertion above and fails this one, which is why the growth is asserted separately rather
+  // than folded into the mount.
   daemon.pushFrame(queueStateFrame(GROWN_BACKLOG))
   await expect(queuedRows(page)).toHaveCount(GROWN_BACKLOG.length, { timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)

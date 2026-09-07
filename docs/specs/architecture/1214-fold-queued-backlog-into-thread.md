@@ -491,3 +491,41 @@ constant-time compare would misrepresent it as one.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — Open question 3 resolved with a measured gate rather than a disabled pin
+
+The plan said to confirm the re-pointed scroll-pin criterion is non-vacuous by showing it fail with the pin
+disabled. That experiment turns out not to isolate anything: neutering `reassertPinnedToBottom` reddens the
+three earlier legs of the same test (assistantText, toolCall, sessionBoundary) before the queued leg is
+reached, so a red proves nothing about *this* criterion.
+
+What the criterion actually risks is the opposite mistake, and it is checkable directly. #967/#1009 tested a
+viewport **shrink**, which moves `clientHeight` and leaves `scrollHeight` alone; what #1214 leaves is content
+**growth**, which does the reverse. A re-point that kept measuring the old quantity would pass against a
+thread nothing happened to. So `e2e/thread-scroll-pin.spec.ts` now reads the thread's metrics either side of
+the `queue_state` push and asserts the growth clears a floor (`QUEUED_GROWTH_FLOOR_PX`, 50 — well under two
+rows, well over the zero a fold that silently drew nothing would produce) while `clientHeight` is unchanged.
+That is a permanent self-evidencing guard rather than a one-off experiment, and it makes the fact the
+criterion depends on measured rather than asserted. Confirmed green. The shrink category remains uncovered
+by that suite, as § Design 7 states.
+
+### 2026-09-07 — `QueuedRowDrop`, a module-private component the plan did not name
+
+The drop control moved onto the timeline row as a small module-private component beside `TimelineRow`
+rather than as JSX inlined into the `userText` arm, which was already the longest arm in the switch. Not an
+exported name, so § Size's count is unchanged; the markup it emits is byte-identical to the deleted
+`QueuedBacklog`'s.
+
+### 2026-09-07 — the comment sweep reached four sites the ticket's "known readers" list did not
+
+Deleting `QueuedBacklog` and `.conversation__queued` falsified four comments that describe the region's
+behaviour without naming either symbol, so no identifier grep finds them: `dropQueuedMessage.ts`'s module
+header (its caller), `BubbleMeta`'s "no injected effect, unlike QueuedBacklog's required `onDrop`", the
+container's "the event changes the height of a region this screen lays out around a pin it owns", and two
+`conversation.css` rules that explain the user bubble's shadow and whitespace treatment in terms of "the
+region's 50% opacity". Found with a multiline concept grep rather than a symbol grep; all four corrected in
+place. `e2e/user-whitespace.spec.ts` — a reader absent from the ticket's list, recorded in § Files read —
+needed only the same prose correction: its `data-thread-role="queued"` selectors and its "a queued bubble
+carries no meta row" height control both survive § Design 4's ruling untouched, which is confirmed green.

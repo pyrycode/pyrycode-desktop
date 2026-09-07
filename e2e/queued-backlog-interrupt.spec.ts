@@ -26,8 +26,9 @@ import type {
 //
 // THREE load-bearing facts a naive clone of the template would miss (read from the code, not inferred):
 //   1. queue_state MUST carry conversation_id === SEEDED_ROW.id. ConversationScreen reads
-//      selectBacklogFor(activeConversation.id) — the read #1009 hoisted out of the region's own control, so
-//      the routing is unchanged — and list-open records the clicked SEEDED_ROW as active
+//      selectBacklogFor(activeConversation.id) — the read #1009 hoisted out of the backlog's own control and
+//      #1214 kept, now as the fold's input, so the routing is unchanged across both — and list-open records
+//      the clicked SEEDED_ROW as active
 //      (PairedShell.tsx), so activeConversation.id === 'seed-conversation'. A snapshot under any other id
 //      lands in the store but is selected by nothing → zero rows render, SILENTLY (the run-config
 //      session-id gate analogue). turn_state has no such gate (timelineBridge drops its conversation_id,
@@ -181,12 +182,13 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
     buildReplyFrames: capturingQueueInterruptFake(captured)
   })
 
-  // Locators scoped by container so the shared .message-row--user / .bubble--user markup never collides:
-  // queued rows live in .conversation__queued and carry data-thread-role="queued"; the delivered echo lives
-  // in the timeline and carries data-thread-role="user". That role difference IS the AC "distinct from
-  // delivered" seam — assert on the role attribute, never the shared class.
+  // #1214: THE QUEUED ROWS LIVE IN THE THREAD NOW. `.conversation__queued` is gone as a region, so the old
+  // container-scoped locators have no container: a queued row is a `.message-row--queued` inside
+  // `.conversation__thread`, and its bubble carries data-thread-role="queued" while a delivered echo's
+  // carries "user". That role difference IS the AC "distinct from delivered" seam and it is now the ONLY
+  // seam — assert on the role attribute or the modifier, never on the .message-row--user class both wear.
   const queuedRow = (text: string) =>
-    page.locator('.conversation__queued .message-row--user', { hasText: text })
+    page.locator('.conversation__thread .message-row--queued', { hasText: text })
   const dropButton = (text: string) =>
     queuedRow(text).getByRole('button', { name: 'Drop queued message' })
   const queuedBubbles = page.locator('[data-thread-role="queued"]')
@@ -195,6 +197,11 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   // Playwright's case-insensitive SUBSTRING `hasText` cannot select two rows at once.
   const deliveredEcho = (text: string) =>
     page.locator('[data-thread-role="user"]', { hasText: text })
+  // #1214: EVERY row one message draws, in whichever state — the locator AC1 ("exactly one row") is stated
+  // against. Both roles at once, because the whole point is that a message can no longer be in two.
+  const rowsFor = (text: string) =>
+    page.locator('[data-thread-role="user"], [data-thread-role="queued"]', { hasText: text })
+  const queuedRegion = page.locator('.conversation__queued')
   const interruptButton = page.getByRole('button', { name: 'Stop the running turn' })
   const runningIndicator = page.locator('.conversation__thinking')
 
@@ -234,11 +241,22 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   await expect(queuedBubbles).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(queuedRow('First queued task')).toBeVisible()
   await expect(queuedRow('Second queued task')).toBeVisible()
-  // The two roles partition: the delivered rows are untouched by the queue push (the AC "distinct" seam).
-  // Both echoes are on screen HERE, which is what makes the post-drop absence below a real mutation check
-  // rather than an assertion that was already true at launch.
-  await expect(deliveredUser).toHaveCount(2)
-  await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(1)
+
+  // --- #1214: ONE ROW PER MESSAGE, and the region is gone. ---
+  // A's echo and A's queued item are the same message, so the push does not ADD a row for A — it converts
+  // the echo already on screen. That conversion is this ticket's whole subject and it is a real 2 → 1
+  // mutation of the delivered count, driven by the push, unreachable from the pre-push state.
+  await expect(deliveredUser).toHaveCount(1)
+  await expect(rowsFor(QUEUED_A.text)).toHaveCount(1)
+  await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(0)
+  // B carries an id no echo here holds, so it draws its own row rather than attaching to somebody else's.
+  await expect(rowsFor('Second queued task')).toHaveCount(1)
+  // Every queued row is IN the thread and the separate region exists nowhere on the page.
+  await expect(queuedRegion).toHaveCount(0)
+  await expect(page.locator('.conversation__thread [data-thread-role="queued"]')).toHaveCount(2)
+  // The unrelated delivered row is untouched by the queue push (the AC "distinct" seam). It is on screen
+  // HERE, which is what makes the post-drop assertion that it SURVIVES a real check rather than a
+  // statement that was already true at launch.
   await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
 
   // --- AC: dequeue (non-optimistic — send half proven from the captured frame, then reflect) ---
@@ -248,20 +266,31 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
       timeout: ROUNDTRIP_TIMEOUT_MS
     })
     .toBe(1)
-  // --- #1213: the ECHO goes at the click, unlike the row. ---
-  // The poll above is the positive wait this absence needs: it reads the drop's OWN effect (the captured
+  // --- #1213: the ECHO goes at the click, unlike the row. #1214: on ONE row, that pair is visible. ---
+  // The poll above is the positive wait this leg needs: it reads the drop's OWN effect (the captured
   // dequeue frame), is unreachable from the pre-click state, and only once it has fired can the removal
-  // that rides the same click have run. A bare toHaveCount(0) here would otherwise pass before the click's
-  // async work resolved.
+  // that rides the same click have run. A bare count here would otherwise pass before the click's async
+  // work resolved.
+  //
+  // The echo left at the click while the daemon still holds A in its backlog, so A is momentarily an
+  // UNMATCHED row: still drawn, still queued, still droppable, but now synthesized from the wire item
+  // rather than from this window's echo, and therefore at the thread's tail. That transient is the
+  // documented cost of merging #1213's optimistic echo removal with #296 AC3's non-optimistic row (the
+  // plan's § Design 8) — asserted here rather than merely described, so that if a later ticket makes the
+  // row's departure optimistic this line is what tells it the behaviour changed.
   await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  // ONLY the dropped message's echo goes: the unrelated delivered row is still there, still attributed.
+  await expect(rowsFor(QUEUED_A.text)).toHaveCount(1)
+  await expect(queuedRow('First queued task')).toBeVisible()
+  // ONLY the dropped message is touched: the unrelated delivered row is still there, still attributed.
   await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
   await expect(deliveredUser).toHaveCount(1)
 
-  // Row A is NOT gone yet (non-optimistic — #296 AC3, unchanged by #1213: the daemon owns the backlog).
-  // Push the fresh replacement snapshot omitting A → it leaves.
+  // Row A is NOT gone yet (non-optimistic — #296 AC3, unchanged by #1213/#1214: the daemon owns the
+  // backlog). Push the fresh replacement snapshot omitting A → the row leaves entirely, in BOTH roles,
+  // which is the AC "dropping it removes the row" end state.
   daemon.pushFrame(queueStateFrame([QUEUED_B]))
   await expect(queuedRow('First queued task')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(rowsFor(QUEUED_A.text)).toHaveCount(0)
   await expect(queuedRow('Second queued task')).toBeVisible()
   await expect(queuedBubbles).toHaveCount(1)
   // The drain half of AC4, from the other direction: that replacement snapshot also removed B's item from

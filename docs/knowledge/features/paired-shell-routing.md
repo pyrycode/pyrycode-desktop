@@ -336,9 +336,10 @@ AppView (route='conversation')
                                                   → WorkspaceChip reads activeConversationStore (#278)
                                                   ComposerErrorSlotControl Re-pair (#1163) → runUnpair(serverIdForOpenConversation(…)) → runUnpairServer → window.pyry.unpairServer(serverId)
                                                     ok + servers remain   → serverInfoStore re-read/written
-                                                                             → clearServerScopedState(serverScopedClearDeps + navigateToList: onBack)  ← #1196
+                                                                             → clearServerScopedState(serverScopedClearDeps + navigateToList: onBack)  ← #1196, #1197
                                                                                departed rows + threads dropped; open chat (always this server's, per
-                                                                               serverIdForOpenConversation) exited via exitActiveConversation → dispatch{back}
+                                                                               serverIdForOpenConversation) exited via exitActiveConversation → dispatch{back};
+                                                                               departed conversations' last-read marks dropped LAST, after the loop ← #1197
                                                     ok + servers empty    → onLastServerUnpaired() → applyPairingChange(deps,'unpaired')
                                                                              → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as settings' unpair
                                                                                App sets route='pairing'
@@ -360,10 +361,11 @@ AppView (route='conversation')
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                                                 ServerRowControl per-row Unpair (#1162) → runUnpairServer → window.pyry.unpairServer(serverId)
                                                   ok + servers remain   → serverInfoStore re-read/written
-                                                                           → clearServerScopedState(serverScopedClearDeps + navigateToList: no-op)  ← #1196
+                                                                           → clearServerScopedState(serverScopedClearDeps + navigateToList: no-op)  ← #1196, #1197
                                                                              departed rows + threads dropped; an open chat belonging to the departed
                                                                              server is exited (exitActiveConversation), but Settings stays on screen —
-                                                                             `nextPairedRoute`'s only exit from 'settings' is the already-absolute 'back'
+                                                                             `nextPairedRoute`'s only exit from 'settings' is the already-absolute 'back';
+                                                                             departed conversations' last-read marks dropped LAST, after the loop ← #1197
                                                                            shell stays on 'settings'
                                                   ok + servers empty    → onUnpaired() → applyPairingChange(deps,'unpaired')
                                                                            → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as thread's unpair

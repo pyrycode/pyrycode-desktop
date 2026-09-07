@@ -27,6 +27,7 @@ import {
   selectExclusiveConversationIdsFor
 } from './store/conversationListStore'
 import { activeConversationStore } from './store/activeConversationStore'
+import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { runConfigStore } from './store/runConfigStore'
 import { runSettingsWriteStore } from './store/runSettingsWriteStore'
@@ -36,10 +37,13 @@ import { exitActiveConversation, type ExitActiveConversationDeps } from './exitA
 
 /**
  * `exitActiveConversation`'s seven effects — inherited rather than restated, because AC3's decision IS
- * that helper's decision — plus the two this clear adds:
+ * that helper's decision — plus the three this clear adds:
  *
  *  - `getDepartedConversationIds` — which conversations the departing machine owns, and ONLY those.
  *  - `clearConversationsFor`      — `conversationListStore`'s #1196 keyed drop of that server's rows.
+ *  - `clearLastReadFor`           — `conversationLastReadStore`'s #1197 keyed drop of those
+ *                                   conversations' read marks. The ONLY member of this set that reaches
+ *                                   outside memory, which is what pins where it is called from.
  *
  * IT EXTENDS `ExitActiveConversationDeps` rather than duplicating its members, which is what makes
  * "AC3 is exitActiveConversation, applied to a set" a fact about the TYPE rather than a claim in a
@@ -58,6 +62,15 @@ import { exitActiveConversation, type ExitActiveConversationDeps } from './exitA
 export interface ClearServerScopedStateDeps extends ExitActiveConversationDeps {
   getDepartedConversationIds: (serverId: string) => ReadonlySet<string>
   clearConversationsFor: (serverId: string) => void
+  /**
+   * #1197: drop the last-read marks of the departed conversations, and only those. It rides the set
+   * `getDepartedConversationIds` already computed rather than taking a read of its own, so the
+   * exclusivity property argued for above covers this destruction too — marks have no backfill any more
+   * than threads do, so the same answer is owed. `ReadonlySet<string>` rather than an iterable, because
+   * a bare `string` satisfies `Iterable<string>` and a caller handing over one id would clear one mark
+   * per character with no type error.
+   */
+  clearLastReadFor: (conversationIds: ReadonlySet<string>) => void
 }
 
 /**
@@ -89,12 +102,40 @@ export interface ClearServerScopedStateDeps extends ExitActiveConversationDeps {
  * matching conversation therefore has its timeline cleared twice, once here and once inside the exit;
  * both calls are idempotent, and paying that is cheaper than a second copy of the gate.
  *
- * Total — no gate of its own, no return value, no throw path. Every effect is an in-memory store write,
- * so unlike `clearPairingScopedState` there is no effect here that can throw and therefore no ordering
- * constraint among the clears beyond the read-before-drop above. Fully synchronous, so on the renderer's
- * single thread no observer can see a half-cleared set and React batches the writes into one commit.
- * A server holding no rows resolves to the shared empty set, loops zero times, and short-circuits the
- * drop inside the store.
+ * THE SECOND ORDERING CONSTRAINT, added at #1197, and it is LOOP-shaped where `clearPairingScopedState`'s
+ * is flat: `clearLastReadFor` MUST run AFTER the loop has finished, and it is placed last. Two
+ * independent reasons, either sufficient:
+ *
+ *   - THE RE-MINT. Every `clearTimelineFor` in the loop notifies `conversationTimelineStore`'s
+ *     subscribers SYNCHRONOUSLY, and among them is #777's bridge, which re-stamps whatever conversation
+ *     is open and, finding the slice gone, records a mark of `0` for it — persisting a departed server's
+ *     conversation id to disk, where it survives a restart, while every in-memory assertion stays green.
+ *     Because that fires on EVERY iteration, a drop placed INSIDE the loop is re-minted by a later one.
+ *     After the loop nothing re-fires it: `exitActiveConversation`'s own `clearTimelineFor` runs on a
+ *     slice the loop body emptied a line earlier and so returns state by reference, waking no listener,
+ *     and this call is the last statement of `runUnpairServer`'s per-server arm. (A still-paired
+ *     server's open chat IS legitimately re-stamped during the loop, with its own honest count — its
+ *     slice is untouched — and the drop names only departed ids, so it cannot be reached.)
+ *   - THE THROW. Every other effect here is an in-memory store write that cannot throw.
+ *     `clearLastReadFor` reaches `localStorage`, so it is the only one that can, and mid-body a throw
+ *     from it would abort every clear after it — including `clearSessionId`, whose clear is the security
+ *     payload described above. Last, a throw aborts nothing. That costs no code and adds no try/catch
+ *     for an unobserved failure; it is a free ordering property, and the test pins it by call order
+ *     rather than trusting this paragraph.
+ *
+ * That the marks are the ONLY member of the departed set reaching outside memory is why #1196 held them
+ * back for a sibling ticket rather than shipping them with the rest: they are the only one carrying an
+ * ordering constraint and a throw path of their own.
+ *
+ * The marks drop is UNCONDITIONAL — there is deliberately no `departed.size` gate in front of it. The
+ * guard belongs in the store, the only place that can answer the question that actually matters ("did
+ * any HELD mark leave?"); a gate here would be a second, weaker copy of it, blind to a non-empty id set
+ * that names nothing held.
+ *
+ * Total — no gate of its own, no return value, no throw path of this function's own. Fully synchronous,
+ * so on the renderer's single thread no observer can see a half-cleared set and React batches the writes
+ * into one commit. A server holding no rows resolves to the shared empty set, loops zero times, and
+ * short-circuits both the row drop and the marks drop inside their own stores.
  *
  * Nothing is logged, and that is the same posture `unpairHandler`, `runUnpairServer`,
  * `exitActiveConversation` and `clearPairingScopedState` all hold: a diagnostic here would want the
@@ -106,7 +147,8 @@ export interface ClearServerScopedStateDeps extends ExitActiveConversationDeps {
  * conversation-id set today, so a departed server's are scopeable with the very set computed above —
  * they are out of SCOPE here (#1090's Ask names this ticket's four slices), not out of reach, and the
  * roster is the sharpest of the three, since a held `local_bash` task's `description` is the literal
- * command line claude ran. `conversationLastReadStore` is the deliberately separate sibling ticket.
+ * command line claude ran. `conversationLastReadStore` USED TO BE ON THIS LIST as the deliberately
+ * separate sibling ticket; #1197 landed it, and it is now the last effect in the body.
  * `announcedModelStore`, `sessionIdStore`, `slashCommandListStore` and `modelListStore` are app-wide
  * single slots with no server key at all; keying them is the separate migration #1145 and #1146 are the
  * open bugs on. Do NOT key a store here to make its clear scopeable.
@@ -126,6 +168,12 @@ export function clearServerScopedState(
     // AC3 — the id gate inside means at most one iteration does anything.
     exitActiveConversation(deps, conversationId)
   }
+
+  // AFTER the loop, never inside it, and last of all — see the second ordering constraint in the
+  // docblock. Both halves are load-bearing: inside, a later iteration's thread clear re-mints the
+  // departed open chat's `0` through #777's bridge; anywhere but last, a `localStorage` throw from the
+  // one effect that reaches outside memory aborts a clear that would otherwise have run.
+  deps.clearLastReadFor(departed)
 }
 
 /**
@@ -159,6 +207,11 @@ export const serverScopedClearDeps: Omit<ClearServerScopedStateDeps, 'navigateTo
     selectExclusiveConversationIdsFor(serverId)(conversationListStore.getState()),
   clearConversationsFor: (serverId) =>
     conversationListStore.getState().clearConversationsFor(serverId),
+  // #1197. The store's OTHER clear stays nullary and untouched: the last-server unpair still routes to
+  // `clearPairingScopedState`, so `tsc` goes on enforcing that no daemon-asserted id can steer which
+  // marks survive the whole-app boundary. This is a second write path, not a widened first one.
+  clearLastReadFor: (conversationIds) =>
+    conversationLastReadStore.getState().clearLastReadFor(conversationIds),
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearTimelineFor: (id) => conversationTimelineStore.getState().clearTimelineFor(id),

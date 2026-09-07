@@ -14,7 +14,10 @@ below and [Paired shell § The last-read stamp](paired-shell-conversation-exits.
 for the write path itself. **[#778](conversation-unread.md) landed the reader** — a framework-free predicate
 over this store's `selectLastReadFor` and [conversation timeline holder](conversation-timeline-holder.md)'s
 `selectTimelineFor`, reading neither via a bound hook here. **#779 clears it at the pairing boundary** — see
-[Configuration and usage](#configuration-and-usage) below. #676, drawing the resulting dot, is still open.
+[Configuration and usage](#configuration-and-usage) below. **[#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)
+added a second, scoped clear** for the boundary the pairing does not fully end at — forgetting one of
+several paired servers now drops only that server's marks, and only that server's — see below. #676,
+drawing the resulting dot, is still open.
 
 ## What it does
 
@@ -42,19 +45,56 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   never-read conversation produces, with no type error. There is deliberately no whole-map
   `selectAllLastRead` — all three keyed precedents in this family omit their whole-map analogue, and the
   sidebar reads one row at a time.
-- **One clear path, `clearAllLastRead()` (#779), the pairing boundary.** Built as `recordLastRead` is: guard,
-  persist and return in one expression inside the updater, so no later edit can hoist the write above the
-  guard. The guard is `marks.size === 0`, never a reference check against
-  `initialConversationLastReadState.marks` — since #776 an empty store's `marks` is whatever `storage.read()`
-  returned, a **fresh** `Map`, never the module constant, so a reference guard would never fire on a clean
-  install and every unpair would perform a redundant `localStorage.setItem`. The already-clear arm returns
-  the state object itself, so zustand's `Object.is` short-circuit fires and no subscriber wakes; the cleared
-  arm returns the named `initialConversationLastReadState` baseline and persists through
-  `storage.write(initialConversationLastReadState.marks)` — `write(empty)`, not a port `clear()` (#776
-  declined that method; see Persistence below). **Nullary by design, not convenience**: taking no
-  `conversationId` means no daemon-asserted id can steer which marks survive the pairing boundary, a
-  property `tsc` enforces rather than a test. No paired `clearLastReadFor(id)` — a mark for a conversation
-  that no longer exists is inert, so a per-id clear would ship an unused write path.
+- **Two clear paths, one per pairing boundary — `clearAllLastRead()` (#779) and `clearLastReadFor(ids)`
+  ([#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)) — kept as separate write paths on
+  purpose, not one signature widened with an optional parameter.** Both are built as `recordLastRead` is:
+  guard, persist and return in one expression inside the updater, so no later edit can hoist the write
+  above the guard.
+  - **`clearAllLastRead()`** answers "the pairing ended" and empties the map. The guard is
+    `marks.size === 0`, never a reference check against `initialConversationLastReadState.marks` — since
+    #776 an empty store's `marks` is whatever `storage.read()` returned, a **fresh** `Map`, never the
+    module constant, so a reference guard would never fire on a clean install and every unpair would
+    perform a redundant `localStorage.setItem`. The already-clear arm returns the state object itself, so
+    zustand's `Object.is` short-circuit fires and no subscriber wakes; the cleared arm returns the named
+    `initialConversationLastReadState` baseline and persists through
+    `storage.write(initialConversationLastReadState.marks)` — `write(empty)`, not a port `clear()` (#776
+    declined that method; see Persistence below). **Nullary by design, not convenience**: taking no
+    `conversationId` means no daemon-asserted id can steer which marks survive the pairing boundary, a
+    property `tsc` enforces rather than a test. #1197 keeps this property rather than spending it — it
+    ships a *separate* path instead of a parameter on this one, so this stays nullary and `tsc` goes on
+    enforcing the whole-app boundary's guarantee.
+  - **`clearLastReadFor(conversationIds: ReadonlySet<string>)`** answers "one of several paired machines
+    is gone" and drops only that machine's conversations, since the marks of a machine the operator is
+    still on are exactly what must survive. The refusal this store's docblock used to carry — no per-id
+    clear, because a mark for a conversation that no longer exists is "inert" — held only while the
+    whole-app boundary was the only one; it does not hold here, since a departed mark is *persisted* under
+    the fixed key and survives not only the unpair but the restart after it, the exact residue #779 exists
+    to prevent. Four decisions `tsc` cannot see:
+    - the parameter is a `ReadonlySet<string>`, never `Iterable<string>` or `readonly string[]` — a bare
+      `string` satisfies `Iterable<string>`, so a caller passing one id instead of a set would compile
+      clean and clear one key per *character*;
+    - the guard asks **"did anything actually leave?"**, never "is the incoming set empty?" — clone,
+      delete each named id, and compare `next.size` against `s.marks.size`; a non-empty set naming
+      nothing held is the *common* case (a departed server's conversations need never have been opened),
+      and `conversationIds.size === 0` would fire a redundant synchronous `localStorage.setItem` on every
+      such unpair;
+    - **one write for the whole set**, never a per-id clear called in a loop — the whole map is persisted
+      under a single fixed key;
+    - the cleared arm returns a fresh `{ marks: next }`, not the named baseline — a scoped drop's result
+      is a surviving map, so there is no shared constant to name, and the emptied-everything case needs no
+      special arm (a repeat of the same ids finds nothing to remove and returns `s` through the guard).
+
+    The ids reaching this path are the *departing* daemon's own claim, filtered to the exclusive set at
+    its single call site rather than trusted verbatim — see [Unpair channel § The two renderer
+    callers](unpair-channel.md#the-two-renderer-callers) for `selectExclusiveConversationIdsFor`, the same
+    filter [conversation list store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+    applies to the sibling thread drop. **Called from `clearServerScopedState`, and only after its
+    departed-conversation loop has finished** — every `clearTimelineFor` inside that loop notifies
+    `conversationTimelineStore`'s subscribers synchronously, including #777's bridge, which re-stamps
+    whatever chat is open and, finding the slice gone, records a `0` for it; a drop placed *inside* the
+    loop would be re-minted by a later iteration. It is also the only effect in that helper's set reaching
+    outside memory, so running it last means a `localStorage` throw aborts no other clear. See [Paired
+    shell routing](paired-shell-routing.md) for the call site.
 - **Value shape — a count, not a timestamp.** No timestamp exists anywhere the renderer can reach: the
   turn-stream IPC arms carry `conversationId` and `turnId` but no time field, `ConversationActivityEntry`
   is four booleans with no arrival marker, and the daemon's own `last_message_ts`/`last_used_at` do not
@@ -120,12 +160,20 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
   including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
   clears can persist a spurious `0` over a true mark (below).
-  **Reader landed in [#778](conversation-unread.md). Clear landed in #779** — `clearAllLastRead()`, wired as
-  the seventh and last effect of [`clearPairingScopedState`](paired-shell-pair-server-route.md#the-pairserver-route-152),
+  **Reader landed in [#778](conversation-unread.md). Whole-app clear landed in #779** — `clearAllLastRead()`,
+  wired as the seventh and last effect of [`clearPairingScopedState`](paired-shell-pair-server-route.md#the-pairserver-route-152),
   called from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired
   the pair-another-server call site (adding a server ends no pairing, so a still-paired server's read
   marks have nothing to lose). Served by `storage.write(new Map())`, not a dedicated port
   `clear()` (#776 declined that method).
+  **Per-server scoped clear landed in [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)** —
+  `clearLastReadFor(conversationIds)`, wired as the new `clearLastReadFor` member of `ClearServerScopedStateDeps`
+  and bound in `serverScopedClearDeps` (`src/renderer/src/clearServerScopedState.ts`) through
+  `conversationLastReadStore.getState().clearLastReadFor`. Called unconditionally as the last statement of
+  `clearServerScopedState`, after its per-departed-conversation `exitActiveConversation` loop — see
+  [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) and [Paired
+  shell routing](paired-shell-routing.md) for both call sites (the composer's Re-pair control and the
+  Settings row's per-server Unpair).
 
 ## Edge cases and limitations
 
@@ -141,18 +189,27 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   on the order of 50 bytes, against a `localStorage` budget in the megabytes (roughly a hundred thousand
   conversations since the last pairing), and the keyspace is bounded by the operator's own opening of
   conversations rather than by anything the daemon can mint. No bound, no prune-on-load, no LRU. #779's
-  pairing-boundary clear remains the only floor.
+  whole-app pairing-boundary clear and #1197's per-server scoped clear are the only floors.
 - **A teardown clear can persist a spurious `0` over a true mark on conversation delete/archive — reachable,
-  not fixed. Resolved for the pairing-end path by #779.** Both `clearPairingScopedState` and
-  `exitActiveConversation` clear `conversationTimelineStore` one line before they clear
-  `activeConversationStore` (code review, PR #792). #777's listener is subscribed to the former for as long
-  as `PairedShell` is mounted, so it fires mid-teardown, still sees the conversation being torn down as
-  "open," finds its timeline slice already gone, and records `0` — persisted, since this is written through
-  the same `recordLastRead` path #776 wraps. **`clearPairingScopedState` now absorbs this**: #779 placed
-  `clearAllLastRead()` last in that helper's body precisely because of this re-mint, so a pairing-ending
-  teardown's spurious `0` is wiped — in memory and on disk — before the helper returns, with a dedicated
-  regression test proving it. See [Paired shell § The last-read
-  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the ordering argument.
+  not fixed. Resolved for both boundaries the pairing can end or narrow at: the whole-app one by #779, the
+  per-server one by #1197.** Both `clearPairingScopedState` and `exitActiveConversation` clear
+  `conversationTimelineStore` one line before they clear `activeConversationStore` (code review, PR #792),
+  and `clearServerScopedState`'s per-departed-conversation loop clears one `conversationTimelineStore` slice
+  per iteration. #777's listener is subscribed to that store for as long as `PairedShell` is mounted, so it
+  fires mid-teardown (or mid-loop), still sees the torn-down conversation as "open," finds its timeline slice
+  already gone, and records `0` — persisted, since this is written through the same `recordLastRead` path
+  #776 wraps, and on the per-server path the loop notifies **once per departed conversation**, so a re-mint
+  is possible on every iteration, not just once. **`clearPairingScopedState` and `clearServerScopedState`
+  both absorb this, the same way**: #779 placed `clearAllLastRead()` last in the whole-app helper's body,
+  and #1197 placed `clearLastReadFor(departed)` last in the per-server helper's body — *after* its loop, not
+  inside it, since a drop placed inside would be re-minted by a later iteration — so either teardown's
+  spurious `0`s are wiped, in memory and on disk, before the helper returns. Both orderings are pinned by a
+  dedicated regression test (`invocationCallOrder`, not an end-state assertion — the re-stamp lives in a
+  React effect and no test in this repo runs that subscription, so only call order can catch a regression
+  here). See [Paired shell § The last-read
+  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the
+  whole-app ordering argument and [Unpair channel § The two renderer
+  callers](unpair-channel.md#the-two-renderer-callers) for the per-server one.
   **`exitActiveConversation` (deleting or archiving the open conversation) still has no such floor** — that
   helper clears only the one conversation's own state, never the whole map, so archiving or deleting the
   conversation you have 20 rows read into still drops its mark to `0` on the way out, persisted. No AC is
@@ -192,3 +249,12 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 - [Paired shell § the `pairServer` route](paired-shell-pair-server-route.md#the-pairserver-route-152) — #779's
   `clearAllLastRead`, wired as `clearPairingScopedState`'s seventh and last effect, and the re-mint
   ordering constraint that placement closes.
+- [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) — #1197's
+  `clearLastReadFor`, wired as `clearServerScopedState`'s last effect (after its departed-conversation
+  loop), the exclusive-id-set filter it rides rather than takes a fresh read of, and both call sites
+  (composer Re-pair, Settings-row Unpair).
+- [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+  — `selectExclusiveConversationIdsFor`, the #1196 sibling filter `clearLastReadFor`'s call site reuses
+  rather than duplicates.
+- [Paired shell routing](paired-shell-routing.md) — the data-flow diagram showing where
+  `clearServerScopedState` (and so `clearLastReadFor`) sits in each per-server unpair path.

@@ -34,6 +34,7 @@ function deps(
     clearActiveConversation: vi.fn(),
     clearSessionId: vi.fn(),
     clearRunConfig: vi.fn(),
+    clearLastReadFor: vi.fn(),
     navigateToList: vi.fn()
   } as never
 }
@@ -122,6 +123,43 @@ describe('clearServerScopedState', () => {
     expect(d.clearTimelineFor).not.toHaveBeenCalled()
     expect(d.clearActiveConversation).not.toHaveBeenCalled()
     expect(d.navigateToList).not.toHaveBeenCalled()
+    // The marks drop is UNCONDITIONAL — no `departed.size` gate here. The guard lives in the store,
+    // which is the only place that can answer the question that actually matters ("did any HELD mark
+    // leave?"); a gate here would be a second, weaker copy of it, blind to a non-empty set naming
+    // nothing held.
+    expect(d.clearLastReadFor).toHaveBeenCalledTimes(1)
+    expect(d.clearLastReadFor).toHaveBeenCalledWith(new Set())
+  })
+
+  it('drops the last-read marks of the departed conversations, and only those (#1197 AC1)', () => {
+    const d = deps({ departed: ['c1', 'c2'], open: conversation('survivor') })
+    clearServerScopedState(d, 'srv-a')
+    expect(d.clearLastReadFor).toHaveBeenCalledTimes(1)
+    // The set the helper ALREADY computed, handed straight on — not a fresh read, and never a widening
+    // to `selectConversationIdsFor`. These ids are the DEPARTING daemon's own claim, so the exclusivity
+    // filter behind `getDepartedConversationIds` is what stops "forget machine A" from destroying
+    // machine B's marks, which have no backfill any more than B's threads do.
+    expect(d.clearLastReadFor).toHaveBeenCalledWith(d.getDepartedConversationIds.mock.results[0].value)
+    expect(d.clearLastReadFor).toHaveBeenCalledWith(new Set(['c1', 'c2']))
+  })
+
+  it('the marks drop runs AFTER every departed thread clear (#1197 AC4)', () => {
+    // THE ordering this can silently half-work on, and it is LOOP-shaped. Each `clearTimelineFor`
+    // notifies `conversationTimelineStore`'s subscribers synchronously, and among them is #777's bridge,
+    // which re-stamps whatever chat is open and — finding the slice gone — records a mark of `0` for it,
+    // persisting a departed conversation's id to disk while every in-memory assertion stays green.
+    // Because that fires on EVERY iteration, a drop placed inside the loop is re-minted by a later one.
+    // The re-stamp lives in a React effect and `vitest.config.ts` is `environment: 'node'` globally, so
+    // no test in this repo runs that subscription: the re-mint cannot be driven end-to-end and an
+    // end-state storage assertion would pass with the bug. Pinned on call ORDER, as
+    // `clearPairingScopedState.test.ts` pins the identical constraint for the whole-app boundary.
+    const d = deps({ departed: ['c1', 'c2', 'c3'], open: conversation('c1') })
+    clearServerScopedState(d, 'srv-a')
+    // The LAST thread clear, not the first — `Math.max` is what makes this "after the loop" rather than
+    // "after the first iteration", which is the placement that actually re-mints.
+    expect(Math.max(...d.clearTimelineFor.mock.invocationCallOrder)).toBeLessThan(
+      d.clearLastReadFor.mock.invocationCallOrder[0]
+    )
   })
 
   it('returns nothing and reports nothing — total, like both clear helpers beside it', () => {

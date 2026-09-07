@@ -87,6 +87,7 @@ import { isImageAttachmentName } from './attachmentIsImage'
 import { BubbleAttachmentImage } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
+import { sendNewSession } from './sendNewSession'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
@@ -2982,6 +2983,21 @@ function Composer({
     if (sendText(text)) setText('')
   }
 
+  // #1218: the Actions menu's New session row. It shares NOTHING with `sendText` above on purpose —
+  // Reset session sends `/clear` as ordinary message text and this asks the daemon to kill claude and
+  // spawn a fresh one, so there is no shared gate, no optimistic echo and no text to clear.
+  //
+  // It takes `activeConversationId`, the SAME expression the send reads, which is what stops the two
+  // ever naming different chats; `sendNewSession` refuses a null or empty id and sends nothing, so the
+  // composer footer rendering with no conversation open is a no-op rather than a command naming none.
+  // `window.pyry` is dereferenced only here, at interaction time — never during render, where it does
+  // not exist under renderToStaticMarkup. No `canSend` gate: that axis decides whether a MESSAGE can be
+  // sent, main's `newSession` arm is already inert when nothing is connected, and a second copy of the
+  // gate in this menu is the drift ComposerActionsMenu's header refuses.
+  const startNewSession = (): void => {
+    sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
+  }
+
   // #940: the slash-command type-ahead over the message box. It reads the composer's own `text` and
   // writes a completion back through `setText` — no store write, no second send path, and `sendText`
   // above is untouched. Its container owns the panel's element and the two refs the markup attaches.
@@ -3171,7 +3187,11 @@ function Composer({
           no conversation and no file — the picker, the path and the bytes all stay in the background
           process. */}
       <div className="composer__footer">
-        <ComposerActionsMenu conversationId={activeConversationId} onCommand={sendText} />
+        <ComposerActionsMenu
+          conversationId={activeConversationId}
+          onCommand={sendText}
+          onNewSession={startNewSession}
+        />
         <ComposerPermissionModeMenu conversationId={activeConversationId} />
         <ComposerModelMenu conversationId={activeConversationId} />
         <ComposerEffortMenu conversationId={activeConversationId} />

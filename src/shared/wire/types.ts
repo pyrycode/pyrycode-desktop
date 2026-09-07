@@ -1033,11 +1033,25 @@ export interface ToolResultPayload {
  * content, relayed by a content-blind relay — carried as opaque display text, decoded but never
  * interpreted; the eventual render slice (#294) must render it as plain text, never HTML. `ts` is the
  * enqueue time (RFC3339), a plain wire string the decoder requires but does not parse. See #292.
+ *
+ * #1213 / pyrycode#2092: `message_id` names the `send_message` that produced this item — the id the
+ * ORIGINATING CLIENT minted, relayed byte-for-byte and never authored by the daemon. It is the correlation
+ * key between a queued row and the sending window's own optimistic timeline echo, which is what lets a drop
+ * take both out. OPTIONAL on this type even though the daemon ships it non-`omitempty`, because that is the
+ * DAEMON's struct: a pre-#2092 daemon's snapshot must still decode rather than failing the whole backlog
+ * closed. So absence is a VALUE here — the `result_detail` / `last_seen_ts` posture — and so is `''`; both
+ * mean "correlates with nothing", and a drop keyed on either removes no echo rather than the wrong one.
+ *
+ * UNTRUSTED on exactly the terms `text` is, and for the same reason: it arrives from another client through
+ * a content-blind relay. It is read for strict string EQUALITY only — never a lookup path, a cache key, a
+ * filename, a URL, a Map key or a React key (the row key is `queued_msg_id`) — and it is never rendered and
+ * never logged. A consumer needing any of those mints its own key rather than widening this one.
  */
 export interface QueuedItem {
   queued_msg_id: number
   text: string
   ts: string
+  message_id?: string
 }
 
 /**

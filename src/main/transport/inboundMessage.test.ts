@@ -3533,6 +3533,61 @@ describe('parseInboundMessage — queue_state recognition (#292, additive)', () 
   })
 })
 
+// #1213: pyrycode#2092 added `message_id` to every queue_state item — the id from the `send_message` that
+// produced it, relayed byte-for-byte and never authored by the daemon. It is the correlation key that lets
+// a drop take the message's timeline echo out too.
+describe('parseInboundMessage — queue_state message_id (#1213)', () => {
+  const item = (extra: Record<string, unknown>): unknown => ({
+    conversation_id: 'conv-1',
+    queued: [{ queued_msg_id: 1, text: 'x', ts: 't', ...extra }]
+  })
+  const decodedItem = (payload: unknown): Record<string, unknown> => {
+    const result = parseInboundMessage(encodeQueueState(payload))
+    if (result === null || result.kind !== 'queue-state') throw new Error('expected a queue-state')
+    return result.queueState.queued[0] as unknown as Record<string, unknown>
+  }
+
+  it('relays the id VERBATIM — not trimmed, not re-cased, never minted client-side (AC1)', () => {
+    // A value that would differ under every transformation a helpful decoder might apply.
+    const wire = '  Mixed-Case-ID_7  '
+    expect(decodedItem(item({ message_id: wire })).message_id).toBe(wire)
+  })
+
+  it('decodes a snapshot from a daemon that sends no message_id, rather than failing it closed (AC1)', () => {
+    // The pre-pyrycode#2092 daemon. Absence is a VALUE, not a decode error — the `result_detail` /
+    // `last_seen_ts` posture — so the whole backlog still arrives.
+    const decoded = decodedItem(item({}))
+    expect(decoded.message_id).toBeUndefined()
+    expect(decoded).toEqual({ queued_msg_id: 1, text: 'x', ts: 't' })
+  })
+
+  it('carries an EMPTY id through as the empty string — a value that correlates with nothing (AC1)', () => {
+    expect(decodedItem(item({ message_id: '' })).message_id).toBe('')
+  })
+
+  it('fails the whole snapshot closed when message_id arrives as a non-string', () => {
+    for (const bad of [7, null, {}, ['a'], true]) {
+      expect(() => parseInboundMessage(encodeQueueState(item({ message_id: bad })))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('carries a distinct id per item, in enqueue order', () => {
+    const result = parseInboundMessage(
+      encodeQueueState({
+        conversation_id: 'conv-1',
+        queued: [
+          { queued_msg_id: 1, text: 'a', ts: 't', message_id: 'm-1' },
+          { queued_msg_id: 2, text: 'b', ts: 't', message_id: 'm-2' }
+        ]
+      })
+    )
+    if (result === null || result.kind !== 'queue-state') throw new Error('expected a queue-state')
+    expect(result.queueState.queued.map((q) => q.message_id)).toEqual(['m-1', 'm-2'])
+  })
+})
+
 describe('parseInboundMessage — queue_state fail-closed (#292, AC4)', () => {
   it('throws when a queue_state payload is not an object', () => {
     expect(() => parseInboundMessage(encodeQueueState('nope'))).toThrow(WireDecodeError)

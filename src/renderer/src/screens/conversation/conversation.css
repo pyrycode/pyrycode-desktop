@@ -168,15 +168,47 @@
    at the bottom lands 172px short and a scrolled-up reader's rows shift 172px under them, both measured.
    `thread-scroll-pin.spec.ts`'s last two tests are the detector and were shown failing with exactly this
    line in place. #601's original ruling that `overflow-anchor` was indifferent held only for the cases it
-   tested, which were all screen renders; it is not indifferent here. */
+   tested, which were all screen renders; it is not indifferent here.
+
+   #1074 HID THE SCROLLBAR, AND `overflow-y: auto` IS WHY THAT IS A PAINT CHANGE ONLY. The design draws no
+   bar: "Message area" (132:4171) is 780 wide inside a 820 `Content` frame with 20px insets, so the column
+   runs the full inner width with no strip reserved on the right, and the frame holds no scrollbar layer at
+   any depth even though it stacks 1026px of message containers. Hiding it takes nothing away — the wheel,
+   the trackpad and the four scroll keys all still reach this region, the last of them through Chromium's
+   sequential-focus starting point after a click inside the thread, which is why NO `tabindex` is declared
+   here (adding one would make the keys work without the click and reorder tab focus with it). `overflow:
+   hidden` would have killed all four and is not what this is. Both legs are driven in
+   `thread-scrollbar.spec.ts`, whose keyboard test was shown passing BEFORE the two lines below landed —
+   that test is a nothing-broke gate, and it is what reddens if either declaration ever becomes `hidden`.
+
+   `scrollbar-width: none` IS THE OPERATIVE DECLARATION on this engine, and the rule under it is inert.
+   Electron 33 is Chromium 130, where `scrollbar-width` is honoured and, once set, the `::-webkit-scrollbar`
+   pseudo-element is not consulted at all. The webkit rule is kept as a fallback for an engine that lacks
+   the standard property; do not read it as the live one, and do not expect an edit to it to change
+   anything here. It is written as a SEPARATE TOP-LEVEL rule rather than a nested `&::-webkit-scrollbar`
+   because there is no CSS nesting anywhere in this repo's nine stylesheets.
+
+   The detector is a COMPUTED read of `scrollbar-width`, never geometry: `offsetWidth - clientWidth === 0`
+   passes with both declarations deleted on any machine drawing overlay bars, and the overlay case cannot be
+   assumed away either — `.composer__input`'s own note records THIS app measured with a layout-taking bar
+   (clientWidth 616 -> 601). Reading `.channel-list` and `.composer__input` back as `auto` in the same run
+   is what proves the read discriminates, and is the same assertion that pins them as untouched: the
+   composer textarea's bar past five lines is a deliberate signal (#1056), not an oversight. */
 .conversation__thread {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
+}
+
+/* The inert fallback for the rule above — see its comment. `scrollbar-width: none` is what hides the bar on
+   Chromium 130; this exists for an engine that does not honour that property. */
+.conversation__thread::-webkit-scrollbar {
+  display: none;
 }
 
 /* #277 — the pre-first-message empty-thread state, shown in place of the thread scroll region while a

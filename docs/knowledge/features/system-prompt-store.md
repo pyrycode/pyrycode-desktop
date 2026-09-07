@@ -173,15 +173,17 @@ at both declaration sites. See [Run configuration store § Scoped to the open ch
 \#1167](run-config-store.md#scoped-to-the-open-chat-since-1167) and [Paired shell — conversation exits
 and stamps § The run-configuration
 clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167)
-for the shared member's placement rules, now covering three stores.
+for the shared member's placement rules, now covering four stores since #1250 added a fourth arrow for
+[System prompt write](system-prompt-write.md)'s window-side write store.
 
-Of the three stores this member clears, this one is the worst to leave standing and the slowest to
-self-heal: `runConfigStore`'s snapshot self-heals in one round trip (the ask fires again, #1176
-refuses a reply naming another chat); `runSettingsWriteStore`'s pending/confirmed state never heals on
-its own at all (a `set_session_settings` ack carries no snapshot). This store sits in between —
-nothing pushes a correction unsolicited, so it re-asserts only on the next activation — but its
-staleness is the sharpest of the three once #1078 lands: a stale prompt shown against another chat's
-thread would be offered for *edit*, not merely displayed.
+Of the four stores this member clears, this one is the worst to leave standing and the slowest to
+self-heal among the two that heal at all: `runConfigStore`'s snapshot self-heals in one round trip (the
+ask fires again, #1176 refuses a reply naming another chat); `runSettingsWriteStore`'s and #1250's
+`systemPromptWriteStore`'s outcome state never heal on their own (a `set_session_settings` ack carries
+no snapshot, and a `set_system_prompt` ack carries no prompt). This store sits in between — nothing
+pushes a correction unsolicited, so it re-asserts only on the next activation — but its staleness is
+the sharpest of the four once #1078 lands: a stale prompt shown against another chat's thread would be
+offered for *edit*, not merely displayed.
 
 **Deliberately not joined to `clearPairingScopedState`.** That helper's own discriminator is whether a
 store re-asserts itself; this one does, on the next activation — the only path that can reach a
@@ -190,7 +192,7 @@ conversation again — so a member there would guard state nothing can read.
 ## Data flow
 
 ```
-activateConversation (id changed) → clearRunConfig()  [inside the gate — runConfigStore, runSettingsWriteStore, systemPromptStore]
+activateConversation (id changed) → clearRunConfig()  [inside the gate — runConfigStore, runSettingsWriteStore, systemPromptStore, systemPromptWriteStore]
                                   → requestConversationConfig(id)  [outside the gate, last]
                                      → requestSystemPrompt(sendCommand, id)  [falsy id ⇒ nothing sent]
 
@@ -263,3 +265,8 @@ string crosses on either field.
 - **[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)** — the editor surface; the
   first and only planned reader of `selectSystemPromptReading`, and the owner of the render/escape/
   length-bound discipline this store's header states but does not itself enforce.
+- [System prompt write](system-prompt-write.md) — the write leg (#1249) and its window-side store
+  (#1250, `systemPromptWriteStore`): a fourth arrow on the same `clearRunConfig` seam, answering "did my
+  save land" rather than "what does this conversation hold." Its `reading === null` argument for keeping
+  the not-yet-loaded state distinct from every daemon answer is the one piece of this store's design that
+  transfers to the write store's own held-`confirmed`-status argument.

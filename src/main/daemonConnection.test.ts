@@ -5903,6 +5903,48 @@ describe('createDaemonConnection — requestModelList (on-demand model vocabular
   })
 })
 
+describe('createDaemonConnection — newSession (kill-and-respawn claude in one conversation, #1217)', () => {
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.newSession('conv-42')).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends exactly one new_session frame carrying the conversation id it was handed (AC4)', async () => {
+    const ctx = await connected()
+
+    ctx.connection.newSession('conv-42')
+
+    const sent = ctx.drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const frames = sent.filter((e) => e.type === 'new_session')
+    // Exactly one, and no reply is awaited: the frame is fire-and-forget, so a second frame would be
+    // a second restart rather than a retry of the first.
+    expect(frames).toHaveLength(1)
+    // Exact toEqual against a value distinct from every other string on the envelope: forwarding the
+    // wrong field cannot pass, and any nonce or correlation key would add a key and fail the match.
+    expect(frames[0].payload).toEqual({ conversation_id: 'conv-42' })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.newSession('c1')
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+})
+
 describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
   const RUN_CONFIG = {
     session_id: 'sess-a',

@@ -359,3 +359,33 @@ Fakes, not mocks, at the transport boundary — the existing driver fake in `dae
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-07
+
+## Revisions
+
+### 2026-09-07 — Phase B, open questions resolved
+
+No design change; recorded so the four questions are visibly answered rather than dropped.
+
+1. **Command payload type's home** — settled as planned: `NewSessionCommandPayload` lives in
+   `commands.ts` beside `AnswerModalCommandPayload`, since it is an IPC-boundary shape derived from
+   the wire type rather than something the daemon publishes.
+2. **`'new_session'` placement in `EnvelopeType`** — sited immediately after `'interrupt'`, the
+   neighbour it shares a daemon-side character with: both are intercepted by the v2 session manager
+   before `dispatch.Route`, both are `interactive`-gated, both are fire-and-forget. The comment says
+   so, so the grouping does not read as alphabetical accident.
+3. **A second enumeration of the connection interface's members** — there is none. `npm run build`
+   forced exactly the two the plan predicted: `viewOf` in `connectionRegistry.ts` (plus its member
+   count, 23 → 24) and the fake in `connectionRegistry.test.ts`. Nothing in `daemonConnection.test.ts`
+   enumerates members.
+4. **`Required<NewSessionPayload>`** — yields `{ conversation_id: string }` under this repo's
+   tsconfig, so the fallback to a hand-written interface was not needed. Proven rather than assumed:
+   the guard test's second `@ts-expect-error` sits on `{ type: 'newSession', payload: {} }`, and an
+   unused directive is itself a TS2578 — so `npm run build` passing is the evidence that the empty
+   payload really does fail to typecheck.
+
+**One departure from § Testing strategy, test-shape only.** That section said the registry test would
+extend the existing member-fake with `newSession: noop`. It records the conversation ids in a new
+`newSessions` array beside `calls` instead: two shipped tests assert `calls` as a whole object with
+`toEqual`, so a member added inside it reddens assertions about lifecycle counting, which this
+delegate is not about — and a counter would not catch the failure that matters here, a delegate that
+resolves the right connection but drops the argument.

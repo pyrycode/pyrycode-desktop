@@ -44,6 +44,7 @@ import type {
   QueuedItem,
   QueueStatePayload,
   DequeueMessagePayload,
+  NewSessionPayload,
   AttachmentChunkPayload,
   AttachmentStoredPayload,
   RequestAttachmentPayload,
@@ -1987,5 +1988,35 @@ describe('model-list wire vocabulary (#971)', () => {
     expect(missingConversation.dropped_models).toBe(0)
     expect(missingModels.conversation_id).toBe('c1')
     expect(missingDropped.conversation_id).toBe('c1')
+  })
+})
+
+describe('new-session wire vocabulary (#1217)', () => {
+  it('admits the new_session outbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const newSession: EnvelopeType = 'new_session'
+    expect(newSession).toBe('new_session')
+  })
+
+  it('shapes NewSessionPayload as a lone conversation_id and nothing else', () => {
+    // Mirrors the daemon SSOT (pyrycode#2099, docs/protocol-mobile.md § New session (v2)): ONE field.
+    // No nonce, no idempotency key and no correlation key — the frame is fire-and-forget with no
+    // reply, and a replay simply starts another fresh session, which the daemon documents as harmless.
+    const payload: NewSessionPayload = { conversation_id: 'conv-1' }
+    expect(payload).toEqual({ conversation_id: 'conv-1' })
+    expect(Object.keys(payload)).toEqual(['conversation_id'])
+  })
+
+  it('keeps conversation_id OPTIONAL — the no-drift pin against tightening it to match the guard', () => {
+    // The wire type mirrors the DAEMON, which publishes the field as optional because a bare frame is
+    // a compatibility promise: no payload, `{}`, an absent id and an explicitly empty one are one wire
+    // meaning (the process-wide follow-active cursor), so an un-upgraded client keeps working.
+    //
+    // This app never sends that form — its command payload is a `Required` derivative and its boundary
+    // guard refuses `''` — but the fix for that asymmetry is NEVER to tighten this interface. Doing so
+    // would be a wire drift against the mobile/daemon contract (CLAUDE.md no-drift), and this line is
+    // what reddens if someone tries: a required field makes the empty literal a TS2741.
+    const bare: NewSessionPayload = {}
+    expect(bare.conversation_id).toBeUndefined()
   })
 })

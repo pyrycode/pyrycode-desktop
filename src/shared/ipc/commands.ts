@@ -30,6 +30,7 @@ import type {
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
   RequestModelListPayload,
+  NewSessionPayload,
   DequeueMessagePayload,
   QuestionAnswerPayload,
   QuestionRefusedPayload
@@ -44,6 +45,25 @@ import type {
  * main-side composer.
  */
 export type AnswerModalCommandPayload = Omit<ModalAnswerPayload, 'answer_token'>
+
+/**
+ * The `newSession` command's payload (#1217) — the wire `NewSessionPayload` with its lone
+ * `conversation_id` made REQUIRED.
+ *
+ * A DERIVATIVE, and the mirror image of `AnswerModalCommandPayload`'s `Omit` above: the same "derive
+ * the command payload from the wire type so the two cannot drift" idiom, tightening a field instead of
+ * excluding one. A hand-written twin would compile identically today and silently stop tracking the
+ * wire type the day it gains a second field.
+ *
+ * IT IS TIGHTER THAN THE WIRE TYPE ON PURPOSE, and neither side is the one to "fix". The wire type
+ * mirrors the daemon, which publishes the field as optional because the absent form is a compatibility
+ * promise for clients written before pyrycode#2099 — and that form means the daemon's process-wide
+ * follow-active cursor, not "this conversation". This app always holds an id, and the protocol's own
+ * rule is that a client which CAN name a conversation must always name one, so the bare form is not
+ * something a sender here should be able to construct. `Required` makes it a compile error rather than
+ * a convention, and `isNewSessionPayload` refuses the runtime equivalent (`''`) at the boundary.
+ */
+export type NewSessionCommandPayload = Required<NewSessionPayload>
 
 /**
  * The fields the renderer supplies to resolve an outstanding question batch with the operator's
@@ -162,6 +182,14 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * neighbour above: that verb answers an unnamed request with a zero-valued reply, so a bare send there
  * was silently useless rather than impossible; here an unnamed request has nothing to ask about at all.
  * It has NO renderer sender in the slice that declares it — #1166 adds the trigger.
+ * And `newSession` (#1217), which asks the daemon to KILL claude and spawn a fresh one in the
+ * conversation it names — not the `/clear` the Actions menu's Reset session already sends as ordinary
+ * message text, which clears context in place and keeps the process. It is the only member whose
+ * payload type TIGHTENS its wire type rather than reusing or Omit-ing it (NewSessionCommandPayload =
+ * `Required<NewSessionPayload>`): the daemon publishes `conversation_id` as optional because the
+ * absent form is a pre-#2099 compatibility promise meaning "the daemon's process-wide follow-active
+ * cursor", and a client that can name a conversation must always name one. It has NO renderer sender
+ * in the slice that declares it — the sibling adds the trigger.
  * No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
@@ -211,6 +239,7 @@ export type RendererCommand =
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt'; serverId?: string }
+  | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'notify'; payload: NotifyPayload }
 
 /**
@@ -279,6 +308,26 @@ export function refuseQuestionsCommand(fields: RefuseQuestionsCommandPayload): R
  */
 export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCommand {
   return { type: 'dequeueMessage', payload: fields }
+}
+
+/**
+ * Wrap the conversation to restart into a well-formed `newSession` command (#1217) — asks the
+ * background process to have the daemon kill claude and spawn a fresh one there. Pure; there is no
+ * token to mint, because the frame carries none at all (no nonce, no answer token, no correlation
+ * key), so — like dequeueMessageCommand and unlike answerModalCommand — the payload type is the
+ * wire-derived one directly.
+ *
+ * It takes the payload rather than a bare `conversationId` scalar, matching every other
+ * payload-bearing constructor in this file; the scalar unwrap happens main-side, at the dispatch arm,
+ * where one local is read twice so the id routed by and the id sent cannot be two expressions.
+ *
+ * `NewSessionCommandPayload` is what stops a caller naming nothing: the wire type's optional id is
+ * `Required` here, so a restart with no conversation is a compile error rather than a frame that
+ * quietly restarts whichever conversation the daemon's cursor last pointed at. Its caller is the
+ * render affordance in the sibling ticket.
+ */
+export function newSessionCommand(fields: NewSessionCommandPayload): RendererCommand {
+  return { type: 'newSession', payload: fields }
 }
 
 /**
@@ -377,6 +426,12 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'interrupt':
       // Bare member (#306): no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)
+    case 'newSession':
+      // The requestModelList arm's shape (#1217) — a required payload, refused BY isNewSessionPayload
+      // rather than by the `in` check, for the reason that arm records. NO serverId arm: the
+      // conversation id already selects the connection, so a second addressing scheme would be a way
+      // for the two to disagree.
+      return 'payload' in value && isNewSessionPayload(value.payload)
     case 'notify':
       return 'payload' in value && isNotifyPayload(value.payload)
     default:
@@ -736,6 +791,41 @@ function isRequestSessionSettingsPayload(value: unknown): value is RequestSessio
 function isRequestModelListPayload(value: unknown): value is RequestModelListPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the newSession payload (#1217). The
+ *  `isRequestModelListPayload` guard above with one clause added — and that clause is the
+ *  security-relevant line of the slice, so read the divergence before "aligning" this with its
+ *  siblings.
+ *
+ *  THIS ONE CHECKS EMPTINESS, WHERE EVERY SIBLING DELIBERATELY DOES NOT. For them `''` is merely an id
+ *  the daemon cannot resolve — a `conversation.not_found` error or a zero-valued reply, harmless
+ *  either way, and policing it client-side would be a second bound to keep in agreement with the
+ *  daemon's. On `new_session` an empty id is not an unresolvable id: the protocol makes no payload,
+ *  `{}`, an absent id and an explicitly empty one ONE wire meaning — restart whichever conversation
+ *  the daemon's process-wide follow-active cursor points at, a cursor only a routed `send_message`
+ *  stamps and every connection shares. So a sender that read an id from a not-yet-loaded slice and
+ *  passed `''` would kill a DIFFERENT conversation's claude, mid-work: the cross-conversation misfire
+ *  pyrycode#2099 exists to close. Nothing else in this repo reddens on a relaxed clause — the frame
+ *  compiles, typechecks and is silently accepted — which is why the refusal is stated here, at the
+ *  untrusted boundary, and not left to `conversationRouter`, whose index happens to skip empty ids but
+ *  whose contract is routing rather than payload validity.
+ *
+ *  A missing key, a literal `null`, an explicitly-undefined payload and a non-string are all rejected
+ *  as in the siblings; a missing key for a STRONGER reason, since absent is the bare form here too.
+ *  The value is client-owned (this app's own conversation state, not network input) and reaches
+ *  exactly two sinks past here: `conversationRouter.route`, a read-only `Map` lookup against an index
+ *  built from the daemon's own conversation lists, and `buildNewSession`, which rebuilds a fresh
+ *  literal — never a log line, path, attribute, or cache key. Structural minimum: an extra field is
+ *  not rejected here, and cannot reach the wire because that rebuild bounds the frame to the one id.
+ *  Pure; never throws. */
+function isNewSessionPayload(value: unknown): value is NewSessionCommandPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    value.conversation_id.length > 0
+  )
 }
 
 function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload {

@@ -76,6 +76,13 @@ interface BuiltConnection {
   serverId: string | null
   pairedServer: PairedServerStore
   calls: { start: number; stop: number; reconnect: number; interrupt: number }
+  /**
+   * The conversation ids this connection's `newSession` was handed (#1217), recorded BESIDE `calls`
+   * rather than inside it. Two tests assert `calls` as a whole object, so a member added there is a
+   * cascade into assertions about lifecycle counting — which this is not about — and this one needs
+   * the argument, not a count: the delegate that dropped it would still count right.
+   */
+  newSessions: string[]
 }
 
 /** Records every construction and every lifecycle call, so a test can assert which one was touched. */
@@ -86,7 +93,8 @@ function createFactoryFake() {
     pairedServer: PairedServerStore
   }): DaemonConnection => {
     const calls = { start: 0, stop: 0, reconnect: 0, interrupt: 0 }
-    built.push({ serverId: spec.serverId, pairedServer: spec.pairedServer, calls })
+    const newSessions: string[] = []
+    built.push({ serverId: spec.serverId, pairedServer: spec.pairedServer, calls, newSessions })
     const noop = (): void => {}
     return {
       start: () => {
@@ -100,6 +108,9 @@ function createFactoryFake() {
       },
       interrupt: () => {
         calls.interrupt += 1
+      },
+      newSession: (conversationId: string) => {
+        newSessions.push(conversationId)
       },
       send: noop,
       requestSessionSettings: noop,
@@ -429,6 +440,19 @@ describe('createConnectionRegistry', () => {
 
       expect(factory.for('alpha').calls.interrupt).toBe(1)
       expect(factory.for('beta').calls.interrupt).toBe(0)
+    })
+
+    it('forwards newSession to the named server with the conversation id verbatim (#1217)', async () => {
+      // The `viewOf` delegate is one line, but it is the line that decides WHICH daemon kills a
+      // claude process. A view that resolved the wrong entry, or dropped the argument, would restart
+      // someone else's conversation silently — the frame is fire-and-forget with no reply to notice.
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+
+      registry.connectionFor('alpha')?.newSession('conv-1')
+
+      expect(factory.for('alpha').newSessions).toEqual(['conv-1'])
+      expect(factory.for('beta').newSessions).toEqual([])
     })
 
     it('answers null for an unheld server, and for every id when nothing is paired', async () => {

@@ -9,7 +9,9 @@ import {
   refuseQuestionsCommand,
   dequeueMessageCommand,
   interruptCommand,
+  newSessionCommand,
   type RendererCommand,
+  type NewSessionCommandPayload,
   type AnswerModalCommandPayload,
   type AnswerQuestionsCommandPayload,
   type RefuseQuestionsCommandPayload,
@@ -404,6 +406,81 @@ describe('isRendererCommand', () => {
     }
     expect(isRendererCommand(bare)).toBe(false)
     expect(isRendererCommand(named)).toBe(true)
+  })
+
+  it('accepts a newSession naming a conversation (#1217)', () => {
+    // The requestModelList arm's shape with the verb changed — except for emptiness, below.
+    expect(isRendererCommand({ type: 'newSession', payload: { conversation_id: 'conv-1' } })).toBe(
+      true
+    )
+    // A structurally extra field is harmless; buildNewSession's fresh literal is what bounds the wire.
+    expect(
+      isRendererCommand({
+        type: 'newSession',
+        payload: { conversation_id: 'conv-1', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a newSession naming the empty conversation — the one guard that checks EMPTINESS (#1217)', () => {
+    // THE SECURITY-RELEVANT LINE OF THE SLICE, and the one place this guard diverges from every
+    // sibling above. They check type and not emptiness deliberately, because for them `''` is merely
+    // an id the daemon cannot resolve — an `error` frame or a zero-valued reply, harmless either way.
+    //
+    // On `new_session` it is not an unresolvable id, it is THE BARE FORM: the protocol makes no
+    // payload, `{}`, an absent id and an explicitly empty one one wire meaning — restart whatever the
+    // daemon's process-wide follow-active cursor points at, which only a routed send_message stamps
+    // and which every connection shares. So a renderer that read an id from a not-yet-loaded slice
+    // and sent `''` would kill a DIFFERENT conversation's claude, mid-work. That is exactly the
+    // cross-conversation misfire pyrycode#2099 exists to close.
+    //
+    // Deleting the `.length > 0` clause reddens this line and nothing else in the repo. Do not
+    // "align" it with the siblings.
+    expect(isRendererCommand({ type: 'newSession', payload: { conversation_id: '' } })).toBe(false)
+  })
+
+  it('rejects newSession with no payload, or an explicitly undefined one (#1217)', () => {
+    // The explicitly-undefined arm is rejected BY VALUE, not by `'payload' in value`: structured
+    // clone PRESERVES an explicitly-undefined property across the IPC bridge, so the `in` check alone
+    // would pass it straight through — isNewSessionPayload is what refuses it.
+    expect(isRendererCommand({ type: 'newSession' })).toBe(false)
+    expect(isRendererCommand({ type: 'newSession', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'newSession', extra: 'ignored' })).toBe(false)
+  })
+
+  it('rejects a newSession whose payload is present but not a conversation id (#1217)', () => {
+    // A present payload must be a well-formed one — a non-string id, a missing key, and a literal
+    // null are all type lies that would otherwise reach encodeEnvelope's bare JSON.stringify. A
+    // missing key is refused here for a STRONGER reason than in the siblings: absent is the bare form.
+    expect(isRendererCommand({ type: 'newSession', payload: { conversation_id: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: 'newSession', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'newSession', payload: null })).toBe(false)
+  })
+
+  it('types newSession as payload-REQUIRED with a REQUIRED id — neither bare form compiles (#1217)', () => {
+    // Compile-time half of AC3, and the half the runtime guard cannot prove. Two directives, because
+    // there are two ways to reach the bare wire form and the command type must refuse both: no
+    // payload at all, and a payload whose id is absent. The second is what makes
+    // NewSessionCommandPayload a `Required` derivative rather than the wire type reused verbatim —
+    // relax it back to `NewSessionPayload` and the second directive becomes an unused TS2578.
+    // (Do not open a prose line with the directive's own name: a comment whose first token is
+    // `@ts-expect-error` IS a directive, wherever it sits, and it will suppress the next line.)
+    // @ts-expect-error payload is required — a restart with no conversation named is the bare form
+    const bare: RendererCommand = { type: 'newSession' }
+    // @ts-expect-error conversation_id is required on the COMMAND payload, optional only on the wire
+    const unnamed: RendererCommand = { type: 'newSession', payload: {} }
+    const named: RendererCommand = { type: 'newSession', payload: { conversation_id: 'conv-1' } }
+
+    expect(isRendererCommand(bare)).toBe(false)
+    expect(isRendererCommand(unnamed)).toBe(false)
+    expect(isRendererCommand(named)).toBe(true)
+  })
+
+  it('newSessionCommand wraps a conversation id into a well-formed member (#1217)', () => {
+    const fields: NewSessionCommandPayload = { conversation_id: 'conv-1' }
+
+    expect(newSessionCommand(fields)).toEqual({ type: 'newSession', payload: fields })
+    expect(isRendererCommand(newSessionCommand(fields))).toBe(true)
   })
 
   it('accepts the bare requestRecentWorkspaces command (no payload — the request carries nothing) (#380)', () => {

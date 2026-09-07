@@ -276,21 +276,38 @@ export interface ConversationLastReadState {
  *  precedents' posture). There is deliberately NO generic `write(id, key, value)`, which would
  *  reintroduce a stringly-typed key beside the one hostile string this store exists to contain.
  *
- *  ONE clear, added at #779 and mirroring the family (#747 shipped the holder, #749 added its eviction
- *  paths): `clearAllLastRead`, the pairing boundary. `clearAll…` rather than `clearLastRead`, matching
- *  `clearAllTimelines` (conversationTimelineStore.ts:156) and `clearAllActivity` — the `All` prefix puts
- *  the blast radius at the CALL SITE rather than only in a docstring. There is deliberately no
- *  `clearLastReadFor(id)` beside it: the twin's per-conversation clear exists because a deleted
- *  conversation invalidates its own thread, whereas a mark for a conversation that no longer exists is
- *  inert — nothing reads it — so a second clear would ship an unused write path.
+ *  TWO clears, one per pairing boundary, and they are separate write paths on purpose (see the nullary
+ *  paragraph below). `clearAllLastRead` (#779) answers "the pairing ENDED" and empties the map;
+ *  `clearLastReadFor` (#1197) answers "ONE of several paired machines is gone" and drops only that
+ *  machine's conversations, because the marks of a machine the operator is still on are exactly what must
+ *  survive. `clearAll…` rather than `clearLastRead`, matching `clearAllTimelines` and `clearAllActivity`
+ *  — the `All` prefix puts the blast radius at the CALL SITE rather than only in a docstring, and the
+ *  scoped clear's parameter does the same job for the other one.
+ *
+ *  THE REFUSAL THIS PARAGRAPH USED TO CARRY IS RETIRED, and the reason is worth keeping so it is not
+ *  reinstated. It read: no `clearLastReadFor(id)` beside the whole-map clear, because a mark for a
+ *  conversation that no longer exists is INERT — nothing reads it — so a second clear would ship an
+ *  unused write path. That was written when the whole-app boundary was the only one, and it does not hold
+ *  on the per-server path: since #776 a departed mark is not inert, it is PERSISTED under a fixed key and
+ *  survives not only the unpair but the restart after it, which is the exact residue #779 exists to
+ *  prevent. What DOES survive of it is the shape argument — this is not a per-id clear. It takes the SET,
+ *  because the whole map is persisted under one fixed key and a per-id clear called in a loop would fire
+ *  one synchronous write per departed conversation.
  *
  *  NULLARY IS A SECURITY PROPERTY, not a signature detail — the same one conversationTimelineStore.ts:141-143
  *  spells out for its own boundary clear. Taking no `conversationId` means no daemon-asserted id can steer
  *  which marks survive the pairing boundary, and `tsc` enforces that rather than a test. An optional id
- *  parameter would re-open exactly that. */
+ *  parameter would re-open exactly that. #1197 KEEPS that property rather than spending it: it adds a
+ *  SEPARATE path instead of a parameter on this one, so `clearAllLastRead` stays nullary and `tsc` goes
+ *  on enforcing the whole-app boundary's guarantee. The ids reaching the scoped path are the DEPARTING
+ *  daemon's own claim, so the property it needs is a different one and is enforced at its single call
+ *  site: `serverScopedClearDeps` binds them to `selectExclusiveConversationIdsFor`, so a confused or
+ *  hostile daemon naming another machine's conversations is filtered to a no-op rather than destroying a
+ *  still-paired machine's marks. */
 export type ConversationLastReadStore = ConversationLastReadState & {
   recordLastRead: (conversationId: string, itemsSeen: LastReadMark) => void
   clearAllLastRead: () => void
+  clearLastReadFor: (conversationIds: ReadonlySet<string>) => void
 }
 
 /** The named empty baseline. Its role NARROWED at #776 from "the factory's default" to just this: the
@@ -400,6 +417,44 @@ export function createConversationLastReadStore(
         if (s.marks.size === 0) return s
         storage.write(initialConversationLastReadState.marks)
         return initialConversationLastReadState
+      }),
+    // The PER-SERVER boundary (#1197) — the scoped counterweight to #779's whole-app one, for the case
+    // where the pairing does not fully end. Built the same way: guard, persist and return are ONE
+    // expression inside the updater, so no later edit can hoist the write above the guard without
+    // deleting the guard. Three things here are invisible to `tsc` and each has a named test:
+    //
+    //   - THE GUARD ASKS "DID ANYTHING ACTUALLY LEAVE?", never "is the incoming set empty?". A non-empty
+    //     set can name nothing this store holds, and that is the COMMON case rather than an edge one: a
+    //     departed server's conversations need never have been opened, so none of them holds a mark.
+    //     Comparing `next.size` against `s.marks.size` is exactly that question — deletions only shrink
+    //     the map and nothing is added on this path, so an unchanged size means no held mark left. A
+    //     `conversationIds.size === 0` guard compiles clean, reads back identically, and fires a
+    //     redundant synchronous `localStorage.setItem` on every unpair of a server whose chats were
+    //     never opened. (The reference guard `clearAllLastRead` warns against is wrong here for a second
+    //     reason on top of that one: `next` is a fresh map on every call.)
+    //   - ONE WRITE SERVES THE WHOLE SET, which is why this takes a set rather than shipping a per-id
+    //     clear for a caller to loop. The whole map lives under one fixed key, so the loop would fire
+    //     one synchronous write per departed conversation for a single logical drop.
+    //   - THE DROPPED ARM RETURNS A FRESH `{ marks: next }`, not the named baseline. The whole-app clear
+    //     hands back `initialConversationLastReadState` for a stable reference across repeated clears;
+    //     a scoped drop's result is a SURVIVING map, so there is no shared constant to name, and the
+    //     drop-everything case needs no special arm — a repeat of the same ids finds nothing to remove
+    //     and returns `s` through the ordinary guard.
+    //
+    // `ReadonlySet<string>`, never `Iterable<string>` or `readonly string[]`: a bare `string` satisfies
+    // `Iterable<string>`, so a caller passing ONE id instead of a set of them would compile clean and
+    // clear one key per CHARACTER. It is also the shape the one producer already holds.
+    //
+    // `Map.prototype.delete` performs no prototype-chain lookup, so `__proto__`, `constructor` and `''`
+    // drop as three unremarkable entries — the construction the header rests on, and the reason this
+    // stays a `Map` operation rather than any object-shaped rewrite.
+    clearLastReadFor: (conversationIds) =>
+      set((s) => {
+        const next = new Map(s.marks)
+        for (const conversationId of conversationIds) next.delete(conversationId)
+        if (next.size === s.marks.size) return s
+        storage.write(next)
+        return { marks: next }
       })
   }))
 }

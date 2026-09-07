@@ -541,6 +541,220 @@ describe('conversationLastReadStore pairing-boundary clear (#779)', () => {
   })
 })
 
+describe('conversationLastReadStore per-server clear (#1197)', () => {
+  // The scoped counterweight, for the boundary the pairing does NOT fully end at: forgetting one of
+  // several paired machines must forget how far the operator had read into ITS chats and nothing else.
+  // Three properties here are invisible to `tsc` and break no assertion above, so each gets a named test:
+  //
+  //   - The guard answers "did anything actually LEAVE?", not "is the incoming set empty?". A non-empty
+  //     set naming nothing held is the common case — a departed server's conversations need never have
+  //     been opened — and `conversationIds.size === 0` passes it straight through to a redundant
+  //     synchronous `localStorage.setItem` on every such unpair.
+  //   - ONE write serves the whole set. The map is persisted under a single fixed key, so a per-id clear
+  //     called in a loop compiles clean, reads back identically, and fires one `setItem` per departed
+  //     conversation. Only a `write` CALL-COUNT assertion catches it.
+  //   - The set must be dropped from a `Map` CLONE. The identity assertion the object-holding precedents
+  //     use is degenerate over numbers, so what catches an in-place `s.marks.delete(id)` is the
+  //     previously held map still reading as it did.
+
+  it('drops the named ids and leaves every other mark exactly as held (AC1)', () => {
+    const store = createConversationLastReadStore(
+      fakeStorage(
+        new Map([
+          ['departed-1', 4],
+          ['departed-2', 9],
+          ['survivor', 7]
+        ])
+      )
+    )
+
+    store.getState().clearLastReadFor(new Set(['departed-1', 'departed-2']))
+
+    // Each departed id reads as NEVER READ again — `null`, not a `0` a real mark could also produce.
+    expect(lastReadFor(store, 'departed-1')).toBeNull()
+    expect(lastReadFor(store, 'departed-2')).toBeNull()
+    // Retaining this one is the whole point of the ticket: the operator is still on that machine.
+    expect(lastReadFor(store, 'survivor')).toBe(7)
+    expect(store.getState().marks.size).toBe(1)
+  })
+
+  it('the persisted value is the SURVIVING map — a relaunch cannot re-hydrate a departed mark (AC2)', () => {
+    const storage = fakeStorage(
+      new Map([
+        ['departed-1', 4],
+        ['survivor', 7]
+      ])
+    )
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearLastReadFor(new Set(['departed-1']))
+
+    // THE test of this ticket: a SECOND store over the same backend is the restart, and it is the only
+    // assertion that separates "dropped the in-memory slice" from "dropped what survives a launch".
+    const afterRestart = createConversationLastReadStore(storage)
+    expect(lastReadFor(afterRestart, 'departed-1')).toBeNull()
+    expect(lastReadFor(afterRestart, 'survivor')).toBe(7)
+    // The LAST thing written over the unpair, pinned at the port rather than at the state: the departed
+    // id must be absent from the bytes, not merely absent from the map that was handed back.
+    const persisted = storage.write.mock.calls.at(-1)?.[0]
+    expect(persisted?.has('departed-1')).toBe(false)
+    expect(persisted?.get('survivor')).toBe(7)
+  })
+
+  it('a multi-id drop performs exactly ONE persistence write (AC2)', () => {
+    const storage = fakeStorage(
+      new Map([
+        ['d1', 1],
+        ['d2', 2],
+        ['d3', 3],
+        ['survivor', 7]
+      ])
+    )
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearLastReadFor(new Set(['d1', 'd2', 'd3']))
+
+    // The set is taken WHOLE rather than a per-id clear called in a loop: three departed conversations
+    // are one write, not three.
+    expect(storage.write).toHaveBeenCalledTimes(1)
+    expect(storage.write.mock.calls[0][0].size).toBe(1)
+  })
+
+  it('a NON-EMPTY set naming nothing held writes nothing and churns no subscriber (AC3)', () => {
+    // The case a `conversationIds.size === 0` guard passes straight through, and the common one: a
+    // departed server's conversations need never have been opened, so none of them holds a mark.
+    const storage = fakeStorage(new Map([['survivor', 7]]))
+    const store = createConversationLastReadStore(storage)
+    const stateBefore = store.getState()
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    store.getState().clearLastReadFor(new Set(['never-read-1', 'never-read-2']))
+    unsubscribe()
+
+    expect(storage.write).not.toHaveBeenCalled()
+    // Returning the state OBJECT makes zustand's `Object.is` short-circuit fire — the construction
+    // `recordLastRead`'s verbatim-repeat arm and `clearAllLastRead`'s already-clear arm both rest on.
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+    expect(lastReadFor(store, 'survivor')).toBe(7)
+  })
+
+  it('an empty set takes the same guard rather than a special case (AC3)', () => {
+    const storage = fakeStorage(new Map([['survivor', 7]]))
+    const store = createConversationLastReadStore(storage)
+    const stateBefore = store.getState()
+
+    store.getState().clearLastReadFor(new Set())
+
+    expect(storage.write).not.toHaveBeenCalled()
+    expect(store.getState()).toBe(stateBefore)
+  })
+
+  it('a partly-matching set drops the held ids and lets the unheld names be inert (AC3)', () => {
+    const storage = fakeStorage(
+      new Map([
+        ['departed-1', 4],
+        ['survivor', 7]
+      ])
+    )
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearLastReadFor(new Set(['departed-1', 'departed-never-opened']))
+
+    // One held id left, so this DOES write — the guard is "did anything leave", and something did.
+    expect(storage.write).toHaveBeenCalledTimes(1)
+    expect(lastReadFor(store, 'departed-1')).toBeNull()
+    expect(lastReadFor(store, 'departed-never-opened')).toBeNull()
+    expect(lastReadFor(store, 'survivor')).toBe(7)
+  })
+
+  it('a SECOND drop of the same ids writes nothing further and rebuilds no state (AC3)', () => {
+    const storage = fakeStorage(new Map([['departed-1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearLastReadFor(new Set(['departed-1']))
+    const stateAfterFirst = store.getState()
+    store.getState().clearLastReadFor(new Set(['departed-1']))
+
+    expect(storage.write).toHaveBeenCalledTimes(1)
+    expect(store.getState()).toBe(stateAfterFirst)
+  })
+
+  it('the drop does not mutate the previously held map (AC1)', () => {
+    const store = createConversationLastReadStore(
+      fakeStorage(
+        new Map([
+          ['departed-1', 4],
+          ['survivor', 7]
+        ])
+      )
+    )
+    const marksBefore = store.getState().marks
+
+    store.getState().clearLastReadFor(new Set(['departed-1']))
+
+    // The load-bearing form for this store, since `Object.is(5, 5)` holds however the map was built:
+    // what catches an in-place `s.marks.delete(id)` is the previously held map still reading as it did.
+    expect(marksBefore.get('departed-1')).toBe(4)
+    expect(marksBefore.size).toBe(2)
+  })
+
+  it('the three hostile keys drop like any other entry (AC1)', () => {
+    const store = createConversationLastReadStore(
+      fakeStorage(new Map([...hostileKeys.map((key) => [key, 6] as const), ['survivor', 7]]))
+    )
+
+    store.getState().clearLastReadFor(new Set(hostileKeys))
+
+    // `Map.prototype.delete('__proto__')` walks no prototype chain, so these are three unremarkable
+    // keys on the DROP path as they are on the write path. A rewrite through `Object.fromEntries`, a
+    // map-into-object spread or an `obj[id] = mark` loop re-materialises the hazard with no type error.
+    for (const key of hostileKeys) {
+      expect(lastReadFor(store, key)).toBeNull()
+    }
+    expect(lastReadFor(store, 'survivor')).toBe(7)
+    expect(store.getState().marks.size).toBe(1)
+  })
+
+  it('a record after a drop starts from empty for that id rather than resurrecting its mark (AC1)', () => {
+    const storage = fakeStorage(new Map([['departed-1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearLastReadFor(new Set(['departed-1']))
+    store.getState().recordLastRead('survivor', 3)
+
+    expect(lastReadFor(store, 'departed-1')).toBeNull()
+    expect(lastReadFor(store, 'survivor')).toBe(3)
+    // The scoped drop cannot leave the module baseline polluted for the next write, exactly as the
+    // whole-app clear cannot.
+    expect(initialConversationLastReadState.marks.size).toBe(0)
+  })
+
+  it('the whole-app clear stays NULLARY and drops everything, this path or not (AC5)', () => {
+    // AC5 rides `clearAllLastRead` unchanged: the last-server unpair still routes to
+    // `clearPairingScopedState`. This asserts the two paths are separate write paths rather than one
+    // widened signature — an optional id parameter on the whole-app clear would re-open exactly the
+    // property its docblock closes, that no daemon-asserted id can steer which marks survive.
+    const store = createConversationLastReadStore(
+      fakeStorage(
+        new Map([
+          ['departed-1', 4],
+          ['survivor', 7]
+        ])
+      )
+    )
+
+    expect(store.getState().clearAllLastRead.length).toBe(0)
+    store.getState().clearAllLastRead()
+
+    expect(store.getState().marks.size).toBe(0)
+    expect(store.getState().marks).toBe(initialConversationLastReadState.marks)
+  })
+})
+
 describe('encodeLastReadMarks / decodeLastReadMarks (#776)', () => {
   // The codec is unit-tested directly: the `node` runtime cannot reach it through the window-guarded real
   // port (pushNotificationPrefStore.test.ts:99-102). This is also the untrusted-input boundary — the blob

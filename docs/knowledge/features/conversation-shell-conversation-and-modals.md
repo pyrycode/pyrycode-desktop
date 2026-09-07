@@ -49,73 +49,136 @@ one continuous thread with no split-brain and no empty second region. See
 [#179 codebase notes](../codebase/179.md) for the full design, the security review, and lessons
 learned.
 
-## Queued backlog + drop affordance (#294, drop since #296, echo removal since #1213)
+## Queued rows folded into the thread (#1214, was #294, drop since #296, echo removal since #1213)
 
-The [queue store](queue-store.md)'s held backlog (per-conversation `QueuedItem` rows the daemon has
-accepted but not yet run) renders as `QueuedBacklog`, an exported pure view mounted after
-`<ThinkingIndicator/>` and before the status row's `<StatusRow/>` trigger. Empty → `null` (no
-region, no chrome — the `ThinkingIndicator` posture); non-empty → one row per item, in enqueue
-order, inside a `.conversation__queued` wrapper dimmed to 50% opacity (the `.tool-row` pending
-precedent, the single "waiting / not yet run" signal). Each row reuses the delivered user-bubble
-treatment (`message-row--user` / `bubble--user`) but is tagged `data-thread-role="queued"` —
-distinct from a delivered row's `data-thread-role="user"`. Reusing `.bubble--user` with no CSS of its
-own means the row inherited [#969](conversation-shell-message-bubble.md#what-stays-untouched)'s desktop
-restyle for free; the ticket deliberately withheld the meta row it added there — a queued message has
-no timestamp and nothing sent yet to copy. `items` comes from `ConversationScreen`'s own
-`selectBacklogFor(openConversationId ?? '')` read (a `useMemo`-stable selector keyed on the active
-conversation's id, `openConversationId` from `activeConversationStore` — #448 rekeyed this off the
-original module-scope `MILESTONE_CONVERSATION_ID` constant the composer used to send under).
-[#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) hoisted the read out of a
-dedicated `QueuedBacklogControl` container and into the screen itself, deleting the container: the
-region's appearance and growth are now both a render of `ConversationScreen`, which is what lets
-[the thread scroll pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)'s
-dep-free re-assert cover a `queue_state` push instead of missing it (that control held its own
-queue-store subscription, so a push used to re-render only the region, shrinking the thread's
-viewport with no re-pin). Nothing about the render itself changed — `openConversationId ?? ''`
-selects the same backlog `QueuedBacklogControl` did, and the `''` sentinel still resolves to the
-store's shared `EMPTY_BACKLOG` with no conversation open, never another conversation's rows.
+**A message sent mid-turn used to draw twice**, and #1214 made it draw once. `submitMessage`
+(`composerSend.ts`) posts an optimistic `userText` echo into the timeline unconditionally, with no idea
+whether the daemon ran the message or parked it; the daemon parks it and pushes a `queue_state`
+snapshot, and through #1214 that snapshot rendered as a *second*, near-identical row in a
+`.conversation__queued` region below the thread (`QueuedBacklog`, described below in earlier form), and
+\#1214 deleted that view and its region outright and folds the two row lists together inside `Timeline`
+itself, so there is exactly one row per message, delivered or waiting.
 
-[#296](../codebase/296.md) added a **drop / cancel affordance** to each row: an icon-only button, a
-leading sibling of the bubble (the row is right-aligned, so leading sits it at the inner edge),
-carrying a client-owned `aria-label="Drop queued message"` and an inline `aria-hidden` SVG glyph.
-`onDrop` is a **required** injected-effect prop on `QueuedBacklog` (the `PermissionModal` "a view
-that cannot answer is a bug" rule) — `ConversationScreen` binds it inline to the pure
-`dropQueuedMessage` helper (`dropQueuedMessage.ts`), supplying `openConversationId` and
-dereferencing `window.pyry.sendCommand` only inside the click closure, never at render (what keeps
-the empty-backlog container smoke render bridge-free). Activating it dispatches
-`dequeueMessageCommand` (see [Dequeue message envelope](dequeue-message-envelope.md)) — **the queued
-row itself is still never removed optimistically**; it disappears only when the daemon's next
-`queue_state` snapshot replaces the backlog and this same store subscription re-renders, #296's
-ruling unchanged by anything below. The button exists only inside `QueuedBacklog`; `Timeline` draws
-every delivered row and is untouched, so "affordance only on queued rows" and "delivered rows
-unaffected" are structural guarantees, not conventions. The drop button inherits the region's 50%
-dimming (a child's own opacity cannot escape a parent opacity compositing group) — shipped dimmed by
-design; see [#296 codebase notes](../codebase/296.md).
+**`foldQueuedRows(items, queued)`** (`foldQueuedRows.ts`, pure, no store/clock/React) does the join, on
+the correlation [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) established
+(`QueuedItem.message_id` ↔ the echo's `messageId`). Contract, in the order it matters:
 
-**[#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) widened what activating the button
-does, without touching the row or the wire frame above.** Before #1213, cancelling a queued message left
-its ordinary delivered-looking `userText` bubble in the thread forever — the daemon parked the message
-instead of running it, but nothing told the composer's optimistic echo that, so the operator's own cancel
-produced a permanent lie in the transcript. `QueuedBacklog`'s `onDrop` now takes the row's `message_id`
-too (`(queuedMsgId: number, messageId: string | undefined) => void`, still only two positional values,
-never the whole `QueuedItem`) and `ConversationScreen` forwards it into `dropQueuedMessage` alongside two
-new deps, `dispatch`/`dispatchFor` — the same pair [composer send](composer-send.md)'s `submitMessage`
-posted the echo through. A drop that actually reaches the daemon (the send did not throw) now also
-removes the correlated echo from both timeline stores; an id-less row — a pre-pyrycode#2092 daemon, or a
-row this window never sent — still drops normally and removes nothing else. The echo's removal *is*
-optimistic (posted at the click, not deferred to a confirming snapshot) — deliberately different from
-the queued row, whose truth the daemon owns; the echo is this window's own record, and `dequeue_message`
-has no reject path to wait for regardless. Full design, including why the removal fires at the click and
-what it leaves the working indicator's `localSendPending` scalar as:
-`docs/specs/architecture/1213-drop-queued-message-removes-echo.md`. See [Thread timeline §
-Types](thread-timeline.md#types) and [Dequeue message
-envelope](dequeue-message-envelope.md#configuration-and-usage) for the store- and command-side detail.
+1. Every timeline item appears exactly once, at its own index, in order — the fold never reorders,
+   drops or duplicates a row, which is what makes "stays where it is when the message runs" structural
+   rather than conventional.
+2. A backlog item correlates to at most one echo and an echo to at most one backlog item: a greedy,
+   one-to-one, first-come assignment over an index built once from `items` (`messageId → indices`,
+   non-empty ids only), consumed as each is claimed. Two identical texts with distinct ids claim two
+   distinct rows; a same-id-twice backlog claims first-come and leaves the second unmatched rather than
+   double-marking one row.
+3. Only `kind === 'userText'` items are ever candidates — enforced by the type system (`messageId` lives
+   on that arm alone), stated as a contract because it is the guard that keeps a `queue_state` from ever
+   putting the queued treatment, or its drop control, onto daemon-authored content.
+4. Only a non-empty `message_id` on both sides participates; `undefined` and `''` correlate with
+   nothing. This is the *first* guard on this path — #1213's own empty-id rule lives at
+   `dropQueuedMessage`, which this consumer never goes through.
+5. A backlog item that claims no echo becomes its own row **at the tail**, in snapshot order, after
+   every timeline row — a first-class state (`queue_state` reaches every interactive connection, so a
+   window can see ids it never minted, e.g. a message queued from mobile, or a reconnect into a backlog
+   it has no echo for), never an error, and never allowed to attach itself to somebody else's row.
 
-No Figma coverage for either the queued row or its drop control — the same documented gap as
-[#148](../codebase/148.md)'s thread-chrome states: the mobile file draws only the populated,
-delivered thread (node 16-8/16-21). #1213 adds no visual of its own — same N/A, stated again in its
-own spec rather than assumed. See [#294 codebase notes](../codebase/294.md) and [#296
-codebase notes](../codebase/296.md) for full design and patterns established.
+`message_id` is compared for strict string equality only — never a `Map` key, a lookup path, a React
+key or a rendered value (#1213 § Security review 1's contract, inherited unchanged). An unmatched tail
+row is synthesized as `{ kind: 'userText', text: entry.text }` with **no** `messageId` — an id this
+window did not mint must never look like one it did — and no `createdAt`/`attachments`, since the wire
+item carries neither.
+
+**`Timeline` takes the backlog through two optional props**, `queued?: readonly QueuedItem[]` and
+`onDropQueued?: (queuedMsgId, messageId) => void`, the same `scrollPin` precedent
+([Conversation shell § Thread scroll
+pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)) —
+required props would have been a 72-site edit cascade in `ConversationScreen.test.tsx` alone. Absent
+`queued`, the fold runs against an empty backlog and yields today's rows byte-for-byte, so the ~72
+existing render sites needed no edit. `Timeline` calls `foldQueuedRows` and renders the folded list;
+**the empty-thread branch now tests the folded rows, not `items`** — a window with no echoes but a
+non-empty backlog used to draw `<EmptyThread/>` with queued rows underneath it (reachable from a
+reconnect into another device's backlog, or a conversation opened fresh here); after the fold that
+combination draws the queued rows instead. Item rows keep their stable array-index key; tail rows key
+on `` `q${queued_msg_id}` `` — a real per-conversation unique integer, the key the deleted
+`QueuedBacklog` already used, in a string namespace that cannot collide with a numeric index —
+**never `message_id`**, which stays a compared value only.
+
+**`TimelineRow`'s `userText` arm forks on `queued` (`QueuedRowHandle | null`), and that fork is the
+whole visual change:**
+
+| | queued | delivered |
+|---|---|---|
+| row class | `message-row message-row--user message-row--queued` (modifier **appended**, never prepended — `ConversationScreen.test.tsx` asserts the class run with `toContain`) | `message-row message-row--user` |
+| `data-thread-role` | `queued` | `user` |
+| drop control | `QueuedRowDrop`, a leading sibling of the bubble | none |
+| `<BubbleMeta>` | **suppressed** | rendered |
+| attachments | rendered (message content, not chrome) | rendered |
+
+The meta-row ruling — suppressed on a queued row, matched or unmatched alike — keeps #969's shipped
+reasoning true word for word ("nothing sent yet to copy, and no time") and keeps the two merged forms
+identical in chrome; a *matched* row is this window's own echo with a `createdAt` it simply doesn't
+show yet, an *unmatched* one has none to show. `e2e/user-whitespace.spec.ts`'s "a queued bubble carries
+no meta row, so its box is a different constant height" needed no edit because of this. Reusing
+`.bubble--user` with no CSS of its own for the bubble itself still means the row inherits
+[#969](conversation-shell-message-bubble.md#what-stays-untouched)'s desktop restyle for free — nothing
+there changed.
+
+**`QueuedRowDrop`** (module-private, moved off the deleted `QueuedBacklog`, markup byte-identical) is
+the drop/cancel affordance #296 shipped: an icon-only button, a leading sibling of the bubble (the row
+is right-aligned, so leading sits it at the inner edge), `aria-label="Drop queued message"`
+(`DROP_QUEUED_LABEL`, a client-owned constant) plus an inline `aria-hidden` SVG glyph. It rides a row
+**only** while `queued !== null` — before #1214 "no delivered row can reach this button" was structural
+(only `QueuedBacklog` rendered it); it is now a condition, guarded one level up by `foldQueuedRows`
+rule 3 above (only `userText` items are ever candidates), and asserted directly in the renderer spec
+rather than left to the shape of the file. `onDropQueued` is still wired the same way: `ConversationScreen`
+binds it inline to the pure `dropQueuedMessage` helper (`dropQueuedMessage.ts`), supplying
+`openConversationId` and dereferencing `window.pyry.sendCommand` only inside the click closure, never at
+render. Activating it dispatches `dequeueMessageCommand` (see [Dequeue message
+envelope](dequeue-message-envelope.md)) — **the queued row itself is still never removed
+optimistically**, #296's ruling unchanged; it disappears only when the daemon's next `queue_state`
+snapshot replaces the backlog and the fold re-derives the row list.
+
+**The drop's two clocks now land on one row, and the resulting hop is accepted, not defended
+against.** [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) made a drop remove the
+correlated `userText` echo optimistically (at the click) while leaving the queued item itself to leave
+non-optimistically (on the daemon's next snapshot, #296 AC3) — a pair that was invisible while the two
+lived in separate rows. Folded onto one row, the gap between the click and the confirming snapshot
+finds the message unmatched (echo gone, backlog entry still held), so it draws for one relay round trip
+as a tail row before it disappears for good — a visible hop to the bottom of the thread, then gone.
+Every alternative reverses a shipped ruling (making the queued row's departure optimistic reverses #296
+AC3; removing the echo by backlog-diff would also delete the echo of every message the daemon simply
+*ran*; a pending-drop ledger across the async boundary is the ledger #1213 §4 reason 3 already
+rejected), so this is tolerated on the same rule the idle flash and the reconnect clear already use: the
+daemon's honest report of its own state, bounded to one relay round trip and strictly display. An
+**unmatched** row's own drop has no such transient — it dispatches `dropUserText` for an id no echo
+carries, the reducer returns the same state reference, and the row leaves on the snapshot as it always
+did.
+
+**CSS: the compositing group moved from the region to the row.** `.conversation__queued`'s `opacity:
+0.5` is now `.message-row--queued { opacity: 0.5 }` — the row is the smallest element containing both
+the bubble and `QueuedRowDrop`, which #296 made a *sibling* of the bubble, so a bubble-level opacity
+(the relocation #294 originally sketched) would leave the button at full brightness. Everything else
+the region contributed was redundant: `.conversation__thread` already declares the same `gap:
+var(--space-3)` / `padding: var(--space-2) var(--space-4)`, so merged rows keep the region's exact
+rhythm with no new rule.
+
+`items` still comes from `ConversationScreen`'s own `selectBacklogFor(openConversationId ?? '')` read
+([queue store](queue-store.md), unchanged by this ticket) — #1214 kept the read exactly where
+[#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) hoisted it, because a `queue_state`
+still needs to re-render the screen for the fold to see it, and because [the thread scroll
+pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)'s
+dep-free re-assert still runs on that render — only the reason changed, from "the region's height" to
+"the fold's input". See that section for what #1214 did to the pin's occupant inventory and to the
+`thread-scroll-pin.spec.ts` criterion that used to be pointed at this region.
+
+No Figma coverage for the queued row or its drop control — the same documented gap as
+[#148](../codebase/148.md)'s thread-chrome states: the mobile file draws only the populated, delivered
+thread (node 16-8/16-21), and node 102-4's desktop Message area has no queued/pending component either.
+\#1214 adds no visual of its own; the "waiting" treatment and the drop control both simply moved. See
+[#294 codebase notes](../codebase/294.md), [#296 codebase notes](../codebase/296.md) and the
+[#1214 architecture spec](../../specs/architecture/1214-fold-queued-backlog-into-thread.md) for full
+design, the security review (hostile-daemon capability bounded to display, §4/§5) and patterns
+established.
 
 ## Screen-snapshot action & display (#324, removed #618)
 

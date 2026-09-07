@@ -8,17 +8,21 @@ Part of [Composer](conversation-shell-composer.md); see that document for the me
 
 The desktop layout's own fixed-height status area directly above the message box (Figma `111:3525`,
 780×24), replacing the loose region the working indicator used to float in. `ComposerStatusArea({
-isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after the
-queued backlog (`<QueuedBacklog/>`, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009)
-mounted straight from `ConversationScreen` rather than through the retired `QueuedBacklogControl`) and
-immediately before `Composer` (through #962 it followed `StatusRow`/`BackgroundTaskTrigger`, both since
-retired — see [Run-configuration row and background-task trigger
+isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after
+`Timeline` (through #1009 the queued backlog sat between them as its own `<QueuedBacklog/>` view,
+mounted straight from `ConversationScreen` rather than through the retired `QueuedBacklogControl`;
+[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) deleted that view and folded its rows
+into `Timeline` itself — see [Conversation shell — conversation surfaces and modals § Queued rows folded
+into the
+thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213))
+and immediately before `Composer` (through #962 it followed `StatusRow`/`BackgroundTaskTrigger`, both
+since retired — see [Run-configuration row and background-task trigger
 retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962);
 that region is now empty above this row):
 
 ```
 .conversation
-├── QueuedBacklog
+├── Timeline                   .conversation__thread  (queued rows drawn in place since #1214)
 ├── ComposerStatusArea         .composer-status
 │   ├── .composer-status__activity
 │   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)

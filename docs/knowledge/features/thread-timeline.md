@@ -192,6 +192,16 @@ always carries one (`submitMessage`'s `newMessageId` is required), but it stays 
 because the union is constructed unstamped in dozens of specs and requiring it would buy nothing an
 id-less, un-droppable row doesn't already give for free.
 
+**[#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) gave this field a second consumer,
+for the opposite direction of the same correlation.** `dropUserText` above *removes* an item by matching
+`messageId`; `foldQueuedRows` (`src/renderer/src/screens/conversation/foldQueuedRows.ts`) *marks* one by
+the same match, joining a `ThreadItem` against the [queue store](queue-store.md)'s held `QueuedItem` rows
+so a message the daemon has queued but not yet run draws as one row rather than two. Both readers inherit
+the identical field contract stated above — strict string equality only, never a rendered value, a `Map`
+key or a React key — rather than restating it. See [Conversation shell — conversation surfaces and
+modals § Queued rows folded into the
+thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
+
 ### The reducer
 
 `reduceTimeline(state, event): TimelineState` is pure and exported — no mutation, fresh state,

@@ -97,13 +97,16 @@ detail: [#300 codebase notes](../codebase/300.md).
 
 - **Producer, shipped ([#296](../codebase/296.md), widened by
   [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)):** the drop affordance on each
-  queued row (a per-row icon button in `QueuedBacklog`, `ConversationScreen.tsx`) calls the pure
+  queued row (a per-row icon button, `QueuedRowDrop` in `ConversationScreen.tsx` since
+  [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) folded the row off the deleted
+  `QueuedBacklog` view and onto the merged timeline row) calls the pure
   `dropQueuedMessage(conversation_id, queued_msg_id, message_id, deps)` helper (`dropQueuedMessage.ts`),
   which calls `dequeueMessageCommand({ conversation_id, queued_msg_id })` and passes the result to the
   injected `deps.sendCommand` (`window.pyry.sendCommand` in production) — byte-identical to the frame
   #296 shipped. The `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held
-  `QueuedItem` rows, read by #294's `QueuedBacklog`; `conversation_id` is the container's open
-  conversation id (the row itself carries no conversation id — the "conversation-id wall"). Since
+  `QueuedItem` rows, folded into `Timeline`'s rows by `foldQueuedRows` since #1214 (previously read
+  directly by #294's `QueuedBacklog`); `conversation_id` is the container's open conversation id (the row
+  itself carries no conversation id — the "conversation-id wall"). Since
   #1213, `deps` also carries `dispatch`/`dispatchFor` — the same two [thread
   timeline](thread-timeline.md) writes `submitMessage` used to post the echo — and the row's
   `QueuedItem.message_id` (pyrycode#2092) rides along as the third positional argument, so a drop that
@@ -139,11 +142,12 @@ detail: [#300 codebase notes](../codebase/300.md).
 - **Zero `EnvelopeType` consumer cascade.** No production code does an exhaustive `switch` over
   `EnvelopeType` (unlike the `DaemonEvent` union, which has three independent exhaustive switches) —
   adding the member needed no companion `assertNever` fix-up anywhere.
-- **Region-dimmed drop control.** The [#296](../codebase/296.md) drop button inherits
-  `.conversation__queued`'s 50%-opacity dimming — a child element's own `opacity: 1` cannot escape a
-  parent's opacity compositing group, so the button cannot be rendered at full brightness without
-  restructuring #294's region-level dimming. Shipped dimmed by design; see [#296 codebase
-  notes](../codebase/296.md) Lessons learned.
+- **Row-dimmed drop control.** The [#296](../codebase/296.md) drop button inherits
+  `.message-row--queued`'s 50%-opacity dimming (moved off the deleted `.conversation__queued` region by
+  [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214), same compositing group, same
+  effect) — a child element's own `opacity: 1` cannot escape a parent's opacity compositing group, so the
+  button cannot be rendered at full brightness without restructuring the row-level dimming. Shipped
+  dimmed by design; see [#296 codebase notes](../codebase/296.md) Lessons learned.
 
 ## Related
 
@@ -169,5 +173,10 @@ detail: [#300 codebase notes](../codebase/300.md).
   The wire frame this doc describes is unchanged; the new behaviour is two additional, purely local
   store writes gated on the send succeeding. Full design:
   `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
+- [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) — deleted `QueuedBacklog` and moved
+  the drop control onto the merged timeline row (`QueuedRowDrop`); the wire frame, `dropQueuedMessage`'s
+  contract and its two positional values (`queuedMsgId`, `messageId`) are all unchanged. See
+  [Conversation shell — conversation surfaces and modals § Queued rows folded into the
+  thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Queue; pyrycode #720 (queue
   security model — dequeue is ungated for any paired client).

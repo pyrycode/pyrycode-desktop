@@ -1128,6 +1128,23 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   store](features/run-settings-write-store.md)'s clears) at all three lifecycle seams — switch, exit,
   per-server unpair. Ships dormant; #1078 is the first reader. (#1231, split from #1078.)
 
+- [System prompt write](features/system-prompt-write.md) — the **transport-only** write half's
+  transport leg: an outbound conversation-keyed `set_system_prompt` verb
+  (`SetSystemPromptPayload{conversation_id,system_prompt}`, tri-state, required) over pyrycode#2151,
+  plus a client-side 8192-**byte** (`Buffer.byteLength`, not UTF-16 length) refusal before the wire.
+  Two things make it unlike the read half: it **correlates `conversation_updated`**, a record this
+  client had never correlated before and which stays a live, unconditional broadcast trigger for
+  `conversationListBridge` — the confirmation is emitted *additively*, after that broadcast, never by
+  consuming the frame the way a `daemon-error` match does; and it **has refusals**, joining the
+  `daemon-error` precedence tier as a fifth member via a new sibling narrower,
+  `SystemPromptRejectReason` (`protocol-malformed`/`conversation-not-found`), the same shape as
+  `HistoryRejectReason`. Both emitted events (`systemPromptWriteConfirmed`/`systemPromptWriteRejected`)
+  carry `conversationId` from the correlation map's own value, never from the daemon-controlled ack
+  `id` — the handle #1250 plans against, closing the `workspaceFolderRejected` bare-outcome trap the
+  ticket names explicitly. (#1249, security-sensitive, builder self-review PASS, no MUST FIX; five
+  mutation checks confirmed non-vacuity.) Split from #1232. Ships dormant; #1250 is the first consumer,
+  #1078 still owns the render.
+
 ## Architecture
 
 _None yet._

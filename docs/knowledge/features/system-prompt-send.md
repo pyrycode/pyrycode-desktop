@@ -3,9 +3,10 @@
 The **transport-only** half of reading a conversation's system prompt: an outbound
 `request_system_prompt` ask, a decoded `system_prompt` reply, and the correlated event that carries
 both the stored prompt and whether the running session was started with a different one. A stored
-prompt takes effect only at a conversation's *next* session start, so a client that did not itself
-perform the write (pyrycode#2151) had no way to learn what a conversation holds, or that the child it
-is typing at predates an edit — this slice teaches the transport to ask.
+prompt takes effect only at a conversation's *next* session start, so a client that could not itself
+perform the write had no way to learn what a conversation holds, or that the child it is typing at
+predates an edit — this slice teaches the transport to ask. The write half, pyrycode#2151, landed
+client-side as [#1249](system-prompt-write.md).
 
 Introduced in [#1230](../codebase/1230.md), split from #1078.
 [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) closed the renderer read half: the
@@ -367,6 +368,12 @@ Fakes over mocks throughout: the existing `daemonConnection.test.ts` driver fake
 
 ## Related
 
+- [System prompt write](system-prompt-write.md) — the write half's transport leg (#1249): the outbound
+  `set_system_prompt` verb, the client-side byte bound, and the two correlated outcomes. **This
+  document's "there is no error frame for this verb at all" is true only of the read verb** —
+  `set_system_prompt` has two published reject codes and joins the `daemon-error` precedence tier; do
+  not read this document's no-error-frame consequences (the routing lookup as the only refusal, the
+  single correlation arm) as applying to the write half too.
 - [System-prompt store](system-prompt-store.md) — the renderer read half (#1231): the store, the
   fifth-subscriber bridge, the activation ask, and the drop joining `runConfigStore`'s clear seam.
 - [Daemon connection — correlation § System-prompt read correlation

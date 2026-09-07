@@ -349,3 +349,59 @@ come from this map and not the decoded payload — closed by a dedicated test at
 requested conversation against a second, open one). See [System prompt send](system-prompt-send.md)
 for the full design, including the outbound builder, the fail-closed decode, and the one
 `DaemonEvent` arm this correlation feeds.
+
+# System-prompt write correlation (#1249)
+
+A ninth correlation store, the `pendingConfigRequests`/`pendingHistoryRequests` shape exactly:
+`pendingSystemPromptWrites: Map<number, string>`, mapping a sent `set_system_prompt`'s `envelopeId` to
+the conversation id that write named. Unlike its eight siblings, this store's reply is a record this
+file had **never correlated before**: `conversation_updated`, which every earlier conversation-keyed
+write verb (`change_workspace`, `archive`, `unarchive`, `rename`, `promote`) declines to correlate, and
+which `conversationListBridge` treats as an **unconditional** list-refresh trigger regardless. That
+live second consumer is why this correlation cannot use the `daemon-error` tier's consume-the-frame
+shape for the ack half — see below.
+
+- **Set — after the send, `pendingConfigRequests`' order**, but with a length gate in front of it that
+  none of the other eight stores carry. `setSystemPrompt(payload)` checks
+  `Buffer.byteLength(payload.system_prompt, 'utf8') > MAX_SYSTEM_PROMPT_BYTES` **before** the
+  `driver === null` guard and before any build — an over-length string emits
+  `systemPromptWriteRejected{reason:'prompt-too-long'}` immediately, with nothing built, nothing sent,
+  and no map entry made. Past that gate, `envelopeId` is captured into one local read by the build, the
+  counter advance, and the `set` alike, and the map is written only *after* `driver.sendMessage`
+  returns — a build/send throw leaves no entry under an unspent id, the same reason it matters on every
+  sibling: a phantom entry would answer whichever write next re-mints that id, handing one
+  conversation's prompt write to another.
+- **Confirm match — additive, not consuming, and it must run *after* the existing unconditional
+  emit.** `case 'conversation-updated':` keeps emitting `conversationUpdated` first, unconditionally,
+  exactly as it did before this ticket (`conversationListBridge`'s trigger). Only then does this store's
+  lookup run: `inbound.inReplyTo` against `pendingSystemPromptWrites`; a miss or absent `inReplyTo`
+  leaves the broadcast as the only emit; a hit `delete`s the entry and emits a **second**,
+  additional event, `systemPromptWriteConfirmed{conversationId}` — `conversationId` read from the
+  map's value, **never** from `inbound.conversationUpdated.id`, which a hostile or confused daemon
+  controls and which a mutation check confirmed a test catches if swapped in. This is the one
+  correlation in this file whose "match" branch must **not** collapse onto the `daemon-error` tier's
+  consume-and-return shape — doing so would stop the requester's own write from refreshing their own
+  conversation row, the trap the ticket names explicitly, and a mutation check that made the ack arm
+  consume the frame on a match reddened five tests.
+- **Reject match — the fifth member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`. A hit
+  `delete`s the entry and emits `systemPromptWriteRejected{conversationId, reason}`, where `reason` is
+  `inbound.systemPromptReject ?? 'unclassified'` off the sibling narrower documented in [Daemon error
+  outcome](daemon-error-outcome.md), then consumes the frame and `return`s — the tier's standing
+  "an envelope id is minted once, so at most one store can hold it" reasoning, unchanged from its four
+  predecessors. Unlike the confirm arm above, this one *does* consume the frame entirely, on the
+  established `daemon-error` precedent — a rejection has no other consumer whose row it must refresh.
+- **Reset — `dial()` clears the map next to its siblings.** A reconnect recycles envelope ids from 2, so
+  a surviving entry would settle a new connection's write against a dead one's conversation.
+- **No cap**, the same evidence-based, no-observed-failure posture as every sibling store in this file.
+
+Both the confirm and reject arms are proven non-vacuous by mutation checks (`## Revisions` in
+`docs/specs/architecture/1249-set-system-prompt-transport.md`): consuming the frame on a match reddened
+5 tests; `system_prompt: payload.system_prompt ?? ''` in the fresh literal reddened 1; measuring the
+byte bound with `.length` instead of `Buffer.byteLength` reddened 1; reading the ack's `id` field
+instead of the map's value reddened 3; the byte bound as `>=` instead of `>` reddened 1.
+
+`security-sensitive`, builder self-review **PASS**, no MUST FIX findings. See [System prompt
+write](system-prompt-write.md) for the full design, including the outbound builder, the additive-ack
+pattern stated once for reuse, the fail-closed decode, and the two `DaemonEvent` arms this correlation
+feeds.

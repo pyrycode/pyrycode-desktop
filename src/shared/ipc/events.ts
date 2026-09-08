@@ -482,11 +482,16 @@ type BaseDaemonEvent =
   // two are NOT of one kind. `model` keeps every warning above IN FULL. The id is a daemon-asserted
   // ROUTING KEY, not rendered text and not model-influenced — it is never markup, a filename, a cache key,
   // a lookup path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by
-  // construction, and the decode-side model_announced log is pinned content-free independently). It STOPS
-  // at the announced-model bridge (#588), which rebuilds a fresh two-field literal from named fields;
-  // AnnouncedModel keeps `model` + `truncated`, and the consumers that route by conversation are
-  // #588 / #674 — where an unknown id must be an explicit no-match, never a fallback onto the open
-  // conversation. No token, key, or raw frame.
+  // construction, and the decode-side model_announced log is pinned content-free independently). It used
+  // to STOP at the announced-model bridge (#588), which rebuilt a fresh two-field literal from named
+  // fields; #1146 widened that literal, because dropping the id is precisely what made the announced-model
+  // store one app-wide slot showing the wrong server's model. It now travels one hop further and STOPS as
+  // a `Map` KEY in that store — never copied into the held record, which keeps `model` + `truncated`, so
+  // it reaches neither of that value's DOM sinks. Every bar above still binds it there, and that store
+  // mandates `ReadonlyMap` over `Record` so a hostile id is an ordinary key rather than a prototype write.
+  // An unknown id must be an explicit no-match, never a fallback onto the open conversation — which the
+  // store gets by construction, since a reader can only ask for a conversation it can select. No token,
+  // key, or raw frame.
   //
   // NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon frame,
   // including a verbatim repeat — which is what tells #588 the value is still current, and the added field

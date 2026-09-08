@@ -386,7 +386,7 @@ describe('clearPairingScopedState', () => {
     keyedTimelines.getState().dispatchFor('a2', { type: 'userText', text: 'another on server A' })
     const sessionId = createSessionIdStore({ sessionId: 'session-on-A' })
     const announcedModel = createAnnouncedModelStore({
-      announced: { model: 'model-on-A', truncated: false }
+      announced: new Map([['a1', { model: 'model-on-A', truncated: false }]])
     })
     const active = createActiveConversationStore({ activeConversation: conversation })
     const session = createSessionStore({
@@ -455,7 +455,7 @@ describe('clearPairingScopedState', () => {
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
     // Server A's identifier — and its `truncated` cut report with it — cannot be attributed to server B.
-    expect(announcedModel.getState().announced).toBeNull()
+    expect(announcedModel.getState().announced.size).toBe(0)
     expect(session.getState()).toMatchObject(initialSessionState)
     // #779: how far the operator read on server A goes with the pairing, in memory AND on disk. The
     // persisted half is the one that fails silently — an in-memory-only clear leaves the marks to be
@@ -483,8 +483,8 @@ describe('clearPairingScopedState', () => {
   it('real stores: clearing an already-clear set is a no-op, timeline items by reference', () => {
     // The idempotence the no-guard design rests on — every clear returns its shared initial* const, so
     // a redundant clear churns no subscriber (notably no selectItems re-render from a fresh []). For
-    // the announced model the cleared value IS the `null` sentinel, so the by-reference property is
-    // structural: a selector's Object.is(null, null) short-circuits the re-render.
+    // the announced model the cleared state is the shared `initialAnnouncedModelState`, returned by
+    // reference, so a keyed selector's Object.is(null, null) short-circuits the re-render.
     const timeline = createTimelineStore()
     const keyedTimelines = createConversationTimelineStore()
     const sessionId = createSessionIdStore()
@@ -526,7 +526,7 @@ describe('clearPairingScopedState', () => {
     expect(keyedTimelines.getState()).toBe(keyedStateBefore)
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
-    expect(announcedModel.getState().announced).toBeNull()
+    expect(announcedModel.getState().announced.size).toBe(0)
     expect(session.getState()).toMatchObject(initialSessionState)
     // The marks store's contribution to the same claim: an empty map short-circuits on `size === 0`, the
     // state OBJECT comes straight back, and — unlike the other six clears, which have no side effect to

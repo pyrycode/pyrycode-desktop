@@ -60,7 +60,10 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   — the daemon connection is alive and the operator lands on a working Channel List — so `sessionStore`'s
   reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s eight) are deliberately
   excluded: resetting the session store would blank a live connection status into a false disconnected
-  state, and the announced model is daemon-scoped, not conversation-scoped.
+  state, and — [`announcedModelStore`](announced-model-store.md) having been keyed by conversation since
+  #1146 — the deleted conversation's own key is simply inert once nothing can select it, while the
+  pairing-ending clear still drops the whole map; a per-conversation drop here would be a second lifetime
+  to keep in agreement with that one, for a key nothing reads back regardless.
   [`slashCommandListStore`'s `clearAllSlashCommandLists`](slash-command-list-store.md) (#955) is excluded
   for the same reason again: a published menu is daemon-scoped, not conversation-scoped, and one
   conversation being deleted says nothing about whether the workspace's verb menu is still valid.

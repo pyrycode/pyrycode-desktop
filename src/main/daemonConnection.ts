@@ -1468,10 +1468,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // routing key, not rendered text, and it reaches no sink on this leg. The argument here used
             // to be ARITHMETIC — that dropping it left exactly one untrusted string crossing rather than
             // two — and it is REPLACED, not renumbered: the id is not untrusted text of `model`'s kind,
-            // and `model` keeps its warnings in full. It stops at the announced-model bridge (#588), which
-            // rebuilds a fresh two-field literal from named fields; the consumers that route by conversation
-            // are #588 / #674, where an unknown id must be an explicit no-match, never a fallback onto the
-            // open conversation. Deliberately stateless: no dedup, no coalescing, no timer, no last-value
+            // and `model` keeps its warnings in full. It used to stop at the announced-model bridge
+            // (#588), which rebuilt a fresh two-field literal from named fields; #1146 widened that
+            // literal — dropping the id is what made the announced-model store one app-wide slot showing
+            // the wrong server's model — so it now stops as a `Map` key in that store, never copied into
+            // the held record and so reaching no render surface. An unknown id is an explicit no-match
+            // there, never a fallback onto the open conversation. Deliberately stateless: no dedup, no coalescing, no timer, no last-value
             // memo — and none keyed by the new id either — the same identifier repeats turn after turn and
             // suppressing a repeat would invent wire semantics the daemon does not have, starving #588 of
             // the re-announcement that says the value is still current. Not compile-forced (this inner

@@ -46,7 +46,7 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
     - [Conversation shell — question panel](features/conversation-shell-question-panel.md) — The batched-question overlay in the composer's slot (#906: `useQuestionBridge` mounted at App level, `ComposerSlot` drawing `QuestionPanelView`; #907: radio/checkbox option rows keyed by array index plus the in-list Other field, drawing only; #912: those rows and the Other field made live against the #911 picks store, surviving a chat switch; #915: the title row draws one tab per question, keyed by array position, and a click jumps the box to it, clamped against a same-nonce re-delivery shortening the list; #916: the same jump added to the Actions row as a Previous button plus a trailing button that reads Next until the last question). **Split 2026-09-02**: its Cancel-button section moved to the document below to stay under the size cap.
     - [Question panel — Cancel refuses the batch](features/question-panel-cancel-refusal.md) — #921 gives the Actions row's Cancel button its first sending handler: `questionResolution.ts`'s `refuseQuestionBatch` sends `refuseQuestionsCommand({question_batch_id})` (#920's command, the `answer_token` minted main-side and never seen by the renderer) guarded in a `try`, then dispatches `dismissed` to `questionPicksStore` and `questionBatchStore` **outside** the try — picks-first, matching `subscribeQuestionBatches`' own fan-out order — so a swallowed send still clears the panel (AC3) and the composer returns. The two client-owned constants carried on the batch store's `dismissed` arm, `outcome: 'refused'`/`source: 'client'`, deliberately avoid `modalResolution.cancelPrompt`'s `'local'`: that value is a member of `WireModalSource`'s closed set and reads there as an *answered* outcome, which would let a later reader merging the two families mistake a refusal for the operator's own choice. Still no `resolved` id-memory on the batch store — the daemon re-asserts a batch only at connect time and both stores already reset on `reconnected` first, so a batch reappearing after a swallowed refusal is the honest outcome. The catch logs a static, content-free string with the error object dropped, since an `Error` from a failing bridge send can stringify the nonce it choked on. `e2e/question-cancel-refuses.spec.ts` is the first spec in this repo to assert on an outbound frame, narrowing its capture of `question_refused` to `{type, question_batch_id}` at capture time so the token can never appear in a diff. Security review PASS — see the document for the full review. Its deps interface, `QuestionRefuseDeps`, is renamed `QuestionResolveDeps` by the document below to serve a second exit.
     - [Question panel — Continue answers the batch](features/question-panel-continue-answer.md) — #922 gives the Actions row's trailing button its Continue-role handler, the panel's last inert control. `resolveQuestionAnswers(questions, selections)` is one pure function that is both the availability gate and the payload builder — a question holds a value with at least one ticked option or a ticked, non-blank Other row, and any gap returns `null` for the whole batch rather than a partial result, so the button's `disabled` state and the frame's contents can never disagree. Ticked labels resolve `option.label` in ascending display order (the one place claude-authored text leaves `questionResolution.ts`, into the entry's `values` array and nowhere else — the stale module docblock claiming otherwise is corrected in the same commit), with the trimmed Other text appended last. A stale option position left by a same-nonce re-delivery — the accepted gap #911's security review handed forward — is skipped rather than thrown out of the render, resolving it rather than merely bounding it. `answerQuestionBatch` reuses `refuseQuestionBatch`'s guarded-send-then-picks-first-clear shape verbatim over the renamed `QuestionResolveDeps`, refusing outright on a `null` payload with no send, no clear, and no log. The gate on the trailing button is a conjunction — unavailable only in the Continue role *and* only while incomplete — because gating on incompleteness alone would disable the same element's Next role and strand the operator unable to reach the question that would complete the batch. `selectBatchSelections`, a new picks-store read shape returning the whole batch's picks by reference (a hoisted shared empty `Map` when untouched, the `EMPTY_QUESTION_SELECTION` mechanism one level up), feeds the container's single call to `resolveQuestionAnswers`. CSS mutes both the content colour *and* the fill on `:disabled` — a deliberate deviation from `.composer__send:disabled`'s content-only convention, because this button's enabled fill is `--color-primary` (`#9dcbfc`, bright in the dark-only theme) rather than the neutral fills the precedent buttons use, so muting content alone would read as legible-but-still-most-prominent. `e2e/question-answer-continue.spec.ts` drives a three-question batch (single-select, multi-select, Other) with nothing answered first, to make the deadlock failure mode visible if it existed, before answering and asserting the sent frame narrows to `{type, question_batch_id, answers}` at capture time. Security review PASS, with one named-not-guarded concurrency residual (a same-nonce re-delivery landing between the render that computed `answers` and the click) ruled not exploitable since only the daemon, which already controls both the re-delivery and the resolution, could mount it.
-    - [Conversation shell — session boundaries and channel info](features/conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row (#286, redrawn #690) and the Channel Info sheet (#365) with its Rename/Archive/Delete actions (#368/#366/#377).
+    - [Conversation shell — session boundaries and channel info](features/conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row (#286, redrawn #690) and the Channel Info sheet (#365) with its Rename/Archive/Delete actions (#368/#366/#377) and its System prompt section (#1078: a pure state machine over the read/write stores, a byte-bound editor, Save/Clear through `submitSystemPrompt`).
     - [Conversation shell — seams](features/conversation-shell-seams.md) — The seams this screen exposes, both the ones a later ticket bound and the ones still open.
     - [Conversation shell — tool row layout](features/conversation-shell-tool-row-layout.md) — Map only. **Split 2026-09-05** into the six documents below.
     - [Conversation shell — tool row code block](features/conversation-shell-tool-row-code-block.md) — #780 promotes a `Bash` call's `command` into a `.code-block` leading the expanded body, carved out of #706's field list on an exact tool-name test.
@@ -1120,7 +1120,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   security-sensitive, builder self-review PASS, one SHOULD FIX closed by a dedicated test — the
   emitted `conversationId` must come from the correlation map, not the decoded payload.) Split from
   #1078. **#1231 closed the read half** — see [System-prompt store](features/system-prompt-store.md)
-  below; #1078 still owns the render.
+  below; #1078's [System prompt
+  section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078) renders
+  it.
 
 - [System-prompt store](features/system-prompt-store.md) — the renderer half of reading a
   conversation's system prompt: a single-slot Zustand store (`runConfigStore`'s DI-factory →
@@ -1132,7 +1134,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   the held reading through the shared `clearRunConfig` dep member (a third arrow, joining [run-config
   store](features/run-config-store.md)'s and [run-settings write
   store](features/run-settings-write-store.md)'s clears) at all three lifecycle seams — switch, exit,
-  per-server unpair. Ships dormant; #1078 is the first reader. (#1231, split from #1078.)
+  per-server unpair. (#1231, split from #1078.) **#1078 closed the render** — see [Conversation shell —
+  session boundaries and channel info § System prompt
+  section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078).
 
 - [System prompt write](features/system-prompt-write.md) — the **transport-only** write half's
   transport leg: an outbound conversation-keyed `set_system_prompt` verb
@@ -1148,23 +1152,25 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   carry `conversationId` from the correlation map's own value, never from the daemon-controlled ack
   `id` — the handle #1250's store correlates on, closing the `workspaceFolderRejected` bare-outcome
   trap the ticket names explicitly. (#1249, security-sensitive, builder self-review PASS, no MUST FIX;
-  five mutation checks confirmed non-vacuity.) Split from #1232. Ships dormant; #1250 closed the window
-  half — see [System-prompt write store](features/system-prompt-write-store.md) below — #1078 still
-  owns the render.
+  five mutation checks confirmed non-vacuity.) Split from #1232. #1250 closed the window half — see
+  [System-prompt write store](features/system-prompt-write-store.md) below — #1078's [System prompt
+  section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078) renders
+  it.
 
 - [System-prompt write store](features/system-prompt-write-store.md) — the window's half of the write:
   `submitSystemPrompt` (record `writeSubmitted` **before** `sendCommand`, tri-state copied verbatim,
   falsy id refuses both) and a keyed `Map<conversationId, SystemPromptWrite>` reducer store reporting
   `in-flight`/`confirmed`/`rejected{reason}`, absence a distinct fourth reading. Correlates on the
   conversation id, not a renderer-minted change id — #1249 rejected minting one, so two writes on one
-  conversation stay indistinguishable here and #1078 gates its submit on the in-flight state instead.
-  `writeConfirmed`/`writeRejected` are gated on the named conversation currently being `in-flight`, so a
-  replayed second outcome cannot flip a settled write. `reconnected` (the `connected` edge) drops only
-  in-flight entries; the shared `clearRunConfig` dep member's new **fourth** arrow
+  conversation stay indistinguishable here and #1078's section gates its submit on the in-flight state
+  instead. `writeConfirmed`/`writeRejected` are gated on the named conversation currently being
+  `in-flight`, so a replayed second outcome cannot flip a settled write. `reconnected` (the `connected`
+  edge) drops only in-flight entries; the shared `clearRunConfig` dep member's new **fourth** arrow
   (`conversationSwitched`) empties the store outright at all three production bodies. Confirmation
   carries no prompt — nothing here ever holds an optimistic stored value or logs, on any path. (#1250,
   security-sensitive, builder self-review PASS, one SHOULD FIX discharged by explicit check — the
-  conversation-id index is a `Map`, not a plain object.) Split from #1232. Ships dormant; #1078 is the
+  conversation-id index is a `Map`, not a plain object.) Split from #1232. **#1078's [System prompt
+  section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** is the
   first reader.
 
 ## Architecture

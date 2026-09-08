@@ -93,6 +93,7 @@ import { sendInterrupt } from './sendInterrupt'
 import { sendNewSession } from './sendNewSession'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
+import { SystemPromptSection } from './SystemPromptSection'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
@@ -2524,7 +2525,8 @@ export function ChannelInfoSheetView({
   onDelete,
   deleteConfirmPending,
   onDeleteConfirm,
-  onDeleteCancel
+  onDeleteCancel,
+  systemPromptSection
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
@@ -2544,6 +2546,11 @@ export function ChannelInfoSheetView({
   deleteConfirmPending?: boolean
   onDeleteConfirm?: () => void
   onDeleteCancel?: () => void
+  // #1078: the System prompt section, injected as a slot — the StatusSheet `children` idiom in narrow
+  // form, so this view stays pure (props in, markup out) while the section reads two stores of its own.
+  // The container supplies it ONLY in the `conversation !== null` branch, exactly like the three action
+  // callbacks above, so the list-opened graceful-empty case grows no editor.
+  systemPromptSection?: ReactNode
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -2600,6 +2607,9 @@ export function ChannelInfoSheetView({
               </div>
             </>
           )}
+          {/* #1078: the System prompt section — between the About detail and the Actions, per the
+              ticket. It brings its own section header, so the slot needs none here. */}
+          {systemPromptSection}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
           {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366) then
               Delete (#377), each a `.channel-info__action` tonal pill rendered only when its callback is
@@ -2757,6 +2767,13 @@ function ChannelInfoSheet({
               }
         }
         onDeleteCancel={() => setDeleteConfirmOpen(false)}
+        // #1078: the System prompt section, gated on a non-null conversation like the three actions
+        // above — so `conversationId` below is a plain required string with no empty-string fallback.
+        systemPromptSection={
+          conversation === null ? undefined : (
+            <SystemPromptSection conversationId={conversation.id} />
+          )
+        }
       />
       {renameOpen && conversation !== null && (
         <RenameConversationDialogView

@@ -11,8 +11,8 @@ client-side as [#1249](system-prompt-write.md).
 Introduced in [#1230](../codebase/1230.md), split from #1078.
 [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) closed the renderer read half: the
 ask now fires on conversation activation and a dedicated store holds the correlated reply — see
-[System-prompt store](system-prompt-store.md). **Nothing renders one yet** —
-[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078) is the editor surface. The four
+[System-prompt store](system-prompt-store.md). Rendered by the [Channel info sheet's System prompt
+section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078) (#1078). The four
 exhaustive renderer bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`, `questionBridge`)
 keep their dormant no-op arm permanently — #1231 added a *fifth*, independent subscriber rather than
 touching those four; see that document's § The bridge for why an exhaustive sixth switch here would be

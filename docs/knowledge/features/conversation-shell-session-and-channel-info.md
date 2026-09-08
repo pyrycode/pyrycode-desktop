@@ -69,8 +69,8 @@ dims the shadow with it, the composite Figma renders), and `.session-delimiter__
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new
 bottom sheet (Figma node 20-48), reusing the Run-configuration `StatusSheet`'s `.status-sheet__*`
 chrome verbatim — the second sheet to do so. Renders the active conversation's **About** detail
-(Workspace `cwd` + Last activity), an empty **Actions** section slot, and a monospace **Channel ID**
-footer. Renderer-contained: no transport, IPC, or wire code.
+(Workspace `cwd` + Last activity), a **System prompt** section (#1078), an empty **Actions** section
+slot, and a monospace **Channel ID** footer. Renderer-contained: no transport, IPC, or wire code.
 
 ```
 .conversation
@@ -85,6 +85,7 @@ footer. Renderer-contained: no transport, IPC, or wire code.
                 ├── "About" section-header
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
+                ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
                 ├── .channel-info__actions          mount point for #366/#367/#368 (Rename+Archive built, Delete #367 open)
                 └── .channel-info__footer           "Channel ID: {id}" (omitted when conversation === null)
@@ -165,3 +166,95 @@ convention. The archived conversation leaving the active list needs no new code 
 `conversation_updated` broadcast reply rides the existing #275 list-re-request path, the same
 mechanism the restore flow already proved in reverse (#346/#348). No transport, IPC, or wire code.
 See [#366 codebase notes](../codebase/366.md) for the full design and patterns established.
+
+**System prompt section ([#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)).** Renders
+the surface for the `set_system_prompt` vertical that had been built and dark since #1230: the whole
+data path — [System-prompt store](system-prompt-store.md) (#1231, the read half) and [System-prompt
+write store](system-prompt-write-store.md) (#1250, the write half) — already existed with nothing
+rendering it. This ticket adds no wire type, no envelope and no IPC arm; it is renderer-only.
+
+Its own file, `SystemPromptSection.tsx`, the `WorkspacePickerSheet.tsx` precedent in this directory —
+not a fourth thousand lines in `ConversationScreen.tsx`. Three exports in the order state flows:
+`deriveSystemPromptSection(reading, write, draft)` is the whole state machine as a pure function (so
+every arm is a vitest case rather than a render); `SystemPromptSectionView` is the pure markup (props
+in, JSX out, no store, no `window.pyry`); `SystemPromptSection` is the thin container that reads the
+two stores, owns the draft, and dispatches.
+
+`ChannelInfoSheetView` gained one optional prop, `systemPromptSection?: ReactNode`, rendered between
+the About block and the `Actions` section header — the `StatusSheet` `children` slot idiom in narrow
+form, keeping the view itself pure. `ChannelInfoSheet` supplies
+`<SystemPromptSection conversationId={conversation.id} />` only in the `conversation !== null` branch,
+the same callback-gate the Rename/Archive/Delete actions use, so the list-opened graceful-empty case
+grows no editor and `conversationId` is a plain required string with no id-or-empty-string fallback.
+The section brings its own `.status-sheet__section-header` ("System prompt"), so the slot needs none.
+
+**The tri-state and its one legitimate collapse.** A conversation's stored prompt is
+`string | undefined` (no prompt at all) vs. `''` (an explicitly empty one) vs. text — and `reading`
+itself can be `null`, a fourth state meaning "nothing has arrived yet." The `null` reading renders a
+`loading` arm with **no editor, no Save, no Clear** — structural, not a rule an implementer has to
+remember, and it is what makes an unanswered conversation unable to be saved blank over a stored value
+(AC1). The `undefined`/`''` distinction collapses only in the editor's *display* seed (both show an
+empty box, and always will, since they are indistinguishable to the eye) — never on the write side:
+Save always sends a `string` (`''` when the box is empty), Clear always sends `null`, and Clear is a
+control the operator presses, never inferred from an empty box. `draft: string | null`
+(`useState`, ADR 0006) tracks whether the operator has touched the box; once non-null, a late-arriving
+reading is never read for display again — the guard against an on-path relay's delayed reply silently
+replacing text already typed.
+
+**The byte count.** `new TextEncoder().encode(text).length`, a module-hoisted encoder, counted live
+against the imported `MAX_SYSTEM_PROMPT_BYTES` (never restated) — matching `daemonConnection.ts`'s
+`Buffer.byteLength(prompt, 'utf8')` exactly (both replace an unpaired surrogate with U+FFFD), so the
+count never reports "under" on a value main refuses. Save is disabled once `byteLength >
+MAX_SYSTEM_PROMPT_BYTES` (inclusive bound: exactly 8192 is legal) rather than waiting for main's own
+`prompt-too-long` refusal — that refusal stays the authority; the client-side count only stops it being
+the operator's first news. Both Save and Clear are withheld while a write is `in-flight`, which also
+closes [System-prompt write store](system-prompt-write-store.md)'s two-writes ambiguity behaviourally,
+since that store correlates on conversation id alone with no per-write identity to disambiguate.
+
+**Session status copy.** `sessionPromptStatus === 'differs'` renders a notice naming **New session** as
+what applies the saved prompt; `matches` and `no_session` render nothing. The confirmed-write line
+*also* restates that same story in a form true under all three statuses ("Saved. A running session
+keeps the prompt it started with until New session.") — a form conditioned on `sessionPromptStatus`
+would go stale the instant a save lands, since nothing re-asks after a write.
+
+**Copy is entirely client-owned**, mirroring `CHANNEL_INFO_*`'s module-constant idiom, apostrophe-free
+(`renderToStaticMarkup` escapes `'` → `&#x27;`). The four `SystemPromptWriteFailure` reasons and the
+three `SessionPromptStatus` values are both closed unions narrowed at the decode boundary, so no daemon
+string ever reaches the section's copy.
+
+**Security.** The stored prompt is untrusted, operator-authored, network-relayed text, and this is the
+first consumer that renders *and edits* it rather than merely holding it — the deny-list [System-prompt
+store](system-prompt-store.md#security) restates is discharged here, not inherited by reference. It
+reaches exactly one sink, a controlled `<textarea value={…}>`: an escaped text child server-side, a DOM
+property in the browser, never a serialized attribute, never `dangerouslySetInnerHTML`, never a URL, a
+filename, a cache key, a lookup path or a React `key`. Nothing on the path normalises or trims the
+value — it round-trips back to the daemon as a write, so any normalisation would silently change what
+the operator stored. Nothing here logs, on any branch, including the byte count — it is rendered into
+the operator's own window because AC3 requires it, never to a console, a file or telemetry. The draft
+lives in `useState` only and dies with the sheet's unmount: an operator can paste a credential into a
+system prompt, so nothing on this path touches `localStorage`, `sessionStorage`, IndexedDB or zustand
+`persist`/`devtools`. Builder self-review, verdict PASS.
+
+**CSS** (`conversation.css`, `.system-prompt__*`) borrows rather than invents, since Figma 102-595 draws
+the sheet this section joins and not the section itself: `.status-sheet__section-header` for its
+heading, the `.channel-info__row`/`__empty` padding rhythm for its prose lines, the Rename dialog's
+outlined field (`.rename-conversation__field`/`__input`, Figma 19:16) for the editor, and
+`.channel-info__action`'s tonal-pill treatment for Save and Clear. No new colour, size or spacing token.
+
+**Testing.** `SystemPromptSection.test.tsx` (vitest, `renderToStaticMarkup`) covers
+`deriveSystemPromptSection` directly — the loading arm, the `undefined`/`''`/text seeds, a typed draft
+surviving a late reading, the inclusive 8192 bound (and one byte over, with a multi-byte character), all
+four refusal reasons, and `differs` vs. `matches`/`no_session` — plus the view's markup: no `<textarea>`
+and no Save in the loading arm, a `<script>`-bearing prompt landing inert as an escaped textarea child,
+and `disabled` present on Save both over-limit and in-flight. `e2e/channel-system-prompt.spec.ts` (fake
+tier) is the vertical's first end-to-end drive: a spec-local fake answers `request_system_prompt` with a
+seeded prompt and `session_prompt_status: 'differs'`, then the spec opens Channel info, asserts the
+seeded value and the `differs` notice, types a string whose UTF-8 byte length diverges from its
+code-unit length (to pin AC3's byte-not-code-unit count), and asserts the captured `set_system_prompt`
+frame carries the typed text verbatim on Save and `system_prompt: null` on Clear. Live confirmation
+(saving never restarts a session, survives an app relaunch) is #2151's daemon-side guarantee and stays
+unproven end-to-end (`needs-real-claude`).
+
+Two Open Questions from the spec were resolved in Phase B without changing the design: Clear stays
+visible on an already-clear conversation (a well-defined no-op write, withheld only in-flight like
+Save), and the confirmed line does restate the session story, in the stale-safe form above.

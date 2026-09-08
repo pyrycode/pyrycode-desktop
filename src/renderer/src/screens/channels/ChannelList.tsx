@@ -889,7 +889,7 @@ export function HostRow({
         // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
         // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
         // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
-        // level up, minus its `.channel-list__control-name` pill, which is #1190's ticket.
+        // level up, and since #1190 its `.channel-list__control-name` pill as well.
         //
         // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
         // the same 12-unit viewBox scaled to the drawing's 14 by the box.
@@ -909,13 +909,27 @@ export function HostRow({
           >
             <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
           </svg>
+          {/* #1190 — the control's NAME, in the pill the row's trailing controls (#1172), the workspace
+              row's own pen and plus (#1180/#1181) and the section header's plus (#1304) already wear.
+              APPENDED AFTER the glyph and never before it: `EDIT_ICON_MARKER` pins that <svg>'s whole
+              opening run, and a child after the closing tag leaves it byte-identical. The pill's text is
+              a bare text node, not an `aria-label="…"` run, so `EDIT_NAME_MARKER` and its counts are
+              untouched too.
+
+              THE SAME CONSTANT AS THE `aria-label` ABOVE, read TWICE, so the spoken name and the drawn
+              one cannot drift. `aria-hidden` is belt-and-braces rather than the mechanism — the
+              `aria-label` already overrides child text for the accessible name — which is why the static
+              tier pins it: nothing else would redden if it were dropped. */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {EDIT_HOST_CONTROL_LABEL}
+          </span>
         </button>
       )}
       {onAddWorkspace && (
         // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
         // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
-        // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, again without the
-        // name pill.
+        // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, and since #1190
+        // its name pill too.
         //
         // ITS OWN CLASS RATHER THAN THE WORKSPACE PLUS'S, the call #1180 made for the pen beside it: the
         // two are the same drawn control at the same size and inset, but they hang off different rows,
@@ -937,6 +951,13 @@ export function HostRow({
           >
             <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
           </svg>
+          {/* The plus's name pill (#1190) on the control beside it — same class, same append discipline
+              and the same one-constant-read-twice wiring as the pen's above, for that comment's reasons.
+              The two pills are the reason the pen and the plus can be told apart at all before a click:
+              they are two bare glyphs 10px apart with nothing else to distinguish them. */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {ADD_WORKSPACE_CONTROL_LABEL}
+          </span>
         </button>
       )}
     </div>

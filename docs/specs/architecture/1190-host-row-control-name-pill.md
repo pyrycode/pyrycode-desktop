@@ -172,3 +172,23 @@ layer and #1172's page do not already record.
 
 - None. The one the ticket raised — whether the Channels host row clips at scroll top — is answered
   above and is measured by the spec rather than left to the implementation.
+
+## Revisions
+
+**2026-09-08 — the clearance prediction, confirmed by measurement.** The plan predicted the band would
+clear the sticky cluster by ~30px. Read off the running window at scroll top with the list overflowing:
+the Channels host row's centre is at y 118, so its band is 104…132 and the pill's top edge is at 106,
+against a cluster whose bottom edge is at 76 — 30px, as derived. The band placement is reused with no
+override and #1172's fallback is not taken. Nothing about the design changed.
+
+**2026-09-08 — which assertion detects a wrong placement, corrected against measurement.** The Testing
+strategy above listed the ACTIONS-EDGE clearance beside the band as though the two were both detectors.
+They are not, and the spec header now says so. Re-pointing the pen's pill at #1304's deviation
+(`top: 100%; transform: none`) and rebuilding reddens the **band** assertion by exactly 22px
+(`pen pill: centre`, expected 118, received 140) and leaves the actions-edge read and every containment
+read green — the whole section header sits between this row and the cluster, so there is 30px of slack
+there and no placement a reader would plausibly write closes it. So on this row the band is the
+detector, containment is the criterion the ticket owes, and the actions-edge read is a standing
+statement of the relation that would catch a cluster that grew or a sticky offset that changed. All
+three are kept and none stands in for another. This is #1172's and #1181's finding on their own
+controls, re-measured here rather than inherited.

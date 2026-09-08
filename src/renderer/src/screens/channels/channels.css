@@ -433,6 +433,49 @@
   opacity: 1;
 }
 
+/* #1190 — THE PEN'S NAME PILL, the same `.channel-list__control-name` the row's trailing controls (#1172),
+   the workspace row's own pair (#1180/#1181) and the section header's plus (#1304) wear; its block far
+   below draws it and this is only the trigger. Written beside the control rather than joined onto any of
+   those selector lists, which is this file's convention: each rule names the elements that can carry a
+   pill, so the set stays readable where the control is.
+
+   ⭐ THE CONTROL'S OWN `:hover`, NEVER THE ROW'S — the whole of "hovering the row's label shows nothing".
+   Deliberately a DIFFERENT scope from the glyph's reveal three rules up: that one fires from the row so
+   the glyph is already there when the pointer arrives at a 20px box it could not otherwise see, and this
+   one fires from the control so the name answers only the thing being pointed at. `:focus-visible` and
+   not `:focus`, matching the control's own opacity rule above, so the keyboard case cannot half-fire.
+
+   THE GEOMETRY IS ENTIRELY THE BLOCK ABOVE'S AND ADDS NO NUMBER, and the workspace pen's containment
+   argument carries over unchanged because that control is this one's box at this one's inset down a row
+   of this one's height: a 20px box at --space-1 down a 28px row has the ROW's centre, so the 24px pill
+   (--space-1 + the 16px body-small line + --space-1) centred inside it spans 2…26 of that 28 and stays
+   inside the row's own band. Containment inside `.channel-list` — `overflow-y: auto`, so it clips on both
+   axes — then follows from the row being in view at ANY scroll position rather than from the rows a drive
+   parks on. `right: 0` pins it to THIS control's right edge, 25px in from the card's content edge, so it
+   grows leftward and adds no horizontal overflow (an out-of-flow box contributes it only rightward or
+   downward).
+
+   ⭐ AND THE BAND IS REUSED HERE RATHER THAN #1304's `top: 100%` DEVIATION, which is the one thing this
+   row had to be checked for. That deviation exists because the section header's plus sits UNDER the
+   sticky `.channel-list__actions` cluster, whose `top: var(--space-1)` resolves against the scrollport's
+   CONTENT box and so lands its bottom edge 4px inside the header. The first host row of a section is one
+   whole header box lower — 20px of content line plus 12px of bottom padding, with
+   `.channel-list__section-header + .channel-list__host` taking no margin — so this pill's top edge clears
+   the cluster by ~30px and hanging it below would push it into the workspace row underneath for nothing.
+   `e2e/sidebar-host-row-control-name-pill.spec.ts` reads that clearance back as a RELATION between the
+   cluster's bottom edge and this pill's top, so a cluster that grew or a sticky offset that changed
+   reddens instead of silently reopening the overlap.
+
+   THE COST, STATED: while a control is hovered its pill covers the trailing part of the machine label,
+   and the plus's covers the pen's glyph beside it (the plus is the later sibling, so it paints over).
+   Accepted on #1172's and #1181's precedent — each is up only while the pointer sits on a 20px control,
+   and `pointer-events: none` on the shared block is what lets a click aimed at the row, or Playwright's
+   hit test on the drives that click these controls without hovering first, read straight through it. */
+.channel-list__host-edit:hover .channel-list__control-name,
+.channel-list__host-edit:focus-visible .channel-list__control-name {
+  display: block;
+}
+
 /* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
 .channel-list__host-edit-icon {
   display: block;
@@ -460,9 +503,8 @@
    with the card's content edge.
 
    `--color-primary`, the `opacity` reveal and the `:focus-visible` outline are the pen's block verbatim
-   and for its reasons. NO `.channel-list__control-name` PILL on either control — the workspace pair wears
-   one (#1181) and copying those buttons wholesale would have pulled it in; the host row's pill is
-   #1190's ticket. */
+   and for its reasons. #1190 completed the copy: both controls now wear the workspace pair's
+   `.channel-list__control-name` pill too, each with its own trigger pair written beside its block. */
 .channel-list__host-add {
   position: absolute;
   right: 0;
@@ -487,6 +529,16 @@
 
 .channel-list__host:hover .channel-list__host-add {
   opacity: 1;
+}
+
+/* #1190 — THE PLUS'S NAME PILL: the pen's trigger pair above on the control beside it, written here
+   rather than joined onto that rule for that rule's own stated reason. Every word of it applies
+   unchanged — the same shared block, the same control's-own-`:hover` scoping, the same band, and the same
+   clearance over the sticky cluster. The one difference is horizontal and follows from this control's own
+   `right: 0`: this pill ends flush with the card's content edge rather than 25px in from it. */
+.channel-list__host-add:hover .channel-list__control-name,
+.channel-list__host-add:focus-visible .channel-list__control-name {
+  display: block;
 }
 
 /* `display: block` is the file's icon convention (__save-icon / __fab-icon). */

@@ -71,6 +71,8 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1266 (2026-09-08) — a spec-only flake fix, tier count unchanged at 16.** `real-claude-effort-default.spec.ts`'s read of the seeded chat's effort segments used to depend on the daemon's unsolicited, best-effort `model_list` push landing inside the 15 s round trip, because the drive's only ask for that chat's vocabulary went out *before* turn 1 — when the bootstrap session had no claude child yet to answer with one. A lost push presented as a stale-daemon timeout with no daemon fault behind it: the 2026-09-07 19:31 UTC red and the 20:01 UTC green were the same `pyry` binary. The fix re-clicks the already-open seeded row between turn 1's quiesce and the sheet open, which re-fires `requestModelList` through `activateConversation`'s changed-id-gated `requestConversationConfig` without disturbing the settled turn or the run configuration — a caused request, not a retry loop. See [composer-effort-menu.md](composer-effort-menu.md) for the mechanism and [PR #1280](https://github.com/pyrycode/pyrycode-desktop/pull/1280). **Nothing here changes `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`** — no spec was added or removed.
+
 **#1259 (2026-09-07) — the tier grows to 16 specs.** `e2e/real-daemon-history-on-open.spec.ts` is the
 liveness proof for [opening a conversation asking for its newest page of
 history](conversation-timeline-store.md): it pairs against a real `pyry`, opens a conversation, sends a

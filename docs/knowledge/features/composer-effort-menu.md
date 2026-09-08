@@ -337,9 +337,22 @@ premise this whole feature rests on), and that no `/effort` line appears in the 
 real turn through the harness's **seeded** row rather than a FAB-created chat, because a never-messaged
 conversation's published levels can only come from the daemon's connect-time or on-demand model-list
 fallback (pyrycode#2124/#2125), whose source is the *bootstrap* session's retained list — and the harness
-binds only the seeded row to that bootstrap session. Getting this spec green needed three real-environment
+binds only the seeded row to that bootstrap session. Getting this spec green needed four real-environment
 fixes, none of them a production change, recorded in the architecture spec's `## Revisions`: two vacuous
 turn-quiesce gates (a closing `toHaveCount(0)` that resolves before the send does anything, and a
-`nonEmptyAssistantCount >= 1` gate that is sound only in a chat proven empty, which the seeded row is not)
-and a stale gate-host daemon binary lacking the model-list fallback the drive depends on, diagnosed from
-the binary's own symbols rather than assumed.
+`nonEmptyAssistantCount >= 1` gate that is sound only in a chat proven empty, which the seeded row is not),
+a stale gate-host daemon binary lacking the model-list fallback the drive depends on, diagnosed from
+the binary's own symbols rather than assumed, and — the last of the four, \#1266 — the seeded row's
+effort-segment read riding on an unsolicited push rather than a request. The client asks for a
+conversation's model list exactly once per activation, and the drive activates the seeded row *before*
+turn 1, when the bootstrap session has no claude child yet; that ask comes back empty, so the read used
+to depend entirely on the daemon's unsolicited, best-effort `model_list` push landing inside the 15 s
+round-trip window — a roughly 1-in-15 flake that presented as a stale-daemon timeout with no daemon fault
+behind it. The fix re-clicks the already-open seeded row between turn 1's quiesce and the sheet open:
+`activateConversation`'s `requestConversationConfig` sits outside its changed-id gate, so a same-id click
+re-fires `requestModelList` without disturbing the settled turn, the session id or the run configuration
+— while `requestOpeningHistory`'s own per-conversation gate stops its non-idempotent prepend from
+running twice. This is a *request*, not a retry loop: `modelListStore`'s ask-once-never-retry posture is
+untouched, and the drive causes exactly one extra ask rather than polling. See
+[PR #1280](https://github.com/pyrycode/pyrycode-desktop/pull/1280) and
+`docs/specs/architecture/1266-ask-for-the-seeded-chats-vocabulary.md`.

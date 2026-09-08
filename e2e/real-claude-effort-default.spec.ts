@@ -30,6 +30,27 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // leaves the fallback empty and every never-messaged chat without levels. That is a property of where the
 // turn lands, not of how long the drive waits for it.
 //
+// AND WHY THAT CHAT'S VOCABULARY IS ASKED FOR RATHER THAN WAITED FOR (#1266, the correction the THIRD
+// gate red bought). The client asks for a conversation's model list exactly ONCE PER ACTIVATION —
+// `requestConversationConfig` reaching `requestModelList` — and this drive activates the seeded row
+// BEFORE turn 1, when the bootstrap session has no claude child and therefore no vocabulary to answer
+// with. That ask comes back with nothing. So until #1266 the read below rode entirely on the daemon's
+// UNSOLICITED push once the child spawned — a frame `modelListStore`'s header documents as best-effort
+// and lossy — landing inside ROUNDTRIP_TIMEOUT_MS. Nothing in the drive caused that frame and nothing
+// re-asked: a required precondition was WAITED FOR rather than REQUESTED, and a lost push presented as a
+// real turn followed by a timeout wearing a daemon-side diagnostic that was not true (2026-09-07 19:31
+// UTC, against the same binary that passed the same spec thirty minutes later and six runs after that).
+//
+// The re-activation below is the repair, and it is a REQUEST, NEVER A RETRY. `activateConversation` runs
+// `requestConversationConfig` OUTSIDE its changed-id gate on purpose, so re-clicking the row already open
+// re-fires the ask while the clear branch — timeline reset, session id, run configuration — stays skipped
+// by that same gate. A drive-side re-ask LOOP would instead be the self-inflicted spin against a
+// withholding relay that `modelListStore`'s header forbids the CLIENT, and a drive that spins where the
+// app may not is asserting a behaviour the app does not have. One caused ask, then the ordinary timeout.
+//
+// The FAB-minted chat further down needs none of this: it is activated AFTER turn 1 has put a vocabulary
+// behind the daemon-wide fallback, so its own one-shot ask is answered — request and response, no push.
+//
 // AND WHY EVERY TURN GATE HERE IS POSITIVE-THEN-MUTATION, AND WHY THE POSITIVE HALF IS BASE-RELATIVE.
 // A bare closing `toHaveCount(0)` on the streaming cursor passes before the send's own work has even
 // started, because the locator was 0 all launch — the first gate run's whole drive completed in under two
@@ -91,8 +112,10 @@ const HANDSHAKE_TIMEOUT_MS = 45_000
 const TURN_TIMEOUT_MS = 120_000
 // Handshake + 2×turn + a create round trip + the settings round trip + headroom.
 const SPEC_TIMEOUT_MS = 360_000
-// A settings write and its reply-gated re-render. No claude turn to absorb, so this is tight on purpose —
-// a timeout here means the daemon did not answer, which is the signal.
+// A settings write and its reply-gated re-render, and since #1266 the model-list ask the drive fires by
+// re-activating the seeded row. No claude turn to absorb, so this is tight on purpose — a timeout here
+// means the daemon did not answer a request that was made, which is the signal. It is not a window for an
+// unsolicited frame to arrive in, and widening it would only lengthen the odds on a push instead.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 
 // The streaming cursor is a child of the assistant bubble; its absence is the per-turn quiesce signal.
@@ -180,20 +203,38 @@ test('a level set before a chat’s first message survives into the first turn',
     .toBeGreaterThan(baseBeforeTurn1)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
+  // --- Now ASK for this chat's vocabulary instead of waiting for the daemon to volunteer it (#1266; the
+  // header says why the pre-turn ask could not answer and why this one can). Re-clicking the row already
+  // open re-runs `activateConversation`, whose `requestConversationConfig` sits OUTSIDE the changed-id
+  // gate, so `request_model_list` goes out again — this time against a bound session whose claude child
+  // is live and has already published its `initialize` reply. The same gate skips the clear branch
+  // because the id did not change, so the settled turn above and this chat's run configuration survive
+  // the click; and the one ask in that set that is NOT idempotent, the opening history page, declines
+  // through `requestOpeningHistory`'s own per-conversation gate rather than prepending a second copy.
+  //
+  // The locator is deliberately left unfiltered: only the seeded conversation exists until the FAB runs
+  // below, so Playwright's strict mode is itself the check that this click lands on that row. ---
+  await seededRow.click()
+
   // --- 1. Pick a level here, through the run-configuration sheet. The segments existing at all is itself
   // the proof that the daemon published a row with levels on it for this chat's model — the join #1168
   // widened to the inherited default, exercised against a chat nobody set a model on. ---
   await openRunConfiguration()
-  // Named, because this is a DAEMON-side precondition and its failure has one actionable cause. The chat
-  // whose bound session just spawned a child has to have a `model_list`; if none arrived, no level can be
-  // picked here and nothing downstream can be read. The message is what keeps a stale daemon on the gate
-  // host from presenting as an anonymous timeout three assertions later.
+  // Named, because this is a DAEMON-side precondition and its failure now has one actionable cause. Since
+  // #1266 the ask behind this read is the drive's own, so a timeout here can no longer mean "the push we
+  // were hoping for went missing" — it means a request went out against a session with a live child and
+  // came back with no vocabulary, which is the daemon's answer and not a race. The message is what keeps
+  // that from presenting as an anonymous timeout three assertions later, and what stops a lost push from
+  // ever wearing this diagnostic again. No skip and no soft-pass: a daemon that publishes nothing fails
+  // the spec right here.
   await expect(
     segment.first(),
-    'the seeded chat published no effort levels after its first turn — the daemon served no model_list ' +
-      'for a conversation whose bound session has a live child, so there is no vocabulary to pick from. ' +
-      'This is a daemon-side precondition, not a client assertion: check that the installed `pyry` is ' +
-      'current before reading it as a defect in this feature.'
+    'the seeded chat published no effort levels within the round trip — the drive re-activated this row ' +
+      'immediately above, which re-sent `request_model_list` for it AFTER its bound session had spawned ' +
+      'a claude child, and no vocabulary came back to pick from. The ask was MADE and went unanswered, ' +
+      'so this is a daemon-side precondition rather than a lost unsolicited push (#1266): check that the ' +
+      'installed `pyry` serves `request_model_list` and retains the bootstrap session’s list before ' +
+      'reading this as a defect in the feature under test.'
   ).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   const published = (await segment.allInnerTexts()).map((text) => text.trim())

@@ -160,6 +160,7 @@ export function translateModalEvent(
     case 'questionShown':
     case 'questionDismissed':
     case 'thinkingProgress':
+    case 'rateLimited':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -205,6 +206,13 @@ export function translateModalEvent(
       // argument: it is a mid-turn READING, nothing daemon-side is waiting on an answer, and there is
       // no `modal_id` to resolve it against. Its consumer is the #1314 render slice, so this no-op is
       // PERMANENT — nothing in this store will ever claim a reading.
+      // rateLimited (#1319) lands here on identical grounds and is the second reading in the group:
+      // nothing daemon-side is waiting on an answer, there is no `modal_id`, and a report about the
+      // account's usage window gates no action claude wants to take. Its consumer is the #1320 store
+      // slice, so this no-op is PERMANENT too. Worth one extra line only because a quota report is the
+      // kind of thing a reader is tempted to raise AS a dialog: that is a render decision for #1321
+      // to make on a surface of its own, and routing it through this store would hand it a permission
+      // prompt's one-shot `modal_answer` resolution semantics, which nothing on the wire can settle.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

@@ -321,6 +321,7 @@ export function translateTimelineEvent(
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':
+    case 'rateLimited':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -376,6 +377,13 @@ export function translateTimelineEvent(
       // (thinkingProgress is now an owned arm — #1314 wired its `thinkingTokens` scalar above, taking
       // the route #1313 left open. Like the stall onset and the two edges beside it, it is thread
       // chrome and not a timeline row, so it left this group without becoming one.)
+      // rateLimited (#1319) joins this group by the same queueState rule (#720) — no turn_id, opens
+      // and closes no turn, so a report about the account's usage window is daemon STATE and not an
+      // item IN a turn, however plainly the turn that observed it is the one the operator is watching.
+      // Its no-op here is DORMANT rather than permanent: whether the reading draws as thread chrome
+      // through this bridge, as apiRetry (#493), compacting (#496) and thinkingProgress (#1314) each
+      // eventually did, or through a subscriber of its own, as questionShown (#885) did, is #1320's
+      // call and not this carry slice's. What is settled here is only that nothing draws it yet.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

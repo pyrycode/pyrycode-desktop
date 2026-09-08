@@ -176,6 +176,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'historyPageReceived':
     case 'historyRequestFailed':
     case 'thinkingProgress':
+    case 'rateLimited':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
@@ -214,6 +215,14 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // answer to give — the opposite direction from claude asking the operator to choose. It reports
       // that claude is thinking, which is as close as this union gets to "an ask is coming" without
       // being one. Its consumer is the #1314 render slice, so the no-op is PERMANENT.
+      //
+      // `rateLimited` (#1319) reads this group the same way and is if anything further from an ask:
+      // it is UNSOLICITED, arrives with nothing outstanding, offers no answer to give, and reports a
+      // condition of the ACCOUNT rather than anything claude wants from the operator. It is the one
+      // arm here that can look like a question in the wrong light — a "you are near your limit" report
+      // invites a prompt — but the daemon settles it: the frame is a REPORT, never a control input,
+      // and no behaviour may branch on it. Its consumer is the #1320 store slice, so the no-op is
+      // PERMANENT.
       return null
     case 'systemPromptWriteConfirmed':
     case 'systemPromptWriteRejected':

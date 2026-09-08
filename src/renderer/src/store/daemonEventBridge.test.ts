@@ -326,6 +326,31 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('rateLimited → null (consumed by the #1320 store slice, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'rateLimited',
+        conversationId: 'conv-1',
+        status: 'allowed_warning',
+        limitType: 'seven_day',
+        resetsAt: 1_755_900_000
+      })
+    ).toBeNull()
+    // An unmeasured status is no more a session action than the one measured value, and a
+    // `resetsAt` of 0 ("claude did not report an instant") is a legitimate reading rather than an
+    // absence. Neither flips a connection scalar: a usage-limit window is orthogonal to whether the
+    // socket is up, which is what makes this no-op permanent rather than dormant.
+    expect(
+      translateDaemonEvent({
+        type: 'rateLimited',
+        conversationId: 'conv-1',
+        status: 'blocked_until_reset',
+        limitType: 'five_hour',
+        resetsAt: 0
+      })
+    ).toBeNull()
+  })
+
   it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

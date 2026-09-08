@@ -355,6 +355,11 @@ function thinkingProgressPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'thinking_progress', ts: FIXED_TS, payload })
 }
 
+/** A `rate_limited` plaintext, wrapping an arbitrary payload (#1319). */
+function rateLimitedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'rate_limited', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` plaintext, wrapping an arbitrary payload (#564). */
 function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -2136,6 +2141,191 @@ describe('createDaemonConnection — thinking_progress stream (#1313)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: thinkingProgressPlaintext({ ...PROGRESS, estimated_tokens: '1200' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — rate_limited stream (#1319)', () => {
+  /**
+   * The daemon's ONE measured non-benign capture (#1318: 2026-08-22, claude 2.1.239) — the account
+   * inside its weekly warning band with every turn still running normally, which is why this frame is
+   * not proof that anything was blocked.
+   */
+  const LIMITED = {
+    conversation_id: 'conv-1',
+    status: 'allowed_warning',
+    limit_type: 'seven_day',
+    resets_at: 1_755_900_000,
+    truncated_fields: null
+  }
+
+  /** The event the fixture above must produce, verbatim. */
+  const CARRIED = {
+    type: 'rateLimited',
+    conversationId: 'conv-1',
+    status: 'allowed_warning',
+    limitType: 'seven_day',
+    resetsAt: 1_755_900_000
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ diagnosticLog })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a rate_limited into exactly one rateLimited event (conversation_id carried)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: rateLimitedPlaintext(LIMITED) })
+
+    const events = emitted(sink).slice(before)
+    // A strict toEqual on the whole event, asserted POSITIVELY: the arm has exactly `type` /
+    // `conversationId` / `status` / `limitType` / `resetsAt` — and NO `daemonTs`, which this
+    // assertion pins for free (an extra defined property fails a toEqual). The omission is #1318's
+    // design carried forward: that decode arm takes no FrameTimestamp, because a stored rate_limited
+    // is still skipped and there is no served-page half for a (type, ts) key to join against.
+    expect(events).toEqual([CARRIED])
+    // The frame's conversation_id reaches the emitted event VERBATIM — the routing key #1320
+    // attributes by.
+    expect(JSON.stringify(events)).toContain('conv-1')
+  })
+
+  it('emits exactly the five modeled properties — truncated_fields does NOT cross, nor any snake key', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: rateLimitedPlaintext({
+        ...LIMITED,
+        truncated_fields: ['status', 'limit_type'],
+        smuggled: 'must-not-cross'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    // One assertion proving three things at once: `truncated_fields` does not cross (the eventual
+    // surface renders no daemon-authored string, so a cut value misses the client-owned copy lookup
+    // and falls back exactly as an unrecognised one does — there is nothing on screen for a
+    // truncation marker to qualify), the snake spellings do not cross, and the emit is a literal
+    // built from named fields rather than a spread of the decoded payload — a spread would carry all
+    // five wire keys.
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'limitType',
+      'resetsAt',
+      'status',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('truncated')
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it.each([
+    ['an unmeasured status', 'blocked_until_reset', 'seven_day'],
+    ['an unmeasured limit_type', 'allowed_warning', 'one_month'],
+    ['a status cut to nothing', '', 'seven_day'],
+    ['a limit_type cut to nothing', 'allowed_warning', '']
+  ])(
+    'carries %s across unchanged — neither set is narrowed on this boundary',
+    async (_label, status, limit_type) => {
+      const { sink, drivers } = await connected()
+      const before = emitted(sink).length
+
+      drivers[0].emit({
+        type: 'message',
+        plaintext: rateLimitedPlaintext({ ...LIMITED, status, limit_type })
+      })
+
+      // The daemon deliberately left both sets OPEN: the value set beyond the one measured-benign
+      // status is unmeasured, so narrowing either here would re-introduce on the IPC boundary exactly
+      // the drop #1318's decoder avoids on the wire — and would drop the first real limit that fires.
+      // These are the assertions that redden if someone later "hardens" this emit into an allow-list.
+      expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, status, limitType: limit_type }])
+    }
+  )
+
+  it.each([0, -1, 8.64e15])('carries resets_at %s across without policing its range', async (resets_at) => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: rateLimitedPlaintext({ ...LIMITED, resets_at }) })
+
+    // `resets_at` is claude's number, unvalidated in BOTH directions: `0` means "claude did not
+    // report a reset instant" and NOT the epoch, so a truthiness test anywhere on this leg would read
+    // it as an absence and drop the event. Negative and absurd magnitudes cross too — rejecting one
+    // would be a validation rule with no captured negative case behind it. Nothing here SCHEDULES
+    // from the number; that prohibition rides the arm's contract forward to the render slice.
+    expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, resetsAt: resets_at }])
+  })
+
+  it('does NOT dedup: a status change followed by a verbatim repeat emits all three', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (const status of ['allowed_warning', 'blocked_until_reset', 'blocked_until_reset']) {
+      drivers[0].emit({ type: 'message', plaintext: rateLimitedPlaintext({ ...LIMITED, status }) })
+    }
+
+    // Three frames, three events — no coalescing, no dedupe, no timer, no last-value memo, and none
+    // keyed by conversation. The daemon re-reports the window once per run whatever its state, so
+    // suppressing the repeat would eat the report that says the reading is still current, and a memo
+    // here would be the only mutable state on this leg — keyed by a daemon-supplied id and fed by a
+    // daemon-supplied stream.
+    expect(emitted(sink).slice(before)).toEqual([
+      CARRIED,
+      { ...CARRIED, status: 'blocked_until_reset' },
+      { ...CARRIED, status: 'blocked_until_reset' }
+    ])
+  })
+
+  it('logs no decoded field on the carry path — not the id, neither string, not the instant', async () => {
+    const cap = captureLog()
+    const { drivers } = await connected(cap.log)
+    cap.records.length = 0
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: rateLimitedPlaintext({
+        ...LIMITED,
+        conversation_id: 'conv-secret-id',
+        status: 'status-must-not-log',
+        limit_type: 'limit-must-not-log',
+        resets_at: 1_755_900_123
+      })
+    })
+
+    // Each field is something a content-free log has no business carrying: the id is
+    // conversation-correlating in a bundle an operator may send off-box, the two strings are
+    // unsanitized claude-authored text in a file whose readers assume it is machine-written, and the
+    // pair together discloses the ACCOUNT'S QUOTA POSTURE — a fact about the operator rather than
+    // about this frame. This leg adds no log call of its own (emitDaemonEvent is log-free by
+    // construction) and #1318's decode-side record is content-free; this asserts the end-to-end claim
+    // the two halves make separately.
+    const logged = JSON.stringify(cap.records)
+    expect(logged).not.toContain('conv-secret-id')
+    expect(logged).not.toContain('status-must-not-log')
+    expect(logged).not.toContain('limit-must-not-log')
+    expect(logged).not.toContain('1755900123')
+    // Not vacuous: the frame WAS decoded and recorded, under a client-owned code literal.
+    expect(cap.records.some((r) => r.event === 'inbound-decoded' && r.code === 'rate_limited')).toBe(true)
+  })
+
+  it('drops a malformed rate_limited without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: rateLimitedPlaintext({ ...LIMITED, resets_at: '1755900000' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

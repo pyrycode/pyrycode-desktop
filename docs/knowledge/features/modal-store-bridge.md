@@ -261,3 +261,11 @@ notes](../codebase/249.md) for the render design.
   decoded at [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) that folds into this
   bridge's no-op group. **Permanently**, not dormant: nothing daemon-side is waiting on an answer and
   there is no `modal_id` to resolve a mid-turn reading against, so this store will never claim it.
+- [Daemon event channel — the sealed union: per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md)
+  — the `rateLimited` arm ([#1319](https://github.com/pyrycode/pyrycode-desktop/issues/1319), decoded at
+  [#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318)) that folds into this bridge's no-op
+  group beside its `thinkingProgress` neighbour. **Permanently**, on the same grounds sharpened: nothing
+  daemon-side is waiting on an answer, there is no `modal_id`, and a report about the account's usage
+  window gates no action claude wants to take — routing it through this store would hand a quota report
+  a permission prompt's one-shot `modal_answer` resolution semantics, which nothing on the wire can
+  settle.

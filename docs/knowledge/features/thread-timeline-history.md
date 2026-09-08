@@ -268,3 +268,12 @@ Nothing imports this module yet.
   the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
   preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)
   and `queueStore` #197 already got.
+- [#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318) (decode) /
+  [#1319](https://github.com/pyrycode/pyrycode-desktop/issues/1319) (IPC carry, dormant) — the daemon's
+  usage-limit reading. Joins `translateTimelineEvent`'s null fall-through group **dormantly**, the
+  `thinkingProgress` posture one ticket earlier (#1312/#1313 above): whether it
+  eventually draws as thread chrome through this bridge or through a subscriber of its own is
+  [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320)'s call, not this module's. No change
+  to this module's own types, reducer or edge cases — see [Thread timeline § How it
+  works](thread-timeline.md#how-it-works) for the current, unaffected contract. Full design and security
+  review: `docs/specs/architecture/1319-rate-limited-ipc-carry.md`.

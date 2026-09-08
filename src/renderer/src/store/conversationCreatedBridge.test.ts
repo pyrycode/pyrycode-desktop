@@ -3,6 +3,7 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import type { ConversationCreatedPayload, MessagePayload } from '@shared/wire/types'
 import {
   requestNewConversation,
+  requestNewChannel,
   translateConversationCreated,
   subscribeConversationCreated
 } from './conversationCreatedBridge'
@@ -59,6 +60,43 @@ describe('requestNewConversation', () => {
     expect(sendCommand).toHaveBeenCalledWith({
       type: 'createConversation',
       payload: { is_promoted: false, name: null, cwd: '/home/pyry/project' }
+    })
+  })
+})
+
+// #1179 — the twin's whole surface: the SAME command, a different fixed payload. Each test is a
+// single-literal assertion, which is the property that would be lost if the two shapes were folded
+// into one constructor behind a flag.
+describe('requestNewChannel', () => {
+  it('fires exactly one createConversation with is_promoted true, the name and the cwd (AC3)', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, 'Release notes', '/home/pyry/project')
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: true, name: 'Release notes', cwd: '/home/pyry/project' }
+    })
+  })
+
+  it('trims edge whitespace from the name before dispatching (AC3)', () => {
+    const sendCommand = vi.fn()
+    requestNewChannel(sendCommand, '  Release notes  ', '/home/pyry/project')
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: true, name: 'Release notes', cwd: '/home/pyry/project' }
+    })
+  })
+
+  it('carries the cwd VERBATIM — no normalisation, no trim, no path resolution (AC3)', () => {
+    // A path a normaliser would rewrite three ways over: edge whitespace, a doubled separator and a
+    // `..` segment. It is the group's own key, daemon-asserted, and echoing exactly what was received
+    // is the only safe handling — main re-validates it and rebuilds a fresh literal before the wire.
+    const sendCommand = vi.fn()
+    const cwd = ' /home/pyry//project/../project '
+    requestNewChannel(sendCommand, 'Release notes', cwd)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: true, name: 'Release notes', cwd }
     })
   })
 })

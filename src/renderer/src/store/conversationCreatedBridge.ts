@@ -31,6 +31,43 @@ export function requestNewConversation(
 }
 
 /**
+ * Fire the `createConversation` command asking for a NAMED CHANNEL (#1179) — the Channels-tree
+ * workspace plus's dispatch, and `requestNewConversation`'s twin. Placed DIRECTLY BESIDE it on purpose:
+ * these are the two fixed payload shapes of one command, and reading both literals together is what
+ * makes "two callers with two fixed payloads" legible where a single constructor behind an
+ * `is_promoted` flag would hide it. Do not fold them — each one's unit test stays a single-literal
+ * assertion only while they are separate.
+ *
+ * `is_promoted: true` and a `name` are the whole difference: until this ticket every create the app
+ * sent was `is_promoted: false, name: null`, so a channel could only come into being by promoting a
+ * chat. The daemon's `create_conversation` handler has honoured all three fields since #241.
+ *
+ * `name` is trimmed — a named channel should not carry accidental edge whitespace, the ruling
+ * `requestRenameConversation` and `requestCreateWorkspaceFolder` both record. The trim is COSMETIC and
+ * is not a validation: the daemon polices the name server-side, and the view's blank-disable means this
+ * is never reached with an empty one, so there is no redundant guard here.
+ *
+ * `cwd` is REQUIRED and non-null (a channel is created in a named workspace, never in the daemon's
+ * default) and is carried VERBATIM — not normalised, not trimmed, no `path` module, no local
+ * resolution. It is the workspace group's own key, which IS a daemon-asserted `cwd`, so echoing exactly
+ * what was received is the only safe handling; main re-validates it at the untrusted IPC boundary and
+ * rebuilds a fresh three-field literal before it reaches the wire.
+ *
+ * Fire-and-forget, like its twin: `sendCommand` is `void`, no result to await. Navigation to the new
+ * channel is decoupled and event-driven, through `useConversationCreatedNav` below.
+ */
+export function requestNewChannel(
+  sendCommand: (command: RendererCommand) => void,
+  name: string,
+  cwd: string
+): void {
+  sendCommand({
+    type: 'createConversation',
+    payload: { is_promoted: true, name: name.trim(), cwd }
+  })
+}
+
+/**
  * The filter: map the one owned arm to its payload, every other DaemonEvent to `null`. `default: null`
  * — not an `assertNever` — because ignoring the rest is the intended, permanent behavior here (this path
  * deliberately consumes only `conversationCreated`), mirroring `translateConversationsEvent`. Returns

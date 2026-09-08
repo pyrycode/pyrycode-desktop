@@ -320,3 +320,29 @@ absolutely positioned at different insets, so drawing the plus moves nothing the
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+### 2026-09-08 — how the e2e drive proves "the thread opens"
+
+The Testing-strategy section above says the happy-path spec asserts that the thread opens. Implemented
+literally — a `.composer` count of 1 — that assertion is **vacuous**, and the first run of the spec proved
+it: `launchPairedApp` clicks the single seeded row at launch, so the app is already on a thread with a
+composer before the drive begins, and the read passes with the navigation deleted. The sibling assertion in
+the refusal drive (`.composer` count 0) failed for the same reason, which is what surfaced it.
+
+Both now read the marked row's title through `.channel-list__row-open[aria-current="true"]`, with the
+launch value established BEFORE the create so each read is a mutation check: it moves from the fixture's
+seeded name to the new chat's "Untitled" placeholder on a confirmation, and must still read the seeded name
+on a refusal. Same criterion, a detector that can actually fail.
+
+No design changed; the plan's Open Questions are unaffected, and Question 2's answer stands as written.
+
+### 2026-09-08 — the two drives calibrate each other, in place of a withheld-reply fixture
+
+The Testing strategy declines the withheld-reply fixture variant and rests the in-flight state on the
+static tier. That leaves one gap the plan did not name: on its own, "the dialog closed" would also pass
+against a Start chat that closed on its own click and never waited — the design this ticket rejects. The
+refusal drive closes it without new fixture work, by running the same click and reading the dialog still
+open: the only difference between the two outcomes is the daemon's answer. Recorded in the spec's header so
+neither drive is read alone.

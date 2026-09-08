@@ -15,7 +15,8 @@ import type {
   RecentWorkspace,
   RecentWorkspacesPayload,
   WorkspaceUpdatedPayload,
-  RenameWorkspacePayload
+  RenameWorkspacePayload,
+  ErrorPayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -105,6 +106,19 @@ export interface ConversationStateFake {
 export interface ConversationStateFakeOptions {
   /** Initial held list, in wire order. Default: a single promoted, named row (DEFAULT_SEED). */
   conversations?: ConversationSummary[]
+  /**
+   * How the fake answers a `create_conversation` (#1308). Default `'created'` — the shipped behaviour,
+   * a correlated `conversation_created` minting a row. `'rejected'` answers with a daemon `error` frame
+   * echoing the request's envelope id as `in_reply_to` and mints NOTHING, which is what the daemon does
+   * when the requested folder escapes its home or does not exist.
+   *
+   * THE FIRST DAEMON REFUSAL THIS FAKE MODELS AT ALL, and deliberately the narrowest possible one: a
+   * whole-fake switch rather than a per-path predicate. A predicate would have to decide WHICH paths the
+   * daemon accepts, which is exactly the server-side policy this client is not allowed to reimplement —
+   * and one spec proving "a refused create is reported" needs no such policy. Every other verb in the
+   * switch keeps its "modelling daemon rejections is out of scope" posture.
+   */
+  createOutcome?: 'created' | 'rejected'
   /** Seeded recent-workspaces list answered on a `recent_workspaces` request (#456). Default `[]` — a
    *  valid loaded-empty reply. READ-ONLY (recent_workspaces has no mutation verb), so it is captured as a
    *  plain const, unlike the mutable `list`. Reused by the split sibling #457, which is why it lives here
@@ -155,6 +169,9 @@ export function conversationStateFake(
   // The seeded recent-workspaces answer — read-only (no mutation verb touches it), so a plain const, not
   // the mutable `list`. Default `[]` = a valid loaded-empty `recent_workspaces_list` reply (#456).
   const recents: RecentWorkspace[] = options.recentWorkspaces ?? []
+  // Read-only for the fake's life, like `recents`: a spec picks the outcome when it builds the fake, and
+  // no verb changes it mid-run.
+  const createOutcome = options.createOutcome ?? 'created'
   // Monotonic id source for minted rows — deterministic, no clock/random.
   let nextCreatedId = 1
 
@@ -183,6 +200,12 @@ export function conversationStateFake(
         return [conversationsFrame(list)]
 
       case 'create_conversation': {
+        // The refusal arm (#1308), ahead of the mint: nothing is pushed to `list`, so a spec asserting
+        // "no row appeared" is asserting about a fake that genuinely created none. The reply correlates by
+        // `in_reply_to`, which is what main's `pendingCreateConversations` matches on to emit the bare
+        // `conversationCreateRejected` — the message below never reaches the window and is here only
+        // because the wire type requires one.
+        if (createOutcome === 'rejected') return [errorFrame(env.id)]
         const payload = env.payload as CreateConversationPayload
         const row: ConversationSummary = {
           id: `created-${nextCreatedId++}`,
@@ -365,6 +388,25 @@ function conversationDeletedFrame(id: string, inReplyTo: number): Uint8Array {
     ts: FIXED_TS,
     in_reply_to: inReplyTo,
     payload: { id } satisfies ConversationDeletedPayload
+  })
+}
+
+/** A daemon `error` CORRELATED reply (#1308) — the request id echoed as `in_reply_to`, which is the only
+ *  field the client correlates on. The `code` is one the daemon really uses for this refusal and the
+ *  `message` is static and names no path, matching what the daemon promises; neither reaches the window,
+ *  which receives a nullary `conversationCreateRejected` and nothing else. `retryable: false` because a
+ *  folder that does not exist will not start existing on a retry of the same request. */
+function errorFrame(inReplyTo: number): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'error',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: {
+      code: 'workspace.not_found',
+      message: 'workspace not found',
+      retryable: false
+    } satisfies ErrorPayload
   })
 }
 

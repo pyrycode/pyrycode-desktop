@@ -181,6 +181,90 @@ Nothing imports this module yet.
   (`reducePendingAttachments`, the pending-set ref) is [Composer attach § Pending
   attachments](composer-attach-pending.md#pending-attachments-1039).
 
+- **[#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) (shipped)** added the sixth chrome
+  scalar, `thinkingTokens: number | null`, and the `thinkingProgress` arm — the render consumer of
+  [#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313)'s dormant `DaemonEvent` (decoded at
+  [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)). `timelineBridge.ts` moved
+  `thinkingProgress` from its inverse-filter `null` group to an owned arm (a filter dropping
+  `conversationId`, field-for-field like `apiRetry`/`compacting`); `ConversationScreen.tsx`'s thinking
+  label gained a new required `thinkingTokens` prop and a module-private `thinkingLabel` formatter
+  (`apiRetryLabel`'s sibling). Unlike every scalar before it the reducer arm **assigns** rather than
+  compares — the reading is not monotonic, restarting near zero at every inference-request boundary — and
+  its three clearing edges (a `turnState` that is not `thinking`, `turnEnd`, `reconnected`) match none of
+  the four scalars above it: not self-cleared by turn activity (`stalled`'s rule, which would blank a live
+  reading mid-think whenever claude interleaves a tool call) and not clearable-only-by-its-own-falling-edge
+  (`apiRetry`/`compacting`'s rule, since the wire sends no falling edge for this frame at all). Full design
+  and the security review of the unbounded daemon integer: `docs/specs/architecture/1314-thinking-token-estimate-status-row.md`.
+
 ## Related
 
 - [Thread timeline](thread-timeline.md) — the parent page: current types, reducer contract, edge cases.
+- The per-ticket `#XXX codebase notes` links below moved here from the parent page's own Related section
+  on 2026-09-08 to stay under its size cap — nothing about the current contract changed, only where the
+  historical pointer lives.
+- [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
+  `assistantDelta`/`turnEnd` `DaemonEvent` arms this module's `ThreadEvent` union targets.
+- [#202 codebase notes](../codebase/202.md) — the store + bridge slice built on this module.
+- [#203 codebase notes](../codebase/203.md) — the render slice; resolved the React-key question (array
+  index) and derived the streaming cursor structurally from the reducer's append-only/tail-mutation
+  invariant.
+- [#214 codebase notes](../codebase/214.md) — the `turn_state` transport slice: wire types, decode
+  (closed-enum idiom), and the `turnState` `DaemonEvent`/`ThreadEvent` arms; gave `selectPhase` its
+  first real source.
+- [#217 codebase notes](../codebase/217.md) — the `tool_use` transport slice: wire types, decode
+  (required-string presence, no enum), and the `toolUse` `DaemonEvent`/`ThreadEvent` arms; gave
+  `reduceTimeline`'s `toolUse` arm its first real feed, appending a `toolCall` item onto `selectItems`.
+- [#229 codebase notes](../codebase/229.md) — the `tool_result` transport slice, the vertical's last
+  transport slice: wire types, decode (four required strings + one `requireBoolean`), and the
+  `toolResult` `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult`
+  correlation its first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
+- [#230 codebase notes](../codebase/230.md) — extends #218's pending `toolCall` chip to resolve in
+  place from `item.result`, and introduces desktop's first error-family design token, `--color-error`.
+- [#696 codebase notes](../codebase/696.md) — extracts the `toolCall` arm into an exported `ToolRow`
+  and reverses #230's decision not to surface `result.resultSummary`, drawing it in a bounded body
+  behind a still-unwired `expanded` flag.
+- [#245 codebase notes](../codebase/245.md) — added the fourth `ThreadItem` kind, `userText`, dormant
+  with a placeholder render arm.
+- [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires
+  `userText`'s producer and real render row, and retires the coarse `MessageThread` in the same commit.
+- [#286 codebase notes](../codebase/286.md) — added the fifth `ThreadItem` kind, `sessionBoundary`,
+  and its `TimelineRow` render row + pure long-form relative-time view-model.
+- [#315 codebase notes](../codebase/315.md) — the transport slice: decodes `stall` into the (at ship
+  time) nullary `stallDetected` `DaemonEvent`, shipped dormant.
+- [#732 codebase notes](../codebase/732.md) — widened `stallDetected` with `conversationId`; the id
+  stops at the timeline bridge, so `ThreadEvent.stallDetected` above is unaffected.
+- [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
+  `stallDetected` arm, and `StallIndicator` (retired, folded into `ThinkingIndicator` by #967 — see
+  [Conversation shell § Thinking / working indicator § Retired by
+  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+- [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
+  non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
+- [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
+  arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
+  supersede predicate (`ApiRetryIndicator` retired, folded into `ThinkingIndicator` by #967 — see
+  [Conversation shell § Thinking / working indicator § Retired by
+  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+- [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
+  non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
+- [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
+  `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
+  second `shouldShowThinking` clause (`CompactingIndicator` retired, folded into `ThinkingIndicator` by
+  #967 — see [Conversation shell § Thinking / working indicator § Retired by
+  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
+- [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
+  `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
+- [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
+  switch, via [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
+- [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
+  ending, unconditional, via
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
+- [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
+  optional `DaemonEvent.toolUse.input` field, shipped dormant.
+- [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried
+  unchanged and by reference through the bridge and the reducer; ships dormant.
+- [#773 codebase notes](../codebase/773.md) — widens the `toolResult`/`ToolResult` pair with
+  `resultDetail`, wire through item in one ticket rather than #642/#643's split; ships dormant.
+- [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
+  the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
+  preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)
+  and `queueStore` #197 already got.

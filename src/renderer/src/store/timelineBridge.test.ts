@@ -14,7 +14,8 @@ import {
   selectItems,
   selectPhase,
   selectStalled,
-  selectApiRetry
+  selectApiRetry,
+  selectThinkingTokens
 } from './timelineStore'
 import {
   createConversationTimelineStore,
@@ -300,6 +301,27 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).toEqual({ type: 'compacting', active: true })
     // A fresh literal, not a pass-through of the DaemonEvent object.
     expect(translated).not.toBe(event)
+  })
+
+  it('thinkingProgress → a ThreadEvent carrying the reading alone, the id dropped (#1314)', () => {
+    const event: DaemonEvent = {
+      type: 'thinkingProgress',
+      estimatedTokens: 1200,
+      conversationId: 'conv-1'
+    }
+    const translated = translateTimelineEvent(event)
+    // `toEqual` on the whole object is what pins the DROP: a pass-through or a spread would carry
+    // `conversationId` into the reducer, and the id must stop at this bridge.
+    expect(translated).toEqual({ type: 'thinkingProgress', estimatedTokens: 1200 })
+    expect(translated).not.toBe(event)
+  })
+
+  it('thinkingProgress → carries a ZERO reading through, never collapsing it to an absence', () => {
+    // The wire has no `omitempty`, so the daemon's zero is legal traffic. A translator that tested
+    // truthiness would drop it here and the label would read as though nothing had been reported.
+    expect(
+      translateTimelineEvent({ type: 'thinkingProgress', estimatedTokens: 0, conversationId: 'c' })
+    ).toEqual({ type: 'thinkingProgress', estimatedTokens: 0 })
   })
 
   it('unrecognizedMessage → a ThreadEvent carrying all four fields, a fresh object', () => {
@@ -590,12 +612,9 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         questionBatchId: 'qb_01HZY',
         outcome: 'unanswered',
         source: 'no_answer'
-      },
-      // the thinking-token reading ships DORMANT (#1313) rather than permanently no-op: its consumer
-      // is the #1314 render slice, which is the one that decides whether a reading draws here or
-      // through a subscriber of its own. A READING, not a state transition — no rising and no falling
-      // edge, no turn_id, opens and closes no turn.
-      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
+      }
+      // (thinkingProgress is no longer a member — #1314 claimed it as an owned arm, the way #493 and
+      // #496 each eventually claimed theirs out of this same group. See its own case below.)
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -645,6 +664,10 @@ describe('timelineTargetFor', () => {
     ],
     ['conv-compacting', { type: 'compacting', active: true, conversationId: 'conv-compacting' }],
     [
+      'conv-thinking',
+      { type: 'thinkingProgress', estimatedTokens: 840, conversationId: 'conv-thinking' }
+    ],
+    [
       'conv-unrecognized',
       {
         type: 'unrecognizedMessage',
@@ -657,8 +680,8 @@ describe('timelineTargetFor', () => {
     ]
   ]
 
-  it('returns each id-carrying owned arm its OWN conversation id (all nine)', () => {
-    expect(idCarrying).toHaveLength(9)
+  it('returns each id-carrying owned arm its OWN conversation id (all ten)', () => {
+    expect(idCarrying).toHaveLength(10)
     for (const [expected, event] of idCarrying) {
       expect(timelineTargetFor(event)).toBe(expected)
     }
@@ -1167,19 +1190,36 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
-  it('#1313: a thinkingProgress daemon event creates NO timeline item (ships dormant)', () => {
+  it('#1314: a thinkingProgress daemon event sets the scalar and creates NO timeline item', () => {
     const bridge = fakeBridge()
     const store = createTimelineStore()
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
-    const before = store.getState()
     bridge.emit({ type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' })
 
-    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
-    // state ref), AND no chat row exists. The first half is what makes "no store the window reads is
-    // written differently than before this slice" an assertion rather than a claim.
-    expect(store.getState()).toBe(before)
+    // #1313's version of this test asserted the SAME state reference — the bridge filtered the event
+    // out entirely. That half is what #1314 reverses, and deliberately: the reading now reaches the
+    // reducer. What survives unchanged is the other half, which was always the load-bearing one — a
+    // reading is chrome, never a row, so no chat row exists for it and none ever will.
+    expect(selectThinkingTokens(store.getState())).toBe(1200)
     expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#1314: the reading routes by its OWN conversation id, not the open-conversation fallback', () => {
+    // The whole point of the arm joining `timelineTargetFor`'s id-carrying group: a reading for a chat
+    // that is not on screen must land on THAT chat's slice. The getter would resolve a different id,
+    // and it must never be consulted — which is directly assertable on a spy.
+    const bridge = fakeBridge()
+    const targets: (string | null)[] = []
+    const getOpen = vi.fn(() => 'conv-on-screen')
+    subscribeTimeline(bridge.onDaemonEvent, (event, conversationId) => {
+      targets.push(timelineWriteTarget(event, conversationId, getOpen))
+    })
+
+    bridge.emit({ type: 'thinkingProgress', estimatedTokens: 42, conversationId: 'conv-background' })
+
+    expect(targets).toEqual(['conv-background'])
+    expect(getOpen).not.toHaveBeenCalled()
   })
 
   it('#885: a questionShown daemon event creates NO timeline item (permanently, not dormant)', () => {

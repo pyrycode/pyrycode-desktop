@@ -312,6 +312,24 @@ export type ThreadEvent =
   // echo is already unreachable from here, and a second guard in the reducer would defend a failure mode
   // the producer makes impossible.
   | { type: 'dropUserText'; messageId: string }
+  // #1314: one thinking-token reading (#1312 decodes it, #1313 carried it to the window, this slice gives
+  // it a consumer). The DaemonEvent carries `conversationId` beside the one render field; the ThreadEvent
+  // this arm describes does not, so the id STOPS at the bridge — a filter + fresh literal (the `apiRetry` /
+  // `compacting` discipline), never a pass-through. One integer and no string field, so the
+  // "no daemon-supplied string is ever rendered" guarantee stays true by construction, as it does for
+  // `stallDetected` and `apiRetry`.
+  //
+  // A READING, NOT AN EDGE, and that is the whole contrast with the two arms it otherwise resembles.
+  // `apiRetry` and `compacting` each carry `active` and the reducer translates that edge into presence;
+  // this frame has no rising and no falling edge at all, so there is no `active` here and no consumer may
+  // look for one. The clears are the REDUCER's, derived from the turn's own lifecycle — see the arm.
+  //
+  // NOT MONOTONIC: the value restarts near zero at every inference-request boundary, four times inside the
+  // daemon's own committed single-turn capture, so a DROP is ordinary traffic and the arm assigns rather
+  // than comparing magnitudes. `estimatedTokens: 0` is a READING, never an absence — nothing may consult
+  // truthiness on it. `estimated_tokens_delta` deliberately does not cross the IPC boundary and is not
+  // accumulated here: the payload's own contract says the deltas do not sum to the turn's total.
+  | { type: 'thinkingProgress'; estimatedTokens: number }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -328,7 +346,7 @@ export interface ApiRetryStatus {
   total: number
 }
 
-/** The whole timeline state: ordered content + the coarse lifecycle phase + the four chrome scalars. */
+/** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
   items: readonly ThreadItem[]
   phase: TurnPhase
@@ -364,6 +382,27 @@ export interface TimelineState {
   // `isTurnRunning` — the interrupt control's only gate — structurally unable to see this signal, so a
   // locally-opened window can never arm a stop button for a turn the daemon has not started.
   localSendPending: boolean
+  // #1314: the latest thinking-token reading for this conversation, or `null` when none is held. The fifth
+  // chrome scalar, and the second to carry a value rather than a liveness fact — `| null` follows
+  // `apiRetry` for that reason, while the payload itself is a bare `number` rather than a record, because
+  // there is one reading and nothing to pair it with (the same "do not cargo-cult #493's structure past
+  // the reason for it" `compacting` applied in the other direction).
+  //
+  // `0` IS A HELD READING, never an absence: the wire has no `omitempty`, so the daemon's zero is legal
+  // traffic. That is exactly why this is `| null` and not a sentinel zero — the two facts are distinct and
+  // a consumer must be able to tell "no reading yet" from "a reading of nothing".
+  //
+  // ITS CLEAR RULES MATCH NONE OF THE FOUR ABOVE, and they are the turn's own lifecycle rather than an
+  // edge of its own (the frame has none):
+  //  - NOT self-cleared by turn activity (`stalled`'s rule): claude interleaves tool calls with its
+  //    thinking, so clearing on a delta or a tool step would blank a live reading mid-think, which is the
+  //    long silence this scalar exists to explain.
+  //  - NOT cleared by a daemon falling edge (`apiRetry`/`compacting`'s rule): there is no falling edge on
+  //    the wire to wait for, and a scalar clearable only by one that never comes sticks forever.
+  //  So: cleared by a `turnState` that is NOT `thinking`, by `turnEnd`, and by `reconnected` — plus `reset`
+  //  for free. Two guards widened for it; see the `turnState` and `reconnected` arms, and the `toolResult`
+  //  arm for the one that deliberately did not.
+  thinkingTokens: number | null
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -480,7 +519,9 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: false,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        // #1314: carried. Turn content is NOT one of the three clearing edges — see the field's contract.
+        thinkingTokens: state.thinkingTokens
       }
     case 'toolUse':
       // Turn activity — clears a live stall (AC2). Already appends a fresh `items`, so just carry
@@ -506,7 +547,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: false,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        thinkingTokens: state.thinkingTokens
       }
     case 'toolResult': {
       // #773: `resultDetail` is carried onto the result verbatim and unconditionally — never a
@@ -537,7 +579,12 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
-            localSendPending: state.localSendPending
+            localSendPending: state.localSendPending,
+            // #1314: carried on BOTH paths, and the guard above deliberately does NOT widen for it — the
+            // `apiRetry` / `compacting` / `localSendPending` reading, not `stalled`'s. A tool result is not
+            // one of the three clearing edges, so an orphan or duplicate result against a held reading
+            // must stay the same-reference no-op it is today.
+            thinkingTokens: state.thinkingTokens
           }
     }
     case 'turnState':
@@ -556,7 +603,18 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // has its window closed by that turn's `turn_state{idle}`, so the indicator can go briefly dark
       // until the daemon reports the new turn — the ticket's own reading, and the queued-message path
       // (#293/#294) is where that case properly lives.
-      return event.state === state.phase && !state.stalled && !state.localSendPending
+      // #1314: this arm is the FIRST of the reading's three clearing edges, and the only conditional one —
+      // the daemon re-asserting `thinking` is not a clear (a reading and the phase that produced it are the
+      // same fact), while any other state means the think this reading described is over. So the guard
+      // widens a THIRD time, and for `localSendPending`'s exact reason rather than by symmetry: without the
+      // new clause a `turn_state{idle}` against an already-idle phase early-outs, and a reading from the
+      // finished turn is still on screen. Expressed as a condition on the EVENT's state, never on
+      // `state.phase`, so a reading that arrives before the daemon's first `turn_state` is not clung to by
+      // a stale phase.
+      return event.state === state.phase &&
+        !state.stalled &&
+        !state.localSendPending &&
+        (event.state === 'thinking' || state.thinkingTokens === null)
         ? state
         : {
             items: state.items,
@@ -564,7 +622,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
-            localSendPending: false
+            localSendPending: false,
+            thinkingTokens: event.state === 'thinking' ? state.thinkingTokens : null
           }
     case 'turnEnd':
       // Appends a boundary; does NOT reset phase — the daemon emits `turn_state: 'idle'` separately.
@@ -579,7 +638,13 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        // #1314: the SECOND clearing edge. A turn boundary is not turn activity — which is why `stalled`
+        // is carried one line up — but it is the end of the thinking this reading measured, and the daemon
+        // sends no falling edge of its own for the reading to wait on. It clears here even though `phase`
+        // does not reset (the paired `turn_state: idle` owns that), so the row keeps showing the thinking
+        // label and it reverts to the bare copy — the shape AC4's e2e reads positively.
+        thinkingTokens: null
       }
     case 'userText':
       // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
@@ -626,7 +691,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: true
+        localSendPending: true,
+        // #1314: carried. A renderer-sourced echo is no more the daemon's word on the reading than it is
+        // on the stall one line up; the operator sending a second message mid-turn does not un-say how
+        // deep the running think is.
+        thinkingTokens: state.thinkingTokens
       }
     case 'dropUserText': {
       // #1213: the operator cancelled the queued message this echo stood for, so the echo comes out. The
@@ -656,7 +725,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: state.stalled,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
-            localSendPending: state.localSendPending
+            localSendPending: state.localSendPending,
+            thinkingTokens: state.thinkingTokens
           }
     }
     case 'sessionBoundary':
@@ -677,7 +747,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        thinkingTokens: state.thinkingTokens
       }
     case 'unrecognizedMessage':
       // A whole diagnostic marker: fresh tail-append, `phase` untouched — the `sessionBoundary` /
@@ -706,7 +777,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: state.apiRetry,
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        thinkingTokens: state.thinkingTokens
       }
     case 'stallDetected':
       // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
@@ -722,7 +794,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: true,
             apiRetry: state.apiRetry,
             compacting: state.compacting,
-            localSendPending: state.localSendPending
+            localSendPending: state.localSendPending,
+            thinkingTokens: state.thinkingTokens
           }
     case 'apiRetry': {
       // #493: the two-edged api-retry status — set from the rising edge, cleared ONLY by the falling one.
@@ -741,7 +814,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
               stalled: state.stalled,
               apiRetry: null,
               compacting: state.compacting,
-              localSendPending: state.localSendPending
+              localSendPending: state.localSendPending,
+              thinkingTokens: state.thinkingTokens
             }
       }
       // The rising edge re-fires as the count climbs and the daemon may repeat an identical frame (no
@@ -756,7 +830,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         stalled: state.stalled,
         apiRetry: { current: event.current, total: event.total },
         compacting: state.compacting,
-        localSendPending: state.localSendPending
+        localSendPending: state.localSendPending,
+        thinkingTokens: state.thinkingTokens
       }
     }
     case 'compacting':
@@ -776,13 +851,43 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: state.stalled,
             apiRetry: state.apiRetry,
             compacting: event.active,
-            localSendPending: state.localSendPending
+            localSendPending: state.localSendPending,
+            thinkingTokens: state.thinkingTokens
+          }
+    case 'thinkingProgress':
+      // #1314: the latest thinking-token reading. The state IS the event's payload, so there is one
+      // expression and no edge to translate — the closest arm in shape to `compacting` directly above, and
+      // the furthest from it in meaning (that one carries a two-edged liveness fact; this one carries a
+      // number and has no edges at all, so its clears live on OTHER arms).
+      //
+      // ASSIGNED, NEVER COMPARED FOR MAGNITUDE. The reading is not monotonic — it restarts near zero at
+      // every inference-request boundary — so a `Math.max` or any only-if-larger guard would eat ordinary
+      // traffic and freeze the label at the first request's peak.
+      //
+      // A verbatim repeat returns the SAME state reference: the wire has no dedup and re-fires as the
+      // count climbs, so without this the label churns its subscribers on every identical frame. `0` takes
+      // this path like any other value — the check is on equality, never on truthiness.
+      //
+      // `items` / `phase` are untouched on every path: a reading is chrome, and it neither opens, closes
+      // nor alters a turn (the frame carries no turn_id and the daemon attributes none). The other four
+      // chrome scalars are independent facts, carried through unchanged.
+      return state.thinkingTokens === event.estimatedTokens
+        ? state
+        : {
+            items: state.items,
+            phase: state.phase,
+            stalled: state.stalled,
+            apiRetry: state.apiRetry,
+            compacting: state.compacting,
+            localSendPending: state.localSendPending,
+            thinkingTokens: event.estimatedTokens
           }
     case 'reset':
-      // All six fields clear in one step. Returning the shared const rather than a hand-written
+      // All seven fields clear in one step. Returning the shared const rather than a hand-written
       // literal is what makes the equality with `initialTimelineState` an identity instead of a
-      // coincidence — a seventh `TimelineState` field is cleared for free, where a literal would
-      // silently keep the stale value and still compile. (#650's `localSendPending` is the sixth, and
+      // coincidence — an eighth `TimelineState` field is cleared for free, where a literal would
+      // silently keep the stale value and still compile. (#650's `localSendPending` is the sixth and
+      // #1314's `thinkingTokens` the seventh, and
       // it cost this arm nothing: a conversation switch or an unpair leaves no locally-opened window
       // behind, for free.) It also buys two properties: a second reset
       // is a no-op reference (idempotent), and `items` stays the SAME reference, so a no-op reset
@@ -797,14 +902,14 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // lost to a disconnect leaves the banner stuck until the app restarts. `protocol-mobile.md`
       // § Reconnect / Backfill splits reconnect by data type: Mode B (control state) resets and rebuilds
       // from whatever the daemon re-asserts, while Mode A (the transcript) reconciles by cursor backfill.
-      // The five chrome scalars are Mode B; `items` is Mode A, which is exactly why it survives BY
+      // The six chrome scalars are Mode B; `items` is Mode A, which is exactly why it survives BY
       // REFERENCE here — a fresh array would blank nothing but would re-render every `selectItems`
       // subscriber, and the shared `initialTimelineState.items` would blank the transcript outright.
       //
       // Hand-written literal, NOT `{ ...initialTimelineState, items: state.items }`: the spread would
       // clear a future seventh field for free, and "for free" is the wrong default here — a new field
       // could be durable Mode A content (wrongly wiped) as easily as Mode B chrome (rightly cleared).
-      // The explicit six fields make a seventh a COMPILE ERROR in this arm, forcing that classification.
+      // The explicit seven fields make an eighth a COMPILE ERROR in this arm, forcing that classification.
       // (`reset` returning the shared constant is the deliberate opposite: it clears everything, so
       // "for free" is unambiguously right there.) It is also this file's idiom — every arm writes all
       // six out. The early-out predicate below is the one thing the compiler cannot keep in sync: a
@@ -825,12 +930,19 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
       // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
       // banner over a permanently-stuck one; do not engineer around it here.
+      // #1314 is that classification for the seventh field, and it is Mode B: a thinking-token reading is
+      // transient chrome about a turn that was running on the OTHER side of the disconnect, and the daemon
+      // re-asserts no `thinking_progress` on connect. Held across the reconcile it would report the depth
+      // of a think that has since finished — the stuck-banner hazard in its plainest form, since this
+      // frame has no falling edge at all to lose. Hence the fifth predicate clause: a state whose ONLY
+      // live chrome is a held reading must NOT early-out.
       const nothingLive =
         state.phase === 'idle' &&
         !state.stalled &&
         state.apiRetry === null &&
         !state.compacting &&
-        !state.localSendPending
+        !state.localSendPending &&
+        state.thinkingTokens === null
       return nothingLive
         ? state
         : {
@@ -839,7 +951,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             stalled: false,
             apiRetry: null,
             compacting: false,
-            localSendPending: false
+            localSendPending: false,
+            thinkingTokens: null
           }
     }
     default:
@@ -853,7 +966,8 @@ export const initialTimelineState: TimelineState = {
   stalled: false,
   apiRetry: null,
   compacting: false,
-  localSendPending: false
+  localSendPending: false,
+  thinkingTokens: null
 }
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */
@@ -863,3 +977,4 @@ export const selectStalled = (s: TimelineState): boolean => s.stalled
 export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry
 export const selectCompacting = (s: TimelineState): boolean => s.compacting
 export const selectLocalSendPending = (s: TimelineState): boolean => s.localSendPending
+export const selectThinkingTokens = (s: TimelineState): number | null => s.thinkingTokens

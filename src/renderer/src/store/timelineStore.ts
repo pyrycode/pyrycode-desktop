@@ -54,5 +54,6 @@ export {
   selectStalled,
   selectApiRetry,
   selectCompacting,
-  selectLocalSendPending
+  selectLocalSendPending,
+  selectThinkingTokens
 } from './threadTimeline'

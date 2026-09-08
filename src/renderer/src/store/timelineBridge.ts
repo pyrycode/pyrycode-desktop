@@ -79,10 +79,10 @@ export function liveJoinKeyFor(event: DaemonEvent): string | undefined {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the twelve timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * timeline state. Owns exactly the thirteen timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
  * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage` / `connected`→`reconnected` #538 /
- * `messageReceived`→`userText` #1223); each is reconstructed
+ * `messageReceived`→`userText` #1223 / `thinkingProgress` #1314); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts`). This is a filter, not a
@@ -222,6 +222,19 @@ export function translateTimelineEvent(
       // the DaemonEvent object. Both edges translate verbatim — deciding what `active: false` means is
       // reduceTimeline's job, not the bridge's — the translator normalizes nothing.
       return { type: 'compacting', active: event.active }
+    case 'thinkingProgress':
+      // #1314: the thinking-token reading (#1312 decodes it, #1313 carried it here, this slice gives it
+      // a consumer). The DaemonEvent carries `conversationId` beside the one render field; the
+      // ThreadEvent this returns does not, so the id STOPS here — a filter + fresh literal (arm
+      // selection), never a pass-through of the DaemonEvent object. That drop is what keeps the routing
+      // key out of the reducer, the label and the DOM entirely; it reaches the keyed store through
+      // `timelineTargetFor` below, whose index is a `Map`.
+      //
+      // `estimatedTokens` is copied VERBATIM and unconditionally — no clamp, no floor, no truthiness
+      // test that would fold the daemon's legal zero into an absence, and no `estimatedTokensDelta`,
+      // which does not cross the IPC boundary at all. The translator normalizes nothing: deciding what
+      // a reading means is reduceTimeline's job and formatting it defensively is the label's.
+      return { type: 'thinkingProgress', estimatedTokens: event.estimatedTokens }
     case 'unrecognizedMessage':
       // The parser-gap diagnostic. The DaemonEvent carries `conversationId` (#784) beside the four
       // render fields; the ThreadEvent this returns does not, so the id STOPS here — a filter + fresh
@@ -308,7 +321,6 @@ export function translateTimelineEvent(
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':
-    case 'thinkingProgress':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -361,13 +373,9 @@ export function translateTimelineEvent(
       // exactly as the batch appearing was. It is worth saying rather than assuming, because a
       // dismissal is the kind of event that reads like something that "happened during the turn": it
       // does not, and there is no turn to file it under.
-      // thinkingProgress (#1313) lands here by the same queueState rule (#720) — no turn_id, opens and
-      // closes no turn — and it is the member of this group a reader is most likely to want here,
-      // since a mid-turn reading of how much claude thought reads exactly like thread chrome for the
-      // running turn. Its no-op is DORMANT rather than permanent: whether the reading draws through
-      // this bridge, as `apiRetry` (#493) and `compacting` (#496) eventually did, or through a
-      // subscriber of its own, as `questionShown` (#885) did, is the #1314 render slice's call and not
-      // this carry slice's. What is settled here is only that nothing draws it yet.
+      // (thinkingProgress is now an owned arm — #1314 wired its `thinkingTokens` scalar above, taking
+      // the route #1313 left open. Like the stall onset and the two edges beside it, it is thread
+      // chrome and not a timeline row, so it left this group without becoming one.)
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
@@ -513,8 +521,9 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'apiRetry':
     case 'compacting':
     case 'unrecognizedMessage':
-      // Nine of the eleven owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
-      // #766 / #732 / #737 / #742 / #784, the #675 family). It is REQUIRED on every one of them — a
+    case 'thinkingProgress':
+      // Ten of the twelve owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
+      // #766 / #732 / #737 / #742 / #784 / #1313, the #675 family). It is REQUIRED on every one of them — a
       // missing or non-string `conversation_id` fails the whole line at the decode without emitting — so
       // the routing key is non-nullable here by construction. TypeScript narrows across grouped cases,
       // so the field resolves with no cast and no probe.

@@ -1372,7 +1372,7 @@ describe('Timeline — the streamed assistant text', () => {
     expect(userMarkup).toContain('bubble bubble--user')
     expect(userMarkup).not.toContain(MODIFIER)
     const labelMarkup = renderToStaticMarkup(
-      <ThinkingIndicator state="thinking" toolName={null} retry={null} />
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />
     )
     expect(labelMarkup).not.toContain(MODIFIER)
     // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor the
@@ -2154,14 +2154,14 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
 // superseded the label" — those arrive as states of their own — it means there is nothing to say.
 describe('ThinkingIndicator — the row label for all four thread statuses (#215, #648, #649, #967)', () => {
   it('is inert when there is nothing to say — renders nothing (zero layout footprint, AC3)', () => {
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} retry={null} />)).toBe(
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} retry={null} thinkingTokens={null} />)).toBe(
       ''
     )
   })
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="thinking" toolName={null} retry={null} />
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />
     )
     // The stable test seam (the bubble__cursor role) — #796 RETAINED `conversation__thinking` when the
     // bubble treatment became the status row's label, precisely so this assertion and the two e2e
@@ -2180,9 +2180,109 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     expect(THINKING_COPY).toBe('Thinking…')
   })
 
+  // #1314: the reading rides INSIDE the thinking label's one text run. Rendered rather than called
+  // directly, because `thinkingLabel` is module-private on `apiRetryLabel`'s precedent — what matters is
+  // what reaches the DOM, and asserting on the markup is what pins the single-run rule too.
+  describe('the thinking-token estimate in the label (#1314)', () => {
+    const thinkingMarkup = (thinkingTokens: number | null): string =>
+      renderToStaticMarkup(
+        <ThinkingIndicator
+          state="thinking"
+          toolName={null}
+          retry={null}
+          thinkingTokens={thinkingTokens}
+        />
+      )
+
+    it('reads exactly as before with no estimate held (AC2)', () => {
+      expect(thinkingMarkup(null)).toContain(`>${THINKING_COPY}</span>`)
+    })
+
+    it.each([
+      [840, 'Thinking… ~840 tokens'],
+      // Zero is a READING, not an absence — the wire has no `omitempty`. A truthiness test anywhere on
+      // the path renders the bare copy here and this is the assertion that catches it.
+      [0, 'Thinking… ~0 tokens'],
+      [999, 'Thinking… ~999 tokens'],
+      // At 1000 and above the reading rounds to the nearest hundred (AC3). 1250 rounds UP, 1249 DOWN —
+      // the pair that pins the rounding rather than a floor or a truncation.
+      [1000, 'Thinking… ~1000 tokens'],
+      [1250, 'Thinking… ~1300 tokens'],
+      [1249, 'Thinking… ~1200 tokens'],
+      [12345, 'Thinking… ~12300 tokens']
+    ])('renders %i as %s (AC3)', (estimate, expected) => {
+      expect(thinkingMarkup(estimate)).toContain(`>${expected}</span>`)
+    })
+
+    it('is ONE text run, never constant-plus-span', () => {
+      // The row's label ellipsizes as a unit, so two runs would draw two ellipses on overflow. The
+      // `>…</span>` shape above already implies it; this asserts it directly, and it is the assertion a
+      // "give the number its own class" edit has to fail.
+      const markup = thinkingMarkup(640)
+      expect(markup).toBe(
+        '<span class="conversation__thinking composer-status__label">Thinking… ~640 tokens</span>'
+      )
+    })
+
+    it.each([NaN, Infinity, -Infinity, -5])(
+      'degrades to the bare copy for %p — the decode proves `number` and nothing more',
+      (hostile) => {
+        // `requireNumber` narrows on `typeof value === 'number'`, which admits every one of these, and
+        // structured clone carries them across the contextBridge intact. This is the defensive-formatting
+        // obligation in the arm's own SECURITY block, and the reason it is a degrade rather than a throw.
+        const markup = thinkingMarkup(hostile)
+        expect(markup).toContain(`>${THINKING_COPY}</span>`)
+        expect(markup).not.toContain('NaN')
+        expect(markup).not.toContain('Infinity')
+        expect(markup).not.toContain('~')
+      }
+    )
+
+    it('rounds a fractional reading rather than rendering its digits', () => {
+      expect(thinkingMarkup(840.7)).toContain('>Thinking… ~841 tokens</span>')
+    })
+
+    it.each(['working', 'retrying', 'compacting', 'stalled'] as const)(
+      'never reaches the %s label — the estimate belongs to thinking alone (AC2)',
+      (state) => {
+        const markup = renderToStaticMarkup(
+          <ThinkingIndicator
+            state={state}
+            toolName={null}
+            retry={{ current: 3, total: 10 }}
+            thinkingTokens={1500}
+          />
+        )
+        expect(markup).not.toContain('tokens')
+        expect(markup).not.toContain('1500')
+      }
+    )
+
+    it('does not survive the tool label — a named tool still replaces the copy whole', () => {
+      // `toolLabel` supersedes `statusRowCopy` unconditionally for thinking/working (#967). Unchanged
+      // behaviour, asserted because the estimate is exactly the kind of thing a later edit appends to
+      // every branch.
+      const markup = renderToStaticMarkup(
+        <ThinkingIndicator state="thinking" toolName="Bash" retry={null} thinkingTokens={900} />
+      )
+      expect(markup).toContain('Running Bash…')
+      expect(markup).not.toContain('tokens')
+    })
+
+    it('reaches the DOM as a text child and nothing else — no attribute carries it', () => {
+      // CLAUDE.md: daemon-derived values may be rendered escaped, never into an attribute, a URL, a
+      // title or a log. The `text-overflow: ellipsis` on this label is the standing temptation to add a
+      // title tooltip; the shipped treatment has none and the estimate does not introduce one.
+      const markup = thinkingMarkup(1500)
+      expect(markup).not.toContain('title=')
+      expect(markup).not.toContain('aria-label=')
+      expect(markup).not.toContain('data-')
+    })
+  })
+
   it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName={null} retry={null} />
+      <ThinkingIndicator state="working" toolName={null} retry={null} thinkingTokens={null} />
     )
     // The same element and the same class attribute — one surface, two labels, no CSS change (AC1's
     // "the indicator is visible", not "a second indicator appears").
@@ -2211,7 +2311,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('names the open tool on the same surface, replacing the generic copy (#649, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName="Bash" retry={null} />
+      <ThinkingIndicator state="working" toolName="Bash" retry={null} thinkingTokens={null} />
     )
     // The same element and the same base classes plus ONE modifier — one surface, now three labels
     // (AC1 is "the indicator names the tool", not "a second indicator appears").
@@ -2234,10 +2334,10 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // The #648 labels must render byte-identical markup, so their assertions above stay AC3's
     // regression evidence rather than being retyped against a moved target.
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} retry={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} retry={null} thinkingTokens={null} />)
     ).not.toContain('composer-status__label--tool')
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} retry={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} retry={null} thinkingTokens={null} />)
     ).not.toContain('composer-status__label--tool')
   })
 
@@ -2247,7 +2347,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // used to be a live api-retry or compaction (which blanked the state), and those now arrive as
     // states of their own. What is left is the honest empty case — an idle turn with no folded status
     // and no local send — where a stale unresolved toolCall can still be sitting in `items`.
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" retry={null} />)).toBe(
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" retry={null} thinkingTokens={null} />)).toBe(
       ''
     )
   })
@@ -2255,7 +2355,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
   it('renders a hostile tool name as inert escaped text, never as markup (#649, AC4)', () => {
     const hostile = '<img src=x onerror="alert(1)">'
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="working" toolName={hostile} retry={null} />
+      <ThinkingIndicator state="working" toolName={hostile} retry={null} thinkingTokens={null} />
     )
     // Attribute-shaped guards, not a bare not.toContain: a `not.toContain('src=')` would pass
     // vacuously. The name reaches the DOM only as an auto-escaped React text child (the tool row's own
@@ -2276,7 +2376,12 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
   // label's single text run instead of a `.api-retry__counter` span.
   it('shows the retry label with the attempt counter in ONE text run (#967, AC1, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 3, total: 10 }} />
+      <ThinkingIndicator
+        state="retrying"
+        toolName={null}
+        retry={{ current: 3, total: 10 }}
+        thinkingTokens={null}
+      />
     )
     expect(markup).toContain('class="conversation__thinking composer-status__label"')
     // ONE run, asserted as one: the copy, the separator space and the digits are a single text child
@@ -2291,14 +2396,24 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('renders a known zero attempt verbatim — 0/10 is not the unknown sentinel (#967, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 0, total: 10 }} />
+      <ThinkingIndicator
+        state="retrying"
+        toolName={null}
+        retry={{ current: 0, total: 10 }}
+        thinkingTokens={null}
+      />
     )
     expect(markup).toContain(`>${API_RETRY_COPY} attempt 0/10</span>`)
   })
 
   it('omits the counter entirely when the count is unknown — never renders 0/0 (#967, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 0, total: 0 }} />
+      <ThinkingIndicator
+        state="retrying"
+        toolName={null}
+        retry={{ current: 0, total: 0 }}
+        thinkingTokens={null}
+      />
     )
     // Still a visible retry status…
     expect(markup).toContain(API_RETRY_COPY)
@@ -2315,13 +2430,13 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
     // the same record — but the prop type admits it, and the bare copy is the honest answer. A degrade,
     // not a defence.
     expect(
-      renderToStaticMarkup(<ThinkingIndicator state="retrying" toolName={null} retry={null} />)
+      renderToStaticMarkup(<ThinkingIndicator state="retrying" toolName={null} retry={null} thinkingTokens={null} />)
     ).toContain(`>${API_RETRY_COPY}</span>`)
   })
 
   it('shows the compaction label on the same surface, in the rows own colour (#967, AC1)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="compacting" toolName={null} retry={null} />
+      <ThinkingIndicator state="compacting" toolName={null} retry={null} thinkingTokens={null} />
     )
     expect(markup).toContain(`>${COMPACTING_COPY}</span>`)
     // No modifier at all: compaction is claude working normally, so it keeps --color-primary — painting
@@ -2331,7 +2446,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
 
   it('shows the stall label with the error-colour modifier and nothing else (#967, AC3)', () => {
     const markup = renderToStaticMarkup(
-      <ThinkingIndicator state="stalled" toolName={null} retry={null} />
+      <ThinkingIndicator state="stalled" toolName={null} retry={null} thinkingTokens={null} />
     )
     expect(markup).toContain(`>${STALL_COPY}</span>`)
     // The WHOLE class attribute: the stall takes exactly one modifier, and the tool modifier is not it.
@@ -2345,7 +2460,12 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
   it('keeps the stalled modifier off the other four states — it is the stall alone (#967, AC3)', () => {
     for (const state of ['thinking', 'working', 'retrying', 'compacting'] as const) {
       const markup = renderToStaticMarkup(
-        <ThinkingIndicator state={state} toolName={null} retry={{ current: 1, total: 2 }} />
+        <ThinkingIndicator
+          state={state}
+          toolName={null}
+          retry={{ current: 1, total: 2 }}
+          thinkingTokens={null}
+        />
       )
       // Positive half first, so this cannot pass vacuously against markup with no label in it.
       expect(markup).toContain('composer-status__label')
@@ -2369,6 +2489,7 @@ describe('ThinkingIndicator — the row label for all four thread statuses (#215
           state={state as 'retrying' | 'compacting' | 'stalled'}
           toolName="Bash"
           retry={{ current: 3, total: 10 }}
+          thinkingTokens={null}
         />
       )
       expect(markup).toContain(`>${copy}</span>`)

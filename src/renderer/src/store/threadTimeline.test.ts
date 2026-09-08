@@ -129,6 +129,12 @@ function compacting(active: boolean): ThreadEvent {
   return { type: 'compacting', active }
 }
 
+/** #1314: one thinking-token reading. No default — a reading is the whole payload, and defaulting it
+ *  would let a test that meant to name a number silently assert against a house value. */
+function thinkingProgress(estimatedTokens: number): ThreadEvent {
+  return { type: 'thinkingProgress', estimatedTokens }
+}
+
 function unrecognized(
   site: 'line_type' | 'assistant_block' | 'user_block' | 'undecodable' = 'line_type',
   messageType = 'some_future_event',
@@ -1011,7 +1017,9 @@ describe('reduceTimeline — reset', () => {
   /** A state dirty on all six fields. The stall goes LAST: a turnState is turn activity and
    *  would clear it (the #317 semantics). #650: and the userText goes AFTER the turnState, for the
    *  mirror-image reason — a turnState clears `localSendPending`, so the original leading position
-   *  left this helper clean on the new field and the clear below would have proved nothing about it. */
+   *  left this helper clean on the new field and the clear below would have proved nothing about it.
+   *  #1314: the reading goes before the stall for the same family of reasons — after the turnState,
+   *  which clears it on any state but `thinking`, and ahead of the stall, which keeps its last place. */
   function dirty(): TimelineState {
     return run([
       delta('A', 'hi'),
@@ -1019,11 +1027,12 @@ describe('reduceTimeline — reset', () => {
       userText('typed'),
       apiRetry(true, 3, 10),
       compacting(true),
+      thinkingProgress(770),
       stall()
     ])
   }
 
-  it('clears all six fields from a fully dirty state (AC2)', () => {
+  it('clears all seven fields from a fully dirty state (AC2)', () => {
     const state = dirty()
     // Precondition: genuinely dirty on every field — otherwise reset proves nothing.
     expect(state.items.length).toBeGreaterThan(0)
@@ -1032,6 +1041,7 @@ describe('reduceTimeline — reset', () => {
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
     expect(state.localSendPending).toBe(true)
+    expect(state.thinkingTokens).not.toBeNull()
 
     const next = reduceTimeline(state, reset())
 
@@ -1041,6 +1051,7 @@ describe('reduceTimeline — reset', () => {
     expect(next.apiRetry).toBe(initialTimelineState.apiRetry)
     expect(next.compacting).toBe(initialTimelineState.compacting)
     expect(next.localSendPending).toBe(initialTimelineState.localSendPending)
+    expect(next.thinkingTokens).toBe(initialTimelineState.thinkingTokens)
   })
 
   it('returns the shared initial constant, not a fresh literal', () => {
@@ -1070,7 +1081,8 @@ describe('reduceTimeline — reset', () => {
 describe('reduceTimeline — reconnected', () => {
   /** A state dirty on all six fields — the `reset` block's helper, including its #650 ordering:
    *  the stall goes LAST (a turnState is turn activity and would clear it, the #317 semantics) and
-   *  the userText goes AFTER the turnState (a turnState clears `localSendPending`). */
+   *  the userText goes AFTER the turnState (a turnState clears `localSendPending`), and #1314's
+   *  reading goes after the turnState too (which clears it on any state but `thinking`). */
   function dirty(): TimelineState {
     return run([
       delta('A', 'hi'),
@@ -1078,11 +1090,12 @@ describe('reduceTimeline — reconnected', () => {
       userText('typed'),
       apiRetry(true, 3, 10),
       compacting(true),
+      thinkingProgress(770),
       stall()
     ])
   }
 
-  it('clears all five chrome scalars in one step (AC1)', () => {
+  it('clears all six chrome scalars in one step (AC1)', () => {
     const state = dirty()
     // Precondition: genuinely dirty on every scalar — otherwise the clear proves nothing.
     expect(state.phase).toBe('thinking')
@@ -1090,6 +1103,7 @@ describe('reduceTimeline — reconnected', () => {
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
     expect(state.localSendPending).toBe(true)
+    expect(state.thinkingTokens).not.toBeNull()
 
     const next = reduceTimeline(state, reconnected())
 
@@ -1098,6 +1112,7 @@ describe('reduceTimeline — reconnected', () => {
     expect(next.apiRetry).toBeNull()
     expect(next.compacting).toBe(false)
     expect(next.localSendPending).toBe(false)
+    expect(next.thinkingTokens).toBeNull()
   })
 
   it('leaves items untouched BY REFERENCE, so no selectItems subscriber re-renders (AC2)', () => {
@@ -1115,7 +1130,7 @@ describe('reduceTimeline — reconnected', () => {
   it('returns the same state reference against already-clean chrome (AC3)', () => {
     expect(reduceTimeline(initialTimelineState, reconnected())).toBe(initialTimelineState)
     // The case that pins the early-out predicate rather than the trivial initial-state one: dirty on
-    // `items` (a real transcript), clean on all five chrome scalars — a first connect mid-transcript.
+    // `items` (a real transcript), clean on all six chrome scalars — a first connect mid-transcript.
     // #650: the trailing `turn_state{idle}` is what makes the transcript chrome-clean now — the echo
     // opens the local window and the daemon's terminal idle is what closes it, so a completed turn is
     // the honest shape of "a real transcript with nothing live".
@@ -1165,6 +1180,108 @@ describe('reduceTimeline — reconnected', () => {
     expect(reduceTimeline(state, reconnected()).items).toBe(state.items)
     expect(reduceTimeline(state, reset()).items).toEqual([])
     expect(reduceTimeline(state, reconnected())).not.toBe(initialTimelineState)
+  })
+})
+
+describe('reduceTimeline — the thinking-token estimate (#1314)', () => {
+  it('holds the reading the frame carried, beside the other four chrome scalars', () => {
+    expect(run([thinkingProgress(840)]).thinkingTokens).toBe(840)
+  })
+
+  it('holds the LATEST reading, never a maximum — the wire is not monotonic', () => {
+    // The payload restarts near zero at every inference-request boundary, four times inside the
+    // daemon's own committed single-turn capture, so a DROP is ordinary traffic. A `Math.max` or any
+    // monotonic filter would eat it, and this is the assertion that reddens if one is ever added.
+    expect(run([thinkingProgress(184), thinkingProgress(167), thinkingProgress(4)]).thinkingTokens).toBe(4)
+  })
+
+  it('holds 0 as a reading, distinct from the absence null means', () => {
+    // Neither Go field carries `omitempty`, so the daemon's zero is legal traffic and nothing may
+    // consult truthiness on it. `toBe(0)` over a falsy check is the whole point of the test.
+    expect(initialTimelineState.thinkingTokens).toBeNull()
+    expect(run([thinkingProgress(0)]).thinkingTokens).toBe(0)
+  })
+
+  it('returns the SAME reference on a verbatim repeat — the wire has no dedup', () => {
+    const held = run([thinkingProgress(320)])
+    expect(reduceTimeline(held, thinkingProgress(320))).toBe(held)
+  })
+
+  it('touches neither items nor phase — chrome, never a row', () => {
+    const state = run([{ type: 'turnState', state: 'thinking' }, delta('A', 'hi'), thinkingProgress(500)])
+    expect(state.items).toEqual([{ kind: 'assistantText', turnId: 'A', text: 'hi' }])
+    expect(state.phase).toBe('thinking')
+  })
+
+  it('survives a turnState that IS thinking — the daemon re-asserting the phase is not a clear', () => {
+    const state = run([thinkingProgress(640), { type: 'turnState', state: 'thinking' }])
+    expect(state.thinkingTokens).toBe(640)
+  })
+
+  it.each(['responding', 'idle'] as const)('clears on turnState{%s} (AC1)', (phase) => {
+    expect(run([thinkingProgress(640), { type: 'turnState', state: phase }]).thinkingTokens).toBeNull()
+  })
+
+  it('does NOT early-out a turnState that only changes the estimate', () => {
+    // The widened guard's regression test. `turn_state{idle}` against an already-idle phase with no
+    // stall and no local send is the arm's early-out case; a held estimate must defeat it, or the
+    // clear never lands and a stale reading outlives its turn.
+    const held = reduceTimeline(run([thinkingProgress(900)]), { type: 'turnState', state: 'idle' })
+    expect(held.phase).toBe('idle')
+    expect(held.thinkingTokens).toBeNull()
+  })
+
+  it('clears on turnEnd (AC1), which leaves phase alone as it always has', () => {
+    const state = run([{ type: 'turnState', state: 'thinking' }, thinkingProgress(1200), turnEnd('A')])
+    expect(state.thinkingTokens).toBeNull()
+    // The e2e's premise: turnEnd does not reset `phase`, so the row is still mounted showing the
+    // thinking label — which is what makes AC4's closing read a POSITIVE one on a live row.
+    expect(state.phase).toBe('thinking')
+  })
+
+  it('clears on reconnected (AC1) — Mode B chrome, not Mode A transcript', () => {
+    expect(run([thinkingProgress(700), reconnected()]).thinkingTokens).toBeNull()
+  })
+
+  it('does NOT early-out a reconnect whose only live chrome is the estimate', () => {
+    // `nothingLive` is the one predicate the compiler cannot keep in sync with a new field. Without
+    // its widened clause this returns the same reference and a reading from before the disconnect is
+    // still on screen after a fresh handshake.
+    const held = run([thinkingProgress(450)])
+    const next = reduceTimeline(held, reconnected())
+    expect(next).not.toBe(held)
+    expect(next.thinkingTokens).toBeNull()
+  })
+
+  it('clears on reset, for free via the shared initial constant', () => {
+    expect(run([thinkingProgress(300), reset()]).thinkingTokens).toBeNull()
+  })
+
+  it('is carried unchanged by every arm that is not one of the three clearing edges', () => {
+    // AC1 enumerates exactly three clears. Turn CONTENT is deliberately not among them: clearing on a
+    // delta or a tool step would blank a live reading the instant claude interleaves a tool call with
+    // its thinking, which is precisely the long silence this feature exists to explain.
+    const carried: readonly ThreadEvent[] = [
+      delta('A', 'hi'),
+      toolUse('A', 't1'),
+      { type: 'toolResult', turnId: 'A', toolUseId: 't1', isError: false, resultSummary: 'ok' },
+      userText('typed'),
+      sessionBoundary(),
+      unrecognized(),
+      stall(),
+      apiRetry(true, 1, 3),
+      compacting(true)
+    ]
+    for (const event of carried) {
+      expect(reduceTimeline(run([thinkingProgress(555)]), event).thinkingTokens).toBe(555)
+    }
+  })
+
+  it('does not latch — a reading after a clear sets the scalar again', () => {
+    // The `compacting` regression shape: had the clear never landed, the same-reference no-op on a
+    // verbatim repeat would swallow the re-assert and the label would be wrong in the OTHER direction.
+    const state = run([thinkingProgress(120), reconnected(), thinkingProgress(120)])
+    expect(state.thinkingTokens).toBe(120)
   })
 })
 

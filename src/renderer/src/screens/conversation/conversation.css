@@ -2607,6 +2607,77 @@
   margin-bottom: var(--space-1);
 }
 
+/* #1264 — one tile's SLOT: the positioning context the remove control hangs on, OUTSIDE the frame's clip.
+
+   ⭐ IT EXISTS BECAUSE THE FRAME BELOW CLIPS AND THAT CLIP IS LOAD-BEARING. .composer__attachment declares
+   `overflow: hidden` for #1263's picture, which is `object-fit: cover` and overflows the 45-wide slot by
+   7.5px each side; the control overhangs the frame by 5px on both axes, so inside that frame it is simply
+   invisible. Dropping the clip to make room would un-cut the picture. Hence a wrapper: it takes the tile's
+   own 45x60 box and becomes the flex item in its place, so every tile's POSITION in the row is unchanged
+   (the shipped x = 0 / 57 / 114 geometry reads the same numbers), and it declares NO overflow of its own,
+   which is the whole point of the element.
+
+   The class shares no WHOLE class token with .composer__attachment — a class selector does not
+   prefix-match, and both unit tests count tiles with `class="composer__attachment"` including the closing
+   quote — so no shipped locator, tile count or tile text read can reach it. */
+.composer__attachment-slot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 45px;
+  height: 60px;
+}
+
+/* The control itself (Figma `Icon` 390:7183, at x=30 y=-5 in a 20x20 box against the 45x60 tile): a
+   circle-xmark hung off the tile's top-right corner, overhanging it by 5px on both axes.
+
+   THE 5px TOP OVERHANG NEEDS NO HEADROOM. .composer's padding-top is --space-2, which is the 8px the strip
+   already sits below (see .composer__attachments' arithmetic note), so the control hangs into padding that
+   is already there rather than into the status row above.
+
+   AND NO z-index. The control paints after its own tile (a later sibling in the slot) and its 5px right
+   overhang ends at x=50, inside the row's 12px gap — so the next slot, which starts at 57, never covers it.
+
+   ⭐ `filter`, NEVER `box-shadow`. The button's box is a 20x20 SQUARE and the drawing inside it is a circle;
+   a box-shadow would draw a rounded square floating behind a disc. drop-shadow follows the alpha of what is
+   actually painted, which is the design's `0 2px 1.5px rgba(0,0,0,0.25)` on the glyph. No shadow token
+   exists, so the literal is what ships here.
+
+   `color` is the GLYPH's ink, inherited through the svg's fill="currentColor"; the disc resolves its own
+   below. Both are read off the node's Figma VARIABLES (get_variable_defs on 390:7183: Schemes/Primary
+   #9dcbfc, Schemes/On Primary #003355) and corroborated by the export's own baked hexes — unlike the
+   transposed pair tokens.css warns about, name and hex agree here in both directions. */
+.composer__attachment-remove {
+  position: absolute;
+  left: 30px;
+  top: -5px;
+  display: block;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--color-primary);
+  filter: drop-shadow(0 2px 1.5px rgba(0, 0, 0, 0.25));
+  cursor: pointer;
+}
+
+/* This file's twenty-rule :focus-visible idiom, and NO hover rule. The design draws neither state
+   (Juhana's 2026-09-02 ruling: existing tokens until a drawing lands) — but a keyboard operator moving
+   across a row of these has to see which one is focused, where a pointer already says so on its own. The
+   ring follows the disc because the button is round. */
+.composer__attachment-remove:focus-visible {
+  outline: 1px solid var(--color-outline);
+  outline-offset: 1px;
+}
+
+/* The second ink. A presentation attribute cannot hold a var(), so the disc carries a class where the
+   glyph carries fill="currentColor" — AttachmentFileIcon's two-ink seam applied to a fill instead of a
+   stroke. A directly declared `fill` beats the inherited presentation attribute, so the two never fight. */
+.composer__attachment-remove-disc {
+  fill: var(--color-on-primary);
+}
+
 /* One tile: the 45x60 frame, the positioning context its extension overlay hangs on, and the GLYPH's ink.
    The measurements are the drawn constants with no theme role, .bubble__file-icon's ruling for the same
    drawing one region over — and `flex: 0 0 auto` states there, as it does here, that this item never

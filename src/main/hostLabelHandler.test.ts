@@ -2,10 +2,20 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   registerHostLabelHandler,
   registerHostLabelServerHandler,
+  registerHostLabelSetHandler,
   type HostLabelHandleTarget,
-  type HostLabelServerHandleTarget
+  type HostLabelServerHandleTarget,
+  type HostLabelSetHandleTarget
 } from './hostLabelHandler'
-import { HOST_LABEL_CHANNEL, HOST_LABEL_SERVER_CHANNEL } from '../shared/ipc/hostLabel'
+import {
+  HOST_LABEL_CHANNEL,
+  HOST_LABEL_SERVER_CHANNEL,
+  HOST_LABEL_SET_CHANNEL
+} from '../shared/ipc/hostLabel'
+import type {
+  MultiPairedServerStore,
+  PairedServerRecord
+} from './pairedServerStore'
 import { MAX_SERVER_ID_LENGTH } from '../shared/ipc/unpair'
 import { MAX_HOST_LABEL_LENGTH } from '../shared/ipc/pairing'
 import {
@@ -692,5 +702,452 @@ describe('the keyed and zero-argument host-label channels over one real store', 
 
     expect(await keyed({}, { serverId: 'server-a' })).toEqual({ status: 'not-stored' })
     expect(await bodyFree({})).toEqual({ status: 'not-stored' })
+  })
+})
+
+// ── The KEYED SET arm (#1186) ────────────────────────────────────────────────────────────────────
+// Same helper idiom as the two arms above, with two differences that are the whole shape of this
+// arm: the store fake carries the two MUTATORS rather than a read, and there is a second store — the
+// paired-server existence check, the first thing in this module that can materialise a record.
+
+function fakeSetTarget(): HostLabelSetHandleTarget & {
+  handle: ReturnType<typeof vi.fn>
+  removeHandler: ReturnType<typeof vi.fn>
+} {
+  return { handle: vi.fn(), removeHandler: vi.fn() }
+}
+
+function setListenerOf(
+  target: ReturnType<typeof fakeSetTarget>
+): (event: unknown, request: unknown) => Promise<unknown> {
+  return target.handle.mock.calls[0][1]
+}
+
+// A record whose two SECRET fields are recognisable strings. The existence check materialises one of
+// these, so every assertion that "no field of the record rides back" is meaningful only against a
+// record that actually holds something worth finding.
+const SECRET_RECORD: PairedServerRecord = {
+  server: 'server-a',
+  relay: 'wss://relay.example/v1/client',
+  token: 'TOKEN-b3ar3r-must-never-cross',
+  server_static_pubkey: 'PUBKEY-static-must-never-cross'
+}
+
+// A paired-server handle answering from a fixed set of ids — the narrowest surface the handler is
+// typed to reach, so nothing else on MultiPairedServerStore is even nameable here.
+function pairedWith(...ids: readonly string[]): Pick<MultiPairedServerStore, 'loadById'> {
+  return {
+    loadById: vi.fn(async (id: string) => (ids.includes(id) ? { ...SECRET_RECORD, server: id } : null))
+  }
+}
+
+// Both mutators spied, and neither read nameable: the Pick already makes save/load/loadFor/clear
+// unreachable, and these pin which of the two the handler chose.
+function setStore(overrides?: Partial<Pick<MultiHostLabelStore, 'saveFor' | 'clearFor'>>): {
+  store: Pick<MultiHostLabelStore, 'saveFor' | 'clearFor'>
+  saveFor: ReturnType<typeof vi.fn>
+  clearFor: ReturnType<typeof vi.fn>
+} {
+  const saveFor = vi.fn<MultiHostLabelStore['saveFor']>().mockResolvedValue(undefined)
+  const clearFor = vi.fn<MultiHostLabelStore['clearFor']>().mockResolvedValue(undefined)
+  return {
+    saveFor,
+    clearFor,
+    store: { saveFor: overrides?.saveFor ?? saveFor, clearFor: overrides?.clearFor ?? clearFor }
+  }
+}
+
+// Every shape the SET guard must refuse. As on the keyed read, `null` and `undefined` are the reason
+// the malformed test asserts that NO store method was reached rather than only that the outcome is
+// `error`: with the guard deleted, `request.label` THROWS on those two and the catch turns the throw
+// into `error`, so an outcome-only assertion would pass green over a removed guard.
+const MALFORMED_SET_REQUESTS: readonly unknown[] = [
+  null,
+  undefined,
+  'pyrybox',
+  42,
+  {},
+  ['pyrybox'],
+  { serverId: 'server-a' },
+  { label: 'Pyrybox' },
+  { server: 'server-a', label: 'Pyrybox' },
+  { serverId: 42, label: 'Pyrybox' },
+  { serverId: 'server-a', label: 42 },
+  { serverId: null, label: 'Pyrybox' },
+  { serverId: 'server-a', label: null },
+  { serverId: undefined, label: 'Pyrybox' },
+  { serverId: 'server-a', label: undefined },
+  { serverId: ['server-a'], label: 'Pyrybox' },
+  { serverId: 'server-a', label: ['Pyrybox'] },
+  { serverId: 'a'.repeat(MAX_SERVER_ID_LENGTH + 1), label: 'Pyrybox' },
+  { serverId: 'server-a', label: 'b'.repeat(MAX_HOST_LABEL_LENGTH + 1) }
+]
+
+describe('registerHostLabelSetHandler', () => {
+  it('registers exactly one handler on the SET channel and unregisters that exact channel', () => {
+    const target = fakeSetTarget()
+
+    const unregister = registerHostLabelSetHandler(target, {
+      store: setStore().store,
+      pairedServers: pairedWith('server-a')
+    })
+
+    expect(target.handle).toHaveBeenCalledTimes(1)
+    // The SET constant, never either read channel: collapsing them would put a WRITE-capable
+    // listener on a channel whose callers expect a structurally read-only one.
+    expect(target.handle).toHaveBeenCalledWith(HOST_LABEL_SET_CHANNEL, expect.any(Function))
+    expect(target.handle).not.toHaveBeenCalledWith(HOST_LABEL_CHANNEL, expect.any(Function))
+    expect(target.handle).not.toHaveBeenCalledWith(HOST_LABEL_SERVER_CHANNEL, expect.any(Function))
+
+    unregister()
+    expect(target.removeHandler).toHaveBeenCalledTimes(1)
+    expect(target.removeHandler).toHaveBeenCalledWith(HOST_LABEL_SET_CHANNEL)
+  })
+
+  it('stores a non-blank label TRIMMED for the named server, and answers with it (AC1)', async () => {
+    const { store, saveFor, clearFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+
+    const response = await setListenerOf(target)({}, { serverId: 'server-a', label: '  Pyrybox  ' })
+
+    // The response describes the label as NOW HELD, so it must be the trimmed value — echoing the
+    // raw request back would let the caller feed untrimmed text into the mapper the reads feed.
+    expect(response).toEqual({ status: 'stored', label: 'Pyrybox' })
+    expect(saveFor).toHaveBeenCalledTimes(1)
+    expect(saveFor).toHaveBeenCalledWith('server-a', 'Pyrybox')
+    expect(clearFor).not.toHaveBeenCalled()
+  })
+
+  it('trims only the SURROUNDING whitespace — interior text is untouched (AC1)', async () => {
+    const { store, saveFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+    const listener = setListenerOf(target)
+
+    // No normalize, no case fold, no collapse of runs, no escape: this is `hostLabelToSend`'s rule
+    // relocated to the boundary, and it only ever strips the ends.
+    for (const [raw, trimmed] of [
+      ['\t\n  Pyry  box \r\n', 'Pyry  box'],
+      ['Pyrýbox', 'Pyrýbox'],
+      ['  <b>Pyrybox</b>  ', '<b>Pyrybox</b>'],
+      ['pyrybox II', 'pyrybox II']
+    ]) {
+      expect(await listener({}, { serverId: 'server-a', label: raw })).toEqual({
+        status: 'stored',
+        label: trimmed
+      })
+      expect(saveFor).toHaveBeenLastCalledWith('server-a', trimmed)
+    }
+  })
+
+  it('a label blank after trimming CLEARS rather than storing an empty name (AC2)', async () => {
+    const { store, saveFor, clearFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+    const listener = setListenerOf(target)
+
+    // The one place that decides whether a label EXISTS. Without the collapse, clearing the dialog's
+    // field would store an empty NAME — which the read channels faithfully report as `stored: ''`,
+    // since '' is a stored value there and not absence.
+    for (const blank of ['', '   ', '\t\n', ' ']) {
+      const response = await listener({}, { serverId: 'server-a', label: blank })
+      expect(response, JSON.stringify(blank)).toEqual({ status: 'not-stored' })
+      // Value-free by the type; this pins that no `label` key rides along on the clear outcome.
+      expect(Object.keys(response as object), JSON.stringify(blank)).toEqual(['status'])
+    }
+    expect(clearFor).toHaveBeenCalledTimes(4)
+    expect(clearFor).toHaveBeenLastCalledWith('server-a')
+    expect(saveFor).not.toHaveBeenCalled()
+  })
+
+  it('refuses every malformed request BEFORE any store call, indistinguishably (AC3)', async () => {
+    for (const request of MALFORMED_SET_REQUESTS) {
+      const { store, saveFor, clearFor } = setStore()
+      const pairedServers = pairedWith('server-a')
+      const target = fakeSetTarget()
+      registerHostLabelSetHandler(target, { store, pairedServers })
+
+      const response = await setListenerOf(target)({}, request)
+      expect(response, JSON.stringify(request)).toEqual({ status: 'error' })
+      expect(Object.keys(response as object), JSON.stringify(request)).toEqual(['status'])
+      // "reaches no store method at all" — the half that detects a deleted guard, and the half that
+      // proves a malformed request cannot write. See MALFORMED_SET_REQUESTS.
+      expect(saveFor, JSON.stringify(request)).not.toHaveBeenCalled()
+      expect(clearFor, JSON.stringify(request)).not.toHaveBeenCalled()
+      expect(pairedServers.loadById, JSON.stringify(request)).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses an id naming no paired server, writing nothing (AC3)', async () => {
+    const { store, saveFor, clearFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+    const listener = setListenerOf(target)
+
+    // Without this check `saveFor` would park an orphan label on disk for an id naming nothing —
+    // which the still-live un-keyed `load` would then answer with, since it returns the most
+    // recently stored entry — and would let a caller append one entry per guessed id, growing the
+    // at-rest blob without bound. Both halves are refused here, on the save AND the clear path.
+    for (const label of ['Pyrybox', '']) {
+      expect(await listener({}, { serverId: 'server-b', label })).toEqual({ status: 'error' })
+    }
+    expect(saveFor).not.toHaveBeenCalled()
+    expect(clearFor).not.toHaveBeenCalled()
+  })
+
+  it('passes the id and the trimmed label through VERBATIM, prototype-shaped ids included (AC1)', async () => {
+    const ids = ['__proto__', 'constructor', '../../pyrycode.paired_server', '']
+    const { store, saveFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith(...ids) })
+    const listener = setListenerOf(target)
+
+    // No normalization, no prefixing: `saveFor` drops any entry whose own `server` field is === this
+    // id and appends, so these are inert strings rather than paths or object keys.
+    for (const id of ids) {
+      await listener({}, { serverId: id, label: ' Pyrybox ' })
+      expect(saveFor).toHaveBeenLastCalledWith(id, 'Pyrybox')
+    }
+    expect(saveFor).toHaveBeenCalledTimes(ids.length)
+  })
+
+  it('every throw collapses to error, resolving rather than rejecting, with no detail (AC3)', async () => {
+    const boom = new Error('/Users/someone/Library/pyrycode.host_label: keychain locked')
+    const cases: Array<{
+      why: string
+      store: Pick<MultiHostLabelStore, 'saveFor' | 'clearFor'>
+      pairedServers: Pick<MultiPairedServerStore, 'loadById'>
+      label: string
+    }> = [
+      {
+        why: 'loadById throws (propagated decrypt failure / malformed record)',
+        store: setStore().store,
+        pairedServers: { loadById: vi.fn().mockRejectedValue(boom) },
+        label: 'Pyrybox'
+      },
+      {
+        why: 'saveFor throws (EncryptionUnavailableError / drifted envelope)',
+        store: setStore({ saveFor: vi.fn().mockRejectedValue(boom) }).store,
+        pairedServers: pairedWith('server-a'),
+        label: 'Pyrybox'
+      },
+      {
+        why: 'clearFor throws',
+        store: setStore({ clearFor: vi.fn().mockRejectedValue(boom) }).store,
+        pairedServers: pairedWith('server-a'),
+        label: '   '
+      },
+      {
+        why: 'MalformedHostLabelError from saveFor',
+        store: setStore({ saveFor: vi.fn().mockRejectedValue(new MalformedHostLabelError()) }).store,
+        pairedServers: pairedWith('server-a'),
+        label: 'Pyrybox'
+      }
+    ]
+
+    for (const { why, store, pairedServers, label } of cases) {
+      const target = fakeSetTarget()
+      registerHostLabelSetHandler(target, { store, pairedServers })
+
+      // Resolves, never rejects: a rejection would cross as an Electron-serialized error carrying a
+      // main-process stack trace. And the caught object is DROPPED — the message above holds a
+      // filesystem path precisely so a leak of it would be visible.
+      const response = await setListenerOf(target)({}, { serverId: 'server-a', label })
+      expect(response, why).toEqual({ status: 'error' })
+      expect(JSON.stringify(response), why).not.toContain('keychain')
+      expect(JSON.stringify(response), why).not.toContain('/Users/')
+    }
+  })
+
+  it('nothing is written when the existence check throws (AC3)', async () => {
+    const { store, saveFor, clearFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, {
+      store,
+      pairedServers: { loadById: vi.fn().mockRejectedValue(new Error('decrypt failed')) }
+    })
+
+    expect(await setListenerOf(target)({}, { serverId: 'server-a', label: 'Pyrybox' })).toEqual({
+      status: 'error'
+    })
+    expect(saveFor).not.toHaveBeenCalled()
+    expect(clearFor).not.toHaveBeenCalled()
+  })
+
+  it('no field of the paired record ever rides back (AC5)', async () => {
+    const { store } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+    const listener = setListenerOf(target)
+
+    // The existence check materialises a PairedServerRecord — a type alias of QrPayload, so a bearer
+    // token and a server static key — for the first time in this module. It is reduced to a boolean
+    // in the call expression itself and never bound to a name, and this is what pins that: the
+    // record holds recognisable secrets and none of them may appear in any outcome.
+    for (const label of ['Pyrybox', '  ']) {
+      const response = await listener({}, { serverId: 'server-a', label })
+      const serialized = JSON.stringify(response)
+      expect(serialized, label).not.toContain('TOKEN-')
+      expect(serialized, label).not.toContain('PUBKEY-')
+      expect(serialized, label).not.toContain('wss://')
+      // Exactly the union's own keys — never the id echoed back, never a relay URL, never a reason.
+      expect(Object.keys(response as object).sort(), label).toEqual(
+        label.trim() === '' ? ['status'] : ['label', 'status']
+      )
+    }
+  })
+
+  it('is log-free on every branch, including the guard refusal (AC5)', async () => {
+    const spies = {
+      log: vi.spyOn(console, 'log').mockImplementation(() => {}),
+      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+      debug: vi.spyOn(console, 'debug').mockImplementation(() => {})
+    }
+
+    // Every branch: save, clear, guard refusal, unknown id, existence-check throw, mutator throw.
+    const drives: Array<[Parameters<typeof registerHostLabelSetHandler>[1], unknown]> = [
+      [{ store: setStore().store, pairedServers: pairedWith('server-a') }, { serverId: 'server-a', label: 'Pyrybox' }],
+      [{ store: setStore().store, pairedServers: pairedWith('server-a') }, { serverId: 'server-a', label: ' ' }],
+      [{ store: setStore().store, pairedServers: pairedWith('server-a') }, { serverId: 42 }],
+      [{ store: setStore().store, pairedServers: pairedWith('server-a') }, { serverId: 'nope', label: 'x' }],
+      [
+        {
+          store: setStore().store,
+          pairedServers: { loadById: vi.fn().mockRejectedValue(new Error('boom')) }
+        },
+        { serverId: 'server-a', label: 'x' }
+      ],
+      [
+        {
+          store: setStore({ saveFor: vi.fn().mockRejectedValue(new Error('boom')) }).store,
+          pairedServers: pairedWith('server-a')
+        },
+        { serverId: 'server-a', label: 'x' }
+      ]
+    ]
+
+    for (const [deps, request] of drives) {
+      const target = fakeSetTarget()
+      registerHostLabelSetHandler(target, deps)
+      await setListenerOf(target)({}, request)
+    }
+
+    // Log-free BY CONSTRUCTION: the id and the label are opaque locals, and a caught error could
+    // echo a filesystem path or keychain detail.
+    for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('writes through on every invoke — no cache, no coalescing', async () => {
+    const { store, saveFor } = setStore()
+    const target = fakeSetTarget()
+    registerHostLabelSetHandler(target, { store, pairedServers: pairedWith('server-a') })
+    const listener = setListenerOf(target)
+
+    await listener({}, { serverId: 'server-a', label: 'Pyrybox' })
+    await listener({}, { serverId: 'server-a', label: 'Pyrybox' })
+
+    // Two identical sets are two writes. Suppressing the second would need a read this arm's dep
+    // type cannot name, and would be wrong the moment another writer moved the label in between.
+    expect(saveFor).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the SET arm against a real host-label store', () => {
+  function allThree(secureStore: SecureStore): {
+    set: (event: unknown, request: unknown) => Promise<unknown>
+    keyed: (event: unknown, request: unknown) => Promise<unknown>
+    bodyFree: (event: unknown) => Promise<unknown>
+  } {
+    const store = createHostLabelStore({ secureStore })
+    const setTarget = fakeSetTarget()
+    const keyedTarget = fakeServerTarget()
+    const bodyFreeTarget = fakeTarget()
+    // The composition root's rule, exercised: ONE store instance behind all three arms, so a write
+    // here is visible to both reads on the very next invoke with no invalidation step.
+    registerHostLabelSetHandler(setTarget, {
+      store,
+      pairedServers: pairedWith('server-a', 'server-b')
+    })
+    registerHostLabelServerHandler(keyedTarget, { store })
+    registerHostLabelHandler(bodyFreeTarget, { store })
+    return {
+      set: setListenerOf(setTarget),
+      keyed: serverListenerOf(keyedTarget),
+      bodyFree: listenerOf(bodyFreeTarget)
+    }
+  }
+
+  it('a stored label is readable back per server, and no other server moves (AC1)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const { set, keyed } = allThree(secureStore)
+
+    await set({}, { serverId: 'server-a', label: 'Pyrybox' })
+    await set({}, { serverId: 'server-b', label: '  Pyrybox II  ' })
+    // Renaming A must leave B alone — the whole point of the keyed envelope.
+    await set({}, { serverId: 'server-a', label: 'Renamed' })
+
+    expect(await keyed({}, { serverId: 'server-a' })).toEqual({ status: 'stored', label: 'Renamed' })
+    expect(await keyed({}, { serverId: 'server-b' })).toEqual({
+      status: 'stored',
+      label: 'Pyrybox II'
+    })
+  })
+
+  it('a clear erases exactly that server, leaving the other stored (AC2)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const { set, keyed } = allThree(secureStore)
+
+    await set({}, { serverId: 'server-a', label: 'Pyrybox' })
+    await set({}, { serverId: 'server-b', label: 'Pyrybox II' })
+
+    expect(await set({}, { serverId: 'server-a', label: '   ' })).toEqual({ status: 'not-stored' })
+    expect(await keyed({}, { serverId: 'server-a' })).toEqual({ status: 'not-stored' })
+    expect(await keyed({}, { serverId: 'server-b' })).toEqual({
+      status: 'stored',
+      label: 'Pyrybox II'
+    })
+  })
+
+  it('a refused set leaves the collection byte-for-byte as it was (AC3)', async () => {
+    const { secureStore, store: blobs } = fakeSecureStore()
+    const { set, keyed } = allThree(secureStore)
+
+    await set({}, { serverId: 'server-a', label: 'Pyrybox' })
+    const before = blobs.get(HOST_LABEL_NAME)
+
+    // A malformed request, an unpaired id, and an over-long label: none may touch the blob.
+    await set({}, { serverId: 'server-a' })
+    await set({}, { serverId: 'server-zzz', label: 'Intruder' })
+    await set({}, { serverId: 'server-a', label: 'b'.repeat(MAX_HOST_LABEL_LENGTH + 1) })
+
+    expect(blobs.get(HOST_LABEL_NAME)).toEqual(before)
+    expect(await keyed({}, { serverId: 'server-a' })).toEqual({ status: 'stored', label: 'Pyrybox' })
+  })
+
+  it('the un-keyed read answers with the most recently SET label (AC4)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const { set, bodyFree } = allThree(secureStore)
+
+    await set({}, { serverId: 'server-a', label: 'Pyrybox' })
+    await set({}, { serverId: 'server-b', label: 'Pyrybox II' })
+
+    // Last-writer-wins is the un-keyed query's own documented semantics, and a set moves it exactly
+    // as the pairing confirm's write does — never the envelope text, never a list, never a count.
+    expect(await bodyFree({})).toEqual({ status: 'stored', label: 'Pyrybox II' })
+  })
+
+  it('a set at exactly MAX_HOST_LABEL_LENGTH round-trips through both reads (AC1, AC4)', async () => {
+    const { secureStore } = fakeSecureStore()
+    const { set, keyed } = allThree(secureStore)
+    const label = 'b'.repeat(MAX_HOST_LABEL_LENGTH)
+
+    // The write guard and the read bound are the same constant in the same unit, so the widest label
+    // this channel accepts is exactly the widest the reads will hand back — never a value stored
+    // here that a read would then refuse as over-long.
+    expect(await set({}, { serverId: 'server-a', label })).toEqual({ status: 'stored', label })
+    expect(await keyed({}, { serverId: 'server-a' })).toEqual({ status: 'stored', label })
   })
 })

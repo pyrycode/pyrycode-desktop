@@ -30,8 +30,16 @@
 // that deferred change. The pointer it carried into hostLabelStore.ts was to a comment that has
 // since retracted the keying mechanism it described — see HOST_LABEL_NAME there.)
 //
+// It ships THREE channels since #1186, on the same reasoning applied once more. HOST_LABEL_SET_CHANNEL
+// is the first WRITE in this module's history: it asks that one named machine BE CALLED something,
+// where the two above only ask what it is called. Keeping it apart is what lets its handler hold a
+// `saveFor`/`clearFor`-only store handle while both reads keep their read-only ones, so no read can
+// write, the write cannot read a label back or reach the un-keyed slot, and a malformed request on any
+// one of the three cannot fall through to another. The Edit host dialog (#1187) is its consumer.
+//
 // Imports nothing from src/main (layering: shared is loaded by preload and renderer and must not pull
 // main-only code). Relative imports only — src/main and src/preload have no @shared alias.
+import { MAX_HOST_LABEL_LENGTH } from './pairing'
 import { MAX_SERVER_ID_LENGTH } from './unpair'
 
 /** The IPC channel the stored-host-label query travels on, renderer ↔ main.
@@ -58,6 +66,30 @@ export const HOST_LABEL_SERVER_CHANNEL = 'pyry:host-label-server' as const
  * persistence name from the id is the mechanism HOST_LABEL_NAME explicitly rejects. Keep it that way.
  */
 export type HostLabelServerRequest = { serverId: string }
+
+/** The IPC channel the per-server host-label WRITE travels on, renderer ↔ main (#1186).
+ *  A third channel rather than a request shape on the keyed read — see the header. Same
+ *  single-source-of-truth discipline; the same three-outcome HostLabelResult comes back, now
+ *  describing the label as it is held AFTER the write. */
+export const HOST_LABEL_SET_CHANNEL = 'pyry:host-label-set' as const
+
+/**
+ * A per-server host-label write: the id of the one machine to rename, and the name to give it
+ * (#1186). The channel is the verb, so there is no `type` discriminant and no separate "clear"
+ * request — a label blank after trimming IS the clear, decided main-side by the handler.
+ *
+ * BOTH fields are UNTRUSTED renderer input, validated by isHostLabelSetRequest at the boundary.
+ * `serverId` is treated exactly as HostLabelServerRequest's: compared with `===` against each decoded
+ * entry's own `server` field by the store, never a store name, a filesystem path, or an object key, so
+ * an id like `__proto__` is inert. `label` becomes a JSON string VALUE inside the keyed envelope and
+ * the payload of the `stored` arm — it is display text and stays unescaped and unnormalised here; the
+ * surface that renders it owns escaping it (CLAUDE.md, operator ruling 2026-08-20).
+ *
+ * `label` is REQUIRED where PairingRequest's is optional. On this channel absence and emptiness are
+ * ONE answer — "no label" — decided in one place by the handler's trim, so a second representation
+ * would only be a way for the two to disagree.
+ */
+export type HostLabelSetRequest = { serverId: string; label: string }
 
 /**
  * The three outcomes of "what host label is stored?", discriminated on `status`, sourced from
@@ -97,6 +129,15 @@ export type HostLabelServerRequest = { serverId: string }
  * view of the paired records and so cannot name the server a bare string belonged to), not an error
  * and never that bare text.
  *
+ * SHARED by all three channels since #1186, still unchanged. On the SET channel the union describes
+ * the label as it is held AFTER the write rather than as it was found: `stored` carries the TRIMMED
+ * label just written, `not-stored` follows the clear a blank-after-trimming label asks for, and
+ * `error` covers a guard refusal, an id naming no paired server, and a throw — the same three
+ * failures collapsed indistinguishably, for the same reason. Answering with the resulting label
+ * rather than a bare `ok` is what lets the caller feed the response straight into the mapper the two
+ * reads already feed, with no second round trip. It is the value written, not a read-back: a re-read
+ * could throw AFTER a completed write and downgrade a real success to `error`.
+ *
  * What the renderer DOES with each outcome — what an empty or absent label falls back to on screen —
  * is #826's decision, not this contract's.
  */
@@ -134,4 +175,48 @@ export type HostLabelResult =
 export function isHostLabelServerRequest(value: unknown): value is HostLabelServerRequest {
   if (typeof value !== 'object' || value === null || !('serverId' in value)) return false
   return typeof value.serverId === 'string' && value.serverId.length <= MAX_SERVER_ID_LENGTH
+}
+
+/**
+ * Runtime type guard for the untrusted renderer→main boundary on HOST_LABEL_SET_CHANNEL (#1186),
+ * mirroring isHostLabelServerRequest one field wider. True iff `value` is a structurally valid
+ * HostLabelSetRequest: a non-null object carrying a `serverId` that is a string within
+ * MAX_SERVER_ID_LENGTH and a `label` that is a string within MAX_HOST_LABEL_LENGTH. Accepts
+ * extra/unknown fields (structural minimum). Pure; never throws — the `in` tests are short-circuited
+ * by the typeof/null tests ahead of them, which is what lets the handler run it OUTSIDE its try.
+ *
+ * BOTH bounds are IMPORTED, never restated: MAX_SERVER_ID_LENGTH from unpair.ts (an alias of
+ * MAX_PASTE_LENGTH, so every persisted `server` id stays addressable) and MAX_HOST_LABEL_LENGTH from
+ * pairing.ts, in the same unit (UTF-16 code units) isPairingRequest uses. Whatever the pairing write
+ * accepts as a label this accepts, and whatever it rejects this rejects — a second number could drift
+ * and let this channel store a label the read channels would then refuse to hand back.
+ *
+ * The label bound applies to the RAW value, BEFORE the handler's trim. Trimming can only shorten, so
+ * this is exactly the test isPairingRequest applies to what the pairing path sends — already trimmed
+ * renderer-side by `hostLabelToSend`. Accepting an over-long value here because it happens to trim
+ * short would make the write channel laxer than the write it mirrors, on a guard whose whole job is
+ * bounding what crosses the wire rather than what survives normalisation.
+ *
+ * A separate function rather than a reuse of isHostLabelServerRequest, for that guard's own stated
+ * reason: the two are close but guard two channels with two different verbs — one reads, one writes —
+ * and naming one after the other would make a later divergence in either read as a bug in both.
+ *
+ * Both fields are REQUIRED, so `{ serverId: undefined }` or `{ label: undefined }` is REJECTED; the
+ * typeof tests do that on their own, and it matters because Electron's structured clone PRESERVES an
+ * own property whose value is undefined. The empty string is deliberately ACCEPTED on BOTH: an empty
+ * id is storable and is answered one step later by the existence check, and an empty label is not a
+ * malformed request at all — it is the request to CLEAR.
+ *
+ * An array carries neither key, so the `in` tests reject it and no Array.isArray branch is needed;
+ * the tests pin that. #1149's rulings, applied here unchanged for the third time.
+ */
+export function isHostLabelSetRequest(value: unknown): value is HostLabelSetRequest {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('serverId' in value) || !('label' in value)) return false
+  return (
+    typeof value.serverId === 'string' &&
+    value.serverId.length <= MAX_SERVER_ID_LENGTH &&
+    typeof value.label === 'string' &&
+    value.label.length <= MAX_HOST_LABEL_LENGTH
+  )
 }

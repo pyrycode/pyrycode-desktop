@@ -134,3 +134,34 @@ or the one client-owned control name. No row title, no `cwd`, no host label.
   shipped placement's own criterion (`pill.top ≥ actions.bottom`) and checking that band-centring reddens
   it — the same falsify-before-trust the two sibling rules record. Recorded under `## Revisions` if the
   measurement changes the decision above.
+
+## Revisions
+
+### 2026-09-08 — the measurement moved the placement to the ticket's named fallback
+
+The Open Question above resolved **against** the plan's decision, and the flow arithmetic that produced
+that decision was wrong. Measured at scroll top in the running window, `.channel-list__actions`'s bottom
+edge is **4px inside the Channels header**, not on its top edge: the cluster is `position: sticky;
+top: var(--space-1)`, and that offset resolves against the scrollport's **content** box — inside
+`.channel-list`'s own `--space-1` top padding — so at scroll top the cluster sits `--space-1` *past* its
+flow position rather than at it.
+
+The three readings, all off a running window: the cluster's bottom edge at 76; band-centring
+(`top: 50%` + `translateY(-50%)`) putting the pill's top at 70; the planned top-alignment (`top: 0`) at 72.
+Both overlap. So the pill hangs **below the plus** instead — `top: 100%; transform: none`, top edge at 92,
+clear of the cluster by the plus's own height. That is the fallback the ticket names, and it is stated as
+a deviation in the PR. It costs the "inside the header's own 32px box" containment argument this plan
+liked: the pill now occupies the header's 12px gap and 12px of the first host row, so containment follows
+from the header **and the row under it** being in view. In exchange the glyph it names stays visible
+beside it, and the clearance is 16px rather than a tangency a one-pixel change to the cluster would
+reopen — which is also why `top: var(--space-1)` (centred in the header's 32px box, clearing the cluster
+exactly) was measured and declined rather than taken as the smaller move.
+
+The overlap is reachable rather than theoretical: the cluster's buttons are transparent at rest but fill
+on their own `:hover`, and the pill can be up on `:focus-visible` while the pointer sits on the gear.
+
+One claim in the Testing strategy above is narrowed by the same measurement. The actions-edge assertion is
+the **criterion** — a relation between two elements, so it also catches a cluster that grows or a sticky
+offset that changes — and it is the line the planned `top: 0` reddens. Band-centring is caught one line
+earlier, by the assertion pinning the pill's top edge to the plus's bottom, so it never reaches the
+actions read at all.

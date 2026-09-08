@@ -1602,6 +1602,23 @@ function SectionHeader({
         >
           <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
         </svg>
+        {/* #1304 — the control's NAME, in the pill the row's trailing controls (#1172) and the workspace
+            row's plus (#1181) already wear. APPENDED AFTER THE GLYPH, never before it: `ChannelList.test.tsx`
+            pins the <svg>'s whole opening run and counts `aria-label="Pair new host"`, and a child after
+            the closing tag leaves both byte-identical — the pill's text is a bare text node, not an
+            attribute.
+
+            `PAIR_NEW_HOST_CONTROL_LABEL` and nothing else, which is the whole of "one definition": the
+            same constant supplies the `aria-label` above, so the spoken name and the drawn one cannot
+            drift, and there is still no slot anywhere in this component for a caller to interpolate
+            operator or daemon text into either.
+
+            `aria-hidden` is belt-and-braces rather than the mechanism — the `aria-label` already overrides
+            child text for the accessible name — which is why the unit tier pins the count of names at two
+            beside the count of pills. */}
+        <span className="channel-list__control-name" aria-hidden="true">
+          {PAIR_NEW_HOST_CONTROL_LABEL}
+        </span>
       </button>
     </header>
   )

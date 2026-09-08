@@ -86,8 +86,17 @@ Concurrency below).
 new Map() }`, `hostLabelStore` (app-wide singleton), `useHostLabelStore(selector)`,
 `selectHostLabelFor(serverId: string | null)` (the only read surface — a selector *factory*, the
 `selectStatusFor`/`selectRelayLinkStatusFor`/`selectConversationsFor` idiom already used across this
-directory), `setHostLabelFor(serverId, value)` (the sole mutation, invoked only by the loader wiring;
-replaces `setHostLabel`).
+directory), `setHostLabelFor(serverId, value)` (the sole mutation; replaces `setHostLabel`).
+
+**[#1299](https://github.com/pyrycode/pyrycode-desktop/issues/1299) gave that sole mutation a second
+caller.** `setHostLabelFor` used to be invoked only by the loader wiring below; it is now also invoked
+by [the Edit host dialog](channel-list-host-row.md#the-edit-host-dialog-1299)'s container, on a
+successful Save, recording main's `window.pyry.setHostLabelFor` answer (a different function that
+happens to share this action's name) for the one slot the dialog was open on. Both callers go through
+`mapHostLabel`, so nothing but a mapped `HostLabelResult` ever lands here, and the direction is
+unchanged: no component feeds a rendered value back in, and the row still only reads. A failed write is
+not recorded here at all — see that section for why an `error` answer to a write must not land in the
+store the way an `error` answer to a read does.
 
 **`null` is an accepted id to `selectHostLabelFor`, and it is not a map key.** It is the frame the sidebar
 renders before the paired-server one-shot resolves, when the row names nobody yet. It answers the same
@@ -283,4 +292,6 @@ latest state rather than a value captured at call time — see § The store abov
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) /
   [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)/[#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) —
   the sidebar host row that mounts `HostLabelData` (and, since #1199, `ServerInfoData` beside it) and
-  renders the value for the server it names.
+  renders the value for the server it names. Since
+  [#1299](channel-list-host-row.md#the-edit-host-dialog-1299), also this store's second writer: the
+  Edit host dialog the row's pen opens.

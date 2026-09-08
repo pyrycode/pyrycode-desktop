@@ -64,9 +64,10 @@ transport, or new store/wire code, so not security-sensitive.
   it has conversations there — the row is meant to carry the plus that starts a chat in a new
   workspace, so a freshly paired machine still needs a route to its first chat. [#1185](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)
   drew that plus (and an edit pen) as a hover-revealed pair in the dots' own slot, but shipped no
-  caller; the row draws neither control, and hovers exactly as it did before, until #1189 (and #1187
-  for the pen) wire a handler through. See [the host row and its connection
-  dots](channel-list-host-row.md) for the full detail.
+  caller. [#1299](channel-list-host-row.md#the-edit-host-dialog-1299) (split from #1187) wired the
+  pen — every host row now opens an Edit host dialog on click, renaming the machine — and the plus is
+  still #1189's. See [the host row and its connection dots](channel-list-host-row.md) for the full
+  detail.
 - Below each host row, that machine's own rows group by **workspace** — one group per distinct
   `cwd`, each headed by a 28px workspace row one indent deeper than the host row (Figma `106:3098`).
   A workspace is a conversation's `cwd`; there is no separate wire concept for it. Both sections

@@ -211,14 +211,34 @@ daemon → conversation_created frame → onDriverEvent 'message' → parseInbou
 | `payload` not an object, or a required field missing/mistyped | `parseConversationCreatedPayload` | throws `WireDecodeError`, category-only message; frame dropped, no partial event |
 | `name: null` on the wire | `requireStringOrNull` | decodes to `null` — a valid distinct value, never `''` |
 | Oversized plaintext | existing `MAX_PLAINTEXT_BYTES` guard | throws before parsing begins |
+| Daemon rejects the create (a `cwd` that does not exist, or escapes the daemon's home) | main-side correlation (below) | bare `conversationCreateRejected`; no consumer yet (#1308) |
 
-## Correlation is deliberately absent
+## The success reply stays uncorrelated; the rejection, since #1307, does not
 
-Same posture as [conversation list fetch](conversation-list-fetch.md#correlation-is-deliberately-absent):
-`in_reply_to` exists on the wire but matching a reply to a specific request is out of scope — the app
-hosts one active conversation, so any `conversation_created` reply is decoded and emitted
-unconditionally, safe because only the authenticated daemon (inside the Noise session) can produce
-one.
+Same posture as [conversation list fetch](conversation-list-fetch.md#correlation-is-deliberately-absent)
+for the **success** half only: `in_reply_to` exists on the wire but matching a `conversation_created` reply
+to a specific request is still out of scope — the app hosts one active conversation, so any
+`conversation_created` is decoded and emitted unconditionally, safe because only the authenticated daemon
+(inside the Noise session) can produce one.
+
+The **rejection** half is different since
+[#1307](https://github.com/pyrycode/pyrycode-desktop/issues/1307): `createConversation` now keeps its own
+envelope id in a module-scope `pendingCreateConversations: Set<number>` (`daemonConnection.ts`), matches a
+daemon `error` back to it by `Envelope.in_reply_to`, and on a match emits a bare `{ type:
+'conversationCreateRejected' }` — never a field read off the untrusted error payload. It exists because a
+create that cannot succeed was previously indistinguishable from one that simply produced no reply yet: the
+FAB and the Channels-tree workspace plus (#1179) both had no failure path at all. Ships with **no
+consumer** — [#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308)'s Add-workspace dialog is
+the first caller that can actually receive a daemon rejection (a folder path that does not exist or
+escapes `$HOME`), so it is also the first to need this event.
+
+Bare by construction, not because only one caller exists — `create_conversation` already has two live
+callers today and #1308 adds a third, so the arm **cannot** say whose rejection it is reporting. A future
+consumer must gate on its own in-flight state and separately accept that a concurrent caller's rejection is
+indistinguishable from its own. See [Daemon connection correlation § Create-conversation rejected
+correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) for the full
+store design, the accepted unbounded-growth argument, and the corrected bareness rationale (a code-review
+finding during #1307 caught the shipped code comment overstating the single-caller case).
 
 ## Out of scope
 
@@ -229,6 +249,10 @@ one.
 
 ## Related
 
+- [Daemon connection correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+  (#1307) — the `pendingCreateConversations` store, the bare `conversationCreateRejected` arm, and the
+  corrected bareness rationale (a rejection cannot be attributed to a caller — there are two today, a third
+  once #1308 lands). Ships with no consumer.
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)

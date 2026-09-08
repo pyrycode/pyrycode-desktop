@@ -226,6 +226,9 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // modal store.
       { type: 'workspaceFolderRejected' },
+      // chat-create rejection ships dormant (#1307); its consumer is #1308's Add workspace dialog, not
+      // the modal store — nothing daemon-side is waiting on an answer, so it is not a permission prompt.
+      { type: 'conversationCreateRejected' },
       // api-retry ships dormant (#492); its render consumer is #493, not the modal store.
       { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' },
       // compaction status ships dormant (#495); its render consumer is #496, not the modal store.

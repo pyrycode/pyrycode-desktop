@@ -753,6 +753,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // inside a synchronous createWorkspaceFolder / onDriverEvent body, no await between a read and a write
   // (the nextEnvelopeId / outstandingAnswers / pendingSettings single-writer rationale).
   const pendingCreateFolders = new Set<number>()
+  // Envelope ids of outstanding create_conversation requests, for the #1307 rejection round-trip — a
+  // further member of the same unique-per-request-envelope-id tier, in pendingCreateFolders' exact shape.
+  // A Set, not a Map: the conversationCreateRejected event is BARE (no value to carry per entry, contrast
+  // pendingSettings' changeId) — membership ("is this envelope id an outstanding create request?") is the
+  // whole query. Keyed by the request's unique envelope id (not a FIFO like outstandingAnswers, whose
+  // `error` carries no discriminating id), so a match is unambiguously the reply to THAT request. The key
+  // is a number this client MINTED, never a daemon-supplied string, so nothing inbound reaches a prototype
+  // setter through it — and a later widening that keys this by anything daemon-supplied must say why.
+  //
+  // Set after a successful send in createConversation, matched by the reply's Envelope.in_reply_to and
+  // deleted in onDriverEvent, and cleared on each dial(). THE SUCCESS REPLY DOES NOT CONSUME AN ENTRY
+  // (pendingCreateFolders again): `conversation_created` is also an unsolicited broadcast, so the entry
+  // lives until a correlated error or the next dial. Nothing bounds the set, deliberately, on
+  // pendingHistoryRequests' argument — an entry costs one number, only this client's own sends add one,
+  // every match deletes one and every dial clears all, so a daemon withholding replies cannot grow it
+  // faster than the operator creates chats. The consequence is that a late error for an already-created
+  // conversation still emits a rejection; the consumer gates on its own in-flight state, the way #396's
+  // newFolderStore honors a reply only while a request is outstanding, and #1308 inherits that obligation.
+  //
+  // Single-writer — every mutation runs to completion inside a synchronous createConversation /
+  // onDriverEvent body, no await between a read and a write (the nextEnvelopeId / outstandingAnswers /
+  // pendingSettings single-writer rationale).
+  const pendingCreateConversations = new Set<number>()
   // envelopeId → the conversation id that request_session_settings named, for the run-config read's
   // attribution (#1176). The reply carries no conversation id of its own and the wire cannot grow one
   // (ADR 0002), so the conversation a reply describes is whichever one this client asked about under
@@ -1078,6 +1101,25 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (pendingCreateFolders.has(inReplyTo)) {
                 pendingCreateFolders.delete(inReplyTo)
                 emitDaemonEvent(sink, { type: 'workspaceFolderRejected' })
+                return
+              }
+              // create_conversation rejection correlation (#1307), the create-folder arm's nearest twin in
+              // the same unique-per-request-envelope-id tier and identical to it in every respect but the
+              // verb. Correlate the content-free error to a pending create_conversation by
+              // Envelope.in_reply_to; a match consumes the frame ENTIRELY: emit the BARE rejection, drop the
+              // pending entry, and skip BOTH the reassembler.fail and the modal-FIFO shift below. An error
+              // correlated by a UNIQUE per-request envelope id is unambiguously the reply to THAT request —
+              // failing a healthy in-flight bundle or consuming the oldest modal answer on it would be a
+              // bug. Order relative to the siblings is immaterial: an envelope id is minted once, so at most
+              // one store can hold it. The emitted event reads NOTHING from the untrusted error payload — it
+              // is nullary by construction; the numeric inReplyTo stays main-internal, never placed on the
+              // event, and the daemon's refusal message is not echoed even in part (it names no path of its
+              // own to surface). No diagnostic log, matching every member of this tier: the only values one
+              // could carry here are the wire routing id and daemon-authored text, and neither may reach a
+              // sink.
+              if (pendingCreateConversations.has(inReplyTo)) {
+                pendingCreateConversations.delete(inReplyTo)
+                emitDaemonEvent(sink, { type: 'conversationCreateRejected' })
                 return
               }
               // Attachment-upload rejection correlation (#861), the third member of the same
@@ -2490,6 +2532,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // mid-bootstrap, or bootstrap-failed). A create request has no consumer to fail; a request sent
     // while disconnected simply produces no reply.
     if (driver === null) return
+    // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
+    // envelope id — the value the daemon echoes as in_reply_to on the rejecting error (#1307). The
+    // createWorkspaceFolder shape; this function named no id before it had a rejection to correlate.
+    const envelopeId = nextEnvelopeId
     try {
       // Build a FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
       // This is the deterministic net that bounds the wire to exactly is_promoted / name / cwd,
@@ -2497,7 +2543,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestConversations —
       // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildCreateConversation({
-        id: nextEnvelopeId,
+        id: envelopeId,
         ts: now(),
         payload: {
           is_promoted: payload.is_promoted,
@@ -2507,6 +2553,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      // Record the pending request AFTER a successful send (the createWorkspaceFolder order, #396): a
+      // build/send throw skips this (caught below), so no phantom entry is left under an id the next
+      // outbound envelope re-mints — one that would swallow THAT envelope's reject. Removed by the
+      // correlated error in onDriverEvent, or abandoned on the next dial().
+      pendingCreateConversations.add(envelopeId)
     } catch {
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
@@ -3243,6 +3294,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
     // create-folder set.
     pendingCreateFolders.clear()
+    // Reset the create_conversation pending set (#1307, AC1): the pendingCreateFolders rationale applied
+    // to the create verb. A reconnect abandons outstanding creates, so a stale envelope id from a dead
+    // session can never correlate an `error` on the reconnected one (which recycles ids from 2).
+    pendingCreateConversations.clear()
     // Reset the run-config request correlation map (#1176, AC4): a reconnect abandons outstanding
     // reads, so a reply correlated against a previous connection's envelope ids can never match on the
     // reconnected one — which is what makes the recycled ids safe here too. Without it, the fresh

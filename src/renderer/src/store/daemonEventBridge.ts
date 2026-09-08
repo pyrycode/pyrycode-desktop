@@ -122,6 +122,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // rejection, not the session store. Present only because the assertNever guard below makes a new arm
       // a compile error (the workspaceFolderCreated-is-a-no-op precedent).
       return null
+    case 'conversationCreateRejected':
+      // No session-store action: #1308's Add workspace dialog (not yet built) consumes the create
+      // rejection, not the session store. Present only because the assertNever guard below makes a new arm
+      // a compile error (the workspaceFolderRejected-is-a-no-op precedent).
+      return null
     case 'workspaceUpdated':
       // No session-store action: the conversation-list refresh trigger (#1288, conversationListBridge's
       // shouldRefreshList) re-requests the list so the renamed workspace's label lands, not the session

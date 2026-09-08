@@ -141,6 +141,7 @@ export function translateModalEvent(
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'conversationCreateRejected':
     case 'workspaceUpdated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
@@ -164,9 +165,11 @@ export function translateModalEvent(
       // (queueState), the #317 stall-render slice (stallDetected), the #329 relay-link store
       // (relayLinkChanged), the #376 list-reflect slice (conversationDeleted), the #382
       // recent-workspaces store (recentWorkspacesReceived), the #157 Create-folder dialog
-      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), and the #393
+      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), the #1308 Add
+      // workspace dialog (conversationCreateRejected — dormant, no consumer built yet), and the #393
       // notificationActivatedBridge (notificationActivated → the paired `open` nav) consume these —
-      // not the modal store. apiRetry (#492) ships dormant; its render consumer is #493 — a retry
+      // not the modal store. A refused chat-create is not a permission prompt: nothing daemon-side is
+      // waiting on an answer, so its no-op here is not a routing accident. apiRetry (#492) ships dormant; its render consumer is #493 — a retry
       // status line is not a modal.
       // compacting (#495) ships dormant likewise; its render consumer is #496 — a compaction banner is
       // not a modal either. unrecognizedMessage ships dormant too; its render consumer is the timeline

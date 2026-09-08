@@ -497,6 +497,10 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
       { type: 'workspaceFolderRejected' },
+      // chat-create rejection ships dormant (#1307); its consumer is #1308's Add workspace dialog, not
+      // the timeline store — it reports that a conversation never came into being, so there is no thread
+      // for it to draw in.
+      { type: 'conversationCreateRejected' },
       // the announced model ships dormant (#587); its consumer is the #588 announced-model store, not
       // the timeline store. Daemon STATE, not a turn-stream item: the frame carries no turn_id and
       // opens and closes no turn — an identity report ABOUT a turn is not an item IN one.

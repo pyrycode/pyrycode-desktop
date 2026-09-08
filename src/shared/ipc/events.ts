@@ -888,6 +888,24 @@ type BaseDaemonEvent =
   // or wire id). Consumed by #397 (round-trip store, not yet built), so all three exhaustive bridges no-op
   // it for now — the workspaceFolderCreated-was-a-no-op precedent.
   | { type: 'workspaceFolderRejected' }
+  // The create_conversation REJECTION arm (#1307), the rejected twin of conversationCreated and the
+  // workspaceFolderRejected arm above in every respect but the verb. Emitted by the MAIN-side correlation
+  // gate (daemonConnection.ts) when a content-free daemon `error` (#116) arrives whose
+  // `Envelope.in_reply_to` matches a pending create_conversation request — so a create that cannot succeed
+  // (a workspace folder that does not exist, or one escaping the daemon's home) can be reported instead of
+  // looking like nothing happened. Before it, `createConversation` was fire-and-forget end to end and its
+  // two callers — the FAB (#242) and the Channels-tree workspace plus (#1179) — had no failure path at all.
+  // BARE — carries NOTHING (the workspaceFolderRejected argument, and one more besides): only one create
+  // dialog is open at a time so there is no concurrency to disambiguate, and the daemon's own refusal
+  // message never echoes the path, so there is nothing to surface even if the arm carried a field. Being
+  // bare makes it maximally content-free BY CONSTRUCTION — no field can hold a daemon-supplied byte, error
+  // code, message, path, or wire id. A LATE REJECTION IS POSSIBLE AND THE CONSUMER OWNS IT: the success
+  // reply does not consume the pending entry (it doubles as an unsolicited broadcast), so an error
+  // correlated to an already-created conversation still emits this. Gate on your own in-flight state, the
+  // way #396's newFolderStore honors a reply only while a request is outstanding. Consumed by #1308's Add
+  // workspace dialog, so all four exhaustive bridges no-op it for now — the workspaceFolderRejected-was-a-
+  // no-op precedent.
+  | { type: 'conversationCreateRejected' }
   // The notification-click arm (#393). UNLIKE every other arm, this is the FIRST MAIN-LOCAL signal on
   // the channel: it is NOT derived from a validated wire envelope — it is emitted by the main-process
   // notification click handler (index.ts) when the user clicks a fired OS notification, so the

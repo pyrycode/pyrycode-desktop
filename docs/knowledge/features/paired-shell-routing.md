@@ -14,7 +14,7 @@ export type PairedNav =
   | { type: 'openArchive' }
   | { type: 'back' }
   | { type: 'openPairServer' }
-  | { type: 'pairServerCancelled' }
+  | { type: 'pairServerCancelled'; returnTo: PairedRoute }
   | { type: 'pairServerPaired' }
 
 export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRoute {
@@ -24,7 +24,7 @@ export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRou
     case 'openArchive':         return 'archive'
     case 'back':                 return 'list'
     case 'openPairServer':      return 'pairServer'
-    case 'pairServerCancelled': return 'settings'
+    case 'pairServerCancelled': return nav.returnTo
     case 'pairServerPaired':    return 'list'
     default:                     return assertNever(nav)
   }
@@ -45,11 +45,27 @@ AC1's "exhaustive/compile-checked transition surface."
 
 [#152](../codebase/152.md) added `pairServer` and its three arms. `pairServerCancelled` and
 `pairServerPaired` are deliberately **not** a reuse of `back`, even though `back` also resolves to
-`list` today: the two pairing exits carry distinct intents (cancel → return to `settings`, where
-pairing was launched from; a completed pair → go home to `list`, the new server's channel list), and
-only one of those coincides with `back`'s current absolute resolution. Keeping them as their own arms
-is forward-safe if `back` ever becomes stack-aware — a stack-aware `back` from `pairServer` would pop to
-`settings` (correct for cancel, wrong for a completed pair).
+`list` today: the two pairing exits carry distinct intents (cancel → return to wherever pairing was
+launched from; a completed pair → go home to `list`, the new server's channel list), and only one of
+those coincides with `back`'s current absolute resolution. Keeping them as their own arms is
+forward-safe if `back` ever becomes stack-aware — a stack-aware `back` from `pairServer` would pop to
+one fixed destination, which cannot be correct for both a cancel that must return to whichever surface
+opened it and a completed pair that must always go home.
+
+**[#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303) gave `pairServerCancelled` the
+union's one payload**, `returnTo: PairedRoute`, and turned the arm's `'settings'` literal into
+`nav.returnTo`. Until then the arm could return a literal because Settings' "Pair another server" row
+was pairing's only entry, so "back to where it was launched from" and "back to `settings`" were the same
+sentence. They stopped being the same sentence the moment the Channels/Chats section headers each grew a
+plus that opens the identical flow (§ below) — cancel's destination became a function of *which surface*
+was open when the flow started, and the reducer cannot answer that on its own: by the time
+`pairServerCancelled` fires, `current` is always `'pairServer'`, which says nothing about where the
+operator came from. The origin has to travel with the event, and the container is what records it — see
+§ The pair-new-host plus and origin-aware cancel below. `returnTo` is typed as the whole `PairedRoute`
+rather than a narrower `'list' | 'thread' | 'settings'` origin union: only those three are ever reachable,
+but by construction (the sole writer records the route at `openPairServer`, and neither the pairing
+screen nor the archive screen renders an entry into pairing) rather than by type, so a narrower union
+would only buy an unreachable fallback arm with no test that could motivate it.
 
 ## The pure view + container (`PairedShell.tsx`)
 
@@ -79,7 +95,7 @@ export function PairedShellView(props: {
       return (
         <div className="paired-shell">
           <div className="paired-shell__sidebar">
-            <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} onOpenArchive={props.onOpenArchive} />
+            <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} onOpenArchive={props.onOpenArchive} onPairNewHost={props.onOpenPairServer} />{/* #1303 */}
           </div>
           <div className="paired-shell__pane">
             {props.route === 'thread'
@@ -121,6 +137,68 @@ always has *something* to show. The `settings` and `archive` cases both reuse th
 unchanged — see [Settings screen](settings-screen.md) and [Archive screen](archive-screen.md) for the
 scaffolds they render, and both still replace the **whole** shell (sidebar included), which is what
 makes "still open over both panes" (#670's AC5) cost zero lines in this file.
+
+### The pair-new-host plus and origin-aware cancel (#1303)
+
+The Channels and Chats section headers in the [Channel List](channel-list.md) each carry a 16×16 plus
+that opens the pairing flow — the same `pairServer` route Settings' "Pair another server" row already
+opens (§ Data flow below). See [Channel List — the section header's pair-new-host
+control](channel-list-section-header-pair-control.md) for the control itself (markup, CSS geometry, the
+accessible-name constant); this section is the routing half — how a second entry point made cancel's
+destination origin-dependent, and how that origin is carried without making `nextPairedRoute` stateful.
+
+**`PairedShellView` reuses `onOpenPairServer` rather than growing a second prop.** `ChannelList` now
+takes an `onPairNewHost: () => void` (required, `onCreateChat`'s reasoning: a defaulted prop would let a
+future caller silently render headers whose plus opens nothing), and `PairedShellView` binds it to the
+identical callback it already hands `SettingsScreen` as `onPairAnother`. Both callers mean exactly "open
+the pairing flow," and making cancel's destination a function of *the route the shell was on*, not of
+*which control fired the event* (below), is what keeps a second prop from being two names for one act.
+This is also why `PairedShell.test.tsx`'s six `PairedShellView` render literals needed no edit for this
+ticket — only one existing case, which composes `nextPairedRoute` directly rather than rendering the
+view, needed the arm's new `returnTo`.
+
+**`PairedShell` records the origin in a second screen-local cell, `pairServerReturn`, beside `paneKey`**
+— same `useState`, same [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
+justification, never a store, never persisted, never sent over IPC. It is written from **the route the
+reducer is currently on** at the single site both entries pass through:
+
+```ts
+onOpenPairServer: () => {
+  setPairServerReturn(route)
+  dispatch({ type: 'openPairServer' })
+}
+```
+
+That one site is what makes one rule cover both entries without either having to know its own name:
+clicked from Settings the route reads `'settings'`; clicked from a section-header plus it reads `'list'`
+or `'thread'`. Seeded `'settings'` — the shipped, pre-#1303 destination — so the unreachable
+never-opened-but-cancelled frame keeps behaving exactly as it did before this ticket (the seed states
+which behaviour to preserve; nothing at runtime ever falls through to it, since `pairServerCancelled` is
+dispatched only by the pairing screen, which only this same handler puts up). `pairingChangeDeps`'
+`returnToPairingOrigin` (renamed from `returnToSettings`, `applyPairingChange.ts`) then dispatches
+`{ type: 'pairServerCancelled', returnTo: pairServerReturn }` — the read.
+
+**`pairingChangeDeps` must stay a per-render object literal**, which it already is for its own reasons
+(three of its members close over per-render values). Hoisting it to module scope, or memoising it on a
+dependency array that omits `pairServerReturn`, would close over a stale origin and send cancel to the
+wrong surface with no type error — flagged in the architecture spec's security review as a SHOULD FIX and
+pinned by `pairedRoute.test.ts`'s three-origin matrix rather than guarded in code.
+
+**Double entry is impossible by construction**, not by a guard: `pairServer` replaces the whole shell, so
+the sidebar carrying the plus is unmounted for the entire time the pairing screen is up, and
+`openPairServer` cannot fire again — and so `pairServerReturn` cannot be rewritten — while a pairing is
+already in progress.
+
+**Cancelling back onto `thread` is why `paneKey` (below) now has to keep surviving an exit it used to be
+destroyed by.** Before #1303 every `pairServerCancelled`/`pairServerPaired` exit landed on a route where
+the pane renders `null` (`settings` or `list`), so a stale `paneKey` could never preserve anything. A
+cancel launched from an open thread now lands back on `thread` itself, and it is correct for the pane to
+come back up on the same conversation — the pairing route touches neither `activeConversationStore` nor
+`paneKey`, and cancel reaches no server, so the id `paneKey` still holds still names the chat the store
+still holds. `ConversationScreen` does remount (it was unmounted while the pairing screen replaced the
+shell) and its own screen-local state — scroll pin, composer draft — resets on that remount; that is
+accepted, and is not what this ticket promises to preserve. See § The conversation-switch remount bug and
+the `paneKey` fix below for the comment this correction lands on.
 
 ## The two-pane desktop shell (`pairedShell.css`, `src/main/index.ts`, #670)
 
@@ -265,9 +343,13 @@ shipped in a follow-up commit on the same PR:
 - The nullary `open` (a push-notification click, [#393](../codebase/393.md)) deliberately does **not**
   touch `paneKey` — it carries no conversation payload and means "show the conversation that's already
   active," so the pane's identity hasn't moved.
-- Nothing clears `paneKey` on exit. Delete, archive, unpair, and pair-another-server all land on a route
-  where the pane renders `null`, so the subtree is destroyed regardless of what the key holds — a stale
-  key cannot preserve a subtree that no longer exists.
+- Nothing clears `paneKey` on exit. Delete, archive, and unpair all land on a route where the pane
+  renders `null`, so the subtree is destroyed regardless of what the key holds — a stale key cannot
+  preserve a subtree that no longer exists. **Since [#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303)
+  this is no longer true of every exit**: cancelling a pairing flow opened from a section-header plus
+  while a thread was open lands back on `thread`, so the pane comes back up on the same `paneKey` — which
+  is correct, not stale, since the pairing route touches neither `activeConversationStore` nor this cell
+  and cancel reaches no server. See § The pair-new-host plus and origin-aware cancel above.
 - Making the prop **required**, not optional, turns "a future call site forgets to record the switch"
   into a compile error rather than a silent reintroduction of the bug.
 
@@ -331,6 +413,8 @@ AppView (route='conversation')
                                                 new-discussion FAB → createConversation command (#242)
                                                 SettingsButton → dispatch{openSettings} (#333)
                                                 ArchiveButton → dispatch{openArchive} (#347)
+                                                SectionHeader plus ×2 (Channels/Chats) → onPairNewHost ← #1303
+                                                  = the SAME onOpenPairServer below → setPairServerReturn(route); dispatch{openPairServer}
                                                 .paired-shell__pane → route==='thread' ?
                                                   ConversationScreen key={paneKey} (store-backed) + BackControl — [←] → dispatch{back}
                                                   → WorkspaceChip reads activeConversationStore (#278)
@@ -358,7 +442,9 @@ AppView (route='conversation')
                                                                   → requestRunConfigSnapshot + requestModelList,
                                                                     re-asking for what clearSessionId just wiped
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
-                                                PairAnotherServerRow → dispatch{openPairServer} (#152)
+                                                PairAnotherServerRow → onOpenPairServer  ← same handler as the
+                                                  section-header plusses above: setPairServerReturn('settings');
+                                                  dispatch{openPairServer} (#152, origin recording added #1303)
                                                 ServerRowControl per-row Unpair (#1162) → runUnpairServer → window.pyry.unpairServer(serverId)
                                                   ok + servers remain   → serverInfoStore re-read/written
                                                                            → clearServerScopedState(serverScopedClearDeps + navigateToList: no-op)  ← #1196, #1197
@@ -372,7 +458,10 @@ AppView (route='conversation')
                                                                              App sets route='pairing'
                                                   error/rejected        → row returns to idle, nothing cleared, nothing navigated
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
-                                                onCancel → dispatch{pairServerCancelled} → 'settings'
+                                                onCancel → dispatch{pairServerCancelled, returnTo: pairServerReturn}  ← #1303
+                                                            → 'settings' | 'list' | 'thread', whichever route
+                                                              was open when openPairServer fired (recorded once,
+                                                              at that single site — see PairedShell above)
                                                 onPaired → clearPairingScopedState(clearPairingDeps)  ← #531
                                                             dispatch{pairServerPaired} → 'list'
                             route='archive'  → ArchiveScreen (pure, no store) + BackControl — [←] → dispatch{back} (#347)

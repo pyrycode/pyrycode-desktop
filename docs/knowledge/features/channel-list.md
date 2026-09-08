@@ -42,6 +42,15 @@ transport, or new store/wire code, so not security-sensitive.
   joins it inside the same top-right `.channel-list__actions` cluster, leading the Settings button
   (gear-rightmost) — added by [#347](../codebase/347.md). Two independent sticky top-right children
   would have stacked awkwardly, so both buttons now share one sticky flex-row wrapper.
+- Each section header ("Channels" and "Chats") now carries its own plus, `aria-label="Pair new host"`,
+  drawn at rest and filled `--color-primary` — unlike every other trailing control in this tree, which
+  reveals only on hover. It opens the same pairing flow Settings' "Pair another server" row opens, and
+  since [#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303) cancelling that flow returns
+  the operator to wherever they launched it from (the open thread, the list, or Settings) rather than
+  always to Settings. See [the section header's pair-new-host
+  control](channel-list-section-header-pair-control.md) for the control's markup, geometry and testing,
+  and [Paired shell — routing](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303)
+  for the origin-aware cancel.
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
@@ -540,6 +549,10 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Channel List — the row's status dot](channel-list-status-dot.md) — the full detail behind § The
   row's status dot above: #799/#800/#801's three-part split, #874's fourth `input-required` subscription,
   and the wiring/testing lessons.
+- [Channel List — the section header's pair-new-host control](channel-list-section-header-pair-control.md)
+  (#1303) — the plus each section header now carries, drawn at rest; opens the same `pairServer` route
+  Settings' "Pair another server" row opens, and made cancelling it origin-dependent — see [Paired shell —
+  routing](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for that half.
 - [#1097 spec](../../specs/architecture/1097-desktop-24px-sidebar-row.md) — converged the row on the
   desktop 24px node (103:2968): the derived height, the body-small label, the deleted last-activity
   time, the shrunk affordances, and the settled status-dot centring.

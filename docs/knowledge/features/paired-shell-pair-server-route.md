@@ -17,6 +17,16 @@ mounts fresh on every entry to `pairServer` (its own `useReducer(pairingReducer,
 and unmounts on every exit, so it always opens at an empty paste screen — no stale paste survives a route
 change.
 
+**Since [#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303), `pairServer` has a second
+entry**: the plus on each [Channel List](channel-list.md) section header, wired to the identical
+`onOpenPairServer` handler Settings' "Pair another server" row already used — see [Channel List — the
+section header's pair-new-host control](channel-list-section-header-pair-control.md) for the control, and
+[Paired shell — routing § The pair-new-host plus and origin-aware
+cancel](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for how a second
+entry made `onPairServerCancelled`'s destination origin-dependent rather than the fixed `'settings'` it
+used to resolve to. `onPairServerPaired` is unaffected — a completed pair still always goes home to
+`list`, from either entry.
+
 `case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`
 button); [#141](../codebase/141.md) replaced it wholesale with the real
 [Channel List home screen](channel-list.md) — see that doc for the store it reads and its row/section

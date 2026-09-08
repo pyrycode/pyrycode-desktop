@@ -39,7 +39,32 @@ describe('nextPairedRoute', () => {
   it('pairServerCancelled returns to settings — non-destructive, no server forgotten (#152, AC4)', () => {
     // Cancel lands back on `settings` (where the user launched pairing), NOT the list: this is a
     // distinct destination from a completed pair, so it needs its own arm — it cannot reuse `back`.
-    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled' })).toBe('settings')
+    //
+    // #1303 turned that destination from a literal in the arm into the event's own `returnTo`, so this
+    // case now states the SETTINGS ENTRY specifically rather than the arm's only behaviour. It is the
+    // shipped path and it is unchanged: the Settings row is on `settings` when it is clicked, so that
+    // is what the container records and that is where cancel lands.
+    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled', returnTo: 'settings' })).toBe(
+      'settings'
+    )
+  })
+
+  it('pairServerCancelled from the sidebar plus returns to the list it was launched from (#1303, AC3)', () => {
+    // The second entry (#1303): the Channels/Chats header plus, clicked while the pane was empty. The
+    // rule is one rule for both entries — back to the surface pairing was launched from — and it is the
+    // payload, not the arm, that says which surface that was.
+    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled', returnTo: 'list' })).toBe(
+      'list'
+    )
+  })
+
+  it('pairServerCancelled from the sidebar plus returns to the open thread (#1303, AC3)', () => {
+    // The case that separates #1303 from "cancel goes home": clicked while a chat was open, cancel
+    // returns to that chat rather than dropping the operator onto the list. `paneKey` is untouched by
+    // the pairing route, so the pane comes back up on the same conversation.
+    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled', returnTo: 'thread' })).toBe(
+      'thread'
+    )
   })
 
   it('pairServerPaired goes home to the new server’s list (#152, AC3)', () => {

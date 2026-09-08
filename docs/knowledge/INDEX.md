@@ -1211,6 +1211,21 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** is the
   first reader.
 
+- [Channel List — the section header's pair-new-host control (#1303)](features/channel-list-section-header-pair-control.md) —
+  both the Channels and Chats section headers now carry a 16px plus, drawn at rest and filled
+  `--color-primary` (unlike every other trailing control in this tree, which reveals only on hover), that
+  opens the same `pairServer` route Settings' "Pair another server" row already opens. The accessible
+  name (`aria-label="Pair new host"`) is a module-level constant, never a prop — `HostRow`'s ruling, since
+  there is no `label` field for interpolated untrusted text to arrive in. The substance is routing, not
+  the button: `pairServer` now has two entries, so `pairServerCancelled` gained the union's one payload,
+  `returnTo: PairedRoute`, and its destination became origin-dependent instead of the fixed `'settings'`
+  literal it used to be — recorded in a new `PairedShell` screen-local cell, `pairServerReturn`, written
+  once at the single site both entries share. See [Paired shell —
+  routing](features/paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for that
+  mechanism. Builder self-review PASS; the spec's Revisions section records that `PairedShell.test.tsx`
+  needed one edit after all (not the predicted zero) and that the e2e drive was falsified before being
+  trusted, against a hardcoded `'settings'`.
+
 ## Architecture
 
 _None yet._

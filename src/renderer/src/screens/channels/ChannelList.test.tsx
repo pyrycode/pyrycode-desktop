@@ -139,6 +139,7 @@ const render = (
       onCreateChannel={noop}
       onEditWorkspace={noop}
       onEditHost={noop}
+      onPairNewHost={noop}
       onSaveAsChannel={noop}
       onRename={noop}
     />
@@ -326,6 +327,23 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in the
 // same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
 // with `treesOf` by #1179, which slices the same tags out of a single tree at a time.
+// #1303 — the section-header plus's accessible name, and the opening tags of the two buttons that wear
+// it. Both headers carry the SAME name by design, so this is a two-match marker everywhere and never a
+// per-tree discriminator. The class shares no token with `__row`, `__row-open`, `__section-header`,
+// `__workspace` or `__host`, which is what keeps it out of every shipped locator's match set.
+const PAIR_NEW_HOST_MARKER = 'aria-label="Pair new host"'
+
+const pairTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  const marker = 'class="channel-list__pair"'
+  for (let at = markup.indexOf(marker); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(marker, end)
+  }
+  return tags
+}
+
 const createTagsIn = (markup: string): string[] => {
   const tags: string[] = []
   const marker = 'class="channel-list__workspace-create"'
@@ -1608,6 +1626,75 @@ describe('ChannelListView', () => {
       expect(tags[1]).toBe(
         `<button type="button" class="channel-list__workspace-create" ${CREATE_CHAT_MARKER}>`
       )
+    })
+  })
+
+  describe('the section headers’ pair-new-host plus (#1303)', () => {
+    // Both headers carry the SAME control, so every count here is two — there is no per-tree difference
+    // to state, unlike the two workspace plusses above. The default fixture is enough: the headers render
+    // unconditionally in every drawn state since #1070.
+    const drawn = (): string =>
+      render([row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true })])
+
+    it('draws the plus on BOTH section headers, keyboard-reachable at rest (AC1/AC2)', () => {
+      const markup = drawn()
+      expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(2)
+      // Real <button>s, so they are in the accessibility tree and tab-reachable — the half AC2 asks for
+      // that a class name alone would not prove. The control is drawn at rest, so unlike the row and
+      // host-row controls there is no reveal rule for a hover to satisfy first.
+      const tags = pairTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).toContain('type="button"')
+        expect(tag).toContain(PAIR_NEW_HOST_MARKER)
+      }
+    })
+
+    it('leaves each header’s own class attribute exactly as it shipped (AC5)', () => {
+      // `SECTION_HEADER_MARKER` is a quote-anchored substring that five specs across this file count, so
+      // a second class on the <header> would redden all of them. The button is a CHILD; the header's own
+      // attribute run is untouched.
+      const markup = drawn()
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(markup).toContain('<header class="channel-list__section-header">Channels<button ')
+      expect(markup).toContain('<header class="channel-list__section-header">Chats<button ')
+    })
+
+    it('draws the design’s 16px glyph inside it (AC1)', () => {
+      // The whole opening run, not a width alone — the #1178 discipline: one marker fixes the class, the
+      // viewBox, both box dimensions, the currentColor fill and the aria-hidden together.
+      expect(drawn()).toContain(
+        '<svg class="channel-list__pair-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">'
+      )
+    })
+
+    it('renders no plus at all in the not-yet-loaded frame', () => {
+      // The headers themselves are withheld there (the tri-state's neutral first paint), so the control
+      // cannot appear without one — asserted rather than assumed, since it is a new element in that gate.
+      expect(countOf(render(null), PAIR_NEW_HOST_MARKER)).toBe(0)
+    })
+
+    it('carries no untrusted text in any attribute of either control', () => {
+      // The accessible name is a compile-time constant and NOT a prop (`HostRow`'s ruling), so no row
+      // name, workspace path or host label can reach these attributes. Asserted against a row whose name
+      // and `cwd` are both hostile.
+      const markup = render([
+        row({
+          id: 'd1',
+          name: '<img src=x onerror=boom>',
+          is_promoted: false,
+          cwd: '/home/me/<img src=x onerror=boom>'
+        })
+      ])
+      const tags = pairTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag).not.toContain('img')
+        expect(tag).not.toContain('onerror')
+        expect(tag).not.toContain('boom')
+        expect(tag).not.toContain('title=')
+      }
     })
   })
 

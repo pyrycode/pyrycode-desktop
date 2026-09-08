@@ -103,9 +103,11 @@ puts it under that row's own `position: absolute` furniture — `.channel-list__
 dots) and `.channel-list__host-add` — rather than the other way around. `pointer-events: none` is what
 keeps a click through the pill landing on the plus regardless of what's on top; no `z-index` fixes the
 paint order without also lifting the pill over the sticky actions cluster it was moved to clear. See
-[Channel List — the host row § Geometry](channel-list-host-row.md) for that row's own furniture, and note
-this for [#1190](https://github.com/pyrycode/pyrycode-desktop/issues/1190) before giving the host row its
-own pill in the same file.
+[Channel List — the host row § Geometry](channel-list-host-row.md) for that row's own furniture.
+[#1190](https://github.com/pyrycode/pyrycode-desktop/issues/1190) later gave that row its own pill in the
+same file, reusing its own band rather than this control's `top: 100%` deviation — the two pills are never
+up at once over the same furniture, since a section's first host row sits a full header box below the
+header's own plus.
 
 **The colour trap, read by name rather than by export.** `get_design_context` on the Pill node
 (`347:6617`) prints `--schemes/primary-container`/`on-primary-container` transposed against `tokens.css`;
@@ -183,7 +185,9 @@ were already scoped to their own control's class, unlike #1181's edit to the row
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — `HostRow`'s
   compile-time-constant accessible-name ruling this control inherits, the hover-revealed plus/pen pair
   this control's "drawn at rest" geometry deliberately departs from, and the row furniture this control's
-  pill now paints under (§ Geometry) — read before giving that row its own pill in #1190.
+  pill now paints under (§ Geometry) —
+  [#1190](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185) then gave that row its own pill,
+  reusing the shared band rather than this control's `top: 100%` deviation.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat
   plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
   (#1178) — the class-isolation precedent (`channel-list__workspace-head`) and the same glyph path.

@@ -983,6 +983,56 @@ describe('ChannelListView', () => {
         expect(countOf(markup, EDIT_ICON_MARKER)).toBe(1)
       })
 
+      // #1190 — the name pill each control shows on its own hover or keyboard focus, the same
+      // `.channel-list__control-name` the row's trailing controls (#1172), the workspace row's pair
+      // (#1180/#1181) and the section header's plus (#1304) wear. Only the MARKUP is assertable here: the
+      // reveal, the drawing and the box all need a layout engine and live in
+      // e2e/sidebar-host-row-control-name-pill.spec.ts.
+      //
+      // Asserted as the closing-tag ADJACENCY rather than as two independent substrings, which is what
+      // makes it a detector for the one placement that would break the shipped tier: each glyph's opening
+      // run is pinned whole by ADD_ICON_MARKER / EDIT_ICON_MARKER above, so a pill that drifted in FRONT
+      // of the <svg> reddens there — but only this assertion says WHERE the pill is, and only it fails if
+      // the pill moves out of the button altogether (a sibling of the control would still contain both
+      // substrings).
+      //
+      // The `aria-hidden` is in the same run on purpose. A button's `aria-label` already overrides its
+      // child text for the accessible name, so this attribute is belt-and-braces — which is exactly why it
+      // needs pinning: nothing else in either tier would redden if it were dropped, and AC2 asks for it.
+      const PILL_OPEN = '<span class="channel-list__control-name" aria-hidden="true">'
+
+      it('names the pen in an aria-hidden pill inside the button (AC1/AC2)', () => {
+        expect(both()).toContain(`</svg>${PILL_OPEN}Edit host</span>`)
+      })
+
+      it('names the plus in an aria-hidden pill inside the button (AC1/AC2)', () => {
+        expect(both()).toContain(`</svg>${PILL_OPEN}Add workspace</span>`)
+      })
+
+      it('keeps each control’s pill text and accessible name in step (AC1/AC2)', () => {
+        // The drift guard: the pill's text and the `aria-label` come off ONE constant per control, so a
+        // row carrying a control carries the accessible name and the drawn name, and the two read the
+        // same words. Counted rather than merely contained — a second pill on a row that draws one
+        // control, or a pill left behind on a withheld one, shows here and nowhere else. The withheld
+        // arms also say the pill is the CONTROL's and not the row's: it goes when its button goes.
+        const markup = both()
+        expect(countOf(markup, PILL_OPEN)).toBe(2)
+        expect(countOf(markup, '>Edit host</span>')).toBe(1)
+        expect(countOf(markup, '>Add workspace</span>')).toBe(1)
+
+        const addOnly = renderRow({ add: noop })
+        expect(countOf(addOnly, PILL_OPEN)).toBe(1)
+        expect(countOf(addOnly, '>Add workspace</span>')).toBe(1)
+        expect(countOf(addOnly, '>Edit host</span>')).toBe(0)
+
+        const editOnly = renderRow({ edit: noop })
+        expect(countOf(editOnly, PILL_OPEN)).toBe(1)
+        expect(countOf(editOnly, '>Edit host</span>')).toBe(1)
+        expect(countOf(editOnly, '>Add workspace</span>')).toBe(0)
+
+        expect(countOf(renderRow(), PILL_OPEN)).toBe(0)
+      })
+
       it('renders the pen BEFORE the plus, so tab order runs left to right (AC4)', () => {
         // Deliberately the reverse of `WorkspaceRow`'s, whose plus-first order its own header records as
         // a COST forced by `e2e/sidebar-workspace-create.spec.ts`'s single-Tab assertion. Both controls

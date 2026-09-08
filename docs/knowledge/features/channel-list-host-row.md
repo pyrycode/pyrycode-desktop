@@ -294,20 +294,44 @@ control, where a per-row block says where it lives. The plus (`.channel-list__ho
 The pen (`.channel-list__host-edit`) sits at `right: calc(var(--space-7) - 3px); top: var(--space-1)`,
 centring its 14px glyph at right 28, 10px clear of the plus. Both filled `--color-primary`, no
 background, no hover circle, `fill="currentColor"`/`aria-hidden="true"` on the SVGs, the file's
-`:focus-visible` outline convention. Neither carries a `.channel-list__control-name` pill —
-[#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) gave
-the workspace pair one, and copying those buttons wholesale would have pulled it in; the host row's pill
-is #1190's ticket.
+`:focus-visible` outline convention. **Both wear `.channel-list__control-name` — the shipped pill
+(#1172) — since [#1190](#the-rows-pen-and-plus-on-hover-1185).**
+[#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) gave the
+workspace pair one first; #1190 brought it up to the host row with no new drawing declaration, appending
+one `<span className="channel-list__control-name" aria-hidden="true">` after each control's `</svg>` —
+appended, not prepended, which is load-bearing: `ChannelList.test.tsx` pins each glyph's whole opening run,
+so a pill placed in front of it would redden the static tier. Each span reads the same
+`EDIT_HOST_CONTROL_LABEL`/`ADD_WORKSPACE_CONTROL_LABEL` constant its own button's `aria-label` already
+reads, so the spoken and the drawn name cannot drift apart; `aria-hidden` is belt-and-braces rather than
+the mechanism, since a button's `aria-label` already overrides child text for the accessible name. Four
+`channels.css` selectors — one hover/focus-visible pair per control — trigger `display: block` on the
+**control's own** `:hover`/`:focus-visible`, never the row's: the whole of AC1's "hovering the row's label
+shows nothing," and a deliberately different scope from the glyph's own reveal three paragraphs up, which
+hangs off the row so the glyph is already there when the pointer arrives at a 20px box it could not
+otherwise see. While one pill is up it covers the other control's glyph or the trailing part of the
+machine label — accepted on #1172's and #1181's precedent, since `pointer-events: none` on the shared
+block lets a click or a hit test land on the row underneath regardless.
 
-**#1190 inherits an occupied top band, not an empty one.** The Channels section header's own plus grew a
-name pill in [#1304](channel-list-section-header-pair-control.md#the-hoverfocus-name-pill-channelscsschannellisttsx-added-by-1304),
-and that pill hangs *below* its control (`top: 100%`) rather than centred on its band, landing in this
-row's own 12px of top padding. `.channel-list` isn't a stacking context and this row is `position:
-relative; z-index: auto` — the same slot as the header — so tree order, not `z-index`, decides: this
-row's subtree paints after the header's, and `.channel-list__host-status`/`.channel-list__host-add` paint
-*over* that pill, not under it, when both are up at once (reachable: the header's pill on `:focus-visible`
-while this row's controls fill on their own `:hover`). #1190's own pill, if placed the same way, would sit
-in this same band relative to the *next* row instead.
+**The band placement is reused verbatim, and the Channels host row clears the sticky actions cluster
+with room to spare.** The Channels section header's own plus hangs its name pill *below* its control
+(`top: 100%`) rather than on the shared band
+([#1304](channel-list-section-header-pair-control.md#the-hoverfocus-name-pill-channelscsschannellisttsx-added-by-1304)),
+because the sticky `.channel-list__actions` cluster's `top` resolves against the scrollport's *content*
+box and so lands 4px *inside* that header at scroll top. The first host row of a section sits one whole
+header box lower — 20px of content line plus 12px of bottom padding, with
+`.channel-list__section-header + .channel-list__host` taking no margin — so at scroll top this pill's top
+edge clears the cluster's bottom edge by ~30px (measured on the running window: row centre y 118, pill top
+y 106, cluster bottom y 76). #1304's `top: 100%` deviation was therefore not needed here: the shared band
+(`right: 0; top: 50%; transform: translateY(-50%)`) is reused unmodified, and
+`e2e/sidebar-host-row-control-name-pill.spec.ts` reads that clearance back as a runtime relation between
+the two edges rather than trusting the prediction — a cluster that grows or a sticky offset that changes
+would redden it. Which of the spec's own assertions actually catches a wrong placement is row-specific
+and not interchangeable with the header's own spec: re-pointing the pen's pill at #1304's `top: 100%;
+transform: none` reddens the **band** assertion here, by exactly 22px, and leaves the actions-edge and
+containment reads green — the opposite of what the same mutation does on the section header, where 30px
+of slack from the header sitting between the row and the cluster means no placement a reader would
+plausibly write closes the gap. Each pill spec has to re-measure its own detector rather than copy a
+sibling's answer.
 
 **The row's right padding goes from 0 to 52px** (`calc(var(--space-8) + var(--space-5))`,
 `.channel-list__workspace`'s own value) **in both states, not only on hover** — reserving the trailing
@@ -340,191 +364,33 @@ geometry, its hover reveal, and what clicking it opens are all covered by e2e no
 
 ## The Edit host dialog (#1299)
 
-[#1299](https://github.com/pyrycode/pyrycode-desktop/issues/1299) (split from #1187) gave the pen its
-first caller: clicking it opens `EditHostDialogView` (new,
-`src/renderer/src/screens/channels/EditHostDialog.tsx`), a near-clone of
-[`EditWorkspaceDialogView`](edit-workspace-dialog.md) (#1180) that renames the machine through
-`window.pyry.setHostLabelFor` (#1186) — the write reaches no daemon: no wire type, no command, no
-bridge change.
-
-**Two departures from the sibling dialog, both deliberate.** Save is enabled on a blank name — a host
-has no folder name to fall back to the way a workspace does, so blank is the valid way back to the
-generic fallback word, and main clears that server's stored entry rather than storing an empty string.
-And the dialog carries a round-trip status (`idle` / `saving` / `failed`) the sibling has no use for,
-because this write is a promise rather than a fire-and-forget outbound command: Save disables and
-freezes the field while `saving`, and an `error` (or an unrecognised) answer renders one client-owned
-line (`.edit-host__error`, "Could not save that name") and re-enables Save. **Cancel is never disabled,
-in any status** — `ipcRenderer.invoke` carries no timeout, so a main side that never answers would
-otherwise leave the dialog frozen with no exit.
-
-**The write helper, `requestSetHostLabel`, tests the recognised arms positively.** `stored`/`not-stored`
-map through `mapHostLabel` (the same mapper the reads use) to the value the container writes into
-[the window store](host-label-window-store.md); anything else — `error`, a rogue arm, or a rejected
-invoke — resolves `null`, meaning "keep the dialog open, write nothing." Written as a negative
-`if (status === 'error')` instead, a future or malformed arm would fall through to the mapper, collapse
-to `error`, and silently reset the row to the generic word; the positive form makes an unrecognised
-answer degrade to the conservative outcome by shape rather than by a branch someone has to keep correct.
-Unlike [`loadHostLabelFor`](host-label-window-store.md), this path does **not** write `error` into the
-store on failure: a failed read genuinely means "unreadable, show the fallback," but a failed write
-means the label is whatever it was before, and recording `error` would invent a state change out of a
-refusal. The promise always resolves and the caught rejection is dropped unread, so nothing here can
-surface as an unhandled rejection in React or log the label.
-
-**The seed is a different collapse from the one the row displays.** `hostRowLabel` (§ above) turns every
-non-name outcome into the fallback word `'Server'`; seeding the field with it would invite the user to
-Save that word as the machine's actual name. `hostRowEditSeed(value)` — exported for the same
-unit-testability reason `hostRowLabel` is — answers "what is stored" instead: verbatim on `stored`
-(including a blank or whitespace-only label, unslimmed — Save is what trims), empty on the other three
-arms.
-
-**Container state is three `useState` cells in `ChannelList`** (`editHostServerId`, `editHostName`,
-`editHostStatus`), gated on `editHostServerId !== null` rather than truthiness — `isHostLabelServerRequest`
-deliberately accepts the empty string as a server id, so a truthy gate would collapse a real machine's
-dialog into "none open." The store write on a successful Save is keyed by the id captured in the render
-closure before the `await`, never by anything the response carried — `HostLabelResult` names no server
-at all, so keying off the response would let one machine's answer land on another machine's row.
-
-**The renderer host-label store gained its second writer.** [Host-label window store](host-label-window-store.md)'s
-`setHostLabelFor` used to have exactly one caller, the loader that fills every slot on mount; this
-dialog's successful Save is the second, recording main's answer for one slot. The row still only reads,
-and nothing feeds a rendered value back into the store — see that page's own note.
-
-**A known gap, left open at merge (code review, non-blocking):** the container's three cells are not
-scoped to the interaction that opened them. If a write is slow, the user Cancels and reopens the dialog
-on a different machine before it resolves, the late resolution still lands on the *new* interaction's
-state — closing a dialog the user just opened, or showing the failure line in a dialog that made no
-write at all. The store write itself is unaffected (it is keyed correctly, per above); only the dialog's
-own open/closed/failed state can drift. Flagged for the next touch of this surface rather than fixed
-here.
-
-**CSS.** `.edit-host*` is its own class family in `channels.css` — a reuse of `.edit-workspace*` or
-`.rename-conversation*` would join those classes' Playwright strict-mode match sets and violate rather
-than fail an assertion (`e2e/sidebar-workspace-edit.spec.ts`, `e2e/conversation-create-rename.spec.ts`).
-Mirrors `.edit-workspace*` declaration for declaration minus the path line, plus a `.edit-host__error`
-line on `.save-as-channel__error`'s recipe. **Since [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)
-the panel also carries the `max-height: 90%` / `overflow-y: auto` pair `.edit-workspace` has always
-had** — this ticket's own comment declined the pair on the premise that everything the panel renders is
-client-owned copy or a label bounded at `MAX_HOST_LABEL_LENGTH` inside a single-line input, and #1300
-falsified that premise by adding an unbounded relay URL (§ below). The comment was corrected in place
-rather than left standing next to code that contradicted it.
-
-**The identity block ([#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)).** No Figma
-node draws this dialog at all, so the block follows [`EditWorkspaceDialogView`](edit-workspace-dialog.md)'s
-own `cwd` line instead: which machine this row actually is, under the field that renames it — the same
-`{ serverId, relayUrl }` pair [Settings' Connection → Server row](server-info-channel.md) already shows.
-Unlike that one-line precedent, two values need to be tellable apart, so each gets its own caption
-(`Server ID`, `Relay`) — a `display: block` `<span>` caption immediately followed by the value as a
-direct text child of the same `<p>` (`.edit-host__detail`), `overflow-wrap: anywhere` so a URL with no
-space still wraps rather than growing the panel past its `max-width`.
-
-`EditHostDialogView` takes one new prop, `server: ServerInfoValue | null`, rather than the two separate
-strings the ticket's own Technical Notes suggested. [`serverInfoStore`](server-info-channel.md)'s state
-docblock already rejects an unobservable pair of nullable fields as ceremony without benefit, and the
-lookup miss (id present, relay absent) is not a state the container's lookup can ever produce — the
-entry is found whole or not at all. One nullable object makes that impossible state unrepresentable
-rather than merely untested; the substance (both values arrive as props, the view looks nothing up) is
-unchanged. `ChannelList` does the lookup in the one place both halves are already in scope —
-`servers.find((entry) => entry.serverId === editHostServerId) ?? null` — so nothing below the container
-changes: `renderServerTrees` (§ above) only ever has the bare id to pass down.
-
-On a miss (a reseed or an unpair while the dialog is open) both captions stay and the value slot renders
-a client-owned `Unavailable` rather than an empty string or a closed dialog — a blank slot would be
-indistinguishable from a value that failed to arrive, and closing would discard an in-progress rename
-for a reason that has nothing to do with it. Both values are the same semi-trusted QR/paste-payload text
-`pairedServerStore`'s own header calls the id untrusted, reaching this view only as an auto-escaped
-React child — `HostRow`'s label already declines four sinks (no `title`, no `aria-label`, no derived
-id/key/lookup path, no log line) and this block holds over all four unchanged, plus a fifth the relay
-URL specifically needs: **displayed, never dialled** — no `new URL`, no `<a href>`, no `window.open` —
-the one value here that invites the opposite instinct.
-
-**Tests.** Unit: `EditHostDialog.test.tsx` (new) covers the chrome, the blank-enabled/round-trip
-departures, the length bound measured on the trimmed name, and `requestSetHostLabel`'s three outcomes
-against a spy. `ChannelList.test.tsx` extends to cover `hostRowEditSeed`'s four arms and that
-`ChannelListView` threads `onEditHost` to every host row. [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)
-extends both further: `EditHostDialog.test.tsx` gains the identity block's rendered-text coverage
-(populated and per-caption, a long relay URL held whole — the `hostRowLabel` 128-character idiom, the
-wrap is CSS and never a slice — and the `server: null` miss rendering `Unavailable` under both
-captions), plus the sink guard riding `ChannelList.test.tsx`'s existing SENTINEL idiom rather than a new
-one: a sentinel id and a sentinel relay each occurring exactly once, immediately after their own
-caption's close. `ChannelList.test.tsx`'s sidebar-side sentinel test gained a line of its own: with the
-dialog closed, which every static render is, neither value reaches the sidebar markup either. E2E, fake
-tier: `e2e/sidebar-host-edit.spec.ts`
-(new) drives Cancel, a blank Save (the clear), a reopen reading the field back empty, a rename visible
-on both of one machine's rows while a second paired machine's rows stay untouched, and a Settings
-round-trip remount proving the value reached main's at-rest store rather than only the renderer
-singleton the Save wrote — a `reuseUserDataDir` relaunch cannot observe this criterion at all, since it
-never reconnects, so `renderBody`'s first gate returns `null` and the sidebar draws nothing; recorded
-under that spec's own `## Revisions` in
-[the architecture spec](../../specs/architecture/1299-edit-host-dialog.md). `host-row-hover-controls.spec.ts`
-is inverted rather than replaced — see the correction above. #1300 extends the same spec with the
-two-machine identity check: machine A's dialog carries `FIRST_SERVER_ID` and its own relay URL read off
-the fixture handle (`${servers[0].forwarder.url}/v1/client`, never a literal — the port is an ephemeral
-loopback one), and machine B's pen opens a dialog carrying B's own pair, asserted by exact per-element
-text rather than substring (`fake-daemon` is a prefix of `fake-daemon-2`, so a `toContainText` would
-pass on the wrong row).
+Split into its own page, [Edit host dialog](edit-host-dialog.md), once this page neared the doc-guard's
+byte cap. [#1299](https://github.com/pyrycode/pyrycode-desktop/issues/1299) (split from #1187) gave the
+pen — drawn with no caller since [#1185](#the-rows-pen-and-plus-on-hover-1185) — its first caller: a
+near-clone of [`EditWorkspaceDialogView`](edit-workspace-dialog.md) that renames the paired machine
+through `window.pyry.setHostLabelFor` (#1186), reaching no daemon.
+[#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300) then added an identity block showing
+the machine's server id and relay URL. See [Edit host dialog](edit-host-dialog.md) for the full design:
+the departures from the sibling dialog, the write helper's positive-arm contract, the identity block, and
+the reopen-while-saving gap left open at merge.
 
 ## The Add workspace dialog (#1308)
 
-[#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308) gave the plus its first caller: clicking
-it opens `AddWorkspaceDialogView` (new, `src/renderer/src/screens/channels/AddWorkspaceDialog.tsx`), a
-near-clone of [`CreateChannelDialogView`](create-channel-dialog.md) (#1179) with a round trip added, which
-makes `EditHostDialogView` (§ above) the closer relative below the field: a three-arm status (`idle` /
-`creating` / `rejected`), a frozen field while the answer is outstanding, a client-owned failure line, and a
-Cancel that is never disabled — load-bearing here specifically, since nothing times out the
-`createConversation` round trip and a silent daemon would otherwise leave the dialog frozen with no exit.
-
-**What it sends.** One absolute folder path, typed by the operator — `''.startsWith('/')` both refuses a
-blank field and is the whole of the client-side rule, since the daemon owns confinement and existence
-checks server-side and a client-side normalisation would silently split one sidebar group into two (`~/foo`
-vs `/home/x/foo`). `requestNewWorkspaceChat` (new, `conversationCreatedBridge.ts`) is a **third sibling**
-beside `requestNewConversation`/`requestNewChannel` rather than a widened parameter: same
-`{is_promoted: false, name: null, cwd}` literal, with a top-level `serverId` main refuses to leave unnamed
-once more than one server is paired — required, not optional, since this caller always knows which row's
-plus was clicked. See [Conversation create](conversation-create.md) for the dispatch and [Daemon connection
-correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
-for the round trip's daemon-side half.
-
-**The in-flight gate is the whole of the round trip**, and it discharges #1307's obligation rather than
-rediscovering it: both listeners (`conversationCreated`, `conversationCreateRejected`) act only while
-`status === 'creating'`, read through a ref rather than a closure (the `useConversationCreatedNav` idiom).
-A rejection at `idle` or `rejected` changes nothing. While the dialog's own create genuinely is
-outstanding, a rejection belonging to the FAB's or the Channels-tree workspace plus's concurrent create is
-**indistinguishable from its own** — the arm is nullary, so there is no per-request field to correlate on
-even in principle. Accepted rather than designed away: it fails toward a false failure report on a create
-that will still land, never a false success. Closing on confirmation does not match `cwd` for the matching
-reason — a daemon that normalises the string would otherwise strand the dialog open over a chat it already
-created.
-
-**Container state lives inside `AddWorkspaceDialog` itself**, not in `ChannelList` — unlike the Edit host
-dialog's three cells above. `ChannelList` holds only the open cell, `addWorkspaceServerId: string | null`,
-gated on `!== null` for `editHostServerId`'s reason and keyed by server id so a reopen against a different
-machine remounts rather than reuses.
-
-**Sinks.** The typed path reaches only the controlled input's `value`; `HostRow`'s four declined sinks (no
-`title`, no `aria-label`, no id/key/lookup path, no log line) hold in full, and the rejection arm carries no
-daemon byte at all to interpolate even by a future edit. **CSS:** `.add-workspace*` is its own class family
-in `channels.css`, cloned from `.edit-host*` (the disabled-field/error-line pair) for the Playwright
-strict-mode reason `.edit-host*` itself was kept separate from `.edit-workspace*`.
-
-**Tests.** Unit: `AddWorkspaceDialog.test.tsx` — the disabled matrix, the three statuses' chrome, the sink
-guard. E2E, fake tier: `e2e/sidebar-add-workspace.spec.ts` (new) — a happy-path launch and a refusal launch
-against `conversationStateFake`'s new `createOutcome: 'rejected'` option (the first daemon refusal that
-fake models at all), both reading the open row's title through `.channel-list__row-open[aria-current="true"]`
-captured *before* the create so each read is a mutation check rather than a locator that could pass before
-the click's async work resolves — a correction recorded in
-`docs/specs/architecture/1308-host-row-add-workspace-dialog.md` § Revisions after the first run proved a
-naive `.composer`-count assertion vacuous (`launchPairedApp` already leaves a composer on screen at
-launch). `e2e/host-row-hover-controls.spec.ts` inverts rather than replaces its two "no Add workspace
-button" reads — see the correction above.
+Split into its own page, [Add workspace dialog](add-workspace-dialog.md), for the same reason.
+[#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308) gave the plus — also drawn with no
+caller since #1185 — its first caller: a near-clone of [`CreateChannelDialogView`](create-channel-dialog.md)
+with a round trip added, closer in shape to [the Edit host dialog](edit-host-dialog.md) than to its own
+template. Sends `requestNewWorkspaceChat`, a third sibling beside `requestNewConversation`/
+`requestNewChannel`. See [Add workspace dialog](add-workspace-dialog.md) for the full design: what it
+sends, the in-flight rejection-correlation gate, and the sink guard.
 
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent page: the view-model, the row's save/rename
   affordances, workspace grouping, and the CSS this section's classes live in.
-- [Conversation create](conversation-create.md) / [Daemon connection correlation § Create-conversation
-  rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) —
-  the transport `requestNewWorkspaceChat` sends over and the round trip § The Add workspace dialog above
-  consumes.
+- [Edit host dialog](edit-host-dialog.md) (#1299) / [Add workspace dialog](add-workspace-dialog.md)
+  (#1308) — split out of this page once it neared the byte cap; the two dialogs the row's pen and plus
+  open, § above.
 - [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
   the store `HostRowControl` reads and the loader `<HostLabelData />` mounts; re-keyed by server id in
   [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199).
@@ -559,17 +425,7 @@ button" reads — see the correction above.
   `serverInfoStore` list this page's `HostRowControl` used to read only `servers[0]` off; narrowed both
   `HostRow.serverId` and `HostConnectionDotsControl`'s to `string`, and amended the id's ban list to allow
   its one remaining use as a React key.
-- [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the dialog § The Edit host dialog above
-  clones, one level down: the same overlay/scrim/panel chrome and Name field.
-- [Host-label store](host-label-store.md) (#1186) — the main-process keyed SET channel,
-  `window.pyry.setHostLabelFor`, this dialog's Save writes through; reaches no daemon.
-- [#1299 spec](../../specs/architecture/1299-edit-host-dialog.md) — the Edit host dialog's full design:
-  the two departures from `EditWorkspaceDialogView`, the positive-arm write contract, and the
-  reopen-while-saving gap recorded under § The Edit host dialog above.
-- [#1300 spec](../../specs/architecture/1300-edit-host-dialog-server-id-and-relay.md) — the identity
-  block's full design and security review: the one-nullable-object prop shape, the lookup-miss
-  placeholder, the `max-height`/`overflow-y` correction, and why the relay URL is displayed but never
-  dialled. Recorded under § The Edit host dialog above.
-- [Server-info store](server-info-channel.md) — `ServerInfoValue`'s `{ serverId, relayUrl }` shape, the
-  `serverInfo` handler's field allowlist, and Settings' Connection → Server row, the one other surface
-  showing this same pair.
+- [#1299 spec](../../specs/architecture/1299-edit-host-dialog.md) / [#1300
+  spec](../../specs/architecture/1300-edit-host-dialog-server-id-and-relay.md) — the Edit host dialog's
+  full design and the identity block's security review; recorded on [that dialog's own
+  page](edit-host-dialog.md).

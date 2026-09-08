@@ -110,6 +110,50 @@ field can hold a daemon-supplied byte. `security-sensitive`, code review **PASS*
 dormant — all three exhaustive renderer bridges no-op the new arm; the real consumer is the not-yet-built
 [#397](https://github.com/pyrycode/pyrycode-desktop/issues/397) round-trip store.
 
+# Create-conversation rejected correlation ([#1307](https://github.com/pyrycode/pyrycode-desktop/issues/1307))
+
+A further correlation store lives here, `pendingCreateFolders`' nearest sibling in shape and placed
+immediately after it in the `daemon-error` chain: `pendingCreateConversations: Set<number>`, envelope ids
+of outstanding [`create_conversation`](conversation-create.md) requests. Before this ticket
+`createConversation` was fire-and-forget end to end — no record of the envelope id was kept, so a daemon
+`error` correlated by `Envelope.in_reply_to` fell through the whole chain and was consumed (or dropped) by
+the modal FIFO. Both of its callers, the new-discussion FAB and the Channels-tree workspace plus, had no
+failure path at all. The header deliberately states **which tier the store joins, not an ordinal** — two
+existing headers in this file already call themselves "the fourth member" or "the third member" of a count
+no gate checks, and this one does not add a third claim to keep straight.
+
+- **Set / match+delete / reset — the `pendingCreateFolders` template verbatim.** `createConversation`
+  captures `envelopeId = nextEnvelopeId` before the build and adds it to the set only after a successful
+  `driver.sendMessage` (a build/send throw registers nothing, so the id cannot be re-minted out from under
+  it); `case 'daemon-error':` checks the set alongside its five siblings inside the existing
+  `inReplyTo !== undefined` guard, and a match deletes the entry, emits the bare
+  `{ type: 'conversationCreateRejected' }`, and `return`s before both `reassembler?.fail` and the modal-FIFO
+  shift; `dial()` clears the set next to its siblings. Nothing is read off the untrusted error payload — the
+  event is nullary, the strongest form of the no-echo property this whole file follows.
+- **The success reply does not consume the entry — same as `pendingCreateFolders`, not a variant of it.**
+  `conversation_created` also serves as an unsolicited broadcast, so a late error for an already-created
+  conversation still emits a rejection. The obligation this pushes downstream is real, not hypothetical: a
+  consumer must gate on its own in-flight state the way `pendingCreateFolders`' `newFolderStore` already
+  does, and [#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308)'s Add-workspace dialog
+  inherits it. Unbounded, on `pendingHistoryRequests`' accepted argument: an entry costs one number, only
+  this client's own sends add one, every match or dial removes one.
+- **Bareness does not mean single-caller, and the shipped code comment overstates that it does.** The
+  #396 code review caught this during #1307's own review: `create_conversation` has **two** live callers
+  today (the FAB and the Channels-tree workspace plus), and #1308's dialog will sit beside them as a third,
+  so more than one request can be outstanding at once. The bare arm therefore cannot say *whose* rejection
+  it is reporting — not because only one caller exists (it doesn't), but because the ticket scoped a
+  per-entry payload out regardless (the daemon's own refusal message never echoes the path, so there is
+  nothing to carry even if a field were added). A consumer must do two things, not one: gate on its own
+  in-flight state, **and** accept that a concurrent caller's rejection is indistinguishable from its own.
+  #1308 must design for both; do not repeat the "only one dialog is ever open" reasoning `pendingCreateFolders`
+  earned honestly (that store really does have exactly one caller) when writing this store's next consumer.
+
+`security-sensitive`, builder self-review **PASS**, one accepted SHOULD FIX (the unbounded set, the
+`pendingCreateFolders`/`pendingHistoryRequests` posture) and one open SHOULD FIX inherited by #1308 (a
+daemon that answers a create it already confirmed can still produce a rejection after the fact — a false
+failure report, never a false success). See [Conversation create](conversation-create.md) for the full
+transport slice this correlation attaches to.
+
 # Attachment-upload correlation ([#861](https://github.com/pyrycode/pyrycode-desktop/issues/861))
 
 The **two-key** correlation the rest of this document's single-key precedent doesn't fit — see

@@ -106,7 +106,9 @@ const boxOf = async (locator: Locator, role: string): Promise<Box> => {
 
 // Every workspace pill's computed `display`, as a set — the absence claims below are whole-set reads
 // rather than per-element ones, so a pill left showing on the other tree's plus fails them instead of
-// going unlooked-at. Scoped to the workspace heads: the row controls' pills are #1172's spec's.
+// going unlooked-at. Scoped to the PLUSSES: the row controls' pills are #1172's spec's, and since #1180
+// the workspace head row carries a second control of its own — the edit pen — whose pill is that
+// ticket's spec's. See the locator below.
 const displays = (pills: Locator): Promise<string[]> =>
   pills.evaluateAll((elements) => elements.map((el) => window.getComputedStyle(el).display))
 
@@ -140,8 +142,13 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   const sidebar = page.locator('.paired-shell__sidebar')
   const actions = page.locator('.channel-list__actions')
   const heads = page.locator('.channel-list__workspace-head')
-  // Every workspace pill, and ONLY those: the row controls wear the same class one level down.
-  const pills = page.locator('.channel-list__workspace-head .channel-list__control-name')
+  // Every PLUS's pill, and only those. Narrowed from `.channel-list__workspace-head …` to the plus
+  // itself by #1180, which gave the same head row a second control wearing the same pill class — so the
+  // old selector would count two pills per head and strict-violate on the single-element reads below.
+  // This is #1181's own edit to #1172's spec repeated one level down (this file's header records it):
+  // each pill spec names the CONTROL whose pill it is about, so a third named control changes no count
+  // here. The row controls' pills remain out of reach either way, being one level down again.
+  const pills = page.locator('.channel-list__workspace-create .channel-list__control-name')
 
   // The two heads addressed BY THE NAME OF THE PLUS THEY CONTAIN rather than by index — the thing the
   // criterion is about, and index-free, so a tree order that changed would fail on the name rather than
@@ -150,8 +157,14 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   const createChat = page.getByRole('button', { name: CREATE_CHAT_NAME })
   const channelsHead = heads.filter({ has: createChannel })
   const chatsHead = heads.filter({ has: createChat })
-  const channelsPill = channelsHead.locator('.channel-list__control-name')
-  const chatsPill = chatsHead.locator('.channel-list__control-name')
+  // Narrowed to the plus for the reason the `pills` locator above states — each of these must resolve
+  // to exactly ONE element, and the head row has carried two pill-wearing controls since #1180.
+  const channelsPill = channelsHead.locator(
+    '.channel-list__workspace-create .channel-list__control-name'
+  )
+  const chatsPill = chatsHead.locator(
+    '.channel-list__workspace-create .channel-list__control-name'
+  )
 
   // --- The launch seed: one unpromoted row, so the Chats tree has the only group — already enough to
   // prove the pill is MOUNTED before anything is hovered, and that the Channels tree draws neither. ---

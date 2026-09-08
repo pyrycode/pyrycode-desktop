@@ -385,3 +385,29 @@ code that departs.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+**2026-09-08 — the pen's pill joins #1181's spec locator, which had to narrow.**
+
+Not foreseen by the plan, found by re-running the shipped specs the change could plausibly redden.
+`e2e/sidebar-workspace-plus-name-pill.spec.ts` locates every workspace pill as
+`.channel-list__workspace-head .channel-list__control-name`, on the stated reasoning that the row
+controls' pills are one level down and therefore out of reach. Since this ticket the head row carries a
+**second** pill-wearing control, so that locator resolves two elements per head: its counts read double
+and its single-element `channelsPill` / `chatsPill` reads strict-violate.
+
+The fix is that spec's own precedent rather than a new one — its header records #1181 narrowing #1172's
+`pills` locator to `.channel-list__row` for exactly this reason when it added a pill in a new place.
+All three locators are narrowed from the head row to `.channel-list__workspace-create`, so each names
+the control whose pill it is about. Every assertion in the file keeps its meaning and its numbers; no
+count was bumped to make a stale claim pass, and a future third named control changes nothing there
+again.
+
+Rejected: giving the pen a pill class of its own. It would restate the whole `.channel-list__control-name`
+block to draw the identical pill, and the ticket pins the pen's pill to "the plus's pill treatment" — one
+definition is the point.
+
+**What this changes in the plan above:** the Testing strategy's e2e list gains
+`sidebar-workspace-plus-name-pill.spec.ts` as a touched file. Nothing in the Design, the state model or
+the security review moves — the pen's markup, its class and its shared pill are exactly as designed.

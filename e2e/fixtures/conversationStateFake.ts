@@ -14,7 +14,8 @@ import type {
   ChangeWorkspacePayload,
   RecentWorkspace,
   RecentWorkspacesPayload,
-  WorkspaceUpdatedPayload
+  WorkspaceUpdatedPayload,
+  RenameWorkspacePayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -37,6 +38,11 @@ import type {
 //     broadcast; the app auto re-requests `list_conversations`, which this fake answers from UPDATED state.
 //   - delete_conversation → a CORRELATED `conversation_deleted { id }` echoing the request id as
 //     `in_reply_to` (no broadcast); the app also auto re-lists.
+//   - rename_workspace → a CORRELATED `workspace_updated` echoing the request id (#1289), the same frame
+//     the `renameWorkspace` seam pushes UNSOLICITED. Correlation is the only difference and it changes
+//     nothing the app does (the decode is unconditional, the refresh trigger correlation-blind), but it
+//     is what the daemon actually sends a requester — a fake answering its own request with a broadcast
+//     would be a state the daemon cannot produce. The app auto re-lists.
 //   - create_conversation → a CORRELATED `conversation_created { record }` (no broadcast), consumed by BOTH
 //     the create→nav bridge and — since #515 — shouldRefreshList; the app auto re-lists, which this fake
 //     answers from state that has ALREADY appended the minted row (`list.push` below), so the new row lands
@@ -138,8 +144,9 @@ export function conversationStateFake(
   // folder name in the Chats tree, reddening a spec against correct production code.
   //
   // A `Map`, not a `Record`: the keys are `cwd` strings, and a plain object resolves a `__proto__` key to
-  // `Object.prototype` (the `groupByServer` rule). Fixture-authored keys make that unreachable here; the
-  // `Map` is the free second fabric.
+  // `Object.prototype` (the `groupByServer` rule). The `Map` alone is what makes that inert — it has no
+  // prototype chain to walk — and it has to be, because since #1289 the keys are NOT all fixture-authored:
+  // the `rename_workspace` arm below keys this map on a `path` the app under test supplied.
   const labels = new Map<string, string | null>()
   for (const row of list) {
     if (!labels.has(row.cwd)) labels.set(row.cwd, row.workspace_label)
@@ -150,6 +157,22 @@ export function conversationStateFake(
   const recents: RecentWorkspace[] = options.recentWorkspaces ?? []
   // Monotonic id source for minted rows — deterministic, no clock/random.
   let nextCreatedId = 1
+
+  // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below
+  // calls it with the request's envelope id (the daemon's CORRELATED answer to a client that asked,
+  // #1289), and the exposed seam calls it without one (the UNSOLICITED broadcast a client that asked for
+  // nothing receives, #1288). One implementation, so the two paths cannot drift in what they mutate.
+  const renameWorkspace = (cwd: string, label: string | null, inReplyTo?: number): Uint8Array => {
+    // BOTH the per-cwd map and every held row move. The map is what a row minted or moved INTO this
+    // workspace later reads; the rows are what `list_conversations` answers with, and that reply is
+    // what the sidebar renders — so updating only one of the two would leave a drive asserting
+    // against a fake the daemon could not produce.
+    labels.set(cwd, label)
+    for (const row of list) {
+      if (row.cwd === cwd) row.workspace_label = label
+    }
+    return workspaceUpdatedFrame(cwd, label, inReplyTo)
+  }
 
   const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
     // Trusted input: decodeEnvelope throwing would be a genuine bug in the app-under-test, not a case to
@@ -236,6 +259,19 @@ export function conversationStateFake(
         return [conversationDeletedFrame(payload.conversation_id, env.id)]
       }
 
+      case 'rename_workspace': {
+        const payload = env.payload as RenameWorkspacePayload
+        // REUSES the mid-test seam rather than restating its mutation: one call moves both the per-cwd
+        // label map and every held row, so the follow-up re-list cannot answer with a label the daemon
+        // never held. What this arm adds is the CORRELATION — the daemon answers the client that asked
+        // by echoing the request's envelope id as `in_reply_to`, which the unsolicited push has no id
+        // to echo. Unlike its neighbours there is no row lookup and so no not-found no-op: a rename
+        // names a WORKSPACE, and a path matching no held row simply moves no row (the daemon would
+        // answer `workspace.not_found`; modelling daemon rejections is out of scope here, as it is for
+        // every other verb in this switch).
+        return [renameWorkspace(payload.path, payload.label, env.id)]
+      }
+
       default:
         // A genuinely-other verb (e.g. a snapshot request on thread entry) needs no reply for these flows;
         // returning [] sends nothing, which the fake daemon settles ok.
@@ -246,17 +282,9 @@ export function conversationStateFake(
   // The mid-test seam (#1288). Attached to the callable rather than returned beside it — see
   // ConversationStateFake for why that keeps 29 spec files untouched.
   return Object.assign(buildReplyFrames, {
-    renameWorkspace(cwd: string, label: string | null): Uint8Array {
-      // BOTH the per-cwd map and every held row move. The map is what a row minted or moved INTO this
-      // workspace later reads; the rows are what `list_conversations` answers with, and that reply is
-      // what the sidebar renders — so updating only one of the two would leave the drive asserting
-      // against a fake the daemon could not produce.
-      labels.set(cwd, label)
-      for (const row of list) {
-        if (row.cwd === cwd) row.workspace_label = label
-      }
-      return workspaceUpdatedFrame(cwd, label)
-    }
+    // Deliberately drops the third argument: the seam models the UNSOLICITED push a client that asked
+    // for nothing receives, so the frame it hands back carries no `in_reply_to` to echo.
+    renameWorkspace: (cwd: string, label: string | null): Uint8Array => renameWorkspace(cwd, label)
   })
 }
 
@@ -309,15 +337,21 @@ function conversationUpdatedFrame(row: ConversationSummary): Uint8Array {
   })
 }
 
-/** `workspace_updated` BROADCAST — the two-field WorkspaceUpdatedPayload (#1288). No `in_reply_to`: the
- *  daemon correlates this frame to whoever asked for the rename and pushes it UNSOLICITED to every other
- *  client, and the unsolicited shape is the one a spec drives, since nothing here sends the rename verb
- *  (that is #1289). The client decodes both identically. */
-function workspaceUpdatedFrame(path: string, label: string | null): Uint8Array {
+/** `workspace_updated` — the two-field WorkspaceUpdatedPayload (#1288), in BOTH the shapes the daemon
+ *  emits. With `inReplyTo` it is the CORRELATED answer to a `rename_workspace` request (#1289); without
+ *  it, the UNSOLICITED broadcast every other connected client receives. `JSON.stringify` omits an
+ *  undefined-valued property, so the broadcast's bytes are byte-identical to the pre-#1289 ones. The
+ *  client decodes both identically. */
+function workspaceUpdatedFrame(
+  path: string,
+  label: string | null,
+  inReplyTo?: number
+): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'workspace_updated',
     ts: FIXED_TS,
+    in_reply_to: inReplyTo,
     payload: { path, label } satisfies WorkspaceUpdatedPayload
   })
 }

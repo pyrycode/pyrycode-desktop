@@ -334,3 +334,33 @@ Each is resolved in Phase B; anything that moves the design lands in a `## Revis
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+### 2026-09-08 — Phase B
+
+Both Open Questions resolved as expected; neither moved the design.
+
+1. **The optional `inReplyTo` does not disturb the sibling drive.** `workspace-updated-relist.spec.ts`
+   passes unchanged alongside the new spec — `JSON.stringify` omits the undefined-valued property, so
+   the broadcast frame's bytes are identical to the pre-#1289 ones.
+2. **`servers.route(undefined)` does resolve the sole connection** in a fake-tier launch. The new spec
+   passes without naming a `serverId`, which it could not do otherwise. Also verified from the source
+   rather than only from the green: `serverRouter`'s `resolve` has exactly three outcomes and **no
+   fallback to an arbitrary server** — a named-but-unconnected id is refused, and `''` is treated as a
+   name that refuses rather than as an omission.
+
+Two changes beyond what the plan prescribed, both small:
+
+- **The fake's mutation is hoisted into one closure-scoped `renameWorkspace(cwd, label, inReplyTo?)`**
+  that the `rename_workspace` arm and the exposed seam both call, rather than the arm calling the seam
+  through the returned object. Same behaviour, but one implementation of what gets mutated, so the
+  correlated and unsolicited paths cannot drift in it.
+- **The `case 'renameWorkspace':` arm in `src/main/index.ts` carries a comment naming its sole gate.**
+  Earned rather than asserted: the route was neutered, rebuilt, and `npm run build` plus the whole unit
+  tier stayed green while only `rename-workspace-command.spec.ts` reddened. That measurement is what the
+  spec was written to buy, and the comment records it so a future edit knows what it is standing on.
+
+The security review's one SHOULD FIX landed: `conversationStateFake`'s `labels` Map comment no longer
+argues from key provenance (the `rename_workspace` arm makes the keys app-supplied), and rests on the
+`Map` having no prototype chain instead.

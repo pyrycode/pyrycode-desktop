@@ -46,6 +46,7 @@ import { buildUnarchiveConversation } from './transport/unarchiveConversationEnv
 import { buildDeleteConversation } from './transport/deleteConversationEnvelope'
 import { buildRenameConversation } from './transport/renameConversationEnvelope'
 import { buildChangeWorkspace } from './transport/changeWorkspaceEnvelope'
+import { buildRenameWorkspace } from './transport/renameWorkspaceEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
@@ -93,6 +94,7 @@ import {
   type DeleteConversationPayload,
   type RenameConversationPayload,
   type ChangeWorkspacePayload,
+  type RenameWorkspacePayload,
   type SetSystemPromptPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
@@ -460,6 +462,26 @@ export interface DaemonConnection {
    * throws out of the module (parity #490).
    */
   changeWorkspace(payload: ChangeWorkspacePayload): void
+  /**
+   * Encrypt a payload-carrying `rename_workspace` control envelope onto the live session — asks the
+   * daemon to change a WORKSPACE's stored label (#1289). Its neighbour `changeWorkspace` moves ONE
+   * CONVERSATION between workspaces; this renames the workspace itself, so it is scoped to a server
+   * rather than to a chat and carries no conversation id at all. `payload.label` is the TRI-STATE's
+   * two live arms — a string names the workspace, a literal `null` clears the label back to the folder
+   * name — and both pass through untouched.
+   *
+   * `path` and `label` are renderer-supplied text the daemon polices SERVER-side (the path must equal a
+   * stored conversation's `cwd` byte for byte, the label must be non-empty after trimming and at most
+   * 128 characters) — the desktop never resolves the path into a local filesystem path and applies no
+   * length check of its own. The `send` TWIN, not `requestDebugBundle`: a rename request has no consumer
+   * to fail, so it is an inert no-op when not connected (`driver === null` → return). FIRE-AND-FORGET —
+   * no reply is correlated or awaited here: the daemon confirms by replying with a `workspace_updated`
+   * record correlated to this requester, which #1288's inbound path decodes into a re-list, so the new
+   * label reaches the sidebar on the authoritative `conversations` reply (the `renameConversation`
+   * posture toward `conversation_updated`). Its caller is the Edit-workspace dialog (#1180); this ticket
+   * ships the transport DORMANT. NEVER throws out of the module (parity #490).
+   */
+  renameWorkspace(payload: RenameWorkspacePayload): void
   /**
    * Encrypt a payload-carrying `set_system_prompt` control envelope onto the live session — asks the
    * daemon to store, replace or CLEAR one conversation's durable system prompt (#1249). Keyed by
@@ -2775,6 +2797,40 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function renameWorkspace(payload: RenameWorkspacePayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A rename-workspace request has no consumer to fail; a
+    // request sent while disconnected simply produces no reply (the daemon's `workspace_updated`
+    // confirmation never arrives, and there is no correlation memory to leave dangling).
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`. This
+      // is the deterministic net that bounds the wire to exactly path / label, ignoring any
+      // renderer-smuggled extra field the structural-minimum guard let through (#236's fresh-literal
+      // posture). Shares the one monotonic nextEnvelopeId with send / changeWorkspace — no second
+      // counter — so ids stay unique across interleaved calls, which the verbs that DO correlate their
+      // replies by in_reply_to depend on.
+      //
+      // `label` IS NAMED UNCONDITIONALLY, and that is the one line here that is not a copy of a
+      // neighbour: a literal `null` is the daemon's CLEAR signal, so building the key conditionally
+      // would turn "clear this label" into a malformed frame with the key absent.
+      const bytes = buildRenameWorkspace({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          path: payload.path,
+          label: payload.label
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload (both the
+      // `path` and the user-content `label`); no log, no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function setSystemPrompt(payload: SetSystemPromptPayload): void {
     // THE BYTE BOUND RUNS FIRST — before the connected guard, deliberately, and this is the one place
     // this method departs from every sibling write verb's opening line. The verdict is about the VALUE,
@@ -3265,6 +3321,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     deleteConversation,
     renameConversation,
     changeWorkspace,
+    renameWorkspace,
     setSystemPrompt,
     setSessionSettings,
     answerModal,

@@ -53,6 +53,7 @@ import {
   type DeleteConversationPayload,
   type RenameConversationPayload,
   type ChangeWorkspacePayload,
+  type RenameWorkspacePayload,
   type SetSessionSettingsPayload,
   type DequeueMessagePayload
 } from '../shared/wire/types'
@@ -4451,6 +4452,87 @@ describe('createDaemonConnection — changeWorkspace (outbound change_workspace,
 
     const payload = decodeEnvelope(drivers[0].sent[0]).payload
     expect(payload).toEqual(CHANGE)
+    expect(JSON.stringify(payload)).not.toContain('smuggled')
+  })
+})
+
+describe('createDaemonConnection — renameWorkspace (outbound rename_workspace, #1289)', () => {
+  const RENAME_WS: RenameWorkspacePayload = { path: '/home/user/projects/app', label: 'Ledger' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.renameWorkspace(RENAME_WS)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one rename_workspace envelope with id 2, ts, and the payload', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.renameWorkspace(RENAME_WS)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('rename_workspace')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(RENAME_WS)
+  })
+
+  it('carries a literal null label onto the wire — the CLEAR signal, never an absent key', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.renameWorkspace({ path: '/home/user/projects/app', label: null })
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual({ path: '/home/user/projects/app', label: null })
+    // The fresh literal names `label` unconditionally, so the key survives. An implementation that
+    // spread a caller payload or built the literal conditionally would drop it, and the daemon reads
+    // an absent `label` as malformed rather than as a clear.
+    expect(JSON.stringify(payload)).toContain('"label":null')
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.renameWorkspace(RENAME_WS)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.renameWorkspace(RENAME_WS)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the two modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in renameWorkspace must bound the wire to path + label.
+    connection.renameWorkspace({
+      path: '/home/user/projects/app',
+      label: 'Ledger',
+      conversation_id: 'smuggled'
+    } as unknown as RenameWorkspacePayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(RENAME_WS)
     expect(JSON.stringify(payload)).not.toContain('smuggled')
   })
 })

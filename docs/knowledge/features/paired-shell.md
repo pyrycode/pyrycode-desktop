@@ -157,7 +157,7 @@ src/renderer/src/
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 - **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
   reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The thirteen-store clear
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The fourteen-store clear
   logic (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
   [#757](../codebase/757.md), `clearAllSlashCommandLists` at
   [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), `clearAllModelLists` at
@@ -165,8 +165,9 @@ src/renderer/src/
   [#779](conversation-last-read-store.md), `clearAllConversations` at
   [#1086](conversation-list-store.md#edge-cases-and-limitations) (§ AC5), `clearAllBacklogs` at
   [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), `clearAllRosters` at
-  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), and `modalStore`'s `dispatch` at
-  [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)) is unit-tested directly on the
+  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), `modalStore`'s `dispatch` at
+  [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140), and `clearAllActivity` at
+  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)) is unit-tested directly on the
   pure helper in `clearPairingScopedState.test.ts`, including dedicated regression cases pinning
   #779's and #977's ordering constraints (`clearAllLastRead` after `clearAllTimelines`, after
   `clearAllSlashCommandLists` since #955 and after `clearAllModelLists` since #977, each pinned by
@@ -201,12 +202,13 @@ src/renderer/src/
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the thirteen clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) and [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action is one of the fourteen clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) and [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
 - [Slash-command-list store](slash-command-list-store.md) / [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) — `clearAllSlashCommandLists` is the eighth store added to `clearPairingDeps`, after the store shipped dormant at #954 following the same #588 → #593 precedent as the announced model; nullary and whole-map, reached only through this helper and never from a bridge arm or either call site, and sequenced to run before `clearAllLastRead` despite arriving after it
 - [Model-list store](model-list-store.md) / [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) — `clearAllModelLists` is the ninth store added to `clearPairingDeps`, after the store shipped dormant at #974 repeating the #588 → #593 / #954 → #955 sequence a third time; nullary and whole-map like its slash-command twin, and sharper because the rows are claude-authored — a clear taking a conversation id would let a daemon-supplied id steer which machine's model identities survive the boundary. Reached only through this helper, never a bridge arm or either call site; sequenced to run before `clearAllLastRead` despite arriving after it
 - [Conversation list store](conversation-list-store.md) / [#1086](https://github.com/pyrycode/pyrycode-desktop/issues/1086) — `clearAllConversations` is the tenth store added to `clearPairingDeps`, unlike its predecessors not because a dormant slice woke up but because keying `byServer` by paired server removed the self-heal that had excluded this store since #531 (a mount-time re-list used to overwrite the whole array regardless of which daemon answered; keying makes a departed server's slot latch instead). Nullary and whole-map like the clears above it; sequenced to run before `clearAllLastRead` despite arriving after it
-- [Queue store](queue-store.md) / [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) — `clearAllBacklogs` is the eleventh store added to `clearPairingDeps`, for the same structural reason as #1086's: scoping the queue-backlog reconnect reset to the reconnecting server's own conversations retired the self-heal that had excluded `queueStore` since #531 (the reset used to clear the whole map on every `connected` edge, including a re-pairing's first one). `queueStore` is the only member of this set whose store the `connected` edge *also* clears — the reset covers a reconnect's listed conversations, this clear covers everything at a pairing change. Nullary and whole-map; sequenced to run before `clearAllLastRead` despite arriving after it
+- [Queue store](queue-store.md) / [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) — `clearAllBacklogs` is the eleventh store added to `clearPairingDeps`, for the same structural reason as #1086's: scoping the queue-backlog reconnect reset to the reconnecting server's own conversations retired the self-heal that had excluded `queueStore` since #531 (the reset used to clear the whole map on every `connected` edge, including a re-pairing's first one). `queueStore` was the first member of this set whose store the `connected` edge *also* clears — the reset covers a reconnect's listed conversations, this clear covers everything at a pairing change — a shape [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139)'s `backgroundTaskRosterStore`, [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140)'s `modalStore` and [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)'s `conversationActivityStore` each repeated. Nullary and whole-map; sequenced to run before `clearAllLastRead` despite arriving after it
+- [Conversation activity store](conversation-activity-store.md) / [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) — `clearAllActivity` is the fourteenth store added to `clearPairingDeps`, and the fifth name to move off the header's own self-healing list by the same argument (after queue, roster and modal): it never appeared in this set at all, on the ground that the `connected` edge's whole-map clear was the sole enforcement of the pairing boundary for it. Scoping that edge to the reconnecting server's own listed conversations (#1145) retired the self-heal identically to its three siblings — a new pairing's first `connected` resolves an empty conversation list, matches no held key, and hands the state back unchanged. Nullary and whole-map, placed beside `dispatchModal` so the four cross-server siblings stay adjacent; sequenced to run before `clearAllLastRead` despite arriving after it
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#757](../codebase/757.md) —
   `clearAllTimelines` (the sixth member of `clearPairingDeps`) and `clearTimelineFor` (the fourth clear in
   `exitConversationDeps`), the keyed holder's first clears, both wired here immediately after each
@@ -339,3 +341,23 @@ src/renderer/src/
   [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146), see [Announced-model
   store](announced-model-store.md#edge-cases-and-limitations)) as known, deliberately unwidened
   residue.
+- [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) · Spec:
+  `docs/specs/architecture/1145-scoped-activity-reset.md` — closes #1141's carve-out. Widens
+  `clearPairingScopedState` to a fourteenth store,
+  [`conversationActivityStore`](conversation-activity-store.md)'s `clearAllActivity`, and is the fifth
+  name to move off the header's own self-healing list by the same argument #1138/#1139/#1140 each ran —
+  the store never appeared in the set at all, since its own header called that the DECIDED answer on the
+  ground that the `connected` edge's whole-map clear was the sole enforcement of the pairing boundary for
+  it. Scoping that edge to the reconnecting server's own listed conversations (via the shared
+  `selectConversationIdsFor`, its fourth consumer) retires the self-heal identically to the three
+  siblings: a new pairing's first `connected` resolves an empty conversation list, matches no held key,
+  and hands the state back unchanged — without the added pairing-boundary clear, a re-pair to the same
+  box would show a finished turn's working dot indefinitely, with every other acceptance criterion green.
+  Unlike its three siblings the new setter, `resetActivityFor`, was nearly free: `clearAllActivity`
+  already existed in exactly the shape `clearPairingDeps` wanted, so this slice mints no new
+  pairing-boundary clear — only the reconnect-side setter, the bridge's `originOf` copy, and the
+  fourteenth dep-set member are new code, against four falsified docblocks to rewrite (this store's
+  header, the bridge's `connected`-branch comment, the comment over `clearAllActivity` itself, and the
+  re-armability test's comment) plus two more found outside that list by grepping the moved symbol
+  (`runConfigLive.ts` and its test cited `clearAllActivity` as the reconnect discriminator; it is now
+  `resetActivityFor`, the discriminator itself unchanged).

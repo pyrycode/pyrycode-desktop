@@ -35,6 +35,10 @@ import {
   selectRosterFor
 } from './store/backgroundTaskRosterStore'
 import { createModalStore, selectOutstanding, selectRejections } from './store/modalStore'
+import {
+  createConversationActivityStore,
+  selectActivityFor
+} from './store/conversationActivityStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   BackgroundTask,
@@ -99,6 +103,7 @@ function spyDeps(): {
   clearAllBacklogs: ReturnType<typeof vi.fn>
   clearAllRosters: ReturnType<typeof vi.fn>
   dispatchModal: ReturnType<typeof vi.fn>
+  clearAllActivity: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -113,6 +118,7 @@ function spyDeps(): {
   const clearAllBacklogs = vi.fn()
   const clearAllRosters = vi.fn()
   const dispatchModal = vi.fn()
+  const clearAllActivity = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -128,6 +134,7 @@ function spyDeps(): {
       clearAllBacklogs,
       clearAllRosters,
       dispatchModal,
+      clearAllActivity,
       dispatchSession,
       clearAllLastRead
     },
@@ -142,6 +149,7 @@ function spyDeps(): {
     clearAllBacklogs,
     clearAllRosters,
     dispatchModal,
+    clearAllActivity,
     dispatchSession,
     clearAllLastRead
   }
@@ -168,7 +176,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all thirteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all fourteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -182,6 +190,7 @@ describe('clearPairingScopedState', () => {
       clearAllBacklogs,
       clearAllRosters,
       dispatchModal,
+      clearAllActivity,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -233,6 +242,11 @@ describe('clearPairingScopedState', () => {
     // id can steer which of a departed daemon's permission prompts outlive the pairing, and against the
     // most actionable content in the set — a retained prompt is a live control, not a stale label.
     expect(dispatchModal).toHaveBeenCalledWith({ type: 'reset' })
+    expect(clearAllActivity).toHaveBeenCalledTimes(1)
+    // #1145, the same nullary property as the six whole-map clears above. The ids it declines to take
+    // are daemon-side conversation ids, and a re-pair to the SAME box reuses them, so an id-taking
+    // clear would let the departing daemon choose which of its own dots outlive the pairing.
+    expect(clearAllActivity).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -242,13 +256,13 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these thirteen stores', () => {
+  it('the pairing-scoped set is exactly these fourteen stores', () => {
     // The tripwire the whole design rests on: this interface IS the enumeration of what "the pairing
-    // ended" means, so a FOURTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
+    // ended" means, so a FIFTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
     // to compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
     // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh, #1139 the
-    // twelfth and #1140 the thirteenth, and each
+    // twelfth, #1140 the thirteenth and #1145 the fourteenth, and each
     // updated this pin, which is the intended cost of adding one; loosening it is not.
     //
     // The pin's stated MOTIVE has changed even though its value has not. It read as a guard against
@@ -262,6 +276,7 @@ describe('clearPairingScopedState', () => {
 
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
+      'clearAllActivity',
       'clearAllBacklogs',
       'clearAllConversations',
       'clearAllLastRead',
@@ -339,6 +354,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(dispatchModal.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the activity clear runs BEFORE the one effect that can throw (#1145)', () => {
+    // The same constraint a fifth time. `clearAllLastRead` is the only effect here that reaches
+    // outside memory (`localStorage`) and so the only one that can throw; placed last, a throw from
+    // it aborts nothing. Placed BEFORE the activity clear, such a throw would abort it — leaving a
+    // departed machine's working, stalled, retrying and compacting dots lit on the sidebar, and this
+    // store's residue is the one nothing can overwrite in place: no daemon re-asserts an activity
+    // fact on connect, so a stale dot survives until that conversation's next `turnState`, under an
+    // id a re-pair to the same box reuses.
+    const { deps, clearAllActivity, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(clearAllActivity.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -788,6 +820,57 @@ describe('clearPairingScopedState', () => {
     })
     expect(selectOutstanding(modals.getState()).map((p) => p.modalId)).toEqual(['mdl-2'])
   })
+
+  it('real stores: no activity fact from the ended pairing is readable, and the connected edge alone would NOT evict them (#1145 AC4)', () => {
+    const activity = createConversationActivityStore()
+    // A turn that was RUNNING when the operator unpaired — the case the residue is visible in, since
+    // `ChannelList` draws its working dot from `selectActivityFor`.
+    activity.getState().setTurnRunning('c-listed', true)
+    activity.getState().setApiRetrying('c-listed', true)
+    // Held under a conversation NO server's list carries — any of the four arms can arrive for one
+    // whose list has not landed, and every scoped reset leaves such an entry alone by construction.
+    activity.getState().setCompacting('c-unlisted', true)
+
+    // FIRST, the half that makes this store's membership necessary rather than defensive. Scoping the
+    // reconnect reset to the reconnecting server's own conversations (#1145) is what removed the
+    // self-heal that kept this store out of the set: the new pairing's first `connected` finds no
+    // conversation list in its slot yet, so the scoped reset resolves an EMPTY id set, matches no held
+    // key, and hands the state object straight back. Simulated directly here rather than through the
+    // bridge, because the claim is about what the edge CANNOT do.
+    const before = activity.getState()
+    activity.getState().resetActivityFor(new Set())
+    expect(activity.getState()).toBe(before)
+    expect(selectActivityFor('c-listed')(activity.getState())?.turnRunning).toBe(true)
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        createQueueStore(),
+        createBackgroundTaskRosterStore(),
+        createModalStore(),
+        activity
+      )
+    )
+
+    // SECOND, the half this ticket adds. Nothing re-asserts an activity fact on a new pairing — no
+    // frame in this family is in the daemon's reconcile-on-connect set, and the next assertion for a
+    // conversation is that conversation's own next `turnState` — so without this clear a turn that
+    // finished while the operator was unpaired goes on showing a working dot, under an id a re-pair to
+    // the same box reuses. Each entry reads back as ABSENT rather than as an observed-idle one, so
+    // `selectActivityFor` hands the sidebar `null` and no dot is drawn at all.
+    expect(activity.getState().entries.size).toBe(0)
+    expect(selectActivityFor('c-listed')(activity.getState())).toBeNull()
+    expect(selectActivityFor('c-unlisted')(activity.getState())).toBeNull()
+  })
 })
 
 function realDeps(
@@ -808,7 +891,9 @@ function realDeps(
   // #1139's twelfth, defaulted for the same reason.
   rosters: ReturnType<typeof createBackgroundTaskRosterStore> = createBackgroundTaskRosterStore(),
   // #1140's thirteenth, defaulted for the same reason.
-  modals: ReturnType<typeof createModalStore> = createModalStore()
+  modals: ReturnType<typeof createModalStore> = createModalStore(),
+  // #1145's fourteenth, defaulted for the same reason.
+  activity: ReturnType<typeof createConversationActivityStore> = createConversationActivityStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -822,6 +907,7 @@ function realDeps(
     clearAllBacklogs: () => queue.getState().clearAllBacklogs(),
     clearAllRosters: () => rosters.getState().clearAllRosters(),
     dispatchModal: (event) => modals.getState().dispatch(event),
+    clearAllActivity: () => activity.getState().clearAllActivity(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

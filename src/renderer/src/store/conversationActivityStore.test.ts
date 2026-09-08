@@ -394,6 +394,188 @@ describe('conversationActivityStore', () => {
     expect(activityFor(store, 'c1')).toBeNull()
   })
 
+  describe('resetActivityFor (scoped reconnect reset, #1145)', () => {
+    it('drops exactly the listed held entries and leaves the rest Object.is-identical (AC1)', () => {
+      const store = createConversationActivityStore()
+      store.getState().setTurnRunning('a1', true)
+      store.getState().setStalled('b1', true)
+      store.getState().setCompacting('b2', true)
+      const a1Before = activityFor(store, 'a1')
+
+      store.getState().resetActivityFor(new Set(['b1', 'b2']))
+
+      expect(activityFor(store, 'b1')).toBeNull()
+      expect(activityFor(store, 'b2')).toBeNull()
+      // The survivor is the SAME entry object, not merely a deep-equal one — `new Map(s.entries)`
+      // copies references — so a component watching another server's conversation is not woken.
+      expect(activityFor(store, 'a1')).toBe(a1Before)
+      expect(store.getState().entries.size).toBe(1)
+    })
+
+    it('drops all four facts of a listed entry, not merely the running one (AC3)', () => {
+      // The reconnect guarantee is about LIVENESS as a whole: a socket that dropped mid-turn can
+      // leave any of the four latched, so a reset that zeroed only `turnRunning` would still show a
+      // stalled or compacting dot from the previous connection.
+      const store = createConversationActivityStore()
+      store.getState().setTurnRunning('b1', true)
+      store.getState().setStalled('b1', true)
+      store.getState().setApiRetrying('b1', true)
+      store.getState().setCompacting('b1', true)
+
+      store.getState().resetActivityFor(new Set(['b1']))
+
+      // Back to "no frame has ever arrived", NOT to a present all-false entry — the same
+      // remove-rather-than-zero reading `dropConversation` carries.
+      expect(activityFor(store, 'b1')).toBeNull()
+    })
+
+    it('clones the outer map rather than deleting in place (AC1)', () => {
+      const store = createConversationActivityStore()
+      store.getState().setApiRetrying('b1', true)
+      store.getState().setCompacting('a1', true)
+      const entriesBefore = store.getState().entries
+
+      store.getState().resetActivityFor(new Set(['b1']))
+
+      // The identity assertion above cannot catch an in-place `s.entries.delete(id)`: with one map
+      // the survivors are trivially identical. This can.
+      expect(entriesBefore.has('b1')).toBe(true)
+      expect(store.getState().entries).not.toBe(entriesBefore)
+      expect(store.getState().entries.has('b1')).toBe(false)
+    })
+
+    it('is RE-ARMABLE rather than one-shot — each reconnect resets again (AC3)', () => {
+      const store = createConversationActivityStore()
+      store.getState().setTurnRunning('b1', true)
+      store.getState().resetActivityFor(new Set(['b1']))
+      expect(activityFor(store, 'b1')).toBeNull()
+
+      store.getState().setStalled('b1', true)
+      store.getState().resetActivityFor(new Set(['b1']))
+      expect(activityFor(store, 'b1')).toBeNull()
+    })
+
+    it('an EMPTY id set notifies nobody and hands the state object back (AC2)', () => {
+      // The first-connect case: the reconnecting server's slot holds no list yet, so the shared
+      // resolution answers `EMPTY_CONVERSATION_IDS` and this must drop nothing at all.
+      const store = createConversationActivityStore()
+      store.getState().setTurnRunning('a1', true)
+      const stateBefore = store.getState()
+
+      let notifications = 0
+      const unsubscribe = store.subscribe(() => {
+        notifications += 1
+      })
+      store.getState().resetActivityFor(new Set())
+      unsubscribe()
+
+      expect(notifications).toBe(0)
+      expect(store.getState()).toBe(stateBefore)
+      expect(activityFor(store, 'a1')).toEqual({ ...idle, turnRunning: true })
+    })
+
+    it('a set naming only ids the store never held notifies nobody (AC2)', () => {
+      // The reconnect of a server whose conversations have produced no activity frame — the common
+      // case rather than an edge one, and the generalisation of `dropConversation`'s absent-key
+      // guard: the state OBJECT comes back, so zustand's `Object.is` fires before the merge.
+      const store = createConversationActivityStore()
+      store.getState().setStalled('a1', true)
+      const stateBefore = store.getState()
+
+      let notifications = 0
+      const unsubscribe = store.subscribe(() => {
+        notifications += 1
+      })
+      store.getState().resetActivityFor(new Set(['b1', 'b2']))
+      unsubscribe()
+
+      expect(notifications).toBe(0)
+      expect(store.getState()).toBe(stateBefore)
+    })
+
+    it('on an already-empty store notifies nobody (AC2)', () => {
+      const store = createConversationActivityStore()
+      const stateBefore = store.getState()
+
+      let notifications = 0
+      const unsubscribe = store.subscribe(() => {
+        notifications += 1
+      })
+      store.getState().resetActivityFor(new Set(['b1']))
+      unsubscribe()
+
+      expect(notifications).toBe(0)
+      expect(store.getState()).toBe(stateBefore)
+    })
+
+    it('a set naming a HELD id does notify — the negative control for the guard (AC1)', () => {
+      // Without this, "an unlisted reset churns nothing" would also pass for a reset path that never
+      // writes at all.
+      const store = createConversationActivityStore()
+      store.getState().setStalled('b1', true)
+
+      let notifications = 0
+      const unsubscribe = store.subscribe(() => {
+        notifications += 1
+      })
+      store.getState().resetActivityFor(new Set(['b1']))
+      unsubscribe()
+
+      expect(notifications).toBe(1)
+      expect(activityFor(store, 'b1')).toBeNull()
+    })
+
+    it('leaves an entry no id set names alone, and does not latch a reset id', () => {
+      const store = createConversationActivityStore()
+      store.getState().setCompacting('orphan', true)
+      store.getState().setTurnRunning('b1', true)
+
+      store.getState().resetActivityFor(new Set(['b1']))
+
+      // The accepted consequence of scoping by the conversation list: an entry held for a
+      // conversation in no server's list survives every scoped reset, and `clearAllActivity` at the
+      // pairing boundary is the only thing that ever collects it.
+      expect(activityFor(store, 'orphan')).toEqual({ ...idle, compacting: true })
+
+      // And a later frame for a reset id creates a fresh entry normally.
+      store.getState().setStalled('b1', false)
+      expect(activityFor(store, 'b1')).toEqual(idle)
+    })
+
+    for (const key of hostileKeys) {
+      it(`treats ${JSON.stringify(key)} as an ordinary key on BOTH sides of the test (AC4)`, () => {
+        const store = createConversationActivityStore()
+
+        // READ BEFORE WRITE, the same ordering as the two blocks above and for the same reason: on a
+        // `Record` this read walks the prototype chain and hands back a non-nullish value, so a
+        // post-reset read alone could not distinguish the `Map` from a `Record`.
+        expect(activityFor(store, key)).toBeNull()
+
+        store.getState().setStalled(key, true)
+        // BOTH sides are daemon-supplied: the held key came from an event's `conversationId`, the
+        // set from a `list_conversations` reply's row id. `Set.prototype.has('__proto__')` performs
+        // no prototype-chain lookup, so a hostile id matches itself and nothing else.
+        store.getState().resetActivityFor(new Set([key]))
+
+        expect(activityFor(store, key)).toBeNull()
+        expect(store.getState().entries.size).toBe(0)
+        expect(({} as Record<string, unknown>).stalled).toBeUndefined()
+        expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'stalled')).toBe(false)
+      })
+    }
+
+    it("'' and '__proto__' reset independently — neither aliases the other (AC4)", () => {
+      const store = createConversationActivityStore()
+      store.getState().setTurnRunning('', true)
+      store.getState().setCompacting('__proto__', true)
+
+      store.getState().resetActivityFor(new Set(['']))
+
+      expect(activityFor(store, '')).toBeNull()
+      expect(activityFor(store, '__proto__')).toEqual({ ...idle, compacting: true })
+    })
+  })
+
   it('the factory yields independent stores, and honours an injected initial state', () => {
     const one = createConversationActivityStore()
     const two = createConversationActivityStore()

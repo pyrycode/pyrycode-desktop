@@ -194,6 +194,28 @@ drop took no daemon-supplied id.
   — if it does, it is a fourth site to move. Resolved during implementation; recorded under
   `## Revisions` if it changes anything.
 
+## Revisions
+
+**2026-09-08, during implementation.**
+
+- **Open question resolved, no design change.** `PairedShell.test.tsx` does not assert the dep set
+  independently — it passed untouched — so the fourteenth member has exactly the three test sites
+  `clearPairingScopedState.test.ts` holds (`spyDeps`, the `Object.keys` pin, `realDeps`), plus the
+  production wiring. The `Object.keys` pin does NOT fail legibly when the test's own literal is
+  updated in the same pass; what actually gates the wiring is `npm run build`, as the ticket said.
+- **Two docblocks beyond the planned four were falsified and corrected.** Both name `clearAllActivity`
+  as the symbol enforcing the reconnect discriminator, which it no longer is:
+  `createRunConfigRefreshTrigger`'s docblock in `runConfigLive.ts` ("the clear is `clearAllActivity`'s
+  discriminator applied here") and the matching comment on its `connected` case in
+  `runConfigLive.test.ts`. Each is a one-symbol correction to `resetActivityFor`; the discriminator
+  itself is unchanged and neither file's behaviour moves. Found by grepping the symbol across `src/`,
+  which is the whole reason the plan's citation discipline names symbols.
+- **Two further sites were checked and deliberately left alone.** `conversationTimelineStore`'s
+  "shaped after `clearAllActivity`" comment stays true (the shape is unchanged, and that clear is now
+  a pairing boundary like its own), and `ChannelList.test.tsx`'s `afterEach` teardown call is still
+  the correct whole-map API. Their stale `file.ts:NNN` line citations are left as found rather than
+  renumbered.
+
 ## Security review
 
 **Verdict:** PASS

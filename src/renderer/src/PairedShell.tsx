@@ -40,6 +40,7 @@ import { conversationListStore } from './store/conversationListStore'
 import { queueStore } from './store/queueStore'
 import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
 import { modalStore } from './store/modalStore'
+import { conversationActivityStore } from './store/conversationActivityStore'
 import { runConfigStore } from './store/runConfigStore'
 import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { systemPromptStore } from './store/systemPromptStore'
@@ -229,6 +230,15 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // and stays answerable, which is the point — `answerModal` routes by modal id to the connection that
   // raised it, so the answer reaches a daemon that is still waiting for it.
   dispatchModal: (event) => modalStore.getState().dispatch(event),
+  // #1145: every conversation's working, stalled, retrying and compacting dot, dropped as one — the
+  // same direct, nullary shape as the six setters above, and the FOURTH member whose store the
+  // `connected` edge also clears. Scoping that edge to the reconnecting server (which is what #1145
+  // does) is what stopped a re-pairing's first `connected` from blanking the map on its way past, and
+  // nothing re-asserts an activity fact except that conversation's own next `turnState` — which for a
+  // turn that ended while unpaired never arrives — so without this entry a departed pairing's working
+  // dot would sit on a sidebar row indefinitely. Adding it to THIS object is what makes the unpair
+  // path below drop it; the call site needed no edit.
+  clearAllActivity: () => conversationActivityStore.getState().clearAllActivity(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through
@@ -449,7 +459,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // replaces, and the container still subscribes to no store and stays server-renderable.
   //
   // `clearPairingScopedState` is nullary HERE: `applyPairingChange` decides whether a change clears,
-  // never what the clear contains, so `clearPairingDeps` stays module-scope above and the thirteen
+  // never what the clear contains, so `clearPairingDeps` stays module-scope above and the fourteen
   // stores stay behind the helper that enumerates and tests them.
   const pairingChangeDeps: PairingChangeDeps = {
     clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),

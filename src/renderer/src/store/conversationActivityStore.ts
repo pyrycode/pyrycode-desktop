@@ -4,11 +4,21 @@
 //
 // This slice shipped the HOLDER (#747); #748 wires the four daemon arms (`turnState`, `stallDetected`,
 // `apiRetry`, `compacting` — src/shared/ipc/events.ts:125,145,172,199) into it, and #749 added the two
-// eviction paths below. Nothing is registered in `clearPairingScopedState`, and that is the DECIDED
-// answer rather than a pending one: on the `connected`-edge vs pairing-scoped discriminator
-// announcedModelStore.ts:29-45 documents ("does a reconnect to the SAME daemon need to clear it?") all
-// four facts are liveness, so a reconnect must clear them ⇒ the `connected` edge, wired in
-// conversationActivityBridge.ts. There is still no reader — #676's sidebar dot is the first.
+// eviction paths below, which #1145 made three.
+//
+// BOTH MECHANISMS, not one. Run against the `connected`-edge vs pairing-scoped discriminator
+// announcedModelStore.ts:29-45 documents ("does a reconnect to the SAME daemon need to clear it?"),
+// all four facts are liveness, so a reconnect to the same daemon MUST clear them — a turn that was
+// running when the socket dropped may have finished while it was down. That answer is unchanged and
+// keeps this store on the `connected` edge, wired in conversationActivityBridge.ts. What #1145
+// changed is that the edge is now SCOPED to the reconnecting server, since `connected` has meant
+// "THIS server's connection came back" from #1117 onward; and scoping it retired the self-heal that
+// was covering the pairing boundary incidentally, so `clearAllActivity` is a member of
+// `ClearPairingScopedStateDeps` rather than being registered nowhere. This header argued the
+// opposite until then — that nothing belonged in that set, as the DECIDED answer — and the reversal
+// is the same one `queueStore`, `backgroundTaskRosterStore` and `modalStore` each went through
+// (#1138, #1139, #1140): a store can answer YES to that discriminator and still belong in the
+// pairing set, because once the edge is scoped the two mechanisms cover different boundaries.
 //
 // Keyed by `conversationId`, NOT a flat slot — the backgroundTaskRosterStore.ts:31-37 argument, reused
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each
@@ -92,15 +102,17 @@ export interface ConversationActivityState {
   entries: ReadonlyMap<string, ConversationActivityEntry>
 }
 
-/** Store shape = state + one named setter per fact + the two eviction paths (#749). `dropConversation`
- *  reads against the entry-per-conversation model; `clearAllActivity` carries `All` so its blast radius
- *  is legible at the CALL SITE rather than only in this docstring. */
+/** Store shape = state + one named setter per fact + the three eviction paths (#749, scoped by #1145).
+ *  `dropConversation` reads against the entry-per-conversation model; `resetActivityFor` drops the
+ *  reconnecting server's own conversations; `clearAllActivity` carries `All` so its blast radius is
+ *  legible at the CALL SITE rather than only in this docstring. */
 export type ConversationActivityStore = ConversationActivityState & {
   setTurnRunning: (conversationId: string, turnRunning: boolean) => void
   setStalled: (conversationId: string, stalled: boolean) => void
   setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
   setCompacting: (conversationId: string, compacting: boolean) => void
   dropConversation: (conversationId: string) => void
+  resetActivityFor: (conversationIds: ReadonlySet<string>) => void
   clearAllActivity: () => void
 }
 
@@ -161,10 +173,16 @@ function writeEntry(
  * `markStalled(id)` would leave no way to clear the fact at all, and #748 needs one.
  *
  * Growth is bounded by the number of distinct `conversationId`s the daemon names SINCE THE LAST
- * HANDSHAKE, at four booleans plus one bounded id string per entry: `clearAllActivity` empties the map
- * on every `connected` edge and `dropConversation` removes a deleted conversation before then. The
- * residue between handshakes — a long-lived pairing that names many conversations without deleting any
- * — is deliberately not capped here; #676, the first reader, is where a real ceiling would go.
+ * PAIRING BOUNDARY, at four booleans plus one bounded id string per entry, and #1145 WIDENED that
+ * bound rather than leaving it where #749 set it. It used to read "since the last handshake", on the
+ * ground that `clearAllActivity` emptied the whole map on every `connected` edge; that edge now drops
+ * only the reconnecting server's LISTED conversations, so an entry for a conversation in no server's
+ * list — reachable, since any of the four arms can arrive for a conversation whose list has not
+ * landed — survives every reconnect and is collected only by `clearAllActivity` at a pairing
+ * boundary. `dropConversation` still removes a deleted conversation before either. The residue
+ * inside one pairing is deliberately not capped here, exactly as the three stores that took this same
+ * widening (#1138, #1139, #1140) left theirs uncapped while holding far larger per-entry payloads;
+ * #676, the first reader, is where a real ceiling would go.
  *
  * Every write is a synchronous `set` under zustand's own store lock with no `await` inside it, so there
  * is no check-then-act gap across a suspension point for a concurrent handler to interleave into.
@@ -218,9 +236,50 @@ export function createConversationActivityStore(
         next.delete(conversationId)
         return { entries: next }
       }),
-    // The pairing boundary, wired at the `connected` edge (conversationActivityBridge.ts). Shaped
-    // after backgroundTaskRosterStore.ts:382, guard included. It deliberately does NOT hand back
-    // `initialConversationActivityState`: that exported constant holds a module-shared MUTABLE
+    // THE RECONNECT RESET (#749, scoped to one server by #1145), the `resetBacklogsFor` /
+    // `resetRostersFor` shape adopted verbatim rather than re-derived. Since #1117 the app holds one
+    // live connection per paired server and since #1068 every event carries the id of the server it
+    // came from, so `connected` means "THIS server's connection came back" and the whole-map clear
+    // this replaces on that edge blanked every OTHER server's dots too — with nothing to re-assert
+    // them until each conversation's next `turnState`, which for a running turn is the turn's end.
+    //
+    // The caller resolves which conversations belong to the reconnecting server from the
+    // server-keyed conversation list (`selectConversationIdsFor`) and hands the ids across, so the
+    // ids are CLIENT-HELD rather than a daemon-supplied field naming a server. An entry held for a
+    // conversation that appears in NO server's list is left alone — the accepted consequence of
+    // scoping by the list, and `clearAllActivity` is the only thing that ever collects one.
+    //
+    // Iterates the HELD keys, not the id set, so the work is bounded by what this store holds rather
+    // than by the server's conversation count. Copy-on-write like `dropConversation` above (never
+    // `s.entries.delete(...)`), so every survivor is `Object.is`-identical to the object held before
+    // and a component watching another server's conversation does not re-render. That guard
+    // generalises `dropConversation`'s absent-key one: when NO held key is listed the state OBJECT
+    // comes back, so zustand's `Object.is` short-circuit fires and a first connect, a reconnect of a
+    // server holding nothing here, and an already-empty map all wake no listener at all.
+    //
+    // A `ReadonlySet` membership test, never a `Record` lookup: `Set.prototype.has('__proto__')`
+    // performs no prototype-chain walk, so the header's hostile-key property holds on BOTH sides of
+    // the test — the held key and the listed id are each daemon-supplied.
+    resetActivityFor: (conversationIds) =>
+      set((s) => {
+        const doomed = [...s.entries.keys()].filter((id) => conversationIds.has(id))
+        if (doomed.length === 0) return s
+        const next = new Map(s.entries)
+        for (const id of doomed) next.delete(id)
+        return { entries: next }
+      }),
+    // THE PAIRING BOUNDARY — a member of `ClearPairingScopedStateDeps` since #1145, wired in
+    // PairedShell's `clearPairingDeps`, and NOT the `connected` edge any more. Scoping that edge to
+    // the reconnecting server retired the self-heal it was providing incidentally: after the
+    // last-server unpair every held entry latches, because the next pairing's first `connected`
+    // resolves an empty conversation list (the `list_conversations` reply rides the same edge),
+    // matches no held key and drops nothing. Conversation ids are daemon-side and a re-pair to the
+    // SAME box reuses them, so a turn that finished while unpaired would show a working dot until
+    // that conversation's next `turnState`. Nullary by design, like its five siblings in that set:
+    // no daemon-supplied id can steer which of a departed daemon's dots outlive the boundary.
+    //
+    // Shaped after backgroundTaskRosterStore.ts:382, guard included. It deliberately does NOT hand
+    // back `initialConversationActivityState`: that exported constant holds a module-shared MUTABLE
     // `Map`, so returning it as live state would make every store instance that clears share one
     // object. The `size === 0` guard buys the idempotence that returning a constant would.
     clearAllActivity: () => set((s) => (s.entries.size === 0 ? s : { entries: new Map() }))

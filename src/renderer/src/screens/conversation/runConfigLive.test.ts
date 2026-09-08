@@ -92,7 +92,7 @@ describe('createRunConfigRefreshTrigger', () => {
 
   it('clears the running set on connected, so a turn in flight across a drop leaves no stale entry', () => {
     // A turn that was running when the socket dropped may have finished while it was down, so its
-    // liveness must not survive the handshake (conversationActivityBridge's clearAllActivity argument).
+    // liveness must not survive the handshake (conversationActivityBridge's resetActivityFor argument).
     const trigger = createRunConfigRefreshTrigger()
     expect(trigger(turn('a', 'thinking'))).toBe(false)
     expect(trigger(connected)).toBe(true)

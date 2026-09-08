@@ -2,13 +2,18 @@ import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
-import type { HelloAckPayload } from '@shared/wire/types'
+import type { ConversationSummary, HelloAckPayload } from '@shared/wire/types'
 import {
   translateConversationActivity,
   subscribeConversationActivity,
   ConversationActivityData
 } from './conversationActivityBridge'
 import { createConversationActivityStore, selectActivityFor } from './conversationActivityStore'
+import {
+  createConversationListStore,
+  selectConversationIdsFor,
+  type ConversationListOrigin
+} from './conversationListStore'
 
 // Framework-free data-path tests with injected spies (the backgroundTaskRosterBridge idiom): no React,
 // no Electron. The real store is wired only for the seam tests. This bridge is reactive-only — the
@@ -40,7 +45,7 @@ const compacting = (conversationId: string, active: boolean): DaemonEvent => ({
 const conversationDeleted = (id: string): DaemonEvent => ({ type: 'conversationDeleted', id })
 
 /** The handshake edge. `ack` is present because the arm carries it, and deliberately never read by
- *  the clear branch — the backgroundTaskRosterBridge.ts:125 posture. */
+ *  the reset branch — the backgroundTaskRosterBridge.ts:125 posture. */
 const ack: HelloAckPayload = {
   protocol_version: 'v2',
   server_id: 'srv-1',
@@ -48,6 +53,23 @@ const ack: HelloAckPayload = {
   capabilities: ['interactive']
 }
 const connected: DaemonEvent = { type: 'connected', ack }
+
+/** A STAMPED handshake edge (#1145). #1068's stamp rides BESIDE the union — it is applied main-side
+ *  after decode by `bindServerOrigin` — so at a bare-`DaemonEvent`-typed hole it arrives structurally
+ *  while the static type stays silent about it. The cast is exactly that shape, and it takes
+ *  `unknown` so the three-valued origin cases can push a value no producer can emit. */
+const connectedFrom = (serverId: unknown): DaemonEvent =>
+  ({ type: 'connected', ack, serverId }) as DaemonEvent
+
+const conversationRow = (id: string): ConversationSummary => ({
+  id,
+  name: null,
+  is_promoted: false,
+  is_archived: false,
+  cwd: '/home/pyry/project',
+  last_message_ts: '2026-07-10T12:00:00Z',
+  last_used_at: '2026-07-10T12:05:00Z'
+})
 
 describe('translateConversationActivity', () => {
   it('maps turnState{thinking} to BOTH writes — running true, and the stall clear', () => {
@@ -154,17 +176,18 @@ describe('subscribeConversationActivity', () => {
 
   function wired() {
     const bridge = fakeBridge()
-    // A NAMED deps object, not a positional list: every one of these six collapses to a signature
-    // another slot accepts — the four setters are all `(string, boolean) => void`, and a function of
-    // fewer parameters is assignable to one of more, so `dropConversation` and `clearAllActivity`
-    // fit any of them too. A positional cross-wire would compile and pass every test in this file.
+    // A NAMED deps object, not a positional list: five of these six collapse to a signature another
+    // slot accepts — the four setters are all `(string, boolean) => void`, and a function of fewer
+    // parameters is assignable to one of more, so `dropConversation` fits any of them too. A
+    // positional cross-wire among those would compile and pass every test in this file. #1145's
+    // `resetActivityForServer` is the first member a setter cannot be assigned INTO, on arity.
     const deps = {
       setTurnRunning: vi.fn(),
       setStalled: vi.fn(),
       setApiRetrying: vi.fn(),
       setCompacting: vi.fn(),
       dropConversation: vi.fn(),
-      clearAllActivity: vi.fn()
+      resetActivityForServer: vi.fn()
     }
     const off = subscribeConversationActivity(bridge.onDaemonEvent, deps)
     return { bridge, ...deps, off }
@@ -230,7 +253,7 @@ describe('subscribeConversationActivity', () => {
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
     expect(w.dropConversation).not.toHaveBeenCalled()
-    expect(w.clearAllActivity).not.toHaveBeenCalled()
+    expect(w.resetActivityForServer).not.toHaveBeenCalled()
   })
 
   it('dispatches conversationDeleted to dropConversation with the event’s OWN id, alone', () => {
@@ -239,7 +262,7 @@ describe('subscribeConversationActivity', () => {
 
     expect(w.dropConversation).toHaveBeenCalledWith('conv-gone')
     expect(w.dropConversation).toHaveBeenCalledTimes(1)
-    expect(w.clearAllActivity).not.toHaveBeenCalled()
+    expect(w.resetActivityForServer).not.toHaveBeenCalled()
     expect(w.setTurnRunning).not.toHaveBeenCalled()
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
@@ -256,16 +279,51 @@ describe('subscribeConversationActivity', () => {
     expect(w.dropConversation).toHaveBeenCalledWith('')
   })
 
-  it('dispatches connected to clearAllActivity, alone', () => {
+  it('dispatches connected to resetActivityForServer with the origin off the stamp, alone', () => {
     const w = wired()
-    w.bridge.emit(connected)
+    w.bridge.emit(connectedFrom('srv-a'))
 
-    expect(w.clearAllActivity).toHaveBeenCalledTimes(1)
+    // The branch hands the CALLER the origin it read off the stamp; turning that into the ids to
+    // drop is `ConversationActivityData`'s job, which is what keeps this bridge store-free (#1145).
+    expect(w.resetActivityForServer).toHaveBeenCalledTimes(1)
+    expect(w.resetActivityForServer).toHaveBeenCalledWith('srv-a')
     expect(w.dropConversation).not.toHaveBeenCalled()
     expect(w.setTurnRunning).not.toHaveBeenCalled()
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
+  })
+
+  it('passes the three-valued origin through unchanged — a real id, null, and an absent stamp (AC2)', () => {
+    // `ConversationListOrigin` is `string | null | undefined` and `byServer` is genuinely keyed by
+    // all three: `null` is a producer bound while no paired record was in hand, `undefined` one that
+    // never went through a binding. Treating the origin as a total, opaque lookup key is what makes
+    // the unstamped case fall out of the ordinary path instead of needing a special branch.
+    const w = wired()
+
+    w.bridge.emit(connectedFrom('srv-a'))
+    w.bridge.emit(connectedFrom(null))
+    w.bridge.emit(connected)
+    // A value no producer can emit (`bindServerOrigin` takes a `string | null` scalar) still selects
+    // a slot rather than throwing, which is what keeps the read total inside a daemon-event listener.
+    w.bridge.emit(connectedFrom(42))
+
+    expect(w.resetActivityForServer.mock.calls).toEqual([['srv-a'], [null], [undefined], [undefined]])
+  })
+
+  it('reads the origin off the client-bound stamp, never the daemon’s ack.server_id (AC5)', () => {
+    // The ack is the DAEMON's word; the stamp is bound main-side from a paired record this client
+    // holds, and `bindServerOrigin` spreads the decoded event FIRST, so a `serverId` the daemon puts
+    // in its own payload cannot overwrite it. A confused or hostile daemon must not be able to steer
+    // whose dots a reset spares.
+    const w = wired()
+
+    w.bridge.emit({
+      ...(connectedFrom('srv-a') as object),
+      ack: { ...ack, server_id: 'srv-b' }
+    } as DaemonEvent)
+
+    expect(w.resetActivityForServer).toHaveBeenCalledWith('srv-a')
   })
 
   it('keeps both removals OUT of the translator — they are subscriber branches', () => {
@@ -287,16 +345,33 @@ describe('subscribeConversationActivity', () => {
   })
 
   describe('seam (real store)', () => {
-    function seam() {
+    /**
+     * Both real stores, wired the way `ConversationActivityData` wires them (#1145): the bridge hands
+     * the reset the ORIGIN it read off the stamp, and the composition root resolves that to the ids
+     * to drop through the shared conversation-list resolution. `lists` seeds which conversations each
+     * server has reported — a server absent from it has no list yet, which is the "drops nothing"
+     * case, and the case a first connect always is.
+     */
+    function seam(
+      lists: readonly (readonly [ConversationListOrigin, readonly string[]])[] = []
+    ): {
+      bridge: ReturnType<typeof fakeBridge>
+      store: ReturnType<typeof createConversationActivityStore>
+    } {
       const bridge = fakeBridge()
       const store = createConversationActivityStore()
+      const list = createConversationListStore()
+      for (const [origin, ids] of lists) {
+        list.getState().setConversations(ids.map(conversationRow), origin)
+      }
       subscribeConversationActivity(bridge.onDaemonEvent, {
         setTurnRunning: (id, v) => store.getState().setTurnRunning(id, v),
         setStalled: (id, v) => store.getState().setStalled(id, v),
         setApiRetrying: (id, v) => store.getState().setApiRetrying(id, v),
         setCompacting: (id, v) => store.getState().setCompacting(id, v),
         dropConversation: (id) => store.getState().dropConversation(id),
-        clearAllActivity: () => store.getState().clearAllActivity()
+        resetActivityForServer: (origin) =>
+          store.getState().resetActivityFor(selectConversationIdsFor(origin)(list.getState()))
       })
       return { bridge, store }
     }
@@ -387,8 +462,8 @@ describe('subscribeConversationActivity', () => {
       expect(selectActivityFor('conv-survivor')(store.getState())).toBe(survivorBefore)
     })
 
-    it('a connected edge empties the store, and is RE-ARMABLE rather than one-shot (AC3)', () => {
-      const { bridge, store } = seam()
+    it('a connected edge drops that server’s facts, and is RE-ARMABLE rather than one-shot (AC3)', () => {
+      const { bridge, store } = seam([[undefined, ['conv-x', 'conv-y', 'conv-z']]])
       bridge.emit(turnState('conv-x', 'thinking'))
       bridge.emit(compacting('conv-y', true))
 
@@ -396,15 +471,137 @@ describe('subscribeConversationActivity', () => {
       expect(store.getState().entries.size).toBe(0)
 
       // Every completed Noise handshake emits `connected` (daemonConnection.ts:478 is its one emit
-      // site) and a new pairing always re-handshakes, so BOTH pairing-change paths reach this branch
-      // — the unpair route flip and the pair-another-server transition that never unmounts the
-      // shell. A one-shot clear would leave the second pairing showing the first one's dots.
+      // site), so the RECONNECT guarantee this pins is that a turn running when the socket dropped
+      // may have finished while it was down and must leave no working dot behind — re-armed on every
+      // handshake, not spent on the first. Until #1145 this comment argued re-armability from the
+      // branch covering BOTH pairing-change paths instead. That argument is gone twice over: #1141
+      // established that pairing another server ends nothing and owes no clear, and #1145 moved the
+      // pairing boundary itself off this edge into `clearPairingScopedState`. The property survives;
+      // its stated motive does not.
       bridge.emit(stallDetected('conv-z'))
       expect(selectActivityFor('conv-z')(store.getState())?.stalled).toBe(true)
 
       bridge.emit(connected)
       expect(store.getState().entries.size).toBe(0)
       expect(selectActivityFor('conv-z')(store.getState())).toBeNull()
+    })
+
+    describe('scoped to the reconnecting server (#1145)', () => {
+      const twoServers = () =>
+        seam([
+          ['srv-a', ['a1']],
+          ['srv-b', ['b1']]
+        ])
+
+      /** All four facts held for one conversation, so a reset that dropped fewer than all of them —
+       *  or the wrong server's — is visible rather than merely plausible. */
+      const holdAllFour = (bridge: ReturnType<typeof fakeBridge>, id: string): void => {
+        bridge.emit(turnState(id, 'thinking'))
+        bridge.emit(stallDetected(id))
+        bridge.emit(apiRetry(id, true))
+        bridge.emit(compacting(id, true))
+      }
+
+      it('leaves the OTHER server’s four facts and resets the reconnecting one’s (AC1)', () => {
+        const { bridge, store } = twoServers()
+        holdAllFour(bridge, 'a1')
+        holdAllFour(bridge, 'b1')
+        const aBefore = selectActivityFor('a1')(store.getState())
+
+        bridge.emit(connectedFrom('srv-b'))
+
+        // The bug: server B's reconnect used to blank server A's working dot for the remainder of a
+        // turn that had not finished, because nothing re-asserts a blanked fact until that
+        // conversation's next `turnState`.
+        expect(selectActivityFor('a1')(store.getState())).toEqual({
+          turnRunning: true,
+          stalled: true,
+          apiRetrying: true,
+          compacting: true
+        })
+        // And by REFERENCE, so no selector watching A re-renders at all.
+        expect(selectActivityFor('a1')(store.getState())).toBe(aBefore)
+        expect(selectActivityFor('b1')(store.getState())).toBeNull()
+      })
+
+      it('drops nothing and hands back the same state when the server has no list yet (AC2)', () => {
+        // srv-b has never answered list_conversations — its slot holds no list, so its reconnect edge
+        // resolves to the empty set. The first connect of a fresh server is exactly this case, and it
+        // is why the pairing boundary needs `clearAllActivity` rather than this edge.
+        const { bridge, store } = seam([['srv-a', ['a1']]])
+        holdAllFour(bridge, 'a1')
+        const stateBefore = store.getState()
+
+        bridge.emit(connectedFrom('srv-b'))
+
+        expect(store.getState()).toBe(stateBefore)
+      })
+
+      it('scopes an unstamped or null-stamped edge to its OWN slot, nothing wider (AC2)', () => {
+        const { bridge, store } = seam([
+          ['srv-a', ['a1']],
+          [null, ['n1']],
+          [undefined, ['u1']]
+        ])
+        bridge.emit(compacting('a1', true))
+        bridge.emit(compacting('n1', true))
+        bridge.emit(compacting('u1', true))
+
+        bridge.emit(connectedFrom(null))
+        expect(selectActivityFor('n1')(store.getState())).toBeNull()
+        expect(selectActivityFor('a1')(store.getState())?.compacting).toBe(true)
+        expect(selectActivityFor('u1')(store.getState())?.compacting).toBe(true)
+
+        bridge.emit(connected)
+        expect(selectActivityFor('u1')(store.getState())).toBeNull()
+        expect(selectActivityFor('a1')(store.getState())?.compacting).toBe(true)
+      })
+
+      it('leaves an entry whose conversation is in NO server’s list alone (AC2)', () => {
+        // The accepted consequence of scoping by the list, and a real case here rather than a corner
+        // one: any of the four arms can arrive for a conversation whose list has not landed. Pinned
+        // so a later widening is a deliberate change rather than drift — `clearAllActivity` at the
+        // pairing boundary is the only thing that ever collects such an entry.
+        const { bridge, store } = twoServers()
+        bridge.emit(compacting('orphan', true))
+
+        bridge.emit(connectedFrom('srv-a'))
+        bridge.emit(connectedFrom('srv-b'))
+        bridge.emit(connectedFrom(null))
+        bridge.emit(connected)
+
+        expect(selectActivityFor('orphan')(store.getState())?.compacting).toBe(true)
+      })
+
+      it('scopes to the client-bound stamp, never the daemon’s ack.server_id (AC5)', () => {
+        const { bridge, store } = twoServers()
+        holdAllFour(bridge, 'a1')
+        holdAllFour(bridge, 'b1')
+
+        // The ack is the DAEMON's word and names srv-b; the stamp is bound main-side from a paired
+        // record this client holds and names srv-a. The stamp wins, end to end.
+        bridge.emit({
+          ...(connectedFrom('srv-a') as object),
+          ack: { ...ack, server_id: 'srv-b' }
+        } as DaemonEvent)
+
+        expect(selectActivityFor('a1')(store.getState())).toBeNull()
+        expect(selectActivityFor('b1')(store.getState())?.turnRunning).toBe(true)
+      })
+
+      it('re-arms per server — B’s reconnect twice over never reaches A (AC3)', () => {
+        const { bridge, store } = twoServers()
+        holdAllFour(bridge, 'a1')
+        holdAllFour(bridge, 'b1')
+
+        bridge.emit(connectedFrom('srv-b'))
+        bridge.emit(turnState('b1', 'responding'))
+        expect(selectActivityFor('b1')(store.getState())?.turnRunning).toBe(true)
+
+        bridge.emit(connectedFrom('srv-b'))
+        expect(selectActivityFor('b1')(store.getState())).toBeNull()
+        expect(selectActivityFor('a1')(store.getState())?.turnRunning).toBe(true)
+      })
     })
 
     it('treats __proto__, constructor and ’’ as three unremarkable keys — READ BEFORE WRITE', () => {

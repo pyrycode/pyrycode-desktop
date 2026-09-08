@@ -57,8 +57,10 @@ import { requestRunConfigSnapshot, subscribeRunConfig } from './runConfigSnapsho
  * one per completed handshake and it is never re-asserted (`conversationActivityBridge.ts:224-227` already
  * relies on this). A replayed `connected` into a reopened window (`liveWindow.ts:152-155`) fires a request
  * too, which is correct rather than duplicate: that window's store is empty and needs the reading. The
- * clear is `clearAllActivity`'s discriminator applied here — a turn that was running when the socket
- * dropped may have finished while it was down, so its liveness must not survive the handshake.
+ * clear is `resetActivityFor`'s discriminator applied here — a turn that was running when the socket
+ * dropped may have finished while it was down, so its liveness must not survive the handshake. (It
+ * read `clearAllActivity` until #1145 scoped that edge per server and moved the nullary clear to the
+ * pairing boundary; the discriminator is unchanged, only the symbol carrying it on this edge.)
  *
  * Reading the edge off the EVENT STREAM rather than off `useSessionStore` + a `useRef` (the
  * conversationListBridge shape the ticket names) is deliberate. `vitest.config.ts` runs `environment:

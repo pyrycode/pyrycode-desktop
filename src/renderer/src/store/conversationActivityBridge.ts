@@ -40,7 +40,42 @@
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { conversationActivityStore } from './conversationActivityStore'
+import {
+  conversationListStore,
+  selectConversationIdsFor,
+  type ConversationListOrigin
+} from './conversationListStore'
 import { isTurnRunning } from '../screens/conversation/ConversationScreen'
+
+/**
+ * Read the server this event came from (#1145), off #1068's stamp.
+ *
+ * An `in`-guarded, `typeof`-checked access rather than a cast, and rather than re-declaring the
+ * listener's parameter as `StampedDaemonEvent`: the stamp rides BESIDE the union, so at a
+ * bare-`DaemonEvent`-typed hole it arrives structurally while the static type stays silent about it.
+ * A COPY rather than an import, matching what all six existing bridges that need one already do —
+ * `relayLinkBridge`, `conversationListBridge`, `daemonEventBridge`, `queueBridge`,
+ * `backgroundTaskRosterBridge` and `modalBridge` each declare their own — for the reason each of them
+ * states: taking another's would couple two deliberately independent subscribers and drag this path's
+ * key domain onto that store's.
+ *
+ * The origin is read ONLY from the stamp, NEVER from the payload. The `connected` arm carries the
+ * daemon's own `ack.server_id`, which is a DISTINCT value the daemon chose; the stamp is bound
+ * main-side at construction from a paired record this client holds, and `bindServerOrigin` spreads
+ * the decoded event FIRST (`{ ...event, serverId }`), so a `serverId` field the daemon puts in its
+ * own payload cannot overwrite it. A hostile or confused daemon therefore cannot make its reconnect
+ * blank another server's dots.
+ */
+function originOf(event: DaemonEvent): ConversationListOrigin {
+  if (!('serverId' in event)) return undefined
+  const { serverId } = event
+  if (serverId === null) return null
+  // The `in` guard narrows the property to `unknown`, so the type is re-established here rather than
+  // asserted. A value that is neither a string nor null selects the unstamped slot: no producer can
+  // emit one (`bindServerOrigin` takes a `string | null` scalar), and answering with a slot rather
+  // than throwing is what keeps this total.
+  return typeof serverId === 'string' ? serverId : undefined
+}
 
 /**
  * One write on its way to one named setter: which fact, whose entry, what value.
@@ -148,15 +183,22 @@ export function translateConversationActivity(
 }
 
 /**
- * The store's whole effect surface, as ONE NAMED OBJECT rather than a positional list (#749). Every
- * member here collapses to a signature another member's slot accepts: the four setters are all
+ * The store's whole effect surface, as ONE NAMED OBJECT rather than a positional list (#749). FIVE of
+ * these six members collapse to a signature another member's slot accepts: the four setters are all
  * `(conversationId: string, value: boolean) => void`, and because a function of FEWER parameters is
- * assignable to one of more, `dropConversation` and `clearAllActivity` fit any of those four slots too.
- * A positional cross-wire would therefore compile AND pass every test in this file's suite — and it is
+ * assignable to one of more, `dropConversation` fits any of those four slots too. A positional
+ * cross-wire among them would therefore compile AND pass every test in this file's suite — and it is
  * structurally uncoverable, because vitest.config.ts:26-27 is `environment: 'node'` globally, so no
  * test in this repo ever runs the effect in `ConversationActivityData` that does the wiring. It has to
  * be a type error instead, and a named member makes each effect state its own name beside its own
  * call. This closes #748's code-review SHOULD FIX, which assigned it forward to this ticket.
+ *
+ * #1145's `resetActivityForServer` is the first member that argument does not fully cover, and it
+ * narrows the hazard rather than removing it: a two-parameter setter cannot be assigned INTO this
+ * one-parameter slot at all, so the collapse is now partial and one direction of the cross-wire is a
+ * type error on its own. It still collapses the OTHER way — a single-parameter function is assignable
+ * to a two-parameter slot, and `ConversationListOrigin` admits `string` — so the named-object choice
+ * is over-determined rather than retired. Do not read the new member as licence to go positional.
  *
  * Deliberately NOT pinned by an `Object.keys(deps).sort()` test like
  * clearPairingScopedState.test.ts:84-91. That pin guards DIVERGENCE BETWEEN TWO independent call sites,
@@ -169,7 +211,7 @@ export interface ConversationActivityDeps {
   setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
   setCompacting: (conversationId: string, compacting: boolean) => void
   dropConversation: (conversationId: string) => void
-  clearAllActivity: () => void
+  resetActivityForServer: (origin: ConversationListOrigin) => void
 }
 
 /**
@@ -186,16 +228,26 @@ export interface ConversationActivityDeps {
  * TWO EARLY-RETURN REMOVAL BRANCHES ahead of the translator (#749), the precedent's shape
  * (backgroundTaskRosterBridge.ts:151-155):
  *
- *   - `connected` → `clearAllActivity()`. THE SOLE ENFORCEMENT of the pairing boundary for this store,
- *     which is why it is registered nowhere in `clearPairingScopedState`: on that file's own
- *     discriminator (:30-33, "does a reconnect to the SAME daemon need to clear it?") the answer here
- *     is YES — all four facts are liveness, so a turn that was running when the socket dropped may
- *     have finished while it was down and must not leave a working dot on an idle row. It reads only
- *     the discriminant and ignores `event.ack`. Because it fires on EVERY completed handshake
- *     (daemonConnection.ts:466-481 is the one emit site) and every new pairing re-handshakes, both
- *     pairing-change paths are covered — the unpair route flip AND the pair-another-server transition
- *     that never unmounts the shell, which this bridge's app-level mount also survives. Gating it or
- *     folding it into the translator would kill that property silently.
+ *   - `connected` → `resetActivityForServer(originOf(event))`, THE RECONNECT RESET, scoped to the
+ *     server whose connection came back (#1145). On `clearPairingScopedState`'s own discriminator
+ *     ("does a reconnect to the SAME daemon need to clear it?") the answer here is YES and stays YES
+ *     — all four facts are liveness, so a turn that was running when the socket dropped may have
+ *     finished while it was down and must not leave a working dot on an idle row. What changed is the
+ *     BLAST RADIUS. This branch called the nullary `clearAllActivity()` until #1145, and was described
+ *     here as the sole enforcement of the pairing boundary, which is why the store was registered
+ *     nowhere in `clearPairingScopedState`. Since #1117 the app holds one live connection per paired
+ *     server and since #1068 every event carries the id of the server it came from, so `connected`
+ *     means "THIS server's connection came back" and a whole-map clear blanked every OTHER server's
+ *     dots — with nothing to re-assert one until that conversation's next `turnState`, which for a
+ *     running turn is the turn's end. Scoping it retires the pairing-boundary claim in full:
+ *     `clearAllActivity` is now a member of `ClearPairingScopedStateDeps`, wired in PairedShell.
+ *
+ *     It reads the DISCRIMINANT and the STAMP, never `event.ack` — the daemon's own `server_id` must
+ *     not steer whose dots survive (`originOf` above). Turning the origin into the conversations to
+ *     drop is the CALLER's job (`ConversationActivityData` below), so this bridge stays store-free and
+ *     drivable with a plain spy. The reset stays re-armable: it fires on EVERY completed handshake
+ *     (daemonConnection.ts:466-481 is the one emit site), never once. Folding it into the translator
+ *     would still be wrong for the reason below, and it must stay ungated on anything but the origin.
  *   - `conversationDeleted` → `dropConversation(event.id)`. NO truthiness guard: a degenerate `''` is
  *     falsy but is a real value the daemon can emit and a real `Map` key, so the branch is
  *     discriminant-driven (conversationDeletedBridge.ts:32-34 makes the same point about the same
@@ -222,7 +274,7 @@ export function subscribeConversationActivity(
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
-      deps.clearAllActivity()
+      deps.resetActivityForServer(originOf(event))
       return
     }
     if (event.type === 'conversationDeleted') {
@@ -276,13 +328,36 @@ export function ConversationActivityData(): null {
     // sees both writes in the same task. Recorded as a decision, not an oversight: batching them would
     // add a fifth setter to a store whose four-named-setter shape is argued at
     // conversationActivityStore.ts:17-20.
+    //
+    // THE COMPOSITION ROOT for #1145's scoping, and the only place the two singletons meet: the
+    // origin the bridge read off the stamp resolves to that server's conversation ids through the
+    // shared resolution, and only those keys are dropped. The list is read HERE, at reset time, not
+    // at subscribe time — on a first connect the server's slot holds no list yet (the
+    // `list_conversations` request rides the same edge) so nothing is dropped and nothing is held
+    // either; on a reconnect the slot still holds the previous episode's rows, since only
+    // `clearAllConversations` at a pairing boundary empties it, so the reconnecting server's
+    // conversations are known even though nothing re-sends an activity fact. Nothing can interleave
+    // between the read and the write: both stores are touched from this one synchronous dispatch,
+    // with no await between them.
+    //
+    // It rides `selectConversationIdsFor`, the SHARED answer, NOT the stricter
+    // `selectExclusiveConversationIdsFor` that `clearServerScopedState` binds. The residual is
+    // accepted and named rather than overlooked: a confused or hostile server B that lists server A's
+    // conversation ids in its own reply can make its reconnect drop A's entries for those ids. The
+    // worst outcome is a missing dot that the conversation's next `turnState` restores — nothing is
+    // destroyed and nothing is unrecoverable — which is exactly the case the shared answer is for,
+    // where the exclusive one exists because an over-broad answer there would destroy another
+    // machine's retained threads with no backfill.
     return subscribeConversationActivity(window.pyry.onDaemonEvent, {
       setTurnRunning: (id, v) => conversationActivityStore.getState().setTurnRunning(id, v),
       setStalled: (id, v) => conversationActivityStore.getState().setStalled(id, v),
       setApiRetrying: (id, v) => conversationActivityStore.getState().setApiRetrying(id, v),
       setCompacting: (id, v) => conversationActivityStore.getState().setCompacting(id, v),
       dropConversation: (id) => conversationActivityStore.getState().dropConversation(id),
-      clearAllActivity: () => conversationActivityStore.getState().clearAllActivity()
+      resetActivityForServer: (origin) =>
+        conversationActivityStore
+          .getState()
+          .resetActivityFor(selectConversationIdsFor(origin)(conversationListStore.getState()))
     })
   }, [])
 

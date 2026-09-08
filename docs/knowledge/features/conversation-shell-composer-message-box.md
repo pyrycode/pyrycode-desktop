@@ -238,7 +238,7 @@ already being inline JSX rather than extracted, and it keeps the ticket's export
 **`contextUsagePercent(usedTokens, windowTokens): number | null`** — new file,
 `src/renderer/src/screens/conversation/contextUsage.ts`, React-free and dependency-free (the
 `composerSend.ts` idiom: a pure module beside the screen with its own `.test.ts`). This is the one
-computation [Run configuration Context window section](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192)
+computation [Run configuration Context window section](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
 used to own inline; see that section above for the extraction and the `Number.isFinite` guard it added.
 Returning `number | null` (not a number beside a separate `available` boolean) is what makes the two
 surfaces structurally unable to disagree about whether a reading exists — the guard is the return type,
@@ -275,7 +275,7 @@ actionable, which is the one step where a reader who cannot separate amber from 
 something real. A word rather than a glyph, since a glyph inside a text run can't be hidden from a screen
 reader. `.composer__context--warning`/`--error` in `conversation.css` are each a single `color` declaration
 naming `--color-warning`/`--color-error` — equal specificity to the base rule, so they must stay below it
-in source order to win. **The [run-configuration context gauge](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192)
+in source order to win. **The [run-configuration context gauge](conversation-shell-run-configuration.md#run-configuration-context-window-section-192)
 deliberately does not follow this ladder** — `.run-config__context-fill` stays `--color-success` at every
 value, so the two surfaces can show different colours for the same number today; keeping the ladder in
 `contextUsage.ts` rather than in the stylesheet is what leaves the bar one class away from adopting it
@@ -293,7 +293,7 @@ one
 `useRunConfigStore(selectSnapshot)` read (not two narrow field selectors — both figures must come from
 the same store tick, or a tear could show a percentage of two unrelated snapshots), coalescing
 `snapshot?.usedTokens ?? 0` / `snapshot?.windowTokens ?? 0` — [`RunConfigSections`'s own
-container](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192) verbatim, so the not-yet-loaded state and the
+container](conversation-shell-run-configuration.md#run-configuration-context-window-section-192) verbatim, so the not-yet-loaded state and the
 daemon's `window_tokens: 0` "unavailable" signal collapse into the identical rendered absence on both
 surfaces. Reads [Run configuration store](run-config-store.md)'s app-lifetime `RunConfigLiveData` feed
 (#810) — this ticket adds no store, no subscription, and no event of its own.

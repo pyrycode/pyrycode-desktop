@@ -2,7 +2,7 @@
 
 The **transport data path** that lets the desktop client ask the pyry daemon to move a
 conversation's recorded workspace (`cwd`) to a different folder. Its caller is the [Workspace
-Picker sheet](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) (#157's remaining split-child).
+Picker sheet](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383) (#157's remaining split-child).
 
 This document also covers the sibling outbound verb, [`renameWorkspace` (#1289)](#workspace-rename-label-change-1289)
 below, which renames the WORKSPACE itself rather than moving a conversation between workspaces —
@@ -196,7 +196,7 @@ no unit test of its own.
   `conversation_updated` decode/re-list this slice rides for free.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
   any `conversation_updated`, so a workspace change lands automatically now that a caller exists.
-- [Workspace Picker sheet](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) / [#383
+- [Workspace Picker sheet](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383) / [#383
   codebase notes](../codebase/383.md) — the real caller, `requestChangeWorkspace`.
 - [#157 codebase notes](../codebase/157.md) — parent split ticket (this transport slice / the
   Workspace Picker UI, #383).

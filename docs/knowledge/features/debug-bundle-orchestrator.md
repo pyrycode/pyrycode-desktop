@@ -12,7 +12,7 @@ export interface DebugBundleDownloadDeps {
 export function createDebugBundleDownload(deps: DebugBundleDownloadDeps): { request(): void }
 ```
 
-Introduced in [#169](../codebase/169.md), the last child of [#118](../codebase/118.md)'s split. Consumed by [#72](../codebase/72.md) — the "Log data" section's Download button, the [conversation shell](conversation-shell-workspace-and-run-config.md#log-data-section-72)'s sole trigger for this module — which closes the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) debug-bundle family end to end: this orchestrator had a real emitter and command handler since #169, but no UI ever called `requestDebugBundle` or read the three `DaemonEvent`s until #72 shipped.
+Introduced in [#169](../codebase/169.md), the last child of [#118](../codebase/118.md)'s split. Consumed by [#72](../codebase/72.md) — the "Log data" section's Download button, the [conversation shell](conversation-shell-run-configuration.md#log-data-section-72)'s sole trigger for this module — which closes the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) debug-bundle family end to end: this orchestrator had a real emitter and command handler since #169, but no UI ever called `requestDebugBundle` or read the three `DaemonEvent`s until #72 shipped.
 
 ## Why this needed its own slice
 
@@ -94,5 +94,5 @@ and one added `case` in the existing switch: `case 'requestDebugBundle': downloa
 - [Save debug bundle (persistence)](save-debug-bundle.md) / [#117](../codebase/117.md) — the `save` dep, closed over `app.getPath('downloads')`.
 - [Command channel](command-channel.md) / [Daemon-event channel](daemon-event-channel.md) / [#168](../codebase/168.md) — the typed IPC contract this ticket wires a real emitter and command handler for; both channels were inert until now.
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md) — the sibling information-minimisation philosophy this module's `emit` boundary shares (a different mechanism, same "the type can't hold a secret" posture).
-- [Conversation shell](conversation-shell-workspace-and-run-config.md#log-data-section-72) / [#72 codebase notes](../codebase/72.md) — the Download button + local state machine that finally drives this module; closes the #71 family.
+- [Conversation shell](conversation-shell-run-configuration.md#log-data-section-72) / [#72 codebase notes](../codebase/72.md) — the Download button + local state machine that finally drives this module; closes the #71 family.
 - Parent: [#118](../codebase/118.md) split into [#168](../codebase/168.md) + this ticket — [[ticket-118-command-surface-refined]], [[ticket-169-orchestrator-refined]].

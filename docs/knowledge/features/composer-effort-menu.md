@@ -9,7 +9,7 @@ Everything under this control was already built and dormant: the shared
 [options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
 (#838/#839/#840), the daemon-published levels in [Model-list store](model-list-store.md) (#974), the
 single-field write in [`changeSetting`](session-settings-send.md) (#256), and the exact-equality match
-rule in [Run configuration Model section](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975)
+rule in [Run configuration Model section](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
 (#560/#975/#976) — the same `publishedRowFor` [the model menu](composer-model-menu.md) is the third caller
 of; this ticket is the fourth. This ticket adds the entries, the trigger's label, and what picking one
 does — the same three things the model menu added one button to the left, `ComposerModelMenu.tsx`'s

@@ -29,7 +29,7 @@ module into a single exhaustive label switch (`workspace_change` unchanged: `Wor
 ${workspaceCwd}`, degrading to the pathless `Workspace changed` on a `null` path); `formatSessionBoundaryTime`
 and the `now` prop threaded through `Timeline`/`TimelineRow` for its sake are both deleted —
 `ConversationScreen`'s own `now` stays, since the [Channel Info](#channel-info-sheet-365) and [Workspace
-Picker](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) sheets still read it for their own relative-time lines.
+Picker](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383) sheets still read it for their own relative-time lines.
 
 The row is now two identically-classed `.session-delimiter__rule` siblings bracketing the centred label,
 each `flex: 1 0 0` inside a `nowrap` flex row — equal halves at every container width by construction,
@@ -115,12 +115,21 @@ background-task trigger
 retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
 for the other two items' own design.
 
-**`conversation === null` renders gracefully, not a crash.** [`activeConversationStore`](conversation-shell-workspace-and-run-config.md#workspace-chip-278)
-is written on exactly one path — the FAB create-nav callback — so a thread opened from the channel list
-never populates it (the app's single-active-conversation interim). The sheet still opens: chrome + a
-`CHANNEL_INFO_EMPTY_COPY` placeholder line in place of the About rows, and the Channel ID footer omitted
-entirely (there is no id to show). `conversation.name === null` (an unnamed scratch conversation) is a
-separate, narrower case — the title falls back to `UNNAMED_CONVERSATION_LABEL` — distinct from no
+**`conversation === null` renders gracefully, not a crash.** [`activeConversationStore`](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278)
+is written by `activateConversation` on both a FAB create-nav callback and a sidebar row's `onOpen`
+(which hands the clicked `ConversationSummary` row straight to the store — a structural superset of
+`ConversationCreatedPayload`), and, since
+[#1184](https://github.com/pyrycode/pyrycode-desktop/issues/1184), re-seeded by
+[`activeConversationReseedBridge`](paired-shell-conversation-exits.md#the-list-reseed-activeconversationreseedbridgets-1184)
+whenever a later list reply describes the open chat differently — so a thread opened from the channel
+list populates it too, not only a freshly created one. The `conversation === null` branch below is
+therefore not a "list-opened vs. created" distinction; it covers the one path that activates no
+conversation at all — the notification-activated `open` dispatch (#393), which carries no payload and
+shows whatever was already active, so a notification arriving before any conversation has ever been
+opened this session leaves the store at its initial `null`. The sheet still opens in that case: chrome +
+a `CHANNEL_INFO_EMPTY_COPY` placeholder line in place of the About rows, and the Channel ID footer
+omitted entirely (there is no id to show). `conversation.name === null` (an unnamed scratch conversation)
+is a separate, narrower case — the title falls back to `UNNAMED_CONVERSATION_LABEL` — distinct from no
 conversation at all.
 
 **Deferred, not invented:** Figma 20-48 also shows Created / Total sessions / Total messages rows and a

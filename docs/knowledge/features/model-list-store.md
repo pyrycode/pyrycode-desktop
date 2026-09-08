@@ -10,11 +10,11 @@ types](model-list-wire-types.md) for the wire contract this store holds. Shipped
 the first consumer landed at [#975](https://github.com/pyrycode/pyrycode-desktop/issues/975), which
 deleted `MODEL_CATALOG` and built the run-configuration sheet's Model rows (and re-anchored the
 running-model lookup) straight off this store — see [Conversation shell — workspace and run
-configuration § Run configuration Model section, daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
+configuration § Run configuration Model section, daemon-published rows](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975).
 [#976](https://github.com/pyrycode/pyrycode-desktop/issues/976) followed, deleting the sheet's other
 hardcoded vocabulary — `EFFORT_LEVELS` — and building the Effort section's segments off the same held
 entry, joined by the same `value`-equality rule (renamed `publishedRowFor`) — see [§ Run configuration
-Effort section, daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
+Effort section, daemon-published levels](conversation-shell-run-configuration.md#run-configuration-effort-section-daemon-published-levels-976).
 Two more consumers followed: the input footer's model and effort menus
 ([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)), and the permission-mode menu
 ([#682](composer-permission-mode-menu.md)), which since
@@ -338,11 +338,11 @@ selectModelListFor(openId) / useModelListStore
 - [Background-task roster store](background-task-roster-store.md) — the structural precedent for
   the keyed store shape (`ReadonlyMap`, copy-on-write, `?? null` selector).
 - [Conversation shell — workspace and run configuration § Run configuration Model section,
-  daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975)
+  daemon-published rows](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
   / [Run configuration store § Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975)
   — the first consumer, #975: deleted `MODEL_CATALOG`, built the Model rows off this store's held
   entry, and re-anchored the running-model lookup onto a row's `value`. [§ Run configuration Effort
-  section, daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976)
+  section, daemon-published levels](conversation-shell-run-configuration.md#run-configuration-effort-section-daemon-published-levels-976)
   — the second consumer, #976: deleted `EFFORT_LEVELS` and built the Effort segments off the same
   held entry, joined by the same `value`-equality rule.
 - `docs/specs/architecture/974-model-list-store.md` — the full architecture spec, including the

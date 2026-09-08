@@ -362,7 +362,7 @@ nothing renders from, while the per-conversation slice in the holder keeps whate
 operator was elsewhere.
 
 `activeConversation` (`useActiveConversationStore(selectActiveConversation)`, already read here since
-[#278](conversation-shell-workspace-and-run-config.md#workspace-chip-278)) moved above the timeline read, because the timeline read now needs its id —
+[#278](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278)) moved above the timeline read, because the timeline read now needs its id —
 same hook, same selector, same single subscription, only its position in the hook list changed. The id
 is derived as `activeConversation?.id ?? null` (the `:281`/`:1955` spelling this file already used), then
 run through a `useMemo`-stable selector so a fresh closure per render does not churn the subscription:

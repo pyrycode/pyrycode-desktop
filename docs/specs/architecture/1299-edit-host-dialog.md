@@ -443,3 +443,33 @@ the ticket is built whole. Split depth is not the reason (parent #1187, no grand
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+### 2026-09-08 — the relaunch leg became a remount
+
+**What changed.** The e2e drive's last step was planned as a second launch on launch 1's `userDataDir`
+(`reuseUserDataDir`) reading `NEW_LABEL` back off the host rows. It is a Settings round-trip remount
+instead.
+
+**Why.** Driven by the code, not by a review finding: the planned step failed with `.channel-list__host`
+at count 0. A `reuseUserDataDir` launch deliberately never connects — launch 1's persisted relay URL
+cannot reach launch 2's fresh forwarder — so no `list_conversations` reply arrives,
+`conversationListStore` stays at its not-yet-loaded `null`, and `renderBody`'s FIRST gate returns null.
+That window draws no headers, no rows and no host rows at all, so there is nothing for any sidebar
+assertion to read. The literal criterion is unobservable in this tier.
+
+**The new contract.** `ChannelList` remounts on the return from Settings, and its remount re-runs
+`HostLabelData`'s keyed one-shot, which writes whatever MAIN answers into every slot unconditionally. A
+write that never reached main's at-rest store therefore comes back `not-stored` and both of machine A's
+rows fall back to the generic word — so this is a detector for the half this ticket could get wrong (the
+value living only in the renderer singleton the Save wrote), rather than a re-read of what was just
+written. The disk half — main's store surviving process death — is `src/main/hostLabelStore.test.ts`'s and
+was never this ticket's to prove. Stated in the spec's own header rather than substituted silently.
+
+### 2026-09-08 — both Open Questions resolved
+
+- **Unsolicited frames.** None: the inbound-frame tally is unchanged across the Save, so the count
+  comparison stands as written and needs no decode-and-filter fallback.
+- **`.edit-host`'s panel scroll.** Not needed, as argued — the panel renders only client-owned copy and a
+  bounded label in a single-line input. The `max-height` / `overflow-y` pair stays out.

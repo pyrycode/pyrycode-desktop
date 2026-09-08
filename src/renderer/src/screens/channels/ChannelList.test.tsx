@@ -6,7 +6,8 @@ import {
   CollapsibleWorkspaceGroup,
   HostConnectionDots,
   HostRow,
-  hostRowLabel
+  hostRowLabel,
+  hostRowEditSeed
 } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 import type { HostLabelValue } from '../../store/hostLabelStore'
@@ -137,6 +138,7 @@ const render = (
       onCreateChat={noop}
       onCreateChannel={noop}
       onEditWorkspace={noop}
+      onEditHost={noop}
       onSaveAsChannel={noop}
       onRename={noop}
     />
@@ -789,6 +791,63 @@ describe('ChannelListView', () => {
         // so the default markup is exactly what it was before this ticket.
         const labels = hostLabelsIn(bothTrees())
         expect(labels).toEqual([FALLBACK, FALLBACK])
+      })
+    })
+
+    describe('the seed the pen hands the Edit host dialog (#1299)', () => {
+      // A DIFFERENT collapse from `hostRowLabel` above, and this block exists to pin the difference. That
+      // one answers "what does the row DISPLAY" and turns every non-name outcome into the generic word;
+      // this one answers "what is STORED", because seeding an editable field with the display word would
+      // invite the user to Save it as their machine's actual name.
+      it('seeds a stored label VERBATIM (AC1)', () => {
+        expect(hostRowEditSeed({ status: 'stored', label: 'Pyrybox' })).toBe('Pyrybox')
+      })
+
+      it('seeds EMPTY for every outcome that is not a stored label (AC1)', () => {
+        // `loading` and `not-stored` are "nothing is stored" and `error` is "nothing could be read"; an
+        // empty field says exactly that, and Save stays enabled on it because blank is a valid answer.
+        expect(hostRowEditSeed({ status: 'loading' })).toBe('')
+        expect(hostRowEditSeed({ status: 'not-stored' })).toBe('')
+        expect(hostRowEditSeed({ status: 'error' })).toBe('')
+      })
+
+      it('does NOT collapse a blank stored label to the row’s fallback word (AC1)', () => {
+        // The two collapses diverge exactly here: `hostRowLabel` shows the generic word for a `''` or
+        // whitespace-only label, and this one hands back what is actually held — the dialog is where such
+        // a label gets fixed, and showing the user something else would be showing a value their machine
+        // is not called. Save trims, so both of these become the clear.
+        expect(hostRowEditSeed({ status: 'stored', label: '' })).toBe('')
+        expect(hostRowEditSeed({ status: 'stored', label: '   ' })).toBe('   ')
+        expect(hostRowLabel({ status: 'stored', label: '   ' })).toBe(hostRowLabel({ status: 'error' }))
+      })
+    })
+
+    describe('the pen is DRAWN on every host row now that a caller passes it (#1299)', () => {
+      // #1185 shipped `HostRow`'s two optional handlers with no caller, so the running app drew neither
+      // control; this ticket is the pen's first caller and the assertions below are what that changes at
+      // the view level. The plus stays undrawn — that half is still #1189's.
+      const EDIT_NAME_MARKER = 'aria-label="Edit host"'
+      const ADD_NAME_MARKER = 'aria-label="Add workspace"'
+      const HOST_ROW_MARKER = 'class="channel-list__host"'
+
+      const occurrences = (markup: string, needle: string): number =>
+        markup.split(needle).length - 1
+
+      it('draws exactly one pen per host row, in both trees (AC5)', () => {
+        const markup = render([row({ id: 'a' })])
+        const rows = occurrences(markup, HOST_ROW_MARKER)
+        expect(rows).toBe(2)
+        expect(occurrences(markup, EDIT_NAME_MARKER)).toBe(rows)
+      })
+
+      it('draws one pen per row for EVERY paired machine (AC4)', () => {
+        const markup = render([row({ id: 'a' })], null, ['server-a', 'server-b'])
+        expect(occurrences(markup, HOST_ROW_MARKER)).toBe(4)
+        expect(occurrences(markup, EDIT_NAME_MARKER)).toBe(4)
+      })
+
+      it('still draws NO plus — that half of the swap is #1189’s (AC5)', () => {
+        expect(render([row({ id: 'a' })])).not.toContain(ADD_NAME_MARKER)
       })
     })
 

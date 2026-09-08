@@ -243,9 +243,10 @@ machine it is drawing (#1187/#1189 will, against the `serverId` this row already
 never becomes an argument this view handles, and `() => void` also refuses a handler declaring a
 parameter — React's synthetic event cannot reach it.
 
-**This ticket ships no caller.** The Edit host dialog is #1187 and the Add workspace dialog is #1189;
-until those land, every production `<HostRowControl>` passes neither prop, so the row draws neither
-`<button>` and hovers exactly as it did before this ticket.
+**This ticket shipped no caller — since corrected.**
+[#1299](#the-edit-host-dialog-1299) (split from #1187) gave `onEditHost` its first caller: every
+production host row now draws the pen. `onAddWorkspace`/the plus is still capless, #1189's, so a
+hovered row today shows the pen in its slot and an empty one where the plus belongs.
 
 **The swap is guarded on a control actually being drawn, not on the row alone being hovered** — the whole
 point of the ticket, and the reason it needed a `:has()` rule rather than the obvious `.channel-list__host:hover
@@ -268,11 +269,16 @@ DOM order," coupling the rule to a DOM order chosen for tab-order reasons alone 
 change; `:has()` states the condition actually meant. Electron 33 is Chromium 130, and `channels.css`
 already carries one `:has()` consumer (`.channel-list__row:has(> .channel-list__row-open[…])`).
 `e2e/host-row-hover-controls.spec.ts` is the one spec that can read this back — the unit tier renders
-markup in a node environment and never evaluates CSS. It hovers a **workspace** row first and watches its
-plus appear/disappear as a same-mechanism proof that `:hover` reaches the tree at all, then hovers the
-production host row and asserts `.channel-list__host-status` still computes `opacity: 1` with neither
-control class in the DOM — deleting the `:has()` guard, or "simplifying" it to a bare `:hover`, reddens
-that read at the dot-opacity assertion, not at the calibration step.
+markup in a node environment and never evaluates CSS. **Rewritten and inverted by
+[#1299](#the-edit-host-dialog-1299)** per that ticket's AC5, once the pen had a caller and so a
+production row to actually draw it on: the workspace-row calibration instrument described above (hover
+a workspace row first, watch its plus, as proof `:hover` reaches the tree at all) is gone, because the
+pen's own appearance on the production row is now a positive read that calibrates itself. The spec now
+reads, on the production host row alone: at rest the pen sits at opacity 0 and both dots are visible;
+hovering brings the pen up first (14×14, right edge 28px in, vertically centred, `--color-primary`) and
+only then reads the dots at opacity 0. Deleting the `:has()` guard, or "simplifying" it to a bare
+`:hover`, still reddens that read — the plus's two "no button drawn" assertions are untouched, since
+that half of the guard is still #1189's.
 
 Both reveals (the pair's suppression, each control's own appearance) use `opacity` and never `display:
 none`/`visibility: hidden` — #1171's ruling, load-bearing twice here: a display-none control cannot take
@@ -316,11 +322,92 @@ the plus), only tab order. `WorkspaceRow`'s own header records its plus-first or
 constrains the order here, so this row puts tab order back in visual order instead of propagating that
 cost for symmetry's sake. `ChannelList.test.tsx` pins it.
 
-**Not yet observable end to end.** The drawn geometry and "clicking fires the handler" both need a
-caller and land with #1187/#1189, which draw the controls for the first time; the static unit tier is
-what pins the markup contract in the meantime. The one criterion `e2e/host-row-hover-controls.spec.ts`
-does cover today is the no-caller case above — behaviour already in a user's hands, unlike the rest of
-the ticket.
+**The pen is now observable end to end; the plus is not, yet.** [#1299](#the-edit-host-dialog-1299) gave
+`onEditHost` its caller, so the pen's drawn geometry, its hover reveal, and what clicking it opens are
+all covered by e2e now (`e2e/host-row-hover-controls.spec.ts`'s rewrite and the new
+`e2e/sidebar-host-edit.spec.ts`, § below). The plus still needs #1189's caller before its geometry and
+click behaviour are observable past the static unit tier.
+
+## The Edit host dialog (#1299)
+
+[#1299](https://github.com/pyrycode/pyrycode-desktop/issues/1299) (split from #1187) gave the pen its
+first caller: clicking it opens `EditHostDialogView` (new,
+`src/renderer/src/screens/channels/EditHostDialog.tsx`), a near-clone of
+[`EditWorkspaceDialogView`](edit-workspace-dialog.md) (#1180) that renames the machine through
+`window.pyry.setHostLabelFor` (#1186) — the write reaches no daemon: no wire type, no command, no
+bridge change.
+
+**Two departures from the sibling dialog, both deliberate.** Save is enabled on a blank name — a host
+has no folder name to fall back to the way a workspace does, so blank is the valid way back to the
+generic fallback word, and main clears that server's stored entry rather than storing an empty string.
+And the dialog carries a round-trip status (`idle` / `saving` / `failed`) the sibling has no use for,
+because this write is a promise rather than a fire-and-forget outbound command: Save disables and
+freezes the field while `saving`, and an `error` (or an unrecognised) answer renders one client-owned
+line (`.edit-host__error`, "Could not save that name") and re-enables Save. **Cancel is never disabled,
+in any status** — `ipcRenderer.invoke` carries no timeout, so a main side that never answers would
+otherwise leave the dialog frozen with no exit.
+
+**The write helper, `requestSetHostLabel`, tests the recognised arms positively.** `stored`/`not-stored`
+map through `mapHostLabel` (the same mapper the reads use) to the value the container writes into
+[the window store](host-label-window-store.md); anything else — `error`, a rogue arm, or a rejected
+invoke — resolves `null`, meaning "keep the dialog open, write nothing." Written as a negative
+`if (status === 'error')` instead, a future or malformed arm would fall through to the mapper, collapse
+to `error`, and silently reset the row to the generic word; the positive form makes an unrecognised
+answer degrade to the conservative outcome by shape rather than by a branch someone has to keep correct.
+Unlike [`loadHostLabelFor`](host-label-window-store.md), this path does **not** write `error` into the
+store on failure: a failed read genuinely means "unreadable, show the fallback," but a failed write
+means the label is whatever it was before, and recording `error` would invent a state change out of a
+refusal. The promise always resolves and the caught rejection is dropped unread, so nothing here can
+surface as an unhandled rejection in React or log the label.
+
+**The seed is a different collapse from the one the row displays.** `hostRowLabel` (§ above) turns every
+non-name outcome into the fallback word `'Server'`; seeding the field with it would invite the user to
+Save that word as the machine's actual name. `hostRowEditSeed(value)` — exported for the same
+unit-testability reason `hostRowLabel` is — answers "what is stored" instead: verbatim on `stored`
+(including a blank or whitespace-only label, unslimmed — Save is what trims), empty on the other three
+arms.
+
+**Container state is three `useState` cells in `ChannelList`** (`editHostServerId`, `editHostName`,
+`editHostStatus`), gated on `editHostServerId !== null` rather than truthiness — `isHostLabelServerRequest`
+deliberately accepts the empty string as a server id, so a truthy gate would collapse a real machine's
+dialog into "none open." The store write on a successful Save is keyed by the id captured in the render
+closure before the `await`, never by anything the response carried — `HostLabelResult` names no server
+at all, so keying off the response would let one machine's answer land on another machine's row.
+
+**The renderer host-label store gained its second writer.** [Host-label window store](host-label-window-store.md)'s
+`setHostLabelFor` used to have exactly one caller, the loader that fills every slot on mount; this
+dialog's successful Save is the second, recording main's answer for one slot. The row still only reads,
+and nothing feeds a rendered value back into the store — see that page's own note.
+
+**A known gap, left open at merge (code review, non-blocking):** the container's three cells are not
+scoped to the interaction that opened them. If a write is slow, the user Cancels and reopens the dialog
+on a different machine before it resolves, the late resolution still lands on the *new* interaction's
+state — closing a dialog the user just opened, or showing the failure line in a dialog that made no
+write at all. The store write itself is unaffected (it is keyed correctly, per above); only the dialog's
+own open/closed/failed state can drift. Flagged for the next touch of this surface rather than fixed
+here.
+
+**CSS.** `.edit-host*` is its own class family in `channels.css` — a reuse of `.edit-workspace*` or
+`.rename-conversation*` would join those classes' Playwright strict-mode match sets and violate rather
+than fail an assertion (`e2e/sidebar-workspace-edit.spec.ts`, `e2e/conversation-create-rename.spec.ts`).
+Mirrors `.edit-workspace*` declaration for declaration minus the path line (the server id and relay URL
+are [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)'s), plus a `.edit-host__error`
+line on `.save-as-channel__error`'s recipe. No `max-height`/`overflow-y` pair: unlike the workspace
+dialog's unbounded `cwd`, everything this panel renders is either client-owned copy or a label bounded
+at `MAX_HOST_LABEL_LENGTH` inside a single-line input.
+
+**Tests.** Unit: `EditHostDialog.test.tsx` (new) covers the chrome, the blank-enabled/round-trip
+departures, the length bound measured on the trimmed name, and `requestSetHostLabel`'s three outcomes
+against a spy. `ChannelList.test.tsx` extends to cover `hostRowEditSeed`'s four arms and that
+`ChannelListView` threads `onEditHost` to every host row. E2E, fake tier: `e2e/sidebar-host-edit.spec.ts`
+(new) drives Cancel, a blank Save (the clear), a reopen reading the field back empty, a rename visible
+on both of one machine's rows while a second paired machine's rows stay untouched, and a Settings
+round-trip remount proving the value reached main's at-rest store rather than only the renderer
+singleton the Save wrote — a `reuseUserDataDir` relaunch cannot observe this criterion at all, since it
+never reconnects, so `renderBody`'s first gate returns `null` and the sidebar draws nothing; recorded
+under that spec's own `## Revisions` in
+[the architecture spec](../../specs/architecture/1299-edit-host-dialog.md). `host-row-hover-controls.spec.ts`
+is inverted rather than replaced — see the correction above.
 
 ## Related
 
@@ -360,3 +447,10 @@ the ticket.
   `serverInfoStore` list this page's `HostRowControl` used to read only `servers[0]` off; narrowed both
   `HostRow.serverId` and `HostConnectionDotsControl`'s to `string`, and amended the id's ban list to allow
   its one remaining use as a React key.
+- [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the dialog § The Edit host dialog above
+  clones, one level down: the same overlay/scrim/panel chrome and Name field.
+- [Host-label store](host-label-store.md) (#1186) — the main-process keyed SET channel,
+  `window.pyry.setHostLabelFor`, this dialog's Save writes through; reaches no daemon.
+- [#1299 spec](../../specs/architecture/1299-edit-host-dialog.md) — the Edit host dialog's full design:
+  the two departures from `EditWorkspaceDialogView`, the positive-arm write contract, and the
+  reopen-while-saving gap recorded under § The Edit host dialog above.

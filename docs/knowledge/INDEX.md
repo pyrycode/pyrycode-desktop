@@ -386,6 +386,14 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   added. [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) (shipped) composed
   `selectHasOutstandingFor` at the sidebar's one production call site, so this status is reachable from a
   row for the first time — see the #801 entry below.
+  [#1174](https://github.com/pyrycode/pyrycode-desktop/issues/1174) (shipped) repainted all of the above to
+  the redrawn Channel list frame: the ring is no longer per-status — it moved to the base rule as a shared
+  `--color-primary` ring every status wears, idle included — and each status now contributes a `background`
+  alone (`--color-tertiary` working, `--color-success` new-messages, `--color-warning` input-required); idle
+  gained a conditional fill while its row is hovered or open. The paint-per-status description two
+  paragraphs up is superseded; see [the feature doc](features/conversation-status-dot.md) for the current
+  model and why moving the ring to a shared rule made a dropped fill binding render a correct-looking idle
+  dot instead of a visibly missing one — the reason #1174 shipped this component's first e2e coverage.
 - [Channel List home screen § The row's status dot](features/channel-list-status-dot.md#the-row-s-status-dot-channellist-tsx-added-by-801-874)
   — #801, closing the #676 split (#799 resolver, #800 leaf, #801 wiring): every sidebar row in both trees
   now leads with a `ConversationStatusDot`, composed per row by a new module-private

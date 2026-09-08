@@ -9,7 +9,7 @@ import {
   useDefaultWorkspaceStore,
   selectDefaultWorkspace
 } from '../../store/defaultWorkspaceStore'
-import { requestNewConversation } from '../../store/conversationCreatedBridge'
+import { requestNewConversation, requestNewChannel } from '../../store/conversationCreatedBridge'
 // #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
 // untouched in name, signature and value; the host row is simply no longer a reader of either.
 // `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
@@ -74,6 +74,7 @@ import { isConversationUnread } from '../../store/conversationUnread'
 import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
+import { CreateChannelDialogView } from './CreateChannelDialog'
 import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
@@ -176,6 +177,14 @@ export function ChannelList({
   // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
   const [renameRow, setRenameRow] = useState<ConversationSummary | null>(null)
   const [renameName, setRenameName] = useState('')
+  // The Create-channel dialog's own per-interaction pair (#1179), independent of the two above for
+  // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
+  // at once and no mutual-exclusion logic is needed. `createChannelCwd` is the WORKSPACE the dialog will
+  // create in — the group key the clicked plus closed over — and holding it here is what keeps that
+  // daemon-asserted path out of the dialog view entirely. `createChannelName` is the controlled field,
+  // seeded EMPTY on every open (there is no current name to seed from, this being a create).
+  const [createChannelCwd, setCreateChannelCwd] = useState<string | null>(null)
+  const [createChannelName, setCreateChannelName] = useState('')
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -214,6 +223,14 @@ export function ChannelList({
         // row's own path are its two arguments and no bridge changed. `window.pyry` is dereferenced
         // inside the arrow alone, never during render (the onNewConversation discipline).
         onCreateChat={(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)}
+        // #1179 — the Channels-tree plus OPENS A DIALOG and sends nothing: the workspace is fixed by
+        // the row that was clicked, and the name still has to be typed. Both cells are seeded together
+        // so a reopen always starts from an empty field (the CreateFolderDialog reset, achieved by the
+        // seed rather than by a store, since there is no store here to reset).
+        onCreateChannel={(cwd) => {
+          setCreateChannelCwd(cwd)
+          setCreateChannelName('')
+        }}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
@@ -237,6 +254,27 @@ export function ChannelList({
           onSave={() => {
             requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
             setRenameRow(null)
+          }}
+        />
+      )}
+      {/* #1179 — gated on an explicit `!== null` and NEVER on truthiness: an empty-string `cwd` would
+          collapse into "no dialog open" under a truthy test (the trap `App.tsx`'s `openConversationId`
+          header names). It is unreachable today because `renderServerTrees` withholds the plus from the
+          unknown-workspace group, whose key IS the empty string — and writing the check this way is
+          what keeps that withhold load-bearing for one reason rather than two. */}
+      {createChannelCwd !== null && (
+        <CreateChannelDialogView
+          name={createChannelName}
+          onNameChange={setCreateChannelName}
+          // Cancel closes and sends nothing (AC2). The next open re-seeds the field, so there is
+          // nothing to clear here.
+          onCancel={() => setCreateChannelCwd(null)}
+          onCreate={() => {
+            // Fire-and-forget, then close (AC3). `window.pyry` is dereferenced HERE, at interaction
+            // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
+            // the helper trims the name.
+            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelCwd)
+            setCreateChannelCwd(null)
           }}
         />
       )}
@@ -265,6 +303,7 @@ export function ChannelListView({
   onOpenArchive,
   onNewConversation,
   onCreateChat,
+  onCreateChannel,
   onSaveAsChannel,
   onRename
 }: {
@@ -295,6 +334,11 @@ export function ChannelListView({
   // and a defaulted prop would let a future caller silently render a sidebar with no per-workspace route
   // to a new chat. The `cwd` is the group's key and travels verbatim; this view never inspects it.
   onCreateChat: (cwd: string) => void
+  // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
+  // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
+  // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
+  // the dialog's Create does, once a name has been typed.
+  onCreateChannel: (cwd: string) => void
   onSaveAsChannel: (row: ConversationSummary) => void
   onRename: (row: ConversationSummary) => void
 }): JSX.Element {
@@ -313,6 +357,7 @@ export function ChannelListView({
         openConversationId,
         onOpen,
         onCreateChat,
+        onCreateChannel,
         onSaveAsChannel,
         onRename
       )}
@@ -760,16 +805,22 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 // nowhere near it, on the same four-sink rule the disclosure declines above. Its glyph is the design's
 // own export (Font Awesome plus, the 16×16 "Icon Edgeless" the Hover variant places at right 2, top 6),
 // an eighth inline path in this file's idiom.
+//
+// #1179 GAVE THE CONTROL A NAME AS WELL AS A HANDLER, and the two arrive as ONE object rather than as
+// two parallel optional props. The Channels tree draws the same plus reading "Create channel", so a
+// `createLabel?` beside `onCreate?` would admit a handler with no name and a name with no handler, and
+// would need a default that silently mislabels one of the two trees. Bundled, the invariant is
+// structural: a tree either offers a create — named — or offers none.
 function WorkspaceRow({
   label,
   expanded,
   onToggle,
-  onCreate
+  create
 }: {
   label: string
   expanded: boolean
   onToggle: () => void
-  onCreate?: () => void
+  create?: WorkspaceCreateControl
 }): JSX.Element {
   return (
     <div className="channel-list__workspace-head">
@@ -791,17 +842,24 @@ function WorkspaceRow({
         </svg>
         <span className="channel-list__workspace-label">{label}</span>
       </button>
-      {onCreate && (
+      {create && (
         // Icon-only button — `aria-label` supplies the accessible name (the `.channel-list__save`
         // pattern), since the glyph alone carries no text. Invisible at rest and revealed by the row's
         // hover or by its own keyboard focus; `channels.css` says why that reveal is `opacity` and never
         // `display: none`, and it is what keeps the control focusable and present in the accessibility
         // tree without a prior hover.
+        //
+        // ONE CLASS FOR BOTH TREES (#1179's builder call). The drawing gives the Workspace component a
+        // single trailing plus, so the Channels one is the same 20px box, the same 16px glyph, the same
+        // `--color-primary` fill and the same reveal — a second class would restate thirty declarations
+        // verbatim. The two are told apart by their accessible NAME alone, which is exactly what the
+        // unit tier counts per tree. `create.label` is a client-owned constant in every caller; the
+        // workspace label reaches it in none, on the four-sink rule the disclosure declines above.
         <button
           type="button"
           className="channel-list__workspace-create"
-          aria-label={CREATE_CHAT_CONTROL_LABEL}
-          onClick={onCreate}
+          aria-label={create.label}
+          onClick={create.onCreate}
         >
           <svg
             className="channel-list__workspace-create-icon"
@@ -859,16 +917,17 @@ function WorkspaceRow({
 export function CollapsibleWorkspaceGroup({
   label,
   defaultExpanded = true,
-  onCreateChat,
+  create,
   children
 }: {
   label: string
   defaultExpanded?: boolean
-  // #1178 — start a chat in THIS group's workspace, or `undefined` for a group that offers none (every
-  // Channels-tree group until #1179, and the unknown-workspace group in either tree). Nullary: the
-  // `cwd` is closed over by `renderServerTrees`, which is the level that holds the group's key, so this
-  // component never handles a daemon-derived path at all.
-  onCreateChat?: () => void
+  // #1178, reshaped by #1179 — the trailing create control this group offers, or `undefined` for a
+  // group that offers none (the unknown-workspace group, in either tree). Nullary `onCreate`: the `cwd`
+  // is closed over by `renderServerTrees`, which is the level that holds the group's key, so this
+  // component never handles a daemon-derived path at all. The `label` rides along so the name and the
+  // handler cannot drift — see `WorkspaceRow`'s header for why they are one object.
+  create?: WorkspaceCreateControl
   children: ReactNode
 }): JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -877,7 +936,7 @@ export function CollapsibleWorkspaceGroup({
       <WorkspaceRow
         label={label}
         expanded={expanded}
-        onCreate={onCreateChat}
+        create={create}
         // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render
         // and is a check-then-act race against React's batching (ToolRow:746 / UnrecognizedRow:858).
         onToggle={() => setExpanded((open) => !open)}
@@ -909,6 +968,24 @@ const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
 // and not a literal at the call site. The words are the client's own and never the workspace label:
 // `Create ${label}` would put daemon text in an attribute, which is the MUST FIX #696's review named.
 const CREATE_CHAT_CONTROL_LABEL = 'Create chat'
+
+// #1179 — its Channels-tree counterpart, and the reason the plus now travels with a name. Same idiom,
+// same client-owned rule, and #1181's pill reads BOTH. The two words differ because the two trees
+// create different things: the Chats plus sends `is_promoted: false, name: null`, this one opens the
+// dialog that sends `is_promoted: true` and a typed name.
+const CREATE_CHANNEL_CONTROL_LABEL = 'Create channel'
+
+/**
+ * A workspace row's trailing create control (#1179): what it is CALLED and what clicking it does, as
+ * one value. Module-private — nothing outside this file constructs one, and the two that exist are
+ * built at `renderBody`'s two `renderServerTrees` calls, which is the single place the two trees are
+ * told apart. `onCreate` is nullary below `renderServerTrees`: that level closes over the group's key,
+ * so no component underneath handles a daemon-derived path.
+ */
+type WorkspaceCreateControl = {
+  readonly label: string
+  readonly onCreate: () => void
+}
 
 /**
  * One section's rows, grouped by server and then by workspace (#1070) — the level the design has always
@@ -944,11 +1021,12 @@ function renderServerTrees(
   rows: readonly SidebarRow[],
   serverIds: readonly string[],
   renderRow: (row: SidebarRow) => JSX.Element,
-  // #1178 — start a chat in a named workspace, or `undefined` for a tree that offers none. OPTIONAL and
-  // trailing, which is what carries the per-tree difference now that ONE helper draws both trees: the
-  // Chats call supplies it, the Channels call does not (its own control is #1179). Takes the `cwd`
-  // rather than the group, so the caller states exactly what crosses this seam.
-  onCreateChat?: (cwd: string) => void
+  // #1178, reshaped by #1179 — the trailing create control this tree draws on each of its workspace
+  // rows, or `undefined` for a tree that offers none. OPTIONAL and trailing, which is what carries the
+  // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
+  // they differ in the two fields of this object alone. `onCreate` takes the `cwd` rather than the
+  // group, so the caller states exactly what crosses this seam.
+  create?: { readonly label: string; readonly onCreate: (cwd: string) => void }
 ): JSX.Element {
   const { servers, unattributed } = groupByServer(serverIds, rows)
   const workspaceGroups = (serverRows: readonly SidebarRow[]): JSX.Element[] =>
@@ -971,11 +1049,12 @@ function renderServerTrees(
         // The unknown group is skipped: its key is `UNKNOWN_WORKSPACE_KEY`, the empty string, which
         // names no directory and is NOT the `null` "take the daemon default" signal the payload keeps
         // distinct. Decided on the KEY, never on the label — a real directory named "Unknown workspace"
-        // is an ordinary group and keeps its plus.
-        onCreateChat={
-          onCreateChat === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+        // is an ordinary group and keeps its plus. Since #1179 that withhold covers BOTH trees, and it
+        // is what keeps the empty string from ever reaching either create.
+        create={
+          create === undefined || group.key === UNKNOWN_WORKSPACE_KEY
             ? undefined
-            : () => onCreateChat(group.key)
+            : { label: create.label, onCreate: () => create.onCreate(group.key) }
         }
       >
         {group.rows.map(renderRow)}
@@ -1004,9 +1083,13 @@ function renderBody(
   // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
   openConversationId: string | null,
   onOpen: (row: ConversationSummary) => void,
-  // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which is the one
-  // place the two trees are told apart now that `renderServerTrees` draws both.
+  // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
+  // its #1179 sibling below — is the one place the two trees are told apart now that
+  // `renderServerTrees` draws both.
   onCreateChat: (cwd: string) => void,
+  // #1179 — open the Create-channel dialog for a named workspace. Handed to the `channels` tree alone.
+  // The container turns it into dialog state; nothing is sent until the dialog's Create.
+  onCreateChannel: (cwd: string) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -1041,6 +1124,10 @@ function renderBody(
           AC1) — the symmetric counterpart to Save-as-channel on Recent rows. Those two affordances are
           also what the promote specs proxy "the row moved sections" on since #1070, the mutually
           exclusive section headers having stopped being mutually exclusive. */}
+      {/* #1179 — the Channels tree's own create, and the second half of the per-tree difference. The
+          two control objects are built HERE, at the only level that knows which tree it is drawing, so
+          the two client-owned label constants stay module-local to this file and neither reaches a
+          component that also handles a `cwd`. */}
       {renderServerTrees(channels, serverIds, (c) => (
         <Row
           key={c.id}
@@ -1053,7 +1140,7 @@ function renderBody(
           onOpen={() => onOpen(c)}
           onRename={() => onRename(c)}
         />
-      ))}
+      ), { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel })}
       <div className="channel-list__divider" />
       {/* The header reads "Chats" (#709, Figma 106:3258); the code-level partition is still `discussions`
           — renaming that vocabulary was explicitly out of scope.
@@ -1075,7 +1162,7 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ), onCreateChat)}
+      ), { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat })}
     </>
   )
 }

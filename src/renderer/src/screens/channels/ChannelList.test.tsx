@@ -134,6 +134,7 @@ const render = (
       onOpenArchive={noop}
       onNewConversation={noop}
       onCreateChat={noop}
+      onCreateChannel={noop}
       onSaveAsChannel={noop}
       onRename={noop}
     />
@@ -182,6 +183,11 @@ const WORKSPACE_LABEL_OPEN = 'class="channel-list__workspace-label">'
 // is not a match for it. That is the whole reason the class ends in a token of its own.
 const WORKSPACE_HEAD_MARKER = 'class="channel-list__workspace-head"'
 const CREATE_CHAT_MARKER = 'aria-label="Create chat"'
+
+// #1179 — the Channels tree's own plus. It wears the SAME class as the Chats one (one drawn control,
+// one CSS block), so the two are told apart by their accessible NAME and by nothing else — which is
+// exactly what AC4 asks to be counted per tree.
+const CREATE_CHANNEL_MARKER = 'aria-label="Create channel"'
 
 // The disclosure state the workspace row carries once it becomes a collapse control (#704). React
 // serialises `aria-expanded={boolean}` to the literal strings "true" / "false", so these are exact
@@ -298,6 +304,30 @@ const OPEN_ROW_MARKER = 'aria-current="true"'
 // the #801 describe (`rowChunksIn` SPLITS on `ROW_MARKER`, so a dead marker yields zero chunks and passes
 // those `for` loops vacuously) rather than failing one. Scanning to the next `>` is exact: React escapes
 // `<` and `>` inside attribute values too.
+// The two trees, split on the divider — `renderBody` emits it between them, so this is exact rather
+// than approximate and reads no section label's text (the #1070 describe's own treatment). Hoisted to
+// module scope by #1179, which needs the same split for the Channels tree's own plus.
+const treesOf = (markup: string): { channels: string; chats: string } => {
+  const at = markup.indexOf('channel-list__divider')
+  return { channels: markup.slice(0, at), chats: markup.slice(at) }
+}
+
+// The workspace plus's own opening tag, sliced so its attribute set can be asserted WHOLE — the
+// `workspaceRowTagsIn` treatment on the control instead of on the row. Tag-scoped rather than
+// document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in the
+// same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong. Hoisted
+// with `treesOf` by #1179, which slices the same tags out of a single tree at a time.
+const createTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  const marker = 'class="channel-list__workspace-create"'
+  for (let at = markup.indexOf(marker); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(marker, end)
+  }
+  return tags
+}
+
 const rowOpenTagsIn = (markup: string): string[] => {
   const tags: string[] = []
   for (let at = markup.indexOf(ROW_OPEN_MARKER); at !== -1; ) {
@@ -990,28 +1020,6 @@ describe('ChannelListView', () => {
         row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
       ])
 
-    // The two trees, split on the divider — `renderBody` emits it between them, so this is exact rather
-    // than approximate and reads no section label's text (the #1070 describe's own treatment).
-    const treesOf = (markup: string): { channels: string; chats: string } => {
-      const at = markup.indexOf('channel-list__divider')
-      return { channels: markup.slice(0, at), chats: markup.slice(at) }
-    }
-
-    // The plus's own opening tag, sliced so its attribute set can be asserted WHOLE — the
-    // `workspaceRowTagsIn` treatment on the control instead of on the row. Tag-scoped rather than
-    // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in
-    // the same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong.
-    const createTagsIn = (markup: string): string[] => {
-      const tags: string[] = []
-      const marker = 'class="channel-list__workspace-create"'
-      for (let at = markup.indexOf(marker); at !== -1; ) {
-        const end = markup.indexOf('>', at)
-        tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
-        at = markup.indexOf(marker, end)
-      }
-      return tags
-    }
-
     it('draws the plus on the Chats tree’s workspace row and on no Channels one (AC3)', () => {
       const markup = bothTrees()
       const { channels, chats } = treesOf(markup)
@@ -1023,7 +1031,11 @@ describe('ChannelListView', () => {
       expect(countOf(chats, CREATE_CHAT_MARKER)).toBe(1)
       // The control is a real <button>, so it is in the accessibility tree and keyboard-reachable at
       // rest — the half AC3 asks for that a class name alone would not prove.
-      const tags = createTagsIn(markup)
+      //
+      // SCOPED TO THE CHATS SLICE since #1179 gave the Channels tree its own plus wearing the same
+      // class. This describe is about the Chats one, so the slice is what keeps that true; the
+      // whole-render count of two is asserted in #1179's describe, where it belongs.
+      const tags = createTagsIn(chats)
       expect(tags).toHaveLength(1)
       expect(tags[0].startsWith('<button ')).toBe(true)
       expect(tags[0]).toContain('type="button"')
@@ -1075,6 +1087,81 @@ describe('ChannelListView', () => {
       expect(tags[0]).not.toContain('onerror')
       expect(tags[0]).not.toContain('boom')
       expect(tags[0]).not.toContain('title=')
+    })
+  })
+
+  describe('the workspace row’s create-channel plus (#1179)', () => {
+    // The #1178 fixture verbatim — one row per tree, both in the SAME workspace — so the per-tree
+    // counts below are about which callback is handed down and never about a missing group.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    it('names the plus per tree: Create channel above the divider, Create chat below (AC4)', () => {
+      const { channels, chats } = treesOf(bothTrees())
+      expect(countOf(channels, CREATE_CHANNEL_MARKER)).toBe(1)
+      expect(countOf(chats, CREATE_CHANNEL_MARKER)).toBe(0)
+      expect(countOf(chats, CREATE_CHAT_MARKER)).toBe(1)
+      expect(countOf(channels, CREATE_CHAT_MARKER)).toBe(0)
+    })
+
+    it('draws ONE control class across both trees, told apart by name alone (AC4)', () => {
+      // The widening this ticket's reuse of `.channel-list__workspace-create` costs, stated as an
+      // equality on both tags rather than as a loosened count: two controls, same class, same element,
+      // different accessible names. A second CSS class would restate thirty declarations to draw the
+      // identical 16px box the drawing gives the Workspace component once.
+      const markup = bothTrees()
+      const tags = createTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).toContain('type="button"')
+        expect(tag).not.toContain('title=')
+      }
+      // Document order: the Channels tree is rendered first, so its plus leads.
+      expect(tags[0]).toContain(CREATE_CHANNEL_MARKER)
+      expect(tags[1]).toContain(CREATE_CHAT_MARKER)
+    })
+
+    it('leaves #1178’s workspace-row markers at one per group per tree (AC4)', () => {
+      const markup = bothTrees()
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, WORKSPACE_HEAD_MARKER)).toBe(2)
+      const tags = workspaceRowTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('title=')
+      }
+    })
+
+    it('withholds the plus from the Channels tree’s unknown-workspace group (AC1)', () => {
+      // Its key is `''` — NOT the `null` "take the daemon default" signal — so a create sent with it
+      // would name no directory at all. Decided on the KEY and never on the label, in BOTH trees now.
+      const markup = render([row({ id: 'c1', name: 'x', is_promoted: true, cwd: '' })])
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(markup, CREATE_CHANNEL_MARKER)).toBe(0)
+      expect(createTagsIn(markup)).toHaveLength(0)
+    })
+
+    it('keeps the daemon-derived label out of the Channels plus’s attributes (AC2)', () => {
+      // The control's name is a client-owned constant, so the `cwd` behind the group reaches none of
+      // its attributes — #1178's four-sink rule, re-asserted on the second control.
+      const markup = render([
+        row({ id: 'c1', name: 'x', is_promoted: true, cwd: '/home/me/<img src=x onerror=boom>' })
+      ])
+      const tags = createTagsIn(markup)
+      expect(tags).toHaveLength(1)
+      expect(tags[0]).toContain(CREATE_CHANNEL_MARKER)
+      expect(tags[0]).not.toContain('img')
+      expect(tags[0]).not.toContain('onerror')
+      expect(tags[0]).not.toContain('boom')
+      expect(tags[0]).not.toContain('title=')
+      // …while the label itself still renders, escaped, as the disclosure button's text child.
+      expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
     })
   })
 

@@ -399,12 +399,23 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
       // thought publishes something unsolicited with nothing outstanding and no answer to give — the
       // opposite direction from claude asking the operator to choose. Its consumer is the #1314
       // render slice.
-      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' },
+      // the usage-limit reading is PERMANENTLY no-op here (#1319): unsolicited, nothing outstanding,
+      // no answer to give, and it reports a condition of the ACCOUNT rather than anything claude wants
+      // from the operator. The frame is a report, never a control input. Its consumer is the #1320
+      // store slice.
+      {
+        type: 'rateLimited',
+        conversationId: 'conv-1',
+        status: 'allowed_warning',
+        limitType: 'seven_day',
+        resetsAt: 1_755_900_000
+      }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 45 union arms minus the 3 owned above.
-    expect(others).toHaveLength(42)
+    // 46 union arms minus the 3 owned above.
+    expect(others).toHaveLength(43)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

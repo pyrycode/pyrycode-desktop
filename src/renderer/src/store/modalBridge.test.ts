@@ -392,7 +392,19 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       // the thinking-token reading is PERMANENTLY no-op here (#1313): nothing daemon-side is waiting
       // on an answer, so a reading of how much claude thought is not a permission prompt under any
       // reading. Its consumer is the #1314 render slice.
-      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' },
+      // the usage-limit reading is PERMANENTLY no-op here (#1319) on the same grounds: nothing
+      // daemon-side is waiting on an answer and there is no `modal_id` to resolve it against, so a
+      // report about the account's usage window gates no action claude wants to take. Whether it ever
+      // becomes a dialog is a render decision for #1321 on a surface of its own. Its consumer is the
+      // #1320 store slice.
+      {
+        type: 'rateLimited',
+        conversationId: 'conv-1',
+        status: 'allowed_warning',
+        limitType: 'seven_day',
+        resetsAt: 1_755_900_000
+      }
     ]
     for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()
   })

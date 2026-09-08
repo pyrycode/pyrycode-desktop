@@ -215,6 +215,20 @@ feeds the bridges.
   #850 / #974 shape) or an existing one. Recorded as DORMANT on `timelineBridge` rather than decided;
   the disposition comment says #1320 owns the choice, so either outcome falsifies no claim here.
 
+## Revisions
+
+**2026-09-08, during implementation — one test added beyond the plan's Testing strategy.** AC2 says
+the emit "logs no decoded field on any path", and the plan discharged that structurally (this leg adds
+no log call; #1318's decode-side record is pinned content-free separately). That left the AC's
+end-to-end claim unasserted, so `daemonConnection.test.ts` gained a log-absence test: a frame carrying
+distinctive values for all four crossing fields, asserted absent from every captured diagnostic
+record, with a non-vacuity assertion that the frame nonetheless produced its `inbound-decoded` record
+under the client-owned `code` literal. The local `connected()` helper takes an optional
+`DiagnosticLog` to support it. No design change — an assertion the plan should have listed.
+
+The plan's one Open Question (which store #1320 claims the arm into) is left open by design; nothing
+in the implementation decided it, and `timelineBridge`'s no-op is recorded DORMANT accordingly.
+
 ## Security review
 
 **Verdict:** PASS

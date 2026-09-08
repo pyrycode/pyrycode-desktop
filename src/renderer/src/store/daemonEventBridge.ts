@@ -316,6 +316,20 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // reading of how much claude thought about private work into a stack trace and a crash
       // reporter. This case is what keeps them out of it.
       return null
+    case 'rateLimited':
+      // No session-store action (#1319): the usage-limit reading's consumer is the #1320 store slice,
+      // not the session store — which holds CONNECTION status, and a usage-limit window is orthogonal
+      // to whether the socket is up. PERMANENTLY a no-op, and here the argument is sharper than the
+      // sibling's above: folding a quota reading into a connection scalar is precisely the "you are
+      // blocked" overclaim the wire names as THE realistic client bug, since the one measured
+      // non-benign status is a warning band in which every turn still ran normally. There is no
+      // status scalar here it may flip the way #317 flipped `stalled` and #493 flipped the retry
+      // status, and there never will be. Present only because the assertNever guard below makes a new
+      // arm a compile error — and that guard is not a formality: it stringifies the WHOLE event into
+      // an Error message, which would put the correlating conversation id, two unsanitized
+      // claude-authored strings, and the account's quota posture into a stack trace and a crash
+      // reporter. This case is what keeps them out of it.
+      return null
     default:
       return assertNever(event)
   }

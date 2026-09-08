@@ -1589,6 +1589,57 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversationId: inbound.thinkingProgress.conversation_id
             })
             return
+          case 'rate-limited':
+            // The usage-limit data path (#1319, decoded at #1318). Emit a fresh literal carrying the
+            // routing key, both readings and the reset instant, copied BY NAME from the
+            // already-decoded, already-validated payload — never a spread of inbound.rateLimited (the
+            // assistant-delta idiom), so a decoder that later grows a field cannot smuggle it across
+            // IPC. The decode stays fail-closed upstream: a missing or mistyped field drops the whole
+            // frame without emitting.
+            //
+            // FOUR OF THE FIVE DECODED FIELDS CROSS. `truncated_fields` is deliberately left behind:
+            // nothing consumes it, because the eventual surface renders no daemon-authored string at
+            // all — it selects client-owned copy by `status` / `limit_type` and falls back to generic
+            // wording — so a cut value misses that lookup exactly as an unrecognised one does and
+            // there is nothing on screen for a truncation marker to qualify. NO `daemonTs` either —
+            // the decode arm takes no FrameTimestamp, because a stored `rate_limited` is still skipped
+            // and there is no served-page half for a (type, ts) key to join against; the
+            // `thinking-progress` arm directly above, not `api-retry`, is the precedent for this
+            // literal's shape.
+            //
+            // NEITHER STRING IS NARROWED HERE. `status` and `limit_type` cross VERBATIM: no
+            // allow-list, no normalising, no lowercasing, no rejection of the benign value. The daemon
+            // left both sets open because the value set beyond the one measured-benign status is
+            // UNMEASURED, so anything narrower on this boundary would re-introduce exactly the drop
+            // #1318's decoder avoids on the wire — and would drop the first real limit that fires.
+            // `resets_at` crosses unpoliced for the same reason in the other direction: `0` means
+            // claude did not report an instant and is not the epoch, so a truthiness test here would
+            // read it as an absence. Nothing on this leg SCHEDULES from it, and nothing downstream may
+            // either; that prohibition rides the arm's contract forward.
+            //
+            // `conversation_id` crosses as `conversationId`: a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg — all four exhaustive bridges no-op
+            // the arm until #1320. Nothing decoded reaches a log either, here or upstream:
+            // emitDaemonEvent is log-free by construction and the decode's log line is content-free,
+            // which matters for the two strings beside the id as much as for the id — they are
+            // unsanitized claude-authored text, and together they disclose the account's quota
+            // posture.
+            //
+            // DELIBERATELY STATELESS: no dedup, no coalescing, no timer, no last-value memo, and none
+            // keyed by the id either. The daemon re-reports the window once per run whatever its
+            // state, so suppressing a repeat would starve the consumer of the report that says the
+            // reading is still current; and a rate limit on a flooding daemon would be the only
+            // mutable state on this leg, keyed by a daemon-supplied id and fed by a daemon-supplied
+            // stream. Not compile-forced (this inner switch has no assertNever) — the round-trip test
+            // guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'rateLimited',
+              conversationId: inbound.rateLimited.conversation_id,
+              status: inbound.rateLimited.status,
+              limitType: inbound.rateLimited.limit_type,
+              resetsAt: inbound.rateLimited.resets_at
+            })
+            return
           case 'background-task-started':
             // The background-task open data path (#564). Emit a fresh literal carrying all six fields,
             // copied BY NAME from the already-decoded, already-validated payload — never a spread of

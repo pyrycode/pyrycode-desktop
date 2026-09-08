@@ -1458,6 +1458,73 @@ type BaseDaemonEvent =
   // Ships dormant — all four exhaustive bridges no-op it until #1314, the
   // compacting-was-a-no-op-until-#496 precedent.
   | { type: 'thinkingProgress'; estimatedTokens: number; conversationId: string }
+  // The usage-limit arm (#1319) — the daemon's report that claude's usage-limit window is in a state
+  // other than the one measured-benign one, decoded at #1318 and carried here.
+  //
+  // A READING, NOT A STATE TRANSITION, exactly as `thinkingProgress` above and for the same reason:
+  // no rising and no falling edge, no `turn_id`, opening and closing no turn — daemon STATE by the
+  // queueState rule (#720) rather than a turn-stream item, because a usage-limit window is orthogonal
+  // to whichever turn happened to observe it. Nothing may read a lift from a gap in the frames.
+  //
+  // A FRAME IS NOT PROOF THAT ANYTHING WAS BLOCKED, and the daemon names this as THE realistic client
+  // bug. The one measured non-benign value is `allowed_warning` (2026-08-22, claude 2.1.239,
+  // `limit_type: seven_day`): the account was inside its weekly warning band and every turn still ran
+  // normally. The plain reading is "claude said something about the usage window worth repeating",
+  // never "you are rate limited" — a consumer rendering the latter tells the user they are blocked
+  // while their turns keep working. It is restated on this arm rather than left on the wire type
+  // because the WORDING DECISION IS MADE AGAINST THIS ARM, not against the payload.
+  //
+  // FOUR OF THE WIRE'S FIVE FIELDS CROSS. `truncated_fields` does NOT: nothing consumes it. The
+  // eventual surface renders no daemon-authored string at all — it selects CLIENT-OWNED COPY by
+  // `status` / `limitType` and falls back to generic wording on a miss — so a value the producer cut
+  // misses that lookup exactly as an unrecognised value does, and there is nothing on screen for a
+  // truncation marker to qualify. A field crosses when something needs it, not before.
+  //
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
+  // already drew; #1318 keeps this type armless there, so there is no page half to join against and
+  // stamping it would advertise a join nothing can perform. `thinkingProgress` and `modelAnnounced`,
+  // not `apiRetry`, are the precedent for this arm's shape.
+  //
+  // NOT DEDUPED: one event per decoded frame, verbatim repeats included. The daemon re-reports the
+  // window once per run whatever its state, and the transport holds no coalescing, timer or
+  // per-conversation memo to make it otherwise — suppressing a repeat would eat the report that says
+  // the reading is still current.
+  //
+  // SECURITY. `status` AND `limitType` ARE CLAUDE-AUTHORED OPEN STRINGS THAT CROSSED THE SUBPROCESS
+  // TRUST BOUNDARY — the daemon bounds them but does not sanitize them, and deliberately did not
+  // close either set (the value set beyond the one measured-benign status is unmeasured, so a client
+  // that narrows either drops the first real limit that fires). On this union they are usable ONLY AS
+  // LOOKUP KEYS FOR CLIENT-OWNED COPY, never rendered verbatim, never an authorization signal, never
+  // a filename, a cache key or a lookup path — and a client MUST NOT BRANCH SECURITY-RELEVANT
+  // BEHAVIOUR ON `status`, which is what keeps a wrong or hostile value costing at most one
+  // misleading row. That contract diverges TWICE from `RateLimitedPayload`'s, deliberately, and a
+  // reader meeting both should not have to guess which binds. Rendering is TIGHTENED: the wire type
+  // says the strings are safe as inert text, and they are, but no surface here draws one. Lookup is
+  // LOOSENED: the wire's "never a Map key" targets a key that resolves a RESOURCE — a filename, a
+  // path, an icon URL, a cache entry — where an attacker-chosen value escapes the program's own
+  // constants, whereas a key into a client-owned copy table selects among strings this client wrote,
+  // falls back on a miss, and pollutes no prototype when the table is a `Map` (or an
+  // `Object.hasOwn`-guarded record). `resetsAt` IS NEVER A SCHEDULING INPUT: it is an unvalidated
+  // claude-authored number, `0` meaning "claude did not report one" and not the epoch, so a delay
+  // derived from it can be negative (fires immediately, and spins if the handler re-arms) or past
+  // setTimeout's ~24.8-day clamp, which ALSO fires immediately rather than never — never schedule,
+  // allocate or iterate from it (`attachment_chunk`'s "never allocate from a claim", one arm over),
+  // and format it defensively rather than trusting its range. NOTHING DECODED REACHES A LOG on any
+  // path: `emitDaemonEvent` is log-free by construction and #1318's decode-side line is pinned
+  // content-free, which matters for all four fields — the pair of strings discloses the ACCOUNT'S
+  // QUOTA POSTURE, a fact about the operator rather than about this frame. `conversationId` is a
+  // daemon-asserted ROUTING KEY, never rendered text and never an authorization signal; if a consumer
+  // indexes by it, THE INDEX IS A `Map`. REQUIRED, never optional, for the reason every routing key on
+  // this union is: an optional one invites `?? activeConversation` fallbacks, which is the
+  // misattribution to remove. Ships dormant — all four exhaustive bridges no-op it until #1320.
+  | {
+      type: 'rateLimited'
+      conversationId: string
+      status: string
+      limitType: string
+      resetsAt: number
+    }
 
 /**
  * The DAEMON'S OWN timestamp for the logical event this DaemonEvent was decoded from (#1225) — the

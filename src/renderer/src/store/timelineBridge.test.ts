@@ -612,9 +612,20 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         questionBatchId: 'qb_01HZY',
         outcome: 'unanswered',
         source: 'no_answer'
-      }
+      },
       // (thinkingProgress is no longer a member — #1314 claimed it as an owned arm, the way #493 and
       // #496 each eventually claimed theirs out of this same group. See its own case below.)
+      // the usage-limit reading ships DORMANT (#1319) rather than permanently no-op, which is the
+      // disposition thinkingProgress held here until #1314 took it: whether the reading draws as
+      // thread chrome through this bridge or through a subscriber of its own is #1320's call. Daemon
+      // STATE by the queueState rule (#720) either way — no turn_id, opens and closes no turn.
+      {
+        type: 'rateLimited',
+        conversationId: 'conv-1',
+        status: 'allowed_warning',
+        limitType: 'seven_day',
+        resetsAt: 1_755_900_000
+      }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -1220,6 +1231,28 @@ describe('subscribeTimeline', () => {
 
     expect(targets).toEqual(['conv-background'])
     expect(getOpen).not.toHaveBeenCalled()
+  })
+
+  it('#1319: a rateLimited daemon event creates NO timeline item and writes NO store (dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'rateLimited',
+      conversationId: 'conv-1',
+      status: 'allowed_warning',
+      limitType: 'seven_day',
+      resetsAt: 1_755_900_000
+    })
+
+    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
+    // state ref), AND no chat row exists. The first half is what makes "no store the window reads is
+    // written differently than before this slice" an assertion rather than a claim — the shape
+    // thinkingProgress's own dormancy test had at #1313, before #1314 reversed it by claiming the arm.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
   })
 
   it('#885: a questionShown daemon event creates NO timeline item (permanently, not dormant)', () => {

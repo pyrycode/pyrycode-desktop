@@ -25,6 +25,7 @@ import type {
   BackgroundTask,
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
+  ThinkingProgressPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -215,6 +216,56 @@ describe('compacting wire vocabulary (#495)', () => {
       active: false
     }
     expect(falling.active).toBe(false)
+  })
+})
+
+describe('thinking-progress wire vocabulary (#1312)', () => {
+  it('admits the thinking_progress inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const thinking: EnvelopeType = 'thinking_progress'
+    expect(thinking).toBe('thinking_progress')
+  })
+
+  it('shapes ThinkingProgressPayload as its three fields — no turn_id, no truncated_fields', () => {
+    // The cut list's absence is the daemon's decision, not an omission: this payload carries no
+    // claude-authored text at all, so nothing is ever cut and a permanently-null field would claim
+    // a bound that does not exist.
+    const payload: ThinkingProgressPayload = {
+      conversation_id: 'c1',
+      estimated_tokens: 184,
+      estimated_tokens_delta: 67
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      estimated_tokens: 184,
+      estimated_tokens_delta: 67
+    })
+  })
+
+  it('admits the all-zero reading — neither Go field carries omitempty, so it is real traffic', () => {
+    const zero: ThinkingProgressPayload = {
+      conversation_id: 'c1',
+      estimated_tokens: 0,
+      estimated_tokens_delta: 0
+    }
+    expect([zero.estimated_tokens, zero.estimated_tokens_delta]).toEqual([0, 0])
+  })
+
+  it('admits a reading LOWER than the one before it — the value is not monotonic across a turn', () => {
+    // `estimated_tokens` restarts near zero at every inference-request boundary, which happens
+    // repeatedly inside one turn (four restarts in the daemon's committed capture). The pair below
+    // is ordinary traffic, which is why nothing on this wire may subtract two readings.
+    const first: ThinkingProgressPayload = {
+      conversation_id: 'c1',
+      estimated_tokens: 184,
+      estimated_tokens_delta: 67
+    }
+    const afterRestart: ThinkingProgressPayload = {
+      conversation_id: 'c1',
+      estimated_tokens: 4,
+      estimated_tokens_delta: 4
+    }
+    expect(afterRestart.estimated_tokens).toBeLessThan(first.estimated_tokens)
   })
 })
 

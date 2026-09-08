@@ -39,6 +39,7 @@ import type {
   BackgroundTask,
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
+  ThinkingProgressPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -406,6 +407,34 @@ interface FrameTimestamp {
  * not appear in any published list. Ships dormant — the announced-model store (#588) is the first
  * consumer.
  *
+ * The `thinking-progress` kind (#1312) carries the decoded ThinkingProgressPayload — claude's only
+ * mid-turn proof of life on the stream-json surface, the daemon's translation of its
+ * `system/thinking_tokens` line. A READING, not a state transition: unlike its `api_retry` /
+ * `compacting` neighbours it has no rising and no falling edge at all, carries no `turn_id`, and opens
+ * and closes no turn. The fail-closed defence is one required string plus TWO required NUMBERS, whose
+ * `0` is a legitimate value rather than an absence — neither Go field carries `omitempty`, so the
+ * daemon's zero value is legal traffic and nothing may consult truthiness.
+ *
+ * DELIBERATELY NOT RANGE-CHECKED, and on this frame that is sharper than the house rule it follows.
+ * There is no precedent in this file for range-validating a wire integer, and a client-invented bound
+ * silently drops valid future frames; but a monotonicity or non-negativity rule here would be actively
+ * wrong rather than merely unprecedented, because `estimated_tokens` restarts near zero at every
+ * inference-request boundary — four times inside the daemon's committed single-turn capture. See
+ * ThinkingProgressPayload for that hazard and its two siblings (the frames are rate-bounded and do not
+ * enumerate claude's lines; the deltas received do not sum to the turn's total).
+ *
+ * IT TAKES NO FrameTimestamp, and the omission is the design rather than an oversight. That mix-in
+ * marks exactly the arms `decodeHistoryEvent` draws, which need (`type`, `ts`) as the join key between a
+ * served page and what the live stream already drew. This type gains no arm there — a stored one is
+ * still skipped — so there is no page half for a `ts` to join against, and stamping it would advertise a
+ * join nothing can perform. `model-announced` above is the precedent.
+ *
+ * NOTHING DECODED REACHES THE LOG, including the two integers: a reading of how much claude thought is a
+ * side-channel on private work, as unwelcome in a log an operator may send off-box as the correlating
+ * `conversation_id` beside it. Ships dormant — daemonConnection's inbound switch has no catch-all, so the
+ * reading stops here until the carry slice claims it. A consumer that later renders it must not allocate
+ * or iterate proportionally to either number, which are unbounded daemon-supplied values.
+ *
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
  * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
@@ -648,6 +677,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
+  | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
@@ -1401,10 +1431,11 @@ export interface DecodedHistoryPage {
  * prototype chain. The same rule binds any later "which types do we draw?" set — a `Set`, never a bare
  * object used as a map.
  *
- * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the six
- * this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
- * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`), the two it has no parser
- * for at all (`thinking_progress`, `rate_limited`), any type a later daemon invents — and `modal_shown` /
+ * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
+ * seven this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
+ * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312 —
+ * `thinking_progress`, whose live-lane parser deliberately came with no arm here), the one it has no
+ * parser for at all (`rate_limited`), any type a later daemon invents — and `modal_shown` /
  * `question_shown`. THAT LAST PAIR IS THE SHARPEST CASE: no prompt may ever reach the window from history
  * as something answerable, because resolving a modal that closed hours ago is a real action taken on a
  * replayed frame. Having no arm is what guarantees it, for a future daemon that starts logging one and for
@@ -1916,6 +1947,44 @@ function parseModelAnnouncedPayload(payload: unknown): ModelAnnouncedPayload {
   const model = requireString(payload, 'model')
   const truncated = requireBoolean(payload, 'truncated')
   return { conversation_id, model, truncated }
+}
+
+/**
+ * Narrow an opaque payload into a ThinkingProgressPayload (#1312). Fail-closed like
+ * parseApiRetryPayload, scaled from four fields to three and from one boolean to none: one
+ * `requireString` for `conversation_id` and one `requireNumber` for each of the two readings, so no new
+ * helper is invented here.
+ *
+ * `requireNumber` CHECKS THE TYPE, NEVER TRUTHINESS, and that is load-bearing on this frame rather than
+ * merely idiomatic: neither Go field carries `omitempty`, so the daemon's zero value round-trips and an
+ * all-zero reading is legal traffic a truthiness test would read as an absence.
+ *
+ * NO RANGE CHECK AND NO INTEGER CHECK on either number, which follows the house rule for a stronger
+ * reason than usual. The rule itself is parseApiRetryPayload's — there is no precedent in this file for
+ * range-validating a wire integer (`seq` / `total` / `used_tokens` / `queued_msg_id` are all bare
+ * requireNumber) and a client-invented bound silently drops VALID future frames, the drift risk
+ * CLAUDE.md / ADR 0002 rank above cosmetic robustness. Here the reflex to resist is more specific: the
+ * two obvious "sanity" rules, that the reading only grows and that neither value is negative, would
+ * FAIL-CLOSE ORDINARY TRAFFIC, because `estimated_tokens` restarts near zero at every inference-request
+ * boundary — four times inside the daemon's committed single-turn capture. See ThinkingProgressPayload
+ * for that hazard and its siblings. A consumer that formats these numbers handles the range defensively;
+ * this boundary says only that they are numbers.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value); the frame-level
+ * MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the oversized case. Returns a fresh three-field
+ * literal, so unknown server-added keys (a spurious `turn_id`, which this frame must never have, or a
+ * planted `__proto__`) are tolerated (forward-compat) but NOT copied through — which also makes it
+ * prototype-pollution-safe. Its messages name the failure CATEGORY only, never interpolating a value: the
+ * id is conversation-correlating and the two readings are a side-channel on how much claude thought.
+ */
+function parseThinkingProgressPayload(payload: unknown): ThinkingProgressPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed thinking_progress payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const estimated_tokens = requireNumber(payload, 'estimated_tokens')
+  const estimated_tokens_delta = requireNumber(payload, 'estimated_tokens_delta')
+  return { conversation_id, estimated_tokens, estimated_tokens_delta }
 }
 
 /**
@@ -3194,6 +3263,29 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'model-announced', modelAnnounced }
+    }
+    case 'thinking_progress': {
+      // Narrow BEFORE logging so a malformed frame (an absent / non-number reading, a JSON-string
+      // number) throws first and leaves no record. NOTHING decoded is logged — not the
+      // conversation_id, and not the two readings, which look like harmless integers and are a
+      // side-channel on how much claude thought about the operator's private work. Only the frame's
+      // byte length + one-way hash, reusing the existing content-free field set (no new
+      // DiagnosticEvent field, so #131's renderer pin is untouched). Strictly safer than the
+      // `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED `envelope.type`; the
+      // code here is a static literal.
+      //
+      // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
+      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
+      // reading stops here until the carry slice claims it.
+      const thinkingProgress = parseThinkingProgressPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'thinking_progress',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'thinking-progress', thinkingProgress }
     }
     case 'background_task_started': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string

@@ -142,6 +142,25 @@ send mechanics and required-id posture, but with no reply of any kind.
   method on this factory — `thinking_progress` is inbound-only. Ships dormant: all four exhaustive
   bridges no-op it (three permanently, `timelineBridge` dormantly) until
   [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) claims it.
+- [#1319](https://github.com/pyrycode/pyrycode-desktop/issues/1319) (decoded at
+  [#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318)) — the `rate-limited` inbound kind +
+  the new `case 'rate-limited':` consumer emit, placed directly after `thinking-progress` so the switch
+  mirrors `InboundDaemonMessage`'s own arm order. A fresh **non-nullary** four-field literal
+  `{ type: 'rateLimited', conversationId, status, limitType, resetsAt }` copied by name from
+  `inbound.rateLimited` (never a spread) — `truncated_fields` is the one decoded field this arm drops,
+  since nothing consumes it and the eventual surface selects client-owned copy by `status`/`limitType`
+  rather than rendering either string. `thinkingProgress`/`modelAnnounced`, not `apiRetry`, are this
+  arm's shape precedent: no `daemonTs` either, since the decode arm takes no `FrameTimestamp`. Neither
+  open string is narrowed here, and `resetsAt` crosses unpoliced — the daemon's `0`-is-not-the-epoch
+  contract, never a scheduling input. Deliberately stateless, same as `apiRetry`/`compacting`/
+  `modelAnnounced`/`thinkingProgress`: no dedup, no coalescing, no timer, no last-value memo — the daemon
+  re-reports the window once per run whatever its state. Not `assertNever`-guarded in this inner switch;
+  the round-trip test is the guard, including an `Object.keys(...).sort()` assertion that
+  `truncated_fields` and the snake-cased fields never ride along, plus a log-absence assertion added
+  during implementation (see the spec's Revisions) since AC2's "logs no decoded field on any path" claim
+  was otherwise unasserted end-to-end. No new method on this factory — `rate_limited` is inbound-only.
+  Ships dormant: all four exhaustive bridges no-op it (three permanently, `timelineBridge` dormantly)
+  until [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) claims it.
 - [#642 codebase notes](../codebase/642.md) — the `tool-use` `case` arm widened by one field: `input: inbound.toolUse.input` added to the existing fresh literal, unconditional (`undefined` when the wire omitted it). Crosses **by reference** to the already-narrowed fresh map `parseToolUsePayload` built — no second copy, since the reserved-key strip already happened at decode. Ships dormant; #643 is the first consumer. No new method on this factory — the sixth `tool_use` field is inbound-only, like the five it joins.
 - [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Noise relay driver](noise-relay-driver.md) — the `relay-link-up`/`relay-link-down{code}` driver events + the two new `onDriverEvent` cases that classify the raw close code into the renderer-facing `relayLinkChanged{status}` `DaemonEvent` (the relay-**socket** leg, distinct from this module's own session-level `connecting`/`connected`/`failed`). Ships dormant; first of three slices toward a two-dot connection-status indicator.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.

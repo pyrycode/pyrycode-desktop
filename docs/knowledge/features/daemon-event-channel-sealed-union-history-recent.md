@@ -219,6 +219,60 @@ the combined list again exceeded the size cap.
   running turn. Whether #1314 claims it through `timelineBridge` (the `apiRetry`/`compacting` posture)
   or through a fifth independent subscriber (the `questionShown`/`slashCommandList` posture) is that
   slice's call, not this carry slice's — what is settled here is only that nothing draws it yet.
+- **`rateLimited{conversationId,status,limitType,resetsAt}`**
+  ([#1319](https://github.com/pyrycode/pyrycode-desktop/issues/1319)) carries the daemon's usage-limit
+  report the last hop across IPC — the wire vocabulary and the fail-closed decode
+  ([#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318)) already existed; this arm is the
+  emit, placed directly after `thinkingProgress` so the switch mirrors `InboundDaemonMessage`'s own arm
+  order. **A reading, not a state transition**, the `thinkingProgress` rule restated for a second arm:
+  no rising and no falling edge, no `turn_id`, opens and closes no turn — daemon state by the
+  `queueState` #720 rule rather than a turn-stream item, since a usage-limit window is orthogonal to
+  whichever turn happened to observe it.
+
+  **Four of the wire's five fields cross.** `truncated_fields` does **not**: nothing consumes it — the
+  eventual surface renders no daemon-authored string at all, selecting client-owned copy by `status` /
+  `limitType` and falling back to generic wording on a miss, so a value the producer cut misses that
+  lookup exactly as an unrecognised one does. **No `daemonTs`**, the `thinkingProgress`/`modelAnnounced`
+  precedent: the decode arm takes no `FrameTimestamp`, so there is no served-page half to join a
+  (`type`, `ts`) key against. `conversationId` is **required, never optional** — the same
+  misattribution-avoidance rule every routing key on this union carries.
+
+  **Neither open string is narrowed on this boundary.** `status` and `limitType` cross verbatim — no
+  allow-list, no normalising, no rejection of the one measured-benign value — because the daemon left
+  both sets open (the value set beyond `allowed_warning` is unmeasured) and narrowing here would drop
+  the first real limit that fires. `resetsAt` crosses unpoliced in the other direction: `0` means claude
+  did not report an instant, not the epoch, so a truthiness read is wrong and nothing on this leg or
+  downstream may schedule, allocate or iterate from it (`attachment_chunk`'s "never allocate from a
+  claim", one field over).
+
+  **Not deduped**: no dedup, no coalescing, no timer, no last-value memo, none keyed by
+  `conversationId` — the daemon re-reports the window once per run whatever its state, and a suppressor
+  would eat the report that says the reading is still current. Not compile-forced (`daemonConnection`'s
+  inbound switch has no `assertNever`) — the round-trip test is what guards this emit, including an
+  `Object.keys(...).sort()` assertion that `truncated_fields` and the snake-cased fields never ride
+  along.
+
+  SECURITY: `status` and `limitType` are **claude-authored open strings that crossed the subprocess
+  trust boundary** — usable only as lookup keys for client-owned copy, never rendered verbatim, never an
+  authorization signal, never a filename, a cache key or a lookup path; a client **must not branch
+  security-relevant behaviour on `status`**. This is a deliberate, named divergence from
+  `RateLimitedPayload`'s own docblock, which forbids using either string as a lookup key at all — the
+  wire's prohibition targets a key that resolves a *resource* (a filename, a path, an icon URL, a cache
+  entry), where an attacker-chosen value escapes the program's own constants, while a key into a
+  client-owned copy table selects only among strings this client wrote and falls back to generic wording
+  on a miss. `conversationId` is a daemon-asserted routing key; if a consumer indexes by it, the index is
+  a `Map`. **A frame is not proof anything was blocked** — the one measured non-benign status
+  (`allowed_warning`, `seven_day`) fired while every turn kept running normally, so a consumer rendering
+  "you are blocked" from this arm alone would mislead the operator. Nothing decoded reaches a log on any
+  path: `emitDaemonEvent` is log-free by construction and #1318's decode-side log line is pinned
+  content-free; together `status`/`limitType` disclose the account's quota posture, a fact about the
+  operator rather than about the frame. Consumed as a **permanent** no-op by three of the four exhaustive
+  bridges (`daemonEventBridge`, `modalBridge`, `questionBridge`) — none of the three will ever own this
+  arm — and a **dormant** no-op by the fourth (`timelineBridge`), the `thinkingProgress` posture exactly.
+  Whether [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) claims it through
+  `timelineBridge` (the `apiRetry`/`compacting`/`thinkingProgress` route) or through a fifth independent
+  subscriber (the `questionShown`/`slashCommandList` route) is that slice's call, not this carry slice's
+  — what is settled here is only that nothing draws it yet.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

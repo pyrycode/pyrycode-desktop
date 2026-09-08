@@ -790,7 +790,8 @@ const CONV_NAMED = {
   is_archived: false,
   cwd: '/home/user/project',
   last_message_ts: '2026-07-08T00:00:00Z',
-  last_used_at: '2026-07-09T00:00:00Z'
+  last_used_at: '2026-07-09T00:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed conversation summary with a null name — an unnamed, archived scratch discussion (#139). */
@@ -801,7 +802,8 @@ const CONV_UNNAMED = {
   is_archived: true,
   cwd: '/tmp/scratch',
   last_message_ts: '2026-07-07T00:00:00Z',
-  last_used_at: '2026-07-07T12:00:00Z'
+  last_used_at: '2026-07-07T12:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed recent-workspace row — path + opaque last_used_at (#380). */
@@ -816,7 +818,8 @@ const CREATED_NAMED = {
   is_promoted: true,
   cwd: '/home/user/project',
   name: 'design review',
-  last_used_at: '2026-07-10T00:00:00Z'
+  last_used_at: '2026-07-10T00:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed conversation_created reply with a null name — an unnamed scratch conversation (#241). */
@@ -825,7 +828,8 @@ const CREATED_UNNAMED = {
   is_promoted: false,
   cwd: '/tmp/scratch',
   name: null,
-  last_used_at: '2026-07-10T01:00:00Z'
+  last_used_at: '2026-07-10T01:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed conversation_updated reply with a string name — a promoted channel, name before cwd (#273). */
@@ -834,7 +838,8 @@ const UPDATED_NAMED = {
   is_promoted: true,
   name: 'weekly sync',
   cwd: '/home/user/project',
-  last_used_at: '2026-07-12T00:00:00Z'
+  last_used_at: '2026-07-12T00:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed conversation_updated reply with a null name — an update that left the name unset (#273). */
@@ -843,7 +848,8 @@ const UPDATED_UNNAMED = {
   is_promoted: true,
   name: null,
   cwd: '/tmp/scratch',
-  last_used_at: '2026-07-12T01:00:00Z'
+  last_used_at: '2026-07-12T01:00:00Z',
+  workspace_label: null
 }
 
 /** A well-formed conversation_deleted reply — a single required `id`, the deleted row (#375).
@@ -1398,7 +1404,7 @@ describe('parseInboundMessage — conversations recognition (#139, additive)', (
     })
   })
 
-  it('drops unknown server keys per row, keeping only the seven known fields (forward-compat)', () => {
+  it('drops unknown server keys per row, keeping only the eight known fields (forward-compat)', () => {
     const withExtras = { ...CONV_NAMED, preview: 'ignore-me', unread: 3 }
     expect(parseInboundMessage(encodeConversations({ conversations: [withExtras] }))).toEqual({
       kind: 'conversations',
@@ -1462,6 +1468,56 @@ describe('parseInboundMessage — conversations fail-closed (#139, AC2/AC4)', ()
       expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
         WireDecodeError
       )
+    }
+  })
+
+  // #1287 — the daemon-held workspace label. Required-present and nullable, the `name` contract exactly:
+  // the daemon writes the key unconditionally (no `omitempty`), so `null` is the VALUE "this workspace has
+  // no label, use the folder name" and a MISSING key is a contract violation. Fail-closed on absence is the
+  // deliberate direction — defaulting an absent key to `null` would let a stale or impersonating daemon
+  // silently suppress a label the user set from another client.
+  it('copies a string workspace_label through and decodes a literal null as the value null', () => {
+    const labelled = { ...CONV_NAMED, workspace_label: 'Second Brain' }
+    const result = parseInboundMessage(
+      encodeConversations({ conversations: [labelled, CONV_UNNAMED] })
+    )
+    expect(result?.kind).toBe('conversations')
+    if (result?.kind === 'conversations') {
+      expect(result.conversations[0].workspace_label).toBe('Second Brain')
+      expect(result.conversations[1].workspace_label).toBeNull()
+    }
+  })
+
+  it('throws when workspace_label is absent/undefined or a non-string non-null', () => {
+    const { workspace_label: _omitted, ...absent } = CONV_NAMED
+    const bad: unknown[] = [
+      absent, // the key omitted entirely — never omitted on the wire
+      { ...CONV_NAMED, workspace_label: undefined },
+      { ...CONV_NAMED, workspace_label: 42 },
+      { ...CONV_NAMED, workspace_label: {} },
+      { ...CONV_NAMED, workspace_label: ['Second Brain'] }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  // The category-only message posture, on the field this ticket adds: a decode failure names the FIELD and
+  // never the offending value, so a rejected label cannot reach a log or an error boundary as content.
+  it('names the category only when workspace_label is rejected — never the offending value', () => {
+    const secretish = 'label-that-must-not-be-echoed'
+    try {
+      parseInboundMessage(
+        encodeConversations({ conversations: [{ ...CONV_NAMED, workspace_label: [secretish] }] })
+      )
+      expect.unreachable('a non-string non-null workspace_label must throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(WireDecodeError)
+      expect((err as Error).message).toContain('workspace_label')
+      expect((err as Error).message).not.toContain(secretish)
+      expect((err as Error).message).not.toContain(CONV_NAMED.cwd)
     }
   })
 
@@ -1588,7 +1644,7 @@ describe('parseInboundMessage — recent_workspaces_list fail-closed (#380, AC3)
 })
 
 describe('parseInboundMessage — conversation_created recognition (#241, additive)', () => {
-  it('narrows a conversation_created reply into { kind: conversation-created } with the five fields', () => {
+  it('narrows a conversation_created reply into { kind: conversation-created } with the six fields', () => {
     expect(parseInboundMessage(encodeConversationCreated(CREATED_NAMED))).toEqual({
       kind: 'conversation-created',
       conversationCreated: CREATED_NAMED
@@ -1611,7 +1667,7 @@ describe('parseInboundMessage — conversation_created recognition (#241, additi
     }
   })
 
-  it('drops unknown server keys, keeping only the five known fields (forward-compat)', () => {
+  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
     // The daemon's ConversationSummary carries is_archived + last_message_ts; a create reply must not,
     // and even if a server sends extras they are tolerated but NOT copied through (spec #274).
     const withExtras = { ...CREATED_NAMED, is_archived: false, last_message_ts: 'x', preview: 'ignore' }
@@ -1630,6 +1686,33 @@ describe('parseInboundMessage — conversation_created fail-closed (#241, AC5)',
   it('throws when the payload is not an object', () => {
     expect(() => parseInboundMessage(encodeConversationCreated('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeConversationCreated(['a']))).toThrow(WireDecodeError)
+  })
+
+  // #1287 — the same required-nullable workspace_label contract as the conversations reply, on the create
+  // reply's own 5-field shape. Both directions pinned here so the three parsers cannot drift apart.
+  it('copies workspace_label through — a string, and a literal null as the value null', () => {
+    const labelled = { ...CREATED_NAMED, workspace_label: 'Second Brain' }
+    expect(parseInboundMessage(encodeConversationCreated(labelled))).toEqual({
+      kind: 'conversation-created',
+      conversationCreated: { ...CREATED_NAMED, workspace_label: 'Second Brain' }
+    })
+    expect(parseInboundMessage(encodeConversationCreated(CREATED_UNNAMED))).toEqual({
+      kind: 'conversation-created',
+      conversationCreated: CREATED_UNNAMED
+    })
+  })
+
+  it('throws when workspace_label is absent/undefined or a non-string non-null', () => {
+    const { workspace_label: _omitted, ...absent } = CREATED_NAMED
+    const bad: unknown[] = [
+      absent,
+      { ...CREATED_NAMED, workspace_label: undefined },
+      { ...CREATED_NAMED, workspace_label: 42 },
+      { ...CREATED_NAMED, workspace_label: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationCreated(payload))).toThrow(WireDecodeError)
+    }
   })
 
   it('throws when any string field is missing or non-string', () => {
@@ -1684,7 +1767,7 @@ describe('parseInboundMessage — conversation_created fail-closed (#241, AC5)',
 })
 
 describe('parseInboundMessage — conversation_updated recognition (#273, additive)', () => {
-  it('narrows a conversation_updated reply into { kind: conversation-updated } with the five fields', () => {
+  it('narrows a conversation_updated reply into { kind: conversation-updated } with the six fields', () => {
     expect(parseInboundMessage(encodeConversationUpdated(UPDATED_NAMED))).toEqual({
       kind: 'conversation-updated',
       conversationUpdated: UPDATED_NAMED
@@ -1707,7 +1790,7 @@ describe('parseInboundMessage — conversation_updated recognition (#273, additi
     }
   })
 
-  it('drops unknown server keys, keeping only the five known fields (forward-compat)', () => {
+  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
     const withExtras = { ...UPDATED_NAMED, is_archived: false, last_message_ts: 'x', preview: 'ignore' }
     expect(parseInboundMessage(encodeConversationUpdated(withExtras))).toEqual({
       kind: 'conversation-updated',
@@ -1724,6 +1807,34 @@ describe('parseInboundMessage — conversation_updated fail-closed (#273, AC)', 
   it('throws when the payload is not an object', () => {
     expect(() => parseInboundMessage(encodeConversationUpdated('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeConversationUpdated(['a']))).toThrow(WireDecodeError)
+  })
+
+  // #1287 — the third parser's copy of the required-nullable workspace_label contract, in this reply's own
+  // field order. A workspace RENAME reaches the client as a conversation_updated broadcast, so this arm is
+  // the live path by which a label change from another client lands without a fresh list request.
+  it('copies workspace_label through — a string, and a literal null as the value null', () => {
+    const labelled = { ...UPDATED_NAMED, workspace_label: 'Second Brain' }
+    expect(parseInboundMessage(encodeConversationUpdated(labelled))).toEqual({
+      kind: 'conversation-updated',
+      conversationUpdated: { ...UPDATED_NAMED, workspace_label: 'Second Brain' }
+    })
+    expect(parseInboundMessage(encodeConversationUpdated(UPDATED_UNNAMED))).toEqual({
+      kind: 'conversation-updated',
+      conversationUpdated: UPDATED_UNNAMED
+    })
+  })
+
+  it('throws when workspace_label is absent/undefined or a non-string non-null', () => {
+    const { workspace_label: _omitted, ...absent } = UPDATED_NAMED
+    const bad: unknown[] = [
+      absent,
+      { ...UPDATED_NAMED, workspace_label: undefined },
+      { ...UPDATED_NAMED, workspace_label: 42 },
+      { ...UPDATED_NAMED, workspace_label: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationUpdated(payload))).toThrow(WireDecodeError)
+    }
   })
 
   it('throws when any string field is missing or non-string', () => {
@@ -3751,7 +3862,7 @@ describe('parseInboundMessage — modal_shown recognition (#201, additive)', () 
     })
   })
 
-  it('drops unknown server keys, keeping only the seven known fields (forward-compat)', () => {
+  it('drops unknown server keys, keeping only the eight known fields (forward-compat)', () => {
     // `conversation_id` was this test's example of an unknown key until #870 made it a known one; the
     // forward-compat point stands on `extra` alone.
     const withExtras = { ...MODAL_SHOWN, extra: 'ignore-me' }
@@ -7412,7 +7523,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     })
   })
 
-  it('drops unknown server keys, keeping only the seven known fields (forward-compat)', () => {
+  it('drops unknown server keys, keeping only the eight known fields (forward-compat)', () => {
     const withExtras = { ...RUN_CONFIG, conversation_id: 'conv-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeSessionSettings(withExtras))).toEqual({
       kind: 'session-settings',
@@ -8485,7 +8596,8 @@ describe('parseInboundMessage — set_system_prompt correlation + reject narrowi
     is_promoted: true,
     name: 'weekly sync',
     cwd: '/home/user/project',
-    last_used_at: '2026-07-12T00:00:00Z'
+    last_used_at: '2026-07-12T00:00:00Z',
+    workspace_label: null
   }
 
   /** A `conversation_updated` plaintext, `null` OMITTING the correlation key (a sentinel rather than
@@ -8543,7 +8655,15 @@ describe('parseInboundMessage — set_system_prompt correlation + reject narrowi
       expect(record.event).toBe('inbound-decoded')
       expect(record.code).toBe('conversation_updated')
       expect(record.in_reply_to).toBeUndefined()
-      expect(lines[0]).not.toContain('41')
+      // The "no field echoes the handle" sweep runs over every field EXCEPT `hash`. That exclusion is not
+      // a weakening: `hash` is a sha256 over the frame bytes, and the frame legitimately contains the
+      // handle, so the digest is derived from it by construction and can never be read back out of it.
+      // Sweeping the raw line instead makes this a lottery — a digest is 64 hex characters, so it carries
+      // a two-character decimal substring most of the time, and it reshuffles whenever the frame's bytes
+      // change for any unrelated reason. It passed until #1287 added one field to the payload and the new
+      // digest happened to contain `e641`.
+      const { hash: _contentAddress, ...loggable } = record
+      expect(JSON.stringify(loggable)).not.toContain('41')
     }
   })
 

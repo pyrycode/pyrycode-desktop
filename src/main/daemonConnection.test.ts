@@ -3538,7 +3538,8 @@ describe('createDaemonConnection — conversations (list_conversations request /
     is_archived: false,
     cwd: '/home/user/project',
     last_message_ts: '2026-07-08T00:00:00Z',
-    last_used_at: '2026-07-09T00:00:00Z'
+    last_used_at: '2026-07-09T00:00:00Z',
+    workspace_label: null
   }
   const CONV_UNNAMED = {
     id: 'conv-2',
@@ -3547,7 +3548,8 @@ describe('createDaemonConnection — conversations (list_conversations request /
     is_archived: true,
     cwd: '/tmp/scratch',
     last_message_ts: '2026-07-07T00:00:00Z',
-    last_used_at: '2026-07-07T12:00:00Z'
+    last_used_at: '2026-07-07T12:00:00Z',
+    workspace_label: null
   }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
@@ -3752,7 +3754,8 @@ describe('createDaemonConnection — createConversation (create_conversation req
     is_promoted: false,
     cwd: '/tmp/scratch',
     name: null,
-    last_used_at: '2026-07-10T00:00:00Z'
+    last_used_at: '2026-07-10T00:00:00Z',
+    workspace_label: null
   }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
@@ -3956,7 +3959,8 @@ describe('createDaemonConnection — promoteConversation (promote_conversation r
     is_promoted: true,
     name: null,
     cwd: '/home/user/project',
-    last_used_at: '2026-07-12T00:00:00Z'
+    last_used_at: '2026-07-12T00:00:00Z',
+    workspace_label: null
   }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
@@ -8602,7 +8606,8 @@ describe('createDaemonConnection — setSystemPrompt + its correlated ack and re
     is_promoted: true,
     name: 'weekly sync',
     cwd: '/home/user/project',
-    last_used_at: '2026-07-12T00:00:00Z'
+    last_used_at: '2026-07-12T00:00:00Z',
+    workspace_label: null
   }
 
   /** A `conversation_updated` plaintext, `null` OMITTING the correlation key (a sentinel rather than

@@ -2327,6 +2327,14 @@ export type ListConversationsPayload = Record<string, never>
  * `last_message_ts` is a TIMESTAMP (RFC3339), not preview text — there is no message text on this
  * wire. `cwd` is an untrusted daemon-supplied string carried as opaque display text; this ticket
  * never resolves it into a filesystem path. See #139.
+ *
+ * `workspace_label` (#1287, daemon pyrycode#2208) is the name the workspace has been GIVEN on the
+ * daemon, stored against the exact `cwd` string — so every row sharing a `cwd` carries the same value.
+ * `string | null` with NO `omitempty`, the `name` contract exactly: a literal `null` is the VALUE
+ * "this workspace has no label, use the folder name", and an ABSENT key is a contract violation that
+ * fails the decode closed. It shares `cwd`'s untrusted-opaque-display-text posture and differs from it
+ * in one way worth stating: `cwd` is a PATH and this is a NAME, so it has no segment structure and
+ * nothing may parse it — it is neither split, resolved, nor used as a lookup key.
  */
 export interface ConversationSummary {
   id: string
@@ -2336,6 +2344,7 @@ export interface ConversationSummary {
   cwd: string
   last_message_ts: string
   last_used_at: string
+  workspace_label: string | null
 }
 
 /** Inbound `conversations` reply body (daemon → client). Order preserved from the wire — the daemon
@@ -2392,6 +2401,10 @@ export interface CreateConversationPayload {
  * "unnamed scratch conversation", NOT an empty string. `is_promoted` is a boolean (`false` = an ad-hoc
  * discussion, a value, not an absence). `cwd` is an untrusted daemon-supplied string carried as opaque
  * display text; this ticket never resolves it into a filesystem path. `last_used_at` is RFC3339. See #241.
+ *
+ * `workspace_label` (#1287) joins the shape with ConversationSummary's contract verbatim — required,
+ * nullable, no `omitempty`, untrusted opaque display text that nothing parses. A created row lands in a
+ * workspace group like any other, so it has to carry the group's name for that group to keep it.
  */
 export interface ConversationCreatedPayload {
   id: string
@@ -2399,6 +2412,7 @@ export interface ConversationCreatedPayload {
   cwd: string
   name: string | null
   last_used_at: string
+  workspace_label: string | null
 }
 
 /**
@@ -2611,6 +2625,11 @@ export interface WorkspaceFolderCreatedPayload {
  * ConversationSummary.name — NOT `string | undefined`. `cwd` is an untrusted daemon-supplied string
  * carried as opaque display text; this ticket never resolves it into a filesystem path. `last_used_at`
  * is RFC3339. See #273.
+ *
+ * `workspace_label` (#1287) joins the shape with ConversationSummary's contract verbatim — required,
+ * nullable, no `omitempty`, untrusted opaque display text that nothing parses. This arm is the LIVE path
+ * for a label change: it is an unsolicited broadcast, so a label set from another client reaches the
+ * sidebar here without a fresh list request.
  */
 export interface ConversationUpdatedPayload {
   id: string
@@ -2618,6 +2637,7 @@ export interface ConversationUpdatedPayload {
   name: string | null
   cwd: string
   last_used_at: string
+  workspace_label: string | null
 }
 
 /**

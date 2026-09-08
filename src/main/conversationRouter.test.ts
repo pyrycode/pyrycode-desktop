@@ -26,7 +26,8 @@ function row(id: string): ConversationSummary {
     is_archived: false,
     cwd: '/workspace',
     last_message_ts: '2026-09-05T00:00:00Z',
-    last_used_at: '2026-09-05T00:00:00Z'
+    last_used_at: '2026-09-05T00:00:00Z',
+    workspace_label: null
   }
 }
 
@@ -37,7 +38,14 @@ function listEvent(serverId: string | null, ...ids: string[]): StampedDaemonEven
 function createdEvent(serverId: string | null, id: string): StampedDaemonEvent {
   return {
     type: 'conversationCreated',
-    conversation: { id, is_promoted: false, cwd: '/workspace', name: null, last_used_at: '' },
+    conversation: {
+      id,
+      is_promoted: false,
+      cwd: '/workspace',
+      name: null,
+      last_used_at: '',
+      workspace_label: null
+    },
     serverId
   }
 }

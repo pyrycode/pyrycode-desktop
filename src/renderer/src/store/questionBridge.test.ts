@@ -214,7 +214,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
             is_archived: false,
             cwd: '/home/user/project',
             last_message_ts: '2026-07-08T00:00:00Z',
-            last_used_at: '2026-07-09T00:00:00Z'
+            last_used_at: '2026-07-09T00:00:00Z',
+            workspace_label: null
           }
         ]
       },
@@ -225,7 +226,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
           is_promoted: false,
           cwd: '/home/user/project',
           name: null,
-          last_used_at: '2026-07-09T00:00:00Z'
+          last_used_at: '2026-07-09T00:00:00Z',
+          workspace_label: null
         }
       },
       {
@@ -235,7 +237,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
           is_promoted: true,
           name: 'Renamed',
           cwd: '/home/user/project',
-          last_used_at: '2026-07-09T00:00:00Z'
+          last_used_at: '2026-07-09T00:00:00Z',
+          workspace_label: null
         }
       },
       { type: 'conversationDeleted', id: 'conv-2' },

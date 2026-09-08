@@ -44,7 +44,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 const WINDOW_TOKENS = 200_000

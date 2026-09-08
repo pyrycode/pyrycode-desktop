@@ -463,7 +463,8 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
             is_archived: false,
             cwd: '/home/user/project',
             last_message_ts: '2026-07-08T00:00:00Z',
-            last_used_at: '2026-07-09T00:00:00Z'
+            last_used_at: '2026-07-09T00:00:00Z',
+            workspace_label: null
           }
         ]
       },

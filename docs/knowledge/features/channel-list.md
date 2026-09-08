@@ -80,7 +80,8 @@ transport, or new store/wire code, so not security-sensitive.
 
 The wire `ConversationSummary` (`src/shared/wire/types.ts`) carries **no message text** — only
 `last_message_ts` (RFC3339), `id`, `name: string | null`, `is_promoted`, `is_archived`, `cwd`,
-`last_used_at`. The Figma design's "Recent discussions" rows show a 2-line message-body preview and
+`last_used_at`, and since [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
+`workspace_label: string | null` (§ Workspace grouping below). The Figma design's "Recent discussions" rows show a 2-line message-body preview and
 message-derived titles for unnamed discussions — neither is buildable from this wire shape. Adding the
 preview needs a daemon-side wire change first (a field on `conversations_read.go`'s
 `ConversationSummary`), then a desktop decode ([#139](conversation-list-fetch.md)) and store
@@ -250,7 +251,7 @@ list reorders. A unit test pins a sentinel server id appearing nowhere in the re
 No log line is added for the `unattributed` bucket: any useful form of one carries the row's `cwd`,
 name, or stamp, which ADR 0007's content-free rule and CLAUDE.md both forbid.
 
-### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
+### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703; the daemon-label preference added by [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287))
 
 Two pure exports, unit-tested without React: `workspaceLabelFor(cwd: string): string | null` —
 the last usable `/`-separated segment of `cwd`, found by walking segments from the end and
@@ -268,6 +269,39 @@ sentinel is already in the fallback bucket by the same rule that assigned it. Th
 labelled `UNKNOWN_WORKSPACE_LABEL = 'Unknown workspace'` and ordered by first appearance like any
 other group — not pinned last.
 
+**The group's *label* prefers the daemon's own name for the workspace; the *key* stays the raw
+`cwd`, and that split is load-bearing.** `ConversationSummary`/`ConversationCreatedPayload`/
+`ConversationUpdatedPayload` carry `workspace_label: string | null` (daemon pyrycode#2208) — the
+name a workspace has been given on the daemon, stored against the exact `cwd` string, so every row
+of one group agrees. `groupByWorkspace` reads it off the group's *first* row only, when non-null:
+the `Map` sets a group's label just once, at creation, so "the first row's label" falls out of the
+existing structure for free, and reading it is correct rather than merely cheap, since the daemon
+holds one label per `cwd`. `null` on the first row falls back to `workspaceLabelFor(cwd)` exactly
+as it did before #1287. The `key` a group is created and looked up under never changes — still
+`workspaceLabelFor(row.cwd) === null ? UNKNOWN_WORKSPACE_KEY : row.cwd`, computed from `cwd` alone.
+Keying on the label instead would be a security regression, not just a display one: `WorkspaceRow`'s
+trailing create-plus control (below) sends `group.key` back *out* to the daemon as a
+`create_conversation` `cwd`, so a daemon-asserted workspace *name* would make the round trip out
+again as a *directory path*. A unit test pins `key === row.cwd` on a labelled row specifically, so a
+future "the label is the nicer identity" refactor reddens instead of shipping.
+
+Two rules narrow the label further. The **fallback group** (`UNKNOWN_WORKSPACE_KEY`) is always
+labelled `UNKNOWN_WORKSPACE_LABEL`, whatever its rows carry — it's a bucket, not a workspace, and
+every row with an unusable `cwd` collapses into it regardless of origin, so naming it after one
+member would assert something false about the others. And a **non-null label is used verbatim,
+blank included** — no trim, no blank-to-fallback guard, the deliberate opposite of `titleFor`. The
+label is state a user set from some other client; silently rewriting a blank one here would make
+this desktop disagree with every other client about the workspace's name. Rejecting a blank belongs
+to the verbs that *set* one (#1288/#1289) and the dialog that sends it (#1180) — none built yet —
+where it can be refused to the user's face instead.
+
+The label reaches the sidebar over the existing `list_conversations` read path and the existing
+`conversation_created`/`conversation_updated` bridges — no new store, no new IPC arm, no
+`localStorage`. A label changed from another client is *not* read off the `conversation_updated`
+broadcast's own payload, despite that payload carrying the field: [`shouldRefreshList`](conversation-list-store.md)
+is and stays id/content-blind, so the broadcast only triggers a fresh `list_conversations` request,
+and the changed label rides in on that reply's rows like any other field.
+
 `renderBody` wraps each tree's existing `.map` one level, inside a keyed `Fragment` (the shorthand
 `<>` cannot carry a key), still inside the same `length > 0` gate that already decides the host
 row and section header — so the zero-row-renders-nothing invariant holds with no new condition.
@@ -275,11 +309,13 @@ row and section header — so the zero-row-renders-nothing invariant holds with 
 `.channel-list__row`'s ancestry is unchanged. `WorkspaceRow` is `HostRow`'s structural twin one
 indent deeper (28px, same type), differing only in the 8px deeper left inset that shows the
 nesting, and it's the file's first component whose visible label is untrusted daemon text rather
-than a client-owned constant — it ellipsizes (the `.channel-list__title` treatment) where the host
-label, a six-character constant, does not need to. The label reaches the DOM only as an
-auto-escaped React child, never an attribute (CLAUDE.md 2026-08-20, #696's MUST FIX). See
-[#703 codebase notes](../codebase/703.md) for the full fallback-key trap and selector-hazard
-writeup.
+than a client-owned constant — since #1287 one of *two* possible daemon strings (the workspace's
+own daemon-held name, or failing that the `cwd` segment), chosen by `groupByWorkspace` before this
+component ever sees it, so the render side needs no branch for which one arrived — it ellipsizes
+(the `.channel-list__title` treatment) where the host label, a six-character constant, does not
+need to. The label reaches the DOM only as an auto-escaped React child, never an attribute (CLAUDE.md
+2026-08-20, #696's MUST FIX). See [#703 codebase notes](../codebase/703.md) for the full
+fallback-key trap and selector-hazard writeup.
 
 Since [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
 and [#1179](create-channel-dialog.md), each `WorkspaceRow` optionally draws a trailing create
@@ -288,6 +324,20 @@ channel" plus opening a dialog on a Channels-tree row — withheld on both trees
 `UNKNOWN_WORKSPACE_KEY` fallback group alone. A channel is no longer only reachable by [promoting
 an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
 for the direct path.
+
+**Fixture note.** `conversationStateFake` (`e2e/fixtures/conversationStateFake.ts`) has to hold one
+label per `cwd`, the same invariant the daemon holds, or the suite's two-trees idiom lies:
+`workspace-collapse.spec.ts`'s pattern of seeding one promoted row and minting a second, unpromoted
+one with the FAB puts both rows under the *same* `cwd` (`DEFAULT_CREATED_CWD` equals the default
+seed's `/fake/workspace`), and the two trees group independently — so a fake minting a `null` label
+for the created row would show the daemon name in one tree and the folder segment in the other,
+reddening a spec against correct production code. The fake derives a `Map<string, string | null>`
+from its seeded rows at factory time rather than taking a label as a fixture option (an option would
+let a spec seed a state — two rows of one `cwd` disagreeing — the daemon cannot produce); its
+`promote_conversation` and `change_workspace` arms, which both reassign a row's `cwd`, re-resolve the
+label from that map too, so a row moved between workspaces takes its new workspace's name rather
+than carrying the old one. [`e2e/workspace-label.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
+is the spec this fixes for, and rides the same both-trees idiom to prove it.
 
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
@@ -454,6 +504,13 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#1070 spec](../../specs/architecture/1070-sidebar-grouped-by-server.md) — the server-then-workspace
   grouping design: `groupByServer`'s join-direction security property, the `Map`-not-`Record`
   reasoning, the unattributed-row decision, and the 2026-09-06 always-render-both-sections ruling.
+- [#1287 spec](../../specs/architecture/1287-workspace-row-daemon-label.md) — the daemon-held
+  workspace label: `workspace_label` on the three inbound payloads, the label/key source split as a
+  security property, the fallback-group and verbatim-blank-label rulings, and the `conversationStateFake`
+  one-label-per-`cwd` fixture model § Workspace grouping above now describes.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #716 (same-last-segment workspace label ambiguity), a possible follow-up to
-  suppress the idle dot's announced label (see [the row's status dot](channel-list-status-dot.md)).
+  (per-row open), #716 (same-last-segment workspace label ambiguity — narrower since
+  [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287): two workspaces can now be told
+  apart by giving them distinct daemon labels, though the label is not yet settable by this client,
+  #1288/#1289/#1180), a possible follow-up to suppress the idle dot's announced label (see [the row's
+  status dot](channel-list-status-dot.md)).

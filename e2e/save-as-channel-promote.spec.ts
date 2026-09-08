@@ -55,7 +55,8 @@ const SCRATCH_SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 const DEDICATED_SEED: ConversationSummary = {
@@ -65,7 +66,8 @@ const DEDICATED_SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 /**

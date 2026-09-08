@@ -64,7 +64,8 @@ const DEFAULT_SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null,
 }
 
 export interface ConversationStateFakeOptions {
@@ -98,6 +99,24 @@ export function conversationStateFake(
   const list: ConversationSummary[] = (options.conversations ?? [DEFAULT_SEED]).map((row) => ({
     ...row
   }))
+  // ONE LABEL PER `cwd`, exactly as the daemon holds it (#1287): the label is stored against the exact
+  // `cwd` string, so a row minted or MOVED into a workspace takes that workspace's name rather than
+  // inventing one. Derived from the seeded rows rather than taken as an option, so a spec cannot seed a
+  // state the daemon cannot produce (two rows of one `cwd` disagreeing).
+  //
+  // WITHOUT THIS THE TWO-TREES SETUP LIES. `workspace-collapse.spec.ts`'s idiom mints its second tree
+  // with the FAB, and the minted row's `cwd` is DEFAULT_CREATED_CWD — the SAME `/fake/workspace` the
+  // seed uses. A fake minting `null` there would render the daemon label in the Channels tree and the
+  // folder name in the Chats tree, reddening a spec against correct production code.
+  //
+  // A `Map`, not a `Record`: the keys are `cwd` strings, and a plain object resolves a `__proto__` key to
+  // `Object.prototype` (the `groupByServer` rule). Fixture-authored keys make that unreachable here; the
+  // `Map` is the free second fabric.
+  const labels = new Map<string, string | null>()
+  for (const row of list) {
+    if (!labels.has(row.cwd)) labels.set(row.cwd, row.workspace_label)
+  }
+  const labelFor = (cwd: string): string | null => labels.get(cwd) ?? null
   // The seeded recent-workspaces answer — read-only (no mutation verb touches it), so a plain const, not
   // the mutable `list`. Default `[]` = a valid loaded-empty `recent_workspaces_list` reply (#456).
   const recents: RecentWorkspace[] = options.recentWorkspaces ?? []
@@ -121,7 +140,8 @@ export function conversationStateFake(
           is_archived: false,
           cwd: payload.cwd ?? DEFAULT_CREATED_CWD,
           last_message_ts: FIXED_TS,
-          last_used_at: FIXED_TS
+          last_used_at: FIXED_TS,
+          workspace_label: labelFor(payload.cwd ?? DEFAULT_CREATED_CWD)
         }
         list.push(row)
         return [conversationCreatedFrame(row)]
@@ -158,6 +178,9 @@ export function conversationStateFake(
         row.is_promoted = true
         row.name = payload.name
         row.cwd = payload.cwd
+        // A promote can carry a DIFFERENT cwd, which moves the row between workspace groups — so its
+        // label is re-resolved from the new workspace rather than carried over from the old one.
+        row.workspace_label = labelFor(payload.cwd)
         return [conversationUpdatedFrame(row)]
       }
 
@@ -166,6 +189,7 @@ export function conversationStateFake(
         const row = findRow(list, payload.conversation_id)
         if (row === undefined) return []
         row.cwd = payload.cwd
+        row.workspace_label = labelFor(payload.cwd)
         return [conversationUpdatedFrame(row)]
       }
 
@@ -222,7 +246,7 @@ function recentWorkspacesListFrame(workspaces: RecentWorkspace[]): Uint8Array {
   })
 }
 
-/** `conversation_updated` BROADCAST — the 5-field ConversationUpdatedPayload (`name` before `cwd`,
+/** `conversation_updated` BROADCAST — the 6-field ConversationUpdatedPayload (`name` before `cwd`,
  *  deliberately WITHOUT is_archived / last_message_ts; the held row keeps those for the follow-up list).
  *  No `in_reply_to` — it is a broadcast. */
 function conversationUpdatedFrame(row: ConversationSummary): Uint8Array {
@@ -235,7 +259,8 @@ function conversationUpdatedFrame(row: ConversationSummary): Uint8Array {
       is_promoted: row.is_promoted,
       name: row.name,
       cwd: row.cwd,
-      last_used_at: row.last_used_at
+      last_used_at: row.last_used_at,
+      workspace_label: row.workspace_label
     } satisfies ConversationUpdatedPayload
   })
 }
@@ -252,7 +277,7 @@ function conversationDeletedFrame(id: string, inReplyTo: number): Uint8Array {
   })
 }
 
-/** `conversation_created` reply — the 5-field ConversationCreatedPayload (`cwd` before `name`, the
+/** `conversation_created` reply — the 6-field ConversationCreatedPayload (`cwd` before `name`, the
  *  intentional reorder vs. conversation_updated). */
 function conversationCreatedFrame(row: ConversationSummary): Uint8Array {
   return encodeEnvelope({
@@ -264,7 +289,8 @@ function conversationCreatedFrame(row: ConversationSummary): Uint8Array {
       is_promoted: row.is_promoted,
       cwd: row.cwd,
       name: row.name,
-      last_used_at: row.last_used_at
+      last_used_at: row.last_used_at,
+      workspace_label: row.workspace_label
     } satisfies ConversationCreatedPayload
   })
 }

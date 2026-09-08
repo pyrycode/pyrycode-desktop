@@ -28,6 +28,7 @@ const row = (over: Partial<ConversationSummary> = {}): ConversationSummary => ({
   cwd: '/home/pyry/project',
   last_message_ts: '2026-07-10T12:00:00Z',
   last_used_at: '2026-07-10T12:05:00Z',
+  workspace_label: null,
   ...over
 })
 
@@ -46,6 +47,7 @@ const updated = (over: Partial<ConversationUpdatedPayload> = {}): ConversationUp
   name: 'Design review',
   cwd: '/home/pyry/project',
   last_used_at: '2026-07-10T12:05:00Z',
+  workspace_label: null,
   ...over
 })
 
@@ -95,7 +97,7 @@ describe('shouldRefreshList', () => {
   it('returns true for a conversationCreated correlated reply (#515)', () => {
     const event: DaemonEvent = {
       type: 'conversationCreated',
-      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts', workspace_label: null }
     }
     expect(shouldRefreshList(event)).toBe(true)
   })
@@ -286,7 +288,7 @@ describe('subscribeConversations', () => {
 
     bridge.emit({
       type: 'conversationCreated',
-      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts', workspace_label: null }
     })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // The 5-field created payload is not a ConversationSummary (no is_archived, no last_message_ts), so
@@ -424,7 +426,7 @@ describe('subscribeConversations', () => {
     // The correlated created reply triggers exactly one re-request; it writes no rows itself.
     bridge.emit({
       type: 'conversationCreated',
-      conversation: { id: 'b', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+      conversation: { id: 'b', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts', workspace_label: null }
     })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a'])

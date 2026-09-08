@@ -31,6 +31,7 @@ function row(overrides: Partial<ConversationSummary> = {}): ConversationSummary 
     cwd: '/home/pyry/project',
     last_message_ts: '2026-08-21T12:00:00Z',
     last_used_at: '2026-08-21T12:00:00Z',
+    workspace_label: null,
     ...overrides
   }
 }
@@ -40,7 +41,8 @@ const created: ConversationCreatedPayload = {
   is_promoted: false,
   cwd: '/home/pyry/project',
   name: null,
-  last_used_at: '2026-08-21T12:00:00Z'
+  last_used_at: '2026-08-21T12:00:00Z',
+  workspace_label: null
 }
 
 const updated: ConversationUpdatedPayload = {
@@ -48,7 +50,8 @@ const updated: ConversationUpdatedPayload = {
   is_promoted: false,
   name: 'Renamed discussion',
   cwd: '/home/pyry/project',
-  last_used_at: '2026-08-21T12:00:00Z'
+  last_used_at: '2026-08-21T12:00:00Z',
+  workspace_label: null
 }
 
 // A fake onDaemonEvent that captures the listener and hands back an off spy — the bridge-test idiom. The

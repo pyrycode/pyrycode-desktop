@@ -55,7 +55,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 // Two seeded recent workspaces with DISTINCT paths where neither is a substring of the other, so a `hasText`

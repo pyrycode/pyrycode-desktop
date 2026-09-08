@@ -793,11 +793,13 @@ type BaseDaemonEvent =
   // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
   // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.
   // No token/key/raw frame — ConversationSummary carries only ids, a nullable title, two flags, a
-  // workspace path (opaque display text), and two timestamps.
+  // workspace path, a nullable workspace NAME (#1287's `workspace_label`), and two timestamps. The path
+  // and the name are both untrusted opaque display text; the name is not a path and nothing parses it.
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
   // The conversation-created arm (#241). Reuses the wire ConversationCreatedPayload verbatim (the
   // conversationsReceived / messageReceived precedent) — nothing to drop, no secret field: it carries
-  // an id, a flag, a nullable title, a workspace path, and a timestamp. Consumed by the render slice
+  // an id, a flag, a nullable title, a workspace path, a nullable workspace name (#1287's
+  // `workspace_label`), and a timestamp. Consumed by the render slice
   // (#242, which opens the new thread), not the session store, so every exhaustive consumer no-ops it.
   // `name` and `cwd` are UNTRUSTED daemon-supplied strings: the render slice #242 must render them as
   // plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but
@@ -805,12 +807,15 @@ type BaseDaemonEvent =
   | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
   // The conversation-updated arm (#273). Reuses the wire ConversationUpdatedPayload verbatim (the
   // conversationCreated precedent) — nothing to drop, no secret field: it carries an id, a flag, a
-  // nullable title, a workspace path, and a timestamp. Emitted from an UNSOLICITED daemon BROADCAST
+  // nullable title, a workspace path, a nullable workspace name (#1287's `workspace_label`), and a
+  // timestamp. Emitted from an UNSOLICITED daemon BROADCAST
   // (not correlated by in_reply_to). Consumed by the list-reflect slice (#275, which flips the row from
-  // discussion to channel), not the session store, so every exhaustive consumer no-ops it. `name` and
-  // `cwd` are UNTRUSTED daemon-supplied strings: the render/store slice #275 must render them as plain
-  // text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but the
-  // constraint is inherited here — do not drop this warning.
+  // discussion to channel), not the session store, so every exhaustive consumer no-ops it. `name`,
+  // `cwd` and `workspace_label` are UNTRUSTED daemon-supplied strings: the render/store slice #275 must
+  // render them as plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no
+  // DOM sink, but the constraint is inherited here — do not drop this warning. READ THE LIST AS CLOSED
+  // ONLY AS OF ITS LAST EDIT: #1287 added the third name to it, and a field left off a list that reads
+  // as exhaustive is how a "this one is trusted" assumption gets inherited by a later consumer.
   | { type: 'conversationUpdated'; conversation: ConversationUpdatedPayload }
   // The conversation-deleted arm (#375). Carries the BARE routing `id` (a fresh literal, not the wire
   // payload object): the sibling conversationUpdated reuses ConversationUpdatedPayload by reference

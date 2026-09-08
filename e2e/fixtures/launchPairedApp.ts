@@ -86,8 +86,9 @@ export const SEEDED_ROW: ConversationSummary = {
   is_promoted: false,
   is_archived: false,
   cwd: '/fake/workspace',
+  workspace_label: null,
   last_message_ts: '2026-07-07T12:00:00.000Z',
-  last_used_at: '2026-07-07T12:00:00.000Z'
+  last_used_at: '2026-07-07T12:00:00.000Z',
 }
 
 /**
@@ -109,8 +110,9 @@ export const SECOND_SEEDED_ROW: ConversationSummary = {
   is_promoted: false,
   is_archived: false,
   cwd: '/fake/workspace-2',
+  workspace_label: null,
   last_message_ts: '2026-07-07T12:00:00.000Z',
-  last_used_at: '2026-07-07T12:00:00.000Z'
+  last_used_at: '2026-07-07T12:00:00.000Z',
 }
 
 /**

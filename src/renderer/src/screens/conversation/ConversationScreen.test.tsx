@@ -3656,6 +3656,7 @@ function createdPayload(
     cwd: '/home/pyry/scratch',
     name: null,
     last_used_at: '2026-07-12T00:00:00Z',
+    workspace_label: null,
     ...overrides
   }
 }

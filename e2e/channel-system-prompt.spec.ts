@@ -42,7 +42,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 // What the daemon holds. 21 ASCII bytes.
@@ -106,7 +107,8 @@ function capturingSystemPromptFake(
             is_promoted: seed.is_promoted,
             name: seed.name,
             cwd: seed.cwd,
-            last_used_at: seed.last_used_at
+            last_used_at: seed.last_used_at,
+            workspace_label: seed.workspace_label
           } satisfies ConversationUpdatedPayload
         })
       ]

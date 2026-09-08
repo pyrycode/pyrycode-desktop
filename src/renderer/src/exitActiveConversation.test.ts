@@ -26,7 +26,8 @@ const conversation = (id: string): ConversationCreatedPayload => ({
   is_promoted: false,
   cwd: '/home/pyry/work',
   name: null,
-  last_used_at: '2026-08-20T09:00:00Z'
+  last_used_at: '2026-08-20T09:00:00Z',
+  workspace_label: null
 })
 
 const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message from A' }]

@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@shared/wire/types'
 import {
   UNNAMED_LABEL,
   UNKNOWN_WORKSPACE_LABEL,
+  UNKNOWN_WORKSPACE_KEY,
   titleFor,
   partitionByPromotion,
   partitionActive,
@@ -22,6 +23,7 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
     cwd: '/tmp',
     last_message_ts: '2026-01-15T12:00:00.000Z',
     last_used_at: '2026-01-15T12:00:00.000Z',
+    workspace_label: null,
     ...over
   }
 }
@@ -236,6 +238,79 @@ describe('groupByWorkspace', () => {
 
   it('returns an empty array for empty input', () => {
     expect(groupByWorkspace([])).toEqual([])
+  })
+
+  // --- #1287: the daemon-held workspace label is preferred over the folder name ---
+
+  it("labels a group with its FIRST row's non-null workspace_label (AC2)", () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/home/juhana/sb', workspace_label: 'Second Brain' }),
+      row({ id: 'b', cwd: '/home/juhana/sb', workspace_label: 'Second Brain' })
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].label).toBe('Second Brain')
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a', 'b'])
+  })
+
+  it('reads the FIRST row only — a later row disagreeing does not change the label (AC2)', () => {
+    // The daemon holds ONE label per cwd, so within a group the values agree and reading the first is how
+    // this says so. Pinned rather than left implicit: a "last wins" or "first non-null wins" refactor would
+    // pass every other test in this block and quietly change which of two disagreeing values is authoritative.
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/w/sb', workspace_label: 'Second Brain' }),
+      row({ id: 'b', cwd: '/w/sb', workspace_label: 'Something Else' }),
+      row({ id: 'c', cwd: '/w/sb', workspace_label: null })
+    ])
+    expect(groups.map((g) => g.label)).toEqual(['Second Brain'])
+  })
+
+  it('falls back to the folder segment when the first row carries null (AC2)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/home/juhana/sb', workspace_label: null }),
+      row({ id: 'b', cwd: '/home/juhana/sb', workspace_label: 'ignored — not the first row' })
+    ])
+    expect(groups.map((g) => g.label)).toEqual(['sb'])
+  })
+
+  it('keeps the group KEY the raw cwd even when a label is present (AC3)', () => {
+    // THE SECURITY-RELEVANT HALF, asserted on the key rather than on the label. The workspace row's plus
+    // sends this key back OUT as a create's `cwd` (ChannelList's CollapsibleWorkspaceGroup call site), so a
+    // key sourced from the label would send a daemon-asserted NAME to the daemon as a DIRECTORY PATH.
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/home/juhana/sb', workspace_label: 'Second Brain' })
+    ])
+    expect(groups.map((g) => g.key)).toEqual(['/home/juhana/sb'])
+  })
+
+  it('groups by cwd alone — differing labels never split a group, matching labels never merge one (AC3)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/w/one', workspace_label: 'Shared Name' }),
+      row({ id: 'b', cwd: '/w/two', workspace_label: 'Shared Name' }),
+      row({ id: 'c', cwd: '/w/one', workspace_label: 'A Different Name' })
+    ])
+    expect(groups.map((g) => g.key)).toEqual(['/w/one', '/w/two'])
+    expect(groups.map((g) => g.rows.map((r) => r.id))).toEqual([['a', 'c'], ['b']])
+  })
+
+  it('labels the unknown-workspace group with the constant WHATEVER its rows carry (AC2)', () => {
+    // That group is a BUCKET, not a workspace: every row with an unusable cwd collapses into it whatever
+    // its origin, so naming it after one member would assert something false about the others.
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '', workspace_label: 'Second Brain' }),
+      row({ id: 'b', cwd: '/', workspace_label: 'Another Label' })
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].key).toBe(UNKNOWN_WORKSPACE_KEY)
+    expect(groups[0].label).toBe(UNKNOWN_WORKSPACE_LABEL)
+  })
+
+  it('uses a blank workspace_label VERBATIM — the client normalises nothing', () => {
+    // Deliberate, and the opposite of `titleFor`'s blank guard. A label is state a user set from some
+    // client; rewriting a blank one locally would make this desktop disagree with mobile about what the
+    // workspace is called, silently and only on this machine. Rejecting a blank belongs to the verbs that
+    // SET one (#1288 / #1289) and to the dialog that sends it (#1180), where it can be refused to the user.
+    const groups = groupByWorkspace([row({ id: 'a', cwd: '/w/sb', workspace_label: '   ' })])
+    expect(groups.map((g) => g.label)).toEqual(['   '])
   })
 })
 

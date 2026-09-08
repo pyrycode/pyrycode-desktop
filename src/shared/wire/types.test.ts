@@ -752,22 +752,25 @@ describe('conversations-write wire vocabulary (#241)', () => {
     })
   })
 
-  it('shapes ConversationCreatedPayload as its OWN 5 fields — NOT a ConversationSummary (spec #274)', () => {
+  it('shapes ConversationCreatedPayload as its OWN 6 fields — NOT a ConversationSummary (spec #274)', () => {
     // The daemon deliberately omits is_archived + last_message_ts on a create reply, so this is a
-    // dedicated 5-field shape, not a reuse of the 7-field ConversationSummary. name is string | null.
+    // dedicated 6-field shape, not a reuse of the 8-field ConversationSummary. name is string | null,
+    // and so is workspace_label (#1287) — both required-present, neither ever absent on the wire.
     const payload: ConversationCreatedPayload = {
       id: 'conv-9',
       is_promoted: false,
       cwd: '/tmp/scratch',
       name: null,
-      last_used_at: '2026-07-10T00:00:00Z'
+      last_used_at: '2026-07-10T00:00:00Z',
+      workspace_label: null
     }
     expect(payload).toEqual({
       id: 'conv-9',
       is_promoted: false,
       cwd: '/tmp/scratch',
       name: null,
-      last_used_at: '2026-07-10T00:00:00Z'
+      last_used_at: '2026-07-10T00:00:00Z',
+      workspace_label: null
     })
     // The two fields the daemon excludes on a create reply are absent (no ConversationSummary reuse).
     expect(payload).not.toHaveProperty('is_archived')
@@ -806,7 +809,7 @@ describe('conversations-write promote/update wire vocabulary (#273)', () => {
     expect(Object.keys(payload)).toEqual(['conversation_id', 'name', 'cwd'])
   })
 
-  it('shapes ConversationUpdatedPayload as { id, is_promoted, name, cwd, last_used_at } — name BEFORE cwd', () => {
+  it('shapes ConversationUpdatedPayload as { id, is_promoted, name, cwd, last_used_at, workspace_label } — name BEFORE cwd', () => {
     // The reply's own 5-field shape. `name` is `string | null` (a literal null, never absent — the
     // daemon uses *string WITHOUT omitempty), exactly like ConversationSummary.name. Field order
     // deliberately places `name` before `cwd` (spec #274), unlike ConversationCreatedPayload.
@@ -815,17 +818,27 @@ describe('conversations-write promote/update wire vocabulary (#273)', () => {
       is_promoted: true,
       name: null,
       cwd: '/home/user/project',
-      last_used_at: '2026-07-10T00:00:00Z'
+      last_used_at: '2026-07-10T00:00:00Z',
+      workspace_label: null
     }
     expect(payload).toEqual({
       id: 'conv-9',
       is_promoted: true,
       name: null,
       cwd: '/home/user/project',
-      last_used_at: '2026-07-10T00:00:00Z'
+      last_used_at: '2026-07-10T00:00:00Z',
+      workspace_label: null
     })
-    // Pin the no-drift wire order: name comes before cwd (the intentional reordering vs. created).
-    expect(Object.keys(payload)).toEqual(['id', 'is_promoted', 'name', 'cwd', 'last_used_at'])
+    // Pin the no-drift wire order: name comes before cwd (the intentional reordering vs. created), with
+    // #1287's workspace_label appended last, matching the daemon's own append.
+    expect(Object.keys(payload)).toEqual([
+      'id',
+      'is_promoted',
+      'name',
+      'cwd',
+      'last_used_at',
+      'workspace_label'
+    ])
 
     // A populated name is an equally valid value (a named channel).
     const named: ConversationUpdatedPayload = { ...payload, name: 'weekly sync' }

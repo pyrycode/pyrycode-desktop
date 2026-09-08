@@ -105,7 +105,8 @@ describe('subscribeQueue', () => {
     is_archived: false,
     cwd: '/home/pyry/project',
     last_message_ts: '2026-07-10T12:00:00Z',
-    last_used_at: '2026-07-10T12:05:00Z'
+    last_used_at: '2026-07-10T12:05:00Z',
+    workspace_label: null
   })
 
   /**

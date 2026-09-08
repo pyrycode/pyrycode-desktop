@@ -50,7 +50,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: '2026-07-07T12:00:00.000Z',
-  last_used_at: '2026-07-07T12:00:00.000Z'
+  last_used_at: '2026-07-07T12:00:00.000Z',
+  workspace_label: null
 }
 
 // The FAB-created row's displayed title: it is minted unnamed (name: null) and #452 never renames it, so

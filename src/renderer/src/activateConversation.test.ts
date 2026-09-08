@@ -44,7 +44,8 @@ const conversation = (id: string): ConversationCreatedPayload => ({
   is_promoted: false,
   cwd: '/home/pyry/work',
   name: null,
-  last_used_at: '2026-07-30T09:00:00Z'
+  last_used_at: '2026-07-30T09:00:00Z',
+  workspace_label: null
 })
 
 const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message from A' }]
@@ -332,7 +333,8 @@ describe('activateConversation', () => {
       is_archived: false,
       cwd: '/home/pyry/work',
       last_message_ts: '2026-07-30T09:05:00Z',
-      last_used_at: '2026-07-30T09:00:00Z'
+      last_used_at: '2026-07-30T09:00:00Z',
+      workspace_label: null
     }
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const timeline = createTimelineStore()

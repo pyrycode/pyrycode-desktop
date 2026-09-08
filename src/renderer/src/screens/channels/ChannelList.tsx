@@ -736,19 +736,25 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 // type, differing by the 8px deeper left inset that shows the nesting (channels.css) — and, since #704,
 // by being a control rather than a plain row.
 //
-// Unlike the host row's compile-time constant, `label` is DAEMON-derived — the last segment of an
-// untrusted `cwd`, derived by `workspaceLabelFor`. It goes in as an auto-escaped React CHILD and nowhere
-// else: never `title=`, never any other attribute, never a URL, never a filename or a lookup path
-// (CLAUDE.md 2026-08-20; #696's security review rejected `title={daemonText}` as a MUST FIX). Being
-// unbounded untrusted text it also ellipsizes, which the host row's six-character constant does not need.
+// Unlike the host row's compile-time constant, `label` is DAEMON-derived. Since #1287 it has TWO possible
+// sources, and both are untrusted daemon text: the workspace's daemon-held NAME (`workspace_label`,
+// preferred when non-null) or, failing that, the last segment of an untrusted `cwd` derived by
+// `workspaceLabelFor`. Which one arrived is invisible here on purpose — `groupByWorkspace` resolves it and
+// this row renders a `string` — so the handling below covers both and needs no branch. It goes in as an
+// auto-escaped React CHILD and nowhere else: never `title=`, never any other attribute, never a URL, never
+// a filename or a lookup path (CLAUDE.md 2026-08-20; #696's security review rejected `title={daemonText}`
+// as a MUST FIX). Being unbounded untrusted text it also ellipsizes, which the host row's six-character
+// constant does not need.
 //
 // The class names share no token — and no substring — with `channel-list__row`, `__row-open`,
 // `__section-header` or `__host`: Playwright locators run in strict mode, so an element JOINING an
 // existing locator's match set strict-violates rather than failing an assertion, and
-// `launchPairedApp.ts:224` clicks an unfiltered `.channel-list__row-open` that 28 specs ride. The text
+// `launchPairedApp`'s single unfiltered `.channel-list__row-open` click is ridden by 28 specs. The text
 // guard is the other half and is fixture-decided here rather than constant-decided: every fake fixture
-// seeds `cwd: '/fake/workspace'`, so the default tier renders the literal "workspace", which equals none
-// of the suite's `exact: true` strings and carries none of the classes its `hasText` locators scope to.
+// seeds `cwd: '/fake/workspace'` AND a null `workspace_label`, so the default tier still renders the
+// literal "workspace", which equals none of the suite's `exact: true` strings and carries none of the
+// classes its `hasText` locators scope to. A fixture seeding a non-null label opts that spec out of the
+// guard and owns picking a string with the same property — `workspace-label.spec.ts` is the one that does.
 //
 // #704 made the row the DISCLOSURE CONTROL for its group — a real <button> rather than a <div onClick>,
 // so keyboard activation (Enter and Space) and screen-reader semantics come for free rather than being
@@ -756,7 +762,9 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 // as written, and four sinks a disclosure control invites are declined ON PURPOSE, each a MUST FIX if it
 // ever appears here — the same four ConversationScreen.tsx:657-668 declines for the tool row, recurring
 // here sourced from the workspace label and from `group.key`:
-//   - NO aria-label. `Collapse ${label}` would interpolate daemon text into an ATTRIBUTE. The accessible
+//   - NO aria-label. `Collapse ${label}` would interpolate daemon text into an ATTRIBUTE — since #1287
+//     that is a daemon-held workspace NAME as readily as a path segment; the decline is unchanged and now
+//     covers a second string. The accessible
 //     name already comes from the text child plus aria-expanded — a screen reader announces
 //     "second-brain, button, expanded", with the glyph aria-hidden and adding nothing to it.
 //   - NO aria-controls / id pair. The APG disclosure pattern invites it and the obvious id source is

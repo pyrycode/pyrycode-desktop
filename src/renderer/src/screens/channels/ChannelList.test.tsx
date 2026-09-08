@@ -100,6 +100,7 @@ function row(over: Partial<SidebarRow>): SidebarRow {
     cwd: '/tmp',
     last_message_ts: isoAgo(5 * 60_000),
     last_used_at: isoAgo(5 * 60_000),
+    workspace_label: null,
     serverId: DEFAULT_SERVER,
     ...over
   }
@@ -955,6 +956,58 @@ describe('ChannelListView', () => {
       const markup = render([row({ id: 'd1', name: 'x', cwd: '/' })])
       expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
       expect(markup).toContain('x')
+    })
+
+    // --- #1287: the daemon-held workspace label reaches the render, in both trees ---
+
+    it("renders the daemon's workspace_label instead of the folder name, in BOTH trees (AC2)", () => {
+      // Read back out of the render rather than restated. The negative half is what gives this teeth:
+      // without it the assertion would pass against a build that ignored the field, since the folder
+      // name is a string too. Both trees, because they are grouped separately and a fix applied in
+      // `renderBody` rather than in `groupByWorkspace` could reach only one of them.
+      const markup = render([
+        row({ id: 'c1', is_promoted: true, cwd: '/home/me/sb', workspace_label: 'Second Brain' }),
+        row({ id: 'd1', is_promoted: false, cwd: '/home/me/sb', workspace_label: 'Second Brain' })
+      ])
+      expect(workspaceLabelsIn(markup)).toEqual(['Second Brain', 'Second Brain'])
+      expect(markup).not.toContain('>sb<')
+    })
+
+    it('falls back to the folder name for a null label, and mixes the two sources per group (AC2)', () => {
+      const markup = render([
+        row({ id: 'c1', is_promoted: true, cwd: '/home/me/sb', workspace_label: 'Second Brain' }),
+        row({ id: 'c2', is_promoted: true, cwd: '/home/me/alpha', workspace_label: null })
+      ])
+      expect(workspaceLabelsIn(markup)).toEqual(['Second Brain', 'alpha'])
+    })
+
+    it('escapes a hostile workspace_label as TEXT and never lets it reach an attribute', () => {
+      // The #703 escaping test's twin for the second daemon string this row now renders. Both halves
+      // matter: escaped-as-text proves the auto-escaped-child claim rather than asserting it in prose,
+      // and the tag-scoped sweep proves the label did not additionally leak into `title=`/`aria-label`
+      // — the sink #696's security review made a MUST FIX, which #1287 must not reopen from a new source.
+      const hostile = '<img src=x onerror=boom>'
+      const markup = render([
+        row({ id: 'd1', name: 'x', cwd: '/home/me/alpha', workspace_label: hostile })
+      ])
+      expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
+      expect(markup).not.toContain(hostile)
+      for (const tag of workspaceRowTagsIn(markup)) {
+        expect(tag).not.toContain('title=')
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('boom')
+      }
+    })
+
+    it('ignores a label on the fallback group — the bucket keeps its constant (AC2)', () => {
+      // Every unusable-cwd row collapses into ONE group whatever its origin, so naming it after one
+      // member would assert something false about the others.
+      const markup = render([
+        row({ id: 'd1', name: 'x', cwd: '/', workspace_label: 'Second Brain' }),
+        row({ id: 'd2', name: 'y', cwd: '', workspace_label: 'Another Label' })
+      ])
+      expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
+      expect(markup).not.toContain('Second Brain')
     })
   })
 

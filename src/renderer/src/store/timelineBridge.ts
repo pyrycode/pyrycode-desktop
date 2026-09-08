@@ -292,6 +292,7 @@ export function translateTimelineEvent(
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'conversationCreateRejected':
     case 'workspaceUpdated':
     case 'modalShown':
     case 'modalDismissed':
@@ -312,9 +313,11 @@ export function translateTimelineEvent(
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
       // queue store (queueState), the #376 list-reflect slice (conversationDeleted), the #382
       // recent-workspaces store (recentWorkspacesReceived), the #157 Create-folder dialog
-      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), and the #1288
+      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), the #1308 Add
+      // workspace dialog (conversationCreateRejected — dormant, no consumer built yet), and the #1288
       // conversation-list refresh trigger (workspaceUpdated) consume
-      // these — not the timeline store. sessionSettingsUpdated, sessionSettingsRejected, and
+      // these — not the timeline store. A refused chat-create is not a turn-stream item either: it
+      // reports that a conversation never came into being, so there is no thread for it to draw in. sessionSettingsUpdated, sessionSettingsRejected, and
       // modalAnswerRejected are NOT timeline items — unlike turnState and, since #286,
       // sessionTransition, none drives a timeline row. queueState is deliberately in this null group:
       // `queue_state` is daemon STATE, not a turn-stream item (#720), so it is NOT folded into

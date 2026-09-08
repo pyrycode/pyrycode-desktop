@@ -248,6 +248,9 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
       },
       { type: 'workspaceFolderCreated', path: '/home/user/project/new' },
       { type: 'workspaceFolderRejected' },
+      // chat-create rejection (#1307): its consumer is #1308's Add workspace dialog, not the question
+      // store — a refused chat-create is not claude asking the operator to choose.
+      { type: 'conversationCreateRejected' },
       {
         type: 'sessionTransition',
         conversationId: 'conv-transition',
@@ -395,8 +398,8 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 43 union arms minus the 3 owned above.
-    expect(others).toHaveLength(40)
+    // 44 union arms minus the 3 owned above.
+    expect(others).toHaveLength(41)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

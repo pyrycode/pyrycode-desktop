@@ -151,6 +151,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'conversationCreateRejected':
     case 'workspaceUpdated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
@@ -176,7 +177,9 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'historyRequestFailed':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
-      // these — not the question store.
+      // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
+      // has no store at all yet: its consumer is #1308's Add workspace dialog, so its no-op here is
+      // DORMANT rather than permanent, and a refused chat-create is not an ask under any reading.
       //
       // The three MODAL arms are the ones to be deliberate about, because a reader arriving from that
       // family is most tempted to route them here: a modal is a PERMISSION PROMPT gating an action

@@ -169,6 +169,14 @@ a table entry in each of `modalBridge.test.ts`, `timelineBridge.test.ts`, `quest
 2. Where in the correlation chain does the new check go? Resolved: immediately after `pendingCreateFolders`,
    its nearest sibling in shape. Order is immaterial to correctness — an envelope id is minted once.
 
+## Revisions
+
+**2026-09-08 (implementation).** One addition the Testing strategy did not foresee: `questionBridge.test.ts`
+asserts a COUNT over its no-op table (`toHaveLength(40)`, "43 union arms minus the 3 owned"), so adding the
+arm reddens that pin as well as needing a table entry. Both were updated (41 / 44). No design change — the
+pin is doing exactly its job, catching an arm that could otherwise be dropped from the table unnoticed. The
+other three bridges' tests carry no such count.
+
 ## Security review
 
 **Verdict:** PASS

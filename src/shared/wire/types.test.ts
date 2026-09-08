@@ -10,6 +10,7 @@ import {
 } from './types'
 import type {
   EnvelopeType,
+  WorkspaceUpdatedPayload,
   DebugBundleChunkPayload,
   DebugBundleDonePayload,
   AssistantDeltaPayload,
@@ -779,6 +780,29 @@ describe('conversations-write wire vocabulary (#241)', () => {
     // A populated name is an equally valid value (a named conversation).
     const named: ConversationCreatedPayload = { ...payload, name: 'design review' }
     expect(named.name).toBe('design review')
+  })
+})
+
+describe('workspace_updated wire vocabulary (#1288)', () => {
+  it('admits the workspace_updated envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const updated: EnvelopeType = 'workspace_updated'
+    expect(updated).toBe('workspace_updated')
+  })
+
+  it('shapes WorkspaceUpdatedPayload as { path, label } — path REQUIRED, label REQUIRED but NULLABLE', () => {
+    // The two fields have deliberately different nullability. `path` names the workspace and is a plain
+    // value-string; `label` mirrors ConversationUpdatedPayload.workspace_label (`*string` with no
+    // `omitempty`), so a cleared label is a literal `null` and never an absent key.
+    const named: WorkspaceUpdatedPayload = { path: '/home/user/projects/app', label: 'Second Brain' }
+    expect(named.label).toBe('Second Brain')
+
+    const cleared: WorkspaceUpdatedPayload = { path: '/home/user/projects/app', label: null }
+    expect(cleared.label).toBeNull()
+
+    // An EMPTY label is a value on the wire, not an absence — nothing may collapse it to null.
+    const empty: WorkspaceUpdatedPayload = { path: '/home/user/projects/app', label: '' }
+    expect(empty.label).toBe('')
   })
 })
 

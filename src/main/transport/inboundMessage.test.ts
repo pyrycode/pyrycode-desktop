@@ -213,6 +213,19 @@ function encodeConversationDeleted(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 20, type: 'conversation_deleted', ts: FIXED_TS, payload })
 }
 
+/** A `workspace_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#1288). Takes an
+ *  optional `in_reply_to`: the daemon correlates this frame to whoever asked for the rename and pushes it
+ *  unsolicited to everyone else, so BOTH shapes are real traffic and both must decode identically. */
+function encodeWorkspaceUpdated(payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 23,
+    type: 'workspace_updated',
+    ts: FIXED_TS,
+    ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }),
+    payload
+  })
+}
+
 /** A `workspace_folder_created` envelope's plaintext bytes, wrapping an arbitrary payload (#381). */
 function encodeWorkspaceFolderCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 21, type: 'workspace_folder_created', ts: FIXED_TS, payload })
@@ -859,6 +872,11 @@ const DELETED = { id: 'conv-9' }
 /** A well-formed workspace_folder_created reply — a single required `path`, the created folder (#381).
  *  `path` is the daemon-side canonical path; a remote, opaque display string never resolved locally. */
 const FOLDER_CREATED = { path: '/home/user/projects/new-app' }
+
+/** A well-formed workspace_updated broadcast — the renamed workspace and its new label (#1288). Both
+ *  fields are untrusted daemon text: `path` a REMOTE path never resolved locally (the FOLDER_CREATED
+ *  posture), `label` the operator-chosen workspace name. */
+const WORKSPACE_UPDATED = { path: '/home/user/projects/app', label: 'Second Brain' }
 
 /** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254),
  *  carrying the routing key the daemon stamps on every transition (#1192). */
@@ -1993,6 +2011,128 @@ describe('parseInboundMessage — workspace_folder_created fail-closed (#381, AC
         type: 'workspace_folder_created',
         ts: FIXED_TS,
         payload: { path: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — workspace_updated recognition (#1288, additive)', () => {
+  it('narrows a workspace_updated broadcast into { kind: workspace-updated } with both fields', () => {
+    expect(parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED))).toEqual({
+      kind: 'workspace-updated',
+      workspaceUpdated: WORKSPACE_UPDATED
+    })
+  })
+
+  it('decodes IDENTICALLY with and without in_reply_to (AC1)', () => {
+    // The daemon correlates this frame to the client that asked for the rename and pushes it unsolicited
+    // to every other one. The arm never reads `Envelope.in_reply_to`, so a correlated frame and an
+    // unsolicited one produce the same value — no `inReplyTo` handle rides the kind, deliberately: the
+    // outbound verb (#1289) learns the rename landed from the re-listed rows like everyone else, so a
+    // handle here would be a match key nothing correlates on.
+    const correlated = parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED, 77))
+    const unsolicited = parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED))
+    expect(correlated).toEqual(unsolicited)
+    expect(correlated).toEqual({ kind: 'workspace-updated', workspaceUpdated: WORKSPACE_UPDATED })
+  })
+
+  it('preserves a null label as the VALUE null — a workspace whose label was cleared', () => {
+    const cleared = { path: WORKSPACE_UPDATED.path, label: null }
+    expect(parseInboundMessage(encodeWorkspaceUpdated(cleared))).toEqual({
+      kind: 'workspace-updated',
+      workspaceUpdated: cleared
+    })
+  })
+
+  it('accepts an empty-string label — a value on the wire, not an absence', () => {
+    // requireStringOrNull polices TYPE, not emptiness, exactly as ConversationUpdatedPayload's
+    // `workspace_label` does. A client-invented emptiness check here would fail-close valid traffic.
+    const empty = { path: WORKSPACE_UPDATED.path, label: '' }
+    expect(parseInboundMessage(encodeWorkspaceUpdated(empty))).toEqual({
+      kind: 'workspace-updated',
+      workspaceUpdated: empty
+    })
+  })
+
+  it('drops unknown server keys, keeping only the fresh two-field object (forward-compat)', () => {
+    const withExtras = { ...WORKSPACE_UPDATED, conversation_id: 'conv-9', cwd: '/elsewhere' }
+    expect(parseInboundMessage(encodeWorkspaceUpdated(withExtras))).toEqual({
+      kind: 'workspace-updated',
+      workspaceUpdated: WORKSPACE_UPDATED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — workspace_updated fail-closed (#1288, AC1)', () => {
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeWorkspaceUpdated('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeWorkspaceUpdated(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeWorkspaceUpdated(null))).toThrow(WireDecodeError)
+  })
+
+  it('throws when path is missing or non-string', () => {
+    const bad: unknown[] = [
+      { label: 'Second Brain' }, // path absent
+      { path: undefined, label: null },
+      { path: 42, label: null },
+      { path: null, label: null }, // path is NOT nullable — only `label` is
+      { path: {}, label: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeWorkspaceUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when label is missing or neither string nor null', () => {
+    // A MISSING key is an absence and fails closed; a literal `null` is a value and does not. That
+    // separation is what makes "the label was cleared" distinguishable from "the frame is truncated".
+    const bad: unknown[] = [
+      { path: '/home/user/projects/app' }, // label absent
+      { path: '/home/user/projects/app', label: undefined },
+      { path: '/home/user/projects/app', label: 42 },
+      { path: '/home/user/projects/app', label: {} },
+      { path: '/home/user/projects/app', label: ['Second Brain'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeWorkspaceUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('never echoes path or label in the failure message — the category only (AC1)', () => {
+    const SECRET_PATH = '/home/secret-user/projects/secret-app'
+    const SECRET_LABEL = 'secret-workspace-label'
+    const cases: unknown[] = [
+      { path: SECRET_PATH, label: 42 },
+      { path: SECRET_PATH, label: { name: SECRET_LABEL } },
+      { path: 42, label: SECRET_LABEL }
+    ]
+    for (const payload of cases) {
+      try {
+        parseInboundMessage(encodeWorkspaceUpdated(payload))
+        expect.unreachable('expected a WireDecodeError')
+      } catch (error) {
+        const message = (error as Error).message
+        expect(message).not.toContain(SECRET_PATH)
+        expect(message).not.toContain(SECRET_LABEL)
+        // The field NAME is a client-owned constant and may appear; the field VALUE may not.
+        expect(message).toMatch(/^(missing required field: (path|label)|malformed workspace_updated payload)$/)
+      }
+    }
+  })
+
+  it('throws on an oversized workspace_updated plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 23,
+        type: 'workspace_updated',
+        ts: FIXED_TS,
+        payload: { path: 'x'.repeat(MAX_PLAINTEXT_BYTES), label: null }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -6961,6 +7101,41 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() => parseInboundMessage(encodeWorkspaceFolderCreated({ path: 42 }), log)).toThrow(
       WireDecodeError
     )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a workspace_updated content-free, never the path or the label, and no count (#1288)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_PATH = '/home/secret-user/projects/secret-app'
+    const SECRET_LABEL = 'secret-workspace-label'
+    const plaintext = encodeWorkspaceUpdated({ path: SECRET_PATH, label: SECRET_LABEL })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // A client-owned literal written in the arm, never the peer's `type` string.
+    expect(record.code).toBe('workspace_updated')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no `path`, no `label`, and NO `count` (the
+    // workspace_folder_created posture).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_PATH)
+    expect(lines[0]).not.toContain(SECRET_LABEL)
+  })
+
+  it('does NOT log on a malformed workspace_updated throw path (#1288)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeWorkspaceUpdated({ path: 42 }), log)).toThrow(
+      WireDecodeError
+    )
+    // The `label` half of the same rule: a frame that fails on the SECOND field must leave no record
+    // either — narrowing runs before the log, so neither reject branch reaches a sink.
+    expect(() =>
+      parseInboundMessage(encodeWorkspaceUpdated({ path: '/home/user/app', label: 42 }), log)
+    ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

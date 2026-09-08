@@ -122,6 +122,12 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // rejection, not the session store. Present only because the assertNever guard below makes a new arm
       // a compile error (the workspaceFolderCreated-is-a-no-op precedent).
       return null
+    case 'workspaceUpdated':
+      // No session-store action: the conversation-list refresh trigger (#1288, conversationListBridge's
+      // shouldRefreshList) re-requests the list so the renamed workspace's label lands, not the session
+      // store. Present only because the assertNever guard below makes a new arm a compile error (the
+      // workspaceFolderRejected-is-a-no-op precedent).
+      return null
     case 'notificationActivated':
       // No session-store action: the notificationActivatedBridge (#393) consumes the click and drives the
       // paired `open` nav, not the session store. Present only because the assertNever guard below makes a

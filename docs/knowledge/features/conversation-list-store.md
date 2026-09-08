@@ -246,16 +246,17 @@ requestConversationList(sendCommand: (c: RendererCommand) => void): void
 subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
 // onDaemonEvent(event => {
 //   const list = translateConversationsEvent(event); if (list !== null) setConversations(list, originOf(event))
-//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376, widened #515
+//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376, widened #515, widened #1288
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
 
 shouldRefreshList(event: DaemonEvent): boolean
 // event.type === 'conversationUpdated' || event.type === 'conversationDeleted' ||
-// event.type === 'conversationCreated' — a plain boolean, not a type guard: the payload
-// (id/name/cwd) is never consulted (#275, widened #376, widened #515). Renamed from
-// isConversationUpdated when #376 added the second arm — one predicate answering "should this event
-// re-request the list?", not N isX predicates OR'd at the call site.
+// event.type === 'conversationCreated' || event.type === 'workspaceUpdated' — a plain boolean, not a
+// type guard: the payload (id/name/cwd, and workspaceUpdated's path/label) is never consulted (#275,
+// widened #376, widened #515, widened #1288). Renamed from isConversationUpdated when #376 added the
+// second arm — one predicate answering "should this event re-request the list?", not N isX predicates
+// OR'd at the call site.
 
 ConversationListData(): null
 // headless component, two effects: subscribe on mount ([]), request on the rising edge to `connected` ([isConnected])
@@ -304,9 +305,10 @@ assertion's arity is only incidental, the same failure would read as noise and i
    conversationListStore.getState().setConversations(list, serverId), () =>
    requestConversationList(window.pyry.sendCommand))`; the off-handle is the cleanup, so a
    StrictMode double-mount nets exactly one live listener. The third arg re-requests the list on a
-   `conversationUpdated` broadcast (#275), a `conversationDeleted` reply (#376), or a
-   `conversationCreated` reply (#515) — `window.pyry.sendCommand` is dereferenced only when the arrow
-   runs, never during render, so the server-render-to-empty-markup invariant is unaffected.
+   `conversationUpdated` broadcast (#275), a `conversationDeleted` reply (#376), a
+   `conversationCreated` reply (#515), or a `workspaceUpdated` frame (#1288) — `window.pyry.sendCommand`
+   is dereferenced only when the arrow runs, never during render, so the server-render-to-empty-markup
+   invariant is unaffected.
 2. **Request on the rising edge to `connected`** (deps `[isConnected]`, `isConnected =
    useSessionStore(s => s.status.type === 'connected')`) — a `useRef(false)` guard fires exactly one
    request per connection episode: resets to `false` while disconnected (so a reconnect re-requests)
@@ -360,6 +362,14 @@ new-discussion FAB's own subscription on the same event, #242)
     → shouldRefreshList(event) → true → refreshOnChange()
     → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#515]
     → … re-enters the flow above; the arriving conversationsReceived lands the new, complete row
+
+daemon → workspace_updated frame (CORRELATED to the renamer, UNSOLICITED to every other client) →
+workspaceUpdated{path,label} DaemonEvent [#1288] → DAEMON_EVENT_CHANNEL → subscribeConversations
+listener
+    → shouldRefreshList(event) → true (path/label never read) → refreshOnChange()
+    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#1288]
+    → … re-enters the flow above; the arriving conversationsReceived lands the renamed workspace's
+      new label on every row that shares its `cwd`
 ```
 
 ## Configuration and usage
@@ -427,6 +437,23 @@ new-discussion FAB's own subscription on the same event, #242)
   the daemon authoritative and reuses the existing `conversationsReceived → setConversations` seam
   unchanged. Being a correlated reply, the refresh is **creator-only**: a second client's list stays stale
   until its own next mutation, which needs a daemon-side broadcast to fix and is out of scope.
+- **A bare workspace rename is not a `conversation_updated` broadcast, so it needed its own trigger arm
+  — landed in [#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288).** `conversation_updated`
+  fans out on a *conversation* mutation (promote/rename/archive/change-workspace); renaming a workspace
+  touches no conversation, so before this ticket the sidebar kept a stale label for a rename performed
+  from another client until an unrelated mutation or a reconnect happened to re-list it. `workspace_updated`
+  closes that gap — correlated by `in_reply_to` to whoever asked for the rename (the outbound verb is
+  [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), not yet built) and pushed unsolicited
+  to every other connected client, both shapes decoding and re-listing identically. **`shouldRefreshList`
+  never reads `path` or `label`, and that is a security property here, not only a shape preference**:
+  patching a row's label straight from this frame would put untrusted daemon text on screen bypassing the
+  `conversations` reply's own decode — the same reasoning [channel list](channel-list.md)'s § Workspace
+  grouping states for why the label rides in on the re-list rather than the broadcast's own payload.
+  `conversationListBridge.test.ts` pins `setConversations` called **zero** times for a `workspaceUpdated`
+  event, so a future "just patch the row" shortcut reddens a gate instead of shipping quietly. Like
+  `conversationUpdated`, the re-list this trigger fires is **global**, not scoped to the server the frame
+  arrived on — scoping a refresh to its origin server is a command-with-a-server-id concern the routing
+  ticket owns, not opened here.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
   not — is written unconditionally into its stamped slot; safe because only the authenticated daemon
   can produce one (see [conversation list fetch § Correlation is deliberately
@@ -526,3 +553,12 @@ new-discussion FAB's own subscription on the same event, #242)
   [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196) — the per-server unpair path this
   store's `clearConversationsFor` and `selectExclusiveConversationIdsFor` exist for; the same ticket that
   closed this document's own long-standing "later ticket's" note under § AC5.
+- [Channel List home screen § Workspace grouping](channel-list.md) /
+  [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287) — the daemon-held `workspace_label`
+  this store's re-list makes live; `docs/specs/architecture/1288-inbound-workspace-updated-relist.md` —
+  the full design and security review for the `workspaceUpdated` trigger arm, including why it carries no
+  `inReplyTo` and why patching a row from its fields would be a security regression, not just a shortcut.
+- [Daemon event channel — the sealed union: per-member history](daemon-event-channel-sealed-union-history.md)
+  — the `workspaceUpdated` `DaemonEvent` member's own entry: field-by-field trust tiers and the four
+  compile-forced no-op bridge arms. [Inbound message decode — extension history](inbound-message-decode-history.md)
+  — the `workspace_updated` decode half, `parseWorkspaceUpdatedPayload`.

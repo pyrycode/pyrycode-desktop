@@ -292,15 +292,24 @@ member would assert something false about the others. And a **non-null label is 
 blank included** — no trim, no blank-to-fallback guard, the deliberate opposite of `titleFor`. The
 label is state a user set from some other client; silently rewriting a blank one here would make
 this desktop disagree with every other client about the workspace's name. Rejecting a blank belongs
-to the verbs that *set* one (#1288/#1289) and the dialog that sends it (#1180) — none built yet —
-where it can be refused to the user's face instead.
+to the verb that *sets* one ([#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289)) and the
+dialog that sends it ([#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180)) — neither built
+yet — where it can be refused to the user's face instead.
 
 The label reaches the sidebar over the existing `list_conversations` read path and the existing
 `conversation_created`/`conversation_updated` bridges — no new store, no new IPC arm, no
 `localStorage`. A label changed from another client is *not* read off the `conversation_updated`
 broadcast's own payload, despite that payload carrying the field: [`shouldRefreshList`](conversation-list-store.md)
 is and stays id/content-blind, so the broadcast only triggers a fresh `list_conversations` request,
-and the changed label rides in on that reply's rows like any other field.
+and the changed label rides in on that reply's rows like any other field. **A *bare* workspace
+rename — no conversation touched — fans out no `conversation_updated` at all**, so it stayed invisible
+here until [#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) added the daemon's dedicated
+`workspace_updated` broadcast as a fourth `shouldRefreshList` trigger: correlated to whoever asked for the
+rename and unsolicited to every other client, content-blind in the same way (`path`/`label` are never read
+off the frame — the label that lands is always the re-listed row's own), so a rename performed from
+another client, or once #1289 lands from this one, now reaches this sidebar without a reconnect. See
+[conversation list store](conversation-list-store.md) for the trigger's own edge-case writeup and
+`docs/specs/architecture/1288-inbound-workspace-updated-relist.md` for the full design.
 
 `renderBody` wraps each tree's existing `.map` one level, inside a keyed `Fragment` (the shorthand
 `<>` cannot carry a key), still inside the same `length > 0` gate that already decides the host
@@ -338,6 +347,20 @@ let a spec seed a state — two rows of one `cwd` disagreeing — the daemon can
 label from that map too, so a row moved between workspaces takes its new workspace's name rather
 than carrying the old one. [`e2e/workspace-label.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1287)
 is the spec this fixes for, and rides the same both-trees idiom to prove it.
+
+[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) added the one seam this fixture still
+lacked: nothing let a spec change a held label *mid-test*, which a live rename from another client needs.
+`conversationStateFake` now returns a **callable carrying an extra property**,
+`renameWorkspace(cwd, label)`, rather than an object of two members — a function with a property is still
+assignable to the bare `(inbound) => Uint8Array[]` every one of the 29 consuming spec files passes as
+`buildReplyFrames`, so the seam cost zero call-site edits. One call moves both the `labels` map and every
+held row sharing that `cwd`, then returns the unsolicited `workspace_updated` broadcast frame for the spec
+to push via `daemon.pushFrame` — a spec cannot mutate the fake's held state and push a frame that
+disagrees with it, since one call does both.
+[`e2e/workspace-updated-relist.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1288) is the
+consumer: it reads the OLD label first (load-bearing — without it the closing read would pass against a
+fake seeded with the new label all along), calls `renameWorkspace`, then reads the NEW label with no
+relaunch and no reconnect.
 
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
@@ -508,9 +531,16 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   workspace label: `workspace_label` on the three inbound payloads, the label/key source split as a
   security property, the fallback-group and verbatim-blank-label rulings, and the `conversationStateFake`
   one-label-per-`cwd` fixture model § Workspace grouping above now describes.
+- [#1288 spec](../../specs/architecture/1288-inbound-workspace-updated-relist.md) — the inbound
+  `workspace_updated` re-list: why a bare rename needs its own trigger arm, why the frame carries no
+  `inReplyTo`, and the `renameWorkspace` fixture seam § Fixture note above now describes. See
+  [conversation list store](conversation-list-store.md) for the trigger's own writeup.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), #716 (same-last-segment workspace label ambiguity — narrower since
   [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287): two workspaces can now be told
-  apart by giving them distinct daemon labels, though the label is not yet settable by this client,
-  #1288/#1289/#1180), a possible follow-up to suppress the idle dot's announced label (see [the row's
+  apart by giving them distinct daemon labels, though a rename is not yet settable *by this client* —
+  [#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) only makes a rename from elsewhere
+  live here; the outbound verb is [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289) and
+  the dialog that sends it is [#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180), neither
+  built yet), a possible follow-up to suppress the idle dot's announced label (see [the row's
   status dot](channel-list-status-dot.md)).

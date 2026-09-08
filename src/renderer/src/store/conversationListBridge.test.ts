@@ -102,6 +102,18 @@ describe('shouldRefreshList', () => {
     expect(shouldRefreshList(event)).toBe(true)
   })
 
+  it('returns true for a workspaceUpdated broadcast (#1288)', () => {
+    const event: DaemonEvent = { type: 'workspaceUpdated', path: '/w', label: 'Second Brain' }
+    expect(shouldRefreshList(event)).toBe(true)
+  })
+
+  it('returns true for a workspaceUpdated whose label was CLEARED (#1288)', () => {
+    // The trigger is the OCCURRENCE of a change, never the payload: a cleared label is as much a
+    // change as a set one, and reading the field to decide would be the thing this function forbids.
+    const event: DaemonEvent = { type: 'workspaceUpdated', path: '/w', label: null }
+    expect(shouldRefreshList(event)).toBe(true)
+  })
+
   it('returns false for a sample of unrelated daemon events', () => {
     const others: DaemonEvent[] = [
       { type: 'conversationsReceived', conversations: [] },
@@ -158,6 +170,22 @@ describe('subscribeConversations', () => {
     subscribeConversations(bridge.onDaemonEvent, setConversations, vi.fn())
 
     bridge.emit({ type: 'connecting' })
+    expect(setConversations).not.toHaveBeenCalled()
+  })
+
+  it('re-requests the list on a workspaceUpdated and PATCHES NO ROW (#1288, AC3)', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
+
+    bridge.emit({ type: 'workspaceUpdated', path: '/w', label: 'Second Brain' })
+
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    // The load-bearing half, and the deterministic detector for the plan's security finding: the
+    // tempting shortcut is to write the frame's `label` straight onto the matching rows, which would
+    // put untrusted daemon text on screen BYPASSING the list decode path. Zero calls, always — the
+    // label reaches the sidebar on the authoritative `conversations` reply this refresh asks for.
     expect(setConversations).not.toHaveBeenCalled()
   })
 

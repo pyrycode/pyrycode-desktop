@@ -465,3 +465,40 @@ newly-*defined* one); both were repaired by naming the sibling field explicitly,
 loosened to `toMatchObject`. See [System prompt write](system-prompt-write.md) for the full design,
 including the outbound builder, the client-side byte bound, and the two `DaemonEvent` arms this
 decode change feeds. Architect (builder) self-review PASS, no MUST FIX findings.
+
+[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) extended it once more, additively,
+with `workspace_updated` → `{ kind: 'workspace-updated', workspaceUpdated: WorkspaceUpdatedPayload }`
+via `parseWorkspaceUpdatedPayload` — the daemon's report that a *workspace's* label changed (SSOT
+pyrycode#2209), where `workspace_folder_created` above reports that a workspace *directory* was made.
+Built on the existing `isRecord`/`requireString`/`requireStringOrNull` helpers verbatim, no new helper
+needed: `path` (required, the `workspace_folder_created` posture — an untrusted remote daemon-side path,
+never resolved, never keyed, never logged) and `label` (required but nullable,
+`ConversationUpdatedPayload.workspace_label`'s contract verbatim — a cleared label is a literal `null`,
+never an absent key). Both fields have deliberately different nullability, and the payload returns a
+fresh two-field object rather than reaching for one shared nullable-field helper.
+
+The frame decodes identically **with and without** `Envelope.in_reply_to`: the daemon correlates it to
+the client that asked for the rename and pushes it unsolicited to every other connected client, and both
+shapes mean the same thing to every consumer — a workspace's label moved — so the `workspace-updated`
+kind carries no `inReplyTo` at all (the `workspace-folder-created` precedent, restated for a frame that
+is *sometimes* correlated rather than never). Content-free-logged as
+`inbound-decoded(code: 'workspace_updated')` before the `default` branch, narrowed before logging so a
+malformed frame leaves no record; neither `path` nor `label` ever reaches a log line, and the parser's
+throw messages name the client-owned field constant only (`malformed workspace_updated payload`,
+`missing required field: path`, `missing required field: label`), never the daemon's string.
+
+The emit half, in [daemon connection](daemon-connection.md)'s consumer switch, builds a fresh
+`{ type: 'workspaceUpdated', path, label }` literal — never a spread of the decoded payload — and the
+[conversation list store](conversation-list-store.md)'s `shouldRefreshList` gained a fourth arm treating
+the event purely as a re-list trigger: **neither field is ever read downstream.** That is the ticket's
+central security property, not an incidental one — patching a sidebar row straight from this frame's
+`label` would put untrusted daemon text on screen bypassing the `conversations` reply's own decode path,
+so the emit and the trigger exist only to make the *existing* re-list mechanism (`conversationUpdated`'s)
+reachable from a frame `conversation_updated` cannot cover: a bare workspace rename touches no
+conversation, so it never fans out a `conversation_updated` broadcast. See [Daemon event channel — the
+sealed union: per-member history](daemon-event-channel-sealed-union-history.md) for the `workspaceUpdated`
+arm's own entry and the four compile-forced no-op bridge cases (`daemonEventBridge`, `timelineBridge`,
+`modalBridge`, `questionBridge`). Architect (self-review) PASS, two SHOULD FIX (both about the shipped-but
+unread `path`/`label` fields carrying a trust-tier warning at their declaration for whichever consumer
+reads them first — closed by the doc comments on `WorkspaceUpdatedPayload` and the `events.ts` arm, not
+by code, since nothing here reads either field yet).

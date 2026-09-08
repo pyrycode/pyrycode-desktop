@@ -292,6 +292,7 @@ export function translateTimelineEvent(
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'workspaceUpdated':
     case 'modalShown':
     case 'modalDismissed':
     case 'sessionSettingsUpdated':
@@ -311,7 +312,8 @@ export function translateTimelineEvent(
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
       // queue store (queueState), the #376 list-reflect slice (conversationDeleted), the #382
       // recent-workspaces store (recentWorkspacesReceived), the #157 Create-folder dialog
-      // (workspaceFolderCreated), and the #397 round-trip store (workspaceFolderRejected) consume
+      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), and the #1288
+      // conversation-list refresh trigger (workspaceUpdated) consume
       // these — not the timeline store. sessionSettingsUpdated, sessionSettingsRejected, and
       // modalAnswerRejected are NOT timeline items — unlike turnState and, since #286,
       // sessionTransition, none drives a timeline row. queueState is deliberately in this null group:

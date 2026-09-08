@@ -419,6 +419,19 @@ function workspaceFolderCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'workspace_folder_created', ts: FIXED_TS, payload })
 }
 
+/** A `workspace_updated` plaintext, wrapping an arbitrary payload (#1288). Takes an optional
+ *  `in_reply_to` — the daemon correlates this frame to whoever asked for the rename and pushes it
+ *  unsolicited to everyone else, so both shapes must reach the same emit. */
+function workspaceUpdatedPlaintext(payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 3,
+    type: 'workspace_updated',
+    ts: FIXED_TS,
+    ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }),
+    payload
+  })
+}
+
 /** A `conversation_updated` plaintext, wrapping an arbitrary payload (#273). */
 function conversationUpdatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_updated', ts: FIXED_TS, payload })
@@ -3944,6 +3957,91 @@ describe('createDaemonConnection — createWorkspaceFolder (create_workspace_fol
         plaintext: workspaceFolderCreatedPlaintext({ path: 42 })
       })
     ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — workspace_updated broadcast → workspaceUpdated (#1288)', () => {
+  /** A well-formed workspace_updated frame — the renamed workspace and its new label. */
+  const WORKSPACE_UPDATED = { path: '/home/user/projects/app', label: 'Second Brain' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake.
+   *  There is no OUTBOUND verb to exercise here — this frame is inbound-only until #1289 — so the
+   *  describe carries only this helper, cloned from its neighbours rather than hoisted (each one is
+   *  describe-local in this file). */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound workspace_updated into one workspaceUpdated carrying both fields FLAT', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(WORKSPACE_UPDATED) })
+
+    // Flat fields, not a payload reference — the workspaceFolderCreated / conversationDeleted idiom for
+    // a small payload. Exactly one event: the frame is a refresh trigger, not a fan-out.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'workspaceUpdated', path: WORKSPACE_UPDATED.path, label: WORKSPACE_UPDATED.label }
+    ])
+  })
+
+  it('emits identically whether the frame is correlated or unsolicited (AC1)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(WORKSPACE_UPDATED, 77) })
+
+    // No `inReplyTo` rides the event: a client that asked for the rename and one that did not both learn
+    // the same thing, and both settle it the same way — by re-listing.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'workspaceUpdated', path: WORKSPACE_UPDATED.path, label: WORKSPACE_UPDATED.label }
+    ])
+  })
+
+  it('carries a cleared label across as the VALUE null', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: workspaceUpdatedPlaintext({ path: WORKSPACE_UPDATED.path, label: null })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'workspaceUpdated', path: WORKSPACE_UPDATED.path, label: null }
+    ])
+  })
+
+  it('emits a FRESH literal — a decoder-side extra field cannot smuggle itself across IPC', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: workspaceUpdatedPlaintext({ ...WORKSPACE_UPDATED, conversation_id: 'smuggled' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      { type: 'workspaceUpdated', path: WORKSPACE_UPDATED.path, label: WORKSPACE_UPDATED.label }
+    ])
+    expect(JSON.stringify(events)).not.toContain('smuggled')
+  })
+
+  it('drops a malformed workspace_updated without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    for (const payload of [{ path: 42 }, { path: '/home/user/app', label: 42 }, { label: 'x' }]) {
+      expect(() =>
+        drivers[0].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(payload) })
+      ).not.toThrow()
+    }
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 })

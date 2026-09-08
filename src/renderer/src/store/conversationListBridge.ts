@@ -64,14 +64,22 @@ export function translateConversationsEvent(
 }
 
 /**
- * The refresh trigger (#275, #376, #515): should this event re-request the list? True for the three arms
- * that signal a daemon-side conversation change — the unsolicited `conversationUpdated` BROADCAST
+ * The refresh trigger (#275, #376, #515, #1288): should this event re-request the list? True for the arms
+ * that signal a daemon-side change the list reflects — the unsolicited `conversationUpdated` BROADCAST
  * (promote / rename / archive), the CORRELATED `conversationDeleted` reply (a permanent delete confirmed
  * with a distinct `{ id }` and no broadcast, pyrycode #822), and the CORRELATED `conversationCreated`
  * reply (#515: the daemon sends no broadcast on a plain create, so without this arm a FAB-created
- * discussion stayed absent from the Channel List until a reconnect or an unrelated mutation). Deliberately
- * a plain boolean, NOT a type guard that narrows to the payload — the event's `id` / `name` / `cwd` are
- * never consulted (AC3). We react to the OCCURRENCE of a change, then let the daemon's authoritative reply
+ * discussion stayed absent from the Channel List until a reconnect or an unrelated mutation), and the
+ * `workspaceUpdated` frame (#1288: a WORKSPACE rename from any client, correlated to the asker and
+ * unsolicited to everyone else — `conversation_updated` fans out on a CONVERSATION mutation, so a bare
+ * workspace rename produces no such frame and the sidebar kept the old name until a reconnect).
+ *
+ * Deliberately a plain boolean, NOT a type guard that narrows to the payload — the event's `id` / `name` /
+ * `cwd`, and `workspaceUpdated`'s `path` / `label`, are never consulted (AC3). On the workspace arm that is
+ * a SECURITY property and not only a shape preference: patching a row from the frame's `label` would put
+ * untrusted daemon text on screen bypassing the `conversations` decode path, which is where the label the
+ * sidebar renders is actually validated. We react to the OCCURRENCE of a change, then let the daemon's
+ * authoritative reply
  * land the new rows via the existing `conversationsReceived → setConversations` seam: a delete drops the
  * row because the fresh `list_conversations` reply omits it, and a create gains a COMPLETE row rather than
  * one fabricated from the 5-field created payload (which carries no `is_archived` / `last_message_ts`) —
@@ -85,7 +93,8 @@ export function shouldRefreshList(event: DaemonEvent): boolean {
   return (
     event.type === 'conversationUpdated' ||
     event.type === 'conversationDeleted' ||
-    event.type === 'conversationCreated'
+    event.type === 'conversationCreated' ||
+    event.type === 'workspaceUpdated'
   )
 }
 
@@ -104,9 +113,10 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
  * (a single event is never both a `conversationsReceived` and a refresh-trigger event, so they never
  * cross-fire): each `conversationsReceived` writes its rows verbatim into the store via
  * `setConversations`; each refresh-trigger event — a `conversationUpdated` broadcast (#275), a
- * `conversationDeleted` reply (#376), or a `conversationCreated` reply (#515) — fires `refreshOnChange`
- * to re-request the authoritative list, keeping the Channel List live on a create/promote/rename/archive/
- * delete without a reconnect. A create fires exactly one re-request: `conversationCreatedBridge` consumes
+ * `conversationDeleted` reply (#376), a `conversationCreated` reply (#515), or a `workspaceUpdated`
+ * frame (#1288) — fires `refreshOnChange` to re-request the authoritative list, keeping the Channel List
+ * live on a create/promote/rename/archive/delete, and on a WORKSPACE rename from any client, without a
+ * reconnect. A create fires exactly one re-request: `conversationCreatedBridge` consumes
  * the same event on an INDEPENDENT subscription but only navigates, it sends no command. Every unrelated
  * event no-ops. Still exactly one subscription (AC4). Returns the
  * unsubscribe handle (the daemonEventBridge off-handle idiom) so the React binding can use it as its

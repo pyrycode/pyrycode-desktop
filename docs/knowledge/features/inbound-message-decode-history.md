@@ -502,3 +502,30 @@ arm's own entry and the four compile-forced no-op bridge cases (`daemonEventBrid
 unread `path`/`label` fields carrying a trust-tier warning at their declaration for whichever consumer
 reads them first — closed by the doc comments on `WorkspaceUpdatedPayload` and the `events.ts` arm, not
 by code, since nothing here reads either field yet).
+
+[#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312) extended it once more, additively,
+with `thinking_progress` → `{ kind: 'thinking-progress', thinkingProgress: ThinkingProgressPayload }`
+via `parseThinkingProgressPayload` — claude's only mid-turn proof of life on the stream-json surface,
+the daemon's translation of its `system/thinking_tokens` line (pyrycode#1386). `ThinkingProgressPayload{
+conversation_id, estimated_tokens, estimated_tokens_delta}` scales `parseApiRetryPayload`'s shape down
+from four fields to three and one boolean to none — a `requireString` plus two `requireNumber` calls,
+no new helper. **A periodic READING, not a state transition**: no rising or falling edge, no `turn_id`,
+opens/closes no turn — the daemon groups it alone in `codes.go` rather than with the `api_retry`/
+`compacting` pair or the `background_task_*` three. **Deliberately not range- or monotonicity-checked**:
+`estimated_tokens` restarts near zero at every inference-request boundary (measured four times inside
+one captured turn), so the usual "no range check on a wire integer" rule is sharper here — a
+monotonicity rule would fail-close ordinary traffic, not merely reject hypothetical future values. The
+wire type's own docblock records two further measured hazards: the frames are rate-bounded and do not
+enumerate claude's lines (33 lines measured as 8 frames), and the deltas received do not sum to the
+turn's total (674 arrived as 243, no field reporting the residue). **Takes no `FrameTimestamp`** —
+[#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225)'s mix-in marks exactly the ten arms
+`decodeHistoryEvent` draws, and AC3 keeps this kind armless there (a regression pin: even a fully
+well-formed stored `thinking_progress` still skips). Content-free-logged as `inbound-decoded(code:
+'thinking_progress')` before the `default` branch; neither `conversation_id` nor either integer ever
+reaches a log line — a reading of how much claude thought is a side-channel on private work. Carries no
+claude-authored text at all (ADR 025), the one respect in which it is safer than every sibling in its
+family. Ships dormant, the same two-step already taken for `question_shown` (#884/#885) and
+`modal_shown` (#870/#871): `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops
+here until the carry slice claims it. Architect (builder) self-review PASS, no MUST FIX findings; one
+SHOULD FIX recorded for the eventual carry/render slice — a consumer must not allocate or iterate
+proportionally to either daemon-supplied number.

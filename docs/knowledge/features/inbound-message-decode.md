@@ -174,3 +174,12 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   `pendingSystemPromptRequests` correlation map — though every renderer bridge still nulls the one
   `DaemonEvent` arm it feeds. Unlike every other kind in this file, the verb it answers has **no**
   `daemon-error` counterpart to widen: `system_prompt` mints no wire error code at all.
+- [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312) extended it once more, additively:
+  the `thinking_progress` kind, `parseThinkingProgressPayload` (`parseApiRetryPayload`'s shape scaled
+  down — one `requireString` plus two `requireNumber` calls, no new helper), and claude's only mid-turn
+  proof of life on the stream-json surface, the daemon's translation of its `system/thinking_tokens`
+  line (pyrycode#1386). A periodic reading, not a state transition — no rising/falling edge, no
+  `turn_id`, takes no `FrameTimestamp`, and gains no arm in `decodeHistoryEvent` (AC3, a regression
+  pin). Ships dormant, the two-step `question_shown` (#884/#885) and `modal_shown` (#870/#871) already
+  took: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops at this boundary
+  until the carry slice claims it. Full account in [Extension history](inbound-message-decode-history.md).

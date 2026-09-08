@@ -26,6 +26,7 @@ export type InboundDaemonMessage =
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }            // #492, additive — NOT nullary
   | { kind: 'compacting'; compacting: CompactingPayload }       // #495, additive — banner-only
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
+  | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -282,6 +283,31 @@ neither struct carries `omitempty` on any key. Full account, including the trust
 does **not** transfer from `slash_command_list`'s measured-`0x0a` evidence, in [Extension
 history](inbound-message-decode-history.md). Ships dormant: `daemonConnection.ts`'s inbound switch has
 no case for `'model-list'` yet.
+
+**Extended once more by [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312), additively.**
+`thinking_progress` → `{ kind: 'thinking-progress', thinkingProgress: ThinkingProgressPayload }` via
+`parseThinkingProgressPayload` — claude's only mid-turn proof of life on the stream-json surface, the
+daemon's translation of its `system/thinking_tokens` line (pyrycode#1386, rate-bound to one frame per 64
+tokens of accumulated delta). `ThinkingProgressPayload{conversation_id, estimated_tokens,
+estimated_tokens_delta}` scales `parseApiRetryPayload`'s shape down from four fields to three and from
+one boolean to none: one `requireString` plus two `requireNumber` calls, no new helper.
+
+**A reading, not a state transition** — unlike `api_retry`/`compacting` it has no rising or falling
+edge, carries no `turn_id`, and opens/closes no turn; the turn's thinking state is already `turn_state:
+thinking`. **Deliberately not range- or monotonicity-checked**: `estimated_tokens` restarts near zero at
+every inference-request boundary (four times inside one committed single-turn capture), so a
+"the reading only grows" rule would fail-close ordinary traffic — the sharpest instance yet of the house
+rule that a client-invented bound on a wire integer risks dropping valid future frames. **Takes no
+`FrameTimestamp`** (see below) — the mix-in marks the ten arms `decodeHistoryEvent` draws, and this kind
+gains no arm there (AC3, a regression pin: a stored `thinking_progress` still skips).
+
+Content-free-logged as `inbound-decoded(code: 'thinking_progress')` before the `default` branch, and
+neither the id nor either number ever reaches a log line — a reading of how much claude thought is a
+side-channel on private work. It carries no claude-authored text at all (ADR 025), the one respect in
+which it is safer than every sibling in its family: there is nothing here for a render sink to escape.
+Ships dormant: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops at this
+boundary until the carry slice claims it, the same two-step `question_shown` (#884/#885) and
+`modal_shown` (#870/#871) already took.
 
 **[#965](https://github.com/pyrycode/pyrycode-desktop/issues/965) widens `daemon-error` by a field, not a
 kind** — the same #642/#773 shape applied to the file's one deliberately content-free kind. Since

@@ -136,6 +136,7 @@ const render = (
       onNewConversation={noop}
       onCreateChat={noop}
       onCreateChannel={noop}
+      onEditWorkspace={noop}
       onSaveAsChannel={noop}
       onRename={noop}
     />
@@ -189,6 +190,11 @@ const CREATE_CHAT_MARKER = 'aria-label="Create chat"'
 // one CSS block), so the two are told apart by their accessible NAME and by nothing else — which is
 // exactly what AC4 asks to be counted per tree.
 const CREATE_CHANNEL_MARKER = 'aria-label="Create channel"'
+
+// #1180 — the workspace row's second trailing control, the pen that opens the Edit workspace dialog.
+// ONE marker for both trees, unlike the two plus names above: the pen says the same word in each, so
+// the per-tree question this file asks about it is "is it drawn in both?" rather than "which name?".
+const EDIT_WORKSPACE_MARKER = 'aria-label="Edit workspace"'
 
 // The disclosure state the workspace row carries once it becomes a collapse control (#704). React
 // serialises `aria-expanded={boolean}` to the literal strings "true" / "false", so these are exact
@@ -321,6 +327,22 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 const createTagsIn = (markup: string): string[] => {
   const tags: string[] = []
   const marker = 'class="channel-list__workspace-create"'
+  for (let at = markup.indexOf(marker); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(marker, end)
+  }
+  return tags
+}
+
+// #1180 — `createTagsIn`'s treatment on the pen beside it. A SECOND helper rather than a parameter on
+// that one: each names the single class it slices, so a reader asking what a control's attribute set is
+// finds one function that answers only about it. The two markers cannot cross-match — both carry their
+// closing quote, and `class="channel-list__workspace-create"` is not a substring of
+// `class="channel-list__workspace-edit"` or the reverse.
+const editTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  const marker = 'class="channel-list__workspace-edit"'
   for (let at = markup.indexOf(marker); at !== -1; ) {
     const end = markup.indexOf('>', at)
     tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
@@ -1215,6 +1237,116 @@ describe('ChannelListView', () => {
       expect(tags[0]).not.toContain('title=')
       // …while the label itself still renders, escaped, as the disclosure button's text child.
       expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
+    })
+  })
+
+  describe('the workspace row’s edit pen (#1180)', () => {
+    // #1179's fixture verbatim — one row per tree, both in the SAME workspace — so each tree draws a
+    // group, and a count that came from a MISSING GROUP rather than from a withheld callback fails on
+    // the workspace-row marker first.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    it('draws the pen on every workspace row in BOTH trees, named once each (AC2)', () => {
+      const markup = bothTrees()
+      const { channels, chats } = treesOf(markup)
+      expect(countOf(channels, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(chats, WORKSPACE_ROW_MARKER)).toBe(1)
+      // ONE label constant serves both trees, unlike the plus's two — the pen says the same word in
+      // each, so this is a count of two identically-named controls and not a per-tree name check.
+      expect(countOf(channels, EDIT_WORKSPACE_MARKER)).toBe(1)
+      expect(countOf(chats, EDIT_WORKSPACE_MARKER)).toBe(1)
+      const tags = editTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        // A real <button>, so it is in the accessibility tree and keyboard-reachable at rest — the
+        // half AC2 asks for that a class name alone would not prove.
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).toContain('type="button"')
+        expect(tag).toContain(EDIT_WORKSPACE_MARKER)
+        expect(tag).not.toContain('title=')
+      }
+    })
+
+    it('renders the pen AFTER the plus, which is what keeps #1178’s Tab assertion true (AC2)', () => {
+      // Forced rather than chosen: `e2e/sidebar-workspace-create.spec.ts` focuses the disclosure and
+      // presses Tab ONCE, expecting the plus. A pen inserted before it would take that Tab and redden
+      // a shipped spec this ticket must leave untouched. Asserted here, in the tier that can see
+      // document order, so a future reorder fails a unit test rather than an e2e run.
+      const chats = treesOf(bothTrees()).chats
+      expect(chats.indexOf(CREATE_CHAT_MARKER)).toBeLessThan(chats.indexOf(EDIT_WORKSPACE_MARKER))
+    })
+
+    it('draws the design’s 14px pen glyph inside it (AC1)', () => {
+      // The whole opening run, not a width alone: one marker fixes the class, the viewBox, both box
+      // dimensions, the currentColor fill and the aria-hidden together. The viewBox is
+      // `.channel-list__rename-icon`'s 12-unit square — the same Font Awesome pen — drawn at 14.
+      expect(bothTrees()).toContain(
+        '<svg class="channel-list__workspace-edit-icon" viewBox="0 0 12 12" width="14" height="14" fill="currentColor" aria-hidden="true">'
+      )
+    })
+
+    it('gives the pen the plus’s name pill, appended after the glyph (AC2)', () => {
+      // The pill is the shipped `.channel-list__control-name`, so this asserts the SPAN follows the
+      // closing </svg> — the append discipline that leaves the glyph's opening run byte-identical.
+      const markup = bothTrees()
+      expect(markup).toContain(
+        '</svg><span class="channel-list__control-name" aria-hidden="true">Edit workspace</span>'
+      )
+    })
+
+    it('withholds the pen from the unknown-workspace group, in both trees (AC2)', () => {
+      // Its key is `''` — NOT the `null` "take the daemon default" signal — so a rename sent with it
+      // would name no directory at all. Decided on the KEY and never on the label, exactly as the
+      // plus is: a real directory named "Unknown workspace" is an ordinary group and keeps its pen.
+      const markup = render([
+        row({ id: 'c1', name: 'x', is_promoted: true, cwd: '' }),
+        row({ id: 'd1', name: 'y', is_promoted: false, cwd: '' })
+      ])
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      expect(editTagsIn(markup)).toHaveLength(0)
+    })
+
+    it('keeps a hostile cwd and workspace_label out of the pen’s attributes (AC4)', () => {
+      // The control's name is a client-owned constant, so neither daemon string reaches any attribute
+      // of it — the four-sink rule `WorkspaceRow` states, re-asserted on the control this ticket adds.
+      const markup = render([
+        row({
+          id: 'd1',
+          name: 'x',
+          is_promoted: false,
+          cwd: '/home/me/<img src=x onerror=boom>',
+          workspace_label: '<script>alert(1)</script>'
+        })
+      ])
+      const tags = editTagsIn(markup)
+      expect(tags).toHaveLength(1)
+      expect(tags[0]).not.toContain('img')
+      expect(tags[0]).not.toContain('onerror')
+      expect(tags[0]).not.toContain('script')
+      expect(tags[0]).not.toContain('title=')
+      // …while the label itself still renders, escaped, as the disclosure button's text child.
+      expect(markup).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    })
+
+    it('leaves the workspace row’s own markers and attribute set untouched (AC3)', () => {
+      // The guard the new class name exists for: `class="channel-list__workspace"` and the head
+      // wrapper's marker still match once per group per tree, and the pen joins neither — nor does it
+      // join `createTagsIn`'s match set, which is what keeps #1178's and #1179's counts honest.
+      const markup = bothTrees()
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, WORKSPACE_HEAD_MARKER)).toBe(2)
+      expect(createTagsIn(markup)).toHaveLength(2)
+      const tags = workspaceRowTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('title=')
+      }
     })
   })
 

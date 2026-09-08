@@ -276,9 +276,18 @@
    SUM `--space-2 + 2px` so the arithmetic stays legible rather than hidden behind a new token — the same
    shape, and the same reason, as `.channel-list__row-open`'s `calc(--space-2 + 6px + --space-2)`.
 
-   The 32px right padding is the Idle variant's `pr-[32px]`, reserving the trailing slot the plus is
-   positioned OVER rather than laid out in. It deliberately stays 32 and not the Hover variant's 52: that
-   extra 20 belongs to #1180's pen, and it arrives with that ticket.
+   THE RIGHT PADDING IS THE HOVER VARIANT'S 52 SINCE #1180, up from the Idle variant's 32, and it is
+   written as the SUM `--space-8 + --space-5` — the slot the plus is positioned over, plus the pen's own
+   20px box — so the arithmetic stays legible rather than hiding behind a token the scale does not have.
+   Same shape, and the same reason, as the `gap` above.
+
+   IT IS THE HOVER NUMBER IN BOTH STATES, WHICH IS THE POINT AND NOT AN OVERSIGHT. Padding the row to 32
+   at rest and 52 on hover would re-truncate a long label the moment the pointer arrived, which is the
+   one thing worse than truncating it slightly early; reserving the trailing 52 unconditionally is what
+   makes "no glyph of the label is painted under either control" true at rest as well as on hover
+   (#1180 AC3). The label's content box then ends 52 in and the pen's hit box starts 45 in, so the two
+   never meet. Neither control is laid out in this padding — both are positioned over it — so the row's
+   derived 28px height is untouched either way.
 
    The height is DERIVED and never declared: `--space-1` top and bottom over the label's 20px line box is
    the drawing's 28. A hard `height` would swallow an overflow silently (`.composer__footer`'s measured
@@ -317,7 +326,7 @@
   flex: 1 1 auto;
   min-width: 0;
   gap: calc(var(--space-2) + 2px);
-  padding: var(--space-1) var(--space-8) var(--space-1) var(--space-2);
+  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-2);
   border: 0;
   border-radius: var(--radius-xs);
   background: none;
@@ -435,6 +444,93 @@
 
 /* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
 .channel-list__workspace-create-icon {
+  display: block;
+}
+
+/* THE EDIT PEN (#1180, Figma "Icon Edgeless" 399:1339 in the Hover variant 399:1060) — the plus's block
+   above with two numbers changed, sitting 10px to its left.
+
+   ITS OWN CLASS RATHER THAN THE PLUS'S, which is the opposite call #1179 made for the two plusses and
+   for the opposite reason. Those two are ONE drawn control differing only in accessible name, so a
+   second class would have restated thirty declarations verbatim. This one is a different size (14 vs
+   16) at a different inset (28 vs 2), so sharing would mean a modifier overriding half the block —
+   more declarations, read in two places.
+
+   THE BOX IS 20 × 20 AND THE GLYPH IS 14 × 14, WHICH REPRODUCES THE DRAWING WITH NO 28px LITERAL. The
+   node places its 14px box at `right: 28px; top: 7.01px` in the 28px row. A 20px (`--space-5`) box at
+   `right: calc(--space-7 - 3px)` = 25, offset `--space-1` from the top, centring a 14px glyph, lands
+   that glyph at right 25 + (20 - 14)/2 = 28 and top 4 + 3 = 7 — the drawn rectangle, derived from
+   tokens plus the box's own halved slack rather than restated as an inset. The `- 3px` IS that slack
+   made explicit; it is the one place the arithmetic could not be written in tokens alone, and hiding it
+   behind a 25px literal would make the 28 unreadable.
+
+   THE TWO HIT BOXES DO NOT OVERLAP: the plus spans 0…20 from the row's trailing edge and this one spans
+   25…45, so each click lands on the control it was aimed at, and the drawn glyphs sit 10px apart
+   (312 → 322 in the 340px row) exactly as the node places them. The row's `pr` reservation above is 52,
+   which clears this box's 45 — that is where the label stops, in every state.
+
+   The 20px box is deliberately the plus's and not a 14px one snug to the glyph: a 14px pointer target
+   is below any reasonable minimum, and the extra 6px is invisible (no background, no radius, no fill —
+   the drawing draws none on either control).
+
+   It positions itself against the WRAPPER'S trailing edge, never against the plus, which is what the
+   plus's own block promised when it reserved this slot: neither control has to move if the other's size
+   changes or if one is ever withheld.
+
+   `--color-primary` (#9dcbfc) is the drawn fill. INVISIBLE AT REST, `opacity` and never `display: none`
+   — the plus's ruling verbatim, and load-bearing for the same reason: a display-none control cannot
+   take focus, so the pen would leave the tab order and the accessibility tree, which is precisely what
+   AC2's "keyboard-reachable at all times" forbids. The reveal hangs off THE ROW's hover so the glyph is
+   already there when the pointer arrives at a 20px box it could not otherwise see, and off the
+   control's own `:focus-visible` so Tab reaches it. */
+.channel-list__workspace-edit {
+  position: absolute;
+  right: calc(var(--space-7) - 3px);
+  top: var(--space-1);
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__workspace-edit:focus-visible {
+  outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+.channel-list__workspace-head:hover .channel-list__workspace-edit {
+  opacity: 1;
+}
+
+/* THE PEN'S NAME PILL — the plus's trigger pair (#1181) on the control beside it, written here rather
+   than joined onto that rule for that rule's own stated reason: each names the elements that can carry
+   a pill, so the set stays readable where the control is.
+
+   THE CONTROL'S OWN `:hover`, never the head row's, which is the whole of "hovering the row's label
+   shows nothing". `:focus-visible` and not `:focus`, matching the opacity rule directly above, so the
+   keyboard case cannot half-fire.
+
+   THE GEOMETRY IS ENTIRELY THE BLOCK ABOVE'S AND ADDS NO NUMBER, and the containment argument the plus
+   records carries over UNCHANGED: this is a 20px box at `--space-1` down a 28px head row, so its centre
+   is the ROW's centre, and the 24px pill centred inside it spans 2…26 of that 28 — inside the row's own
+   band, so containment inside the `overflow-y: auto` `.channel-list` follows from the row being in view
+   at any scroll position. `right: 0` pins it to THIS control's right edge, 25px in from the scroller's
+   content edge, so it grows leftward and adds no horizontal overflow. `pointer-events: none` on the
+   pill lets a click aimed at the row — or Playwright's hit test — read straight through it. */
+.channel-list__workspace-edit:hover .channel-list__control-name,
+.channel-list__workspace-edit:focus-visible .channel-list__control-name {
+  display: block;
+}
+
+/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+.channel-list__workspace-edit-icon {
   display: block;
 }
 
@@ -1529,6 +1625,178 @@
 /* Create disabled while the name is blank (AC2) — the M3 38% disabled emphasis (opacity, not a color
    literal — the #218 de-emphasis precedent) and a non-interactive cursor. */
 .create-channel__create:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* #1180 — THE EDIT-WORKSPACE DIALOG, what the workspace row's pen opens. No node of its own is drawn:
+   verified against the Figma on 2026-09-08, the Desktop page's Dialogs section holds Rename, Save as
+   Channel, Create Folder and Paste Code only. The ticket pins this dialog's chrome to the Rename one's
+   (102:498), so the block below mirrors .create-channel* — which already mirrors that node declaration
+   for declaration — with ONE element added, the path line, and the Rename dialog's own Cancel / Save
+   action pair.
+
+   A FIFTH CLASS FAMILY rather than reusing .rename-conversation*, and the reason is not tidiness. Two:
+     - Playwright locators run in strict mode and `e2e/conversation-create-rename.spec.ts` scopes to the
+       Rename dialog's classes, so a second dialog wearing them would JOIN that spec's match set and
+       strict-violate rather than fail an assertion — the guard `WorkspaceRow`'s header states for the
+       sidebar, applied to a dialog. `.create-channel*` was minted for exactly this.
+     - This dialog has an element the Rename one does not, and `RenameConversationDialog.test.tsx` pins
+       that dialog's markup with attribute-run markers; a path line inside them would land between
+       assertions written to describe a two-child panel.
+
+   `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll column and covers
+   the window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+.edit-workspace-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
+   40% via opacity (not a color literal) — the create-channel-overlay__scrim idiom. */
+.edit-workspace-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The centered M3 dialog panel: surface-container-high, 28px radius, 24px padding, a column with 16px
+   gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows.
+
+   ⭐ `max-height` + `overflow-y` ARE LOAD-BEARING HERE IN A WAY THEY ARE NOT ON THE SIBLING DIALOGS.
+   Those two bound a name the user is typing; this panel also renders an untrusted daemon `cwd` of
+   unbounded length, which WRAPS rather than ellipsizing (that is the point of showing it). Without the
+   cap a hostile or merely deep path grows the panel past the window with its actions off-screen — so
+   the pair is what turns "unbounded text" into "text that scrolls inside the dialog". Do not drop them
+   on the reasoning that the neighbours barely need them. */
+.edit-workspace {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The headline-small title (102:499's treatment, reading "Edit workspace"). margin: 0 resets the
+   heading default. */
+.edit-workspace__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+/* The outlined Name field (102:500) — a bordered frame stacking the label over the input value. The
+   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
+   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal —
+   the .create-channel__field token-mapping precedent. */
+.edit-workspace__field {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+}
+
+/* The field label (102:501) is M3 label-medium (12px); the theme has no label-medium token, so map to
+   the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
+.edit-workspace__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The input value (102:502) — body-large, on-surface. Reset to a borderless field so the frame's border
+   is the only chrome; the label above supplies the field's meaning. */
+.edit-workspace__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* THE PATH LINE — the workspace's full `cwd`, and the one element this dialog has that its siblings do
+   not. `.settings__default-workspace-value`'s recipe (body-small, on-surface-variant, the muted
+   value-line treatment), which is where this app already renders a workspace path for information.
+
+   ⭐ `overflow-wrap: anywhere` AND DELIBERATELY NO ELLIPSIS CHAIN — the opposite call from every other
+   daemon-derived string in this file. The sidebar row ellipsizes its label because a row is a fixed
+   band and the name is a glance; this line exists BECAUSE the user came to read the path, and a path
+   cut off at the panel's edge answers nothing. `anywhere` rather than `break-word` so a long
+   unbroken segment (a path with no separators near the wrap point) breaks too, instead of pushing the
+   panel wider than its max-width. Vertical growth is bounded by the panel's own scroll, above.
+
+   margin: 0 resets the <p> default; the panel's 16px column gap owns the spacing, so the line sits the
+   same distance under the field as the actions sit under it. */
+.edit-workspace__path {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The action row (the Rename dialog's 19:19) — Cancel + Save both right-aligned (the node's
+   justify-end). 4px gap = --space-1. */
+.edit-workspace__actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The two text-button actions — the M3 dialog text-button treatment (pill, transparent fill,
+   --color-primary label, label-large), mirroring create-channel__create. */
+.edit-workspace__cancel,
+.edit-workspace__save {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.edit-workspace__cancel:focus-visible,
+.edit-workspace__save:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* Save disabled while the trimmed name is blank or over 128 characters (AC4) — the M3 38% disabled
+   emphasis (opacity, not a color literal — the #218 de-emphasis precedent) and a non-interactive
+   cursor. */
+.edit-workspace__save:disabled {
   opacity: 0.38;
   cursor: default;
 }

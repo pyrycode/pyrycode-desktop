@@ -194,6 +194,12 @@ daemon → conversation_created frame → [#241, unchanged] → conversationCrea
   first seeds a single unpromoted row, so its render has no Channels group and its strict
   `.channel-list__workspace-create` locator still resolves to exactly one element even though both
   trees now draw that class.
+- **`e2e/real-daemon-create-channel.spec.ts`** (#1283, [real-daemon credential-light
+  e2e](real-daemon-credential-light-e2e.md)) is the real-daemon twin: `conversationStateFake` mints
+  its row *from the request*, so `sidebar-create-channel.spec.ts` above proves what the client
+  sends and nothing about what the daemon does with it. This is the first spec on any tier to
+  exercise the daemon's promoted-create branch against a real `pyry`, and it reads all three
+  payload fields back off the daemon's own list rather than an echo.
 
 ## Lessons learned
 
@@ -241,4 +247,7 @@ daemon → conversation_created frame → [#241, unchanged] → conversationCrea
 - [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the
   parent screen; § Workspace grouping is where `groupByWorkspace`/`UNKNOWN_WORKSPACE_KEY` (the
   withhold this dialog's plus relies on) are defined.
+- [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / #1283 — the real-daemon
+  proof of this dialog's create, including the `cwd`-defaulting trap and the `seedCwdSubdir` fixture
+  option built to make it non-vacuous.
 - Spec: `docs/specs/architecture/1179-channels-tree-create-channel-dialog.md`.

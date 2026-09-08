@@ -214,6 +214,13 @@ an untrusted string of unbounded length.
   right 28, 10px clear of the plus, row still 28 tall), click → path line text → type → Save → the
   **new** label in both trees with `aria-expanded` unchanged.
 - **`e2e/sidebar-workspace-plus-name-pill.spec.ts`** (revised, not new) — see § Revision below.
+- **`e2e/real-daemon-workspace-rename.spec.ts`** (#1293, [real-daemon credential-light
+  e2e](real-daemon-credential-light-e2e.md)) is the real-daemon twin: the fake twin's
+  `conversationStateFake` answers whatever `rename_workspace` the client sent, so it proves the frame
+  leaves the app and nothing about whether a real `pyry` registers a handler for it. Pairs against a
+  claude-less spawned daemon, reads the pre-save label off a `seedCwdSubdir` seed, drives the same
+  pen → dialog → fill → Save gesture, and asserts the label changed on the daemon's own re-list —
+  see that doc's § on the label-clearing trap this drive has to pin apart first.
 
 ## Revision: the pen's pill forced a sibling spec to narrow its locator
 
@@ -255,6 +262,7 @@ pill and contradict the ticket's own "the plus's pill treatment."
   (#1289) — the `renameWorkspace` wire contract, guard shape and security review this dialog's Save
   sends against; this ticket is that verb's first and, so far, only caller.
 - [Rename conversation dialog](rename-conversation-dialog.md) (#360) — the chrome this dialog clones.
-- Real-daemon proof that a real `pyry` registers a `rename_workspace` handler is out of scope here,
-  filed separately as #1293.
+- [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / #1293 — the real-`pyry`
+  proof that a handler is registered for this verb, and the trap a fresh registry's fallback label
+  hides from a careless choice of typed name.
 - Spec: `docs/specs/architecture/1180-workspace-edit-dialog.md`.

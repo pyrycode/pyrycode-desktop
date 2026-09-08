@@ -281,6 +281,14 @@ auto-escaped React child, never an attribute (CLAUDE.md 2026-08-20, #696's MUST 
 [#703 codebase notes](../codebase/703.md) for the full fallback-key trap and selector-hazard
 writeup.
 
+Since [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+and [#1179](create-channel-dialog.md), each `WorkspaceRow` optionally draws a trailing create
+control keyed on this same `group.key` — a "Create chat" plus on a Chats-tree row, a "Create
+channel" plus opening a dialog on a Channels-tree row — withheld on both trees from the
+`UNKNOWN_WORKSPACE_KEY` fallback group alone. A channel is no longer only reachable by [promoting
+an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
+for the direct path.
+
 ### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
 Split out to its own page: [the row's status dot](channel-list-status-dot.md) — the
@@ -425,6 +433,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — the full detail
   behind § The host row and its connection dots above: #710/#718's original build, #834's operator-typed
   label, and #1199's per-server-id keying of both the label and the two dots.
+- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+  (#1178) — the Chats-tree workspace plus, the `renderServerTrees` create seam § Workspace grouping
+  above now threads.
+- [Create-channel dialog](create-channel-dialog.md) (#1179) — the Channels-tree workspace plus and the
+  dialog it opens; the first path to a channel that skips [Save-as-channel](save-as-channel-dialog.md)'s
+  promotion.
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree

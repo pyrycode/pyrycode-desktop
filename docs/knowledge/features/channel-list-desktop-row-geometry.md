@@ -418,24 +418,37 @@ against "being the only control", so #1180's 14×14 pen can land at `right: 28px
 rule moving.
 
 **Wiring rides one shared helper, not a per-tree map.** Since #1070's server loop, both the Channels and
-Chats trees render through one `renderServerTrees`, so the per-tree difference — only the Chats tree
-offers a create — has to travel as a parameter rather than a code-path split: `renderServerTrees` takes
-an optional `onCreateChat(cwd)`, its inner `workspaceGroups` closes over each group's own key and hands
-`CollapsibleWorkspaceGroup` a nullary `onCreateChat?: () => void`, which reaches `WorkspaceRow` as
-`onCreate` — the same optional-callback shape `Row` already uses for `onSaveAsChannel`. `renderBody`
-supplies the callback to the `discussions` call only; the `channels` call passes nothing until #1179's
-own Create channel dialog exists. The container's callback is
-`(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)` — the FAB's own constructor
-([conversation-create.md](conversation-create.md)), and this is that helper's **second caller**, its
-first with a `cwd` that is not the client's own saved default.
+Chats trees render through one `renderServerTrees`, so the per-tree difference has to travel as a
+parameter rather than a code-path split: `renderServerTrees` takes an optional trailing `create` control,
+its inner `workspaceGroups` closes over each group's own key and hands `CollapsibleWorkspaceGroup` a
+nullary `create?: WorkspaceCreateControl`, which reaches `WorkspaceRow` unchanged — the same
+optional-value shape `Row` already uses for `onSaveAsChannel`. `renderBody` builds one control object
+per tree at its two `renderServerTrees` calls — the only place the two trees are told apart — and since
+[#1179](create-channel-dialog.md) supplies one to **both**: the `channels` call's opens [the
+Create-channel dialog](create-channel-dialog.md) instead of sending a command directly, the `discussions`
+call's still fires `(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)` — the FAB's own
+constructor ([conversation-create.md](conversation-create.md)), and `requestNewConversation`'s **second
+caller**, the first with a `cwd` that is not the client's own saved default.
 
-**The unknown-workspace group is withheld by its key, never by its label.** `groupByWorkspace`'s fallback
-bucket keys on `UNKNOWN_WORKSPACE_KEY` (`''`, exported by this ticket for its first outside consumer),
-which names no directory and is **not** the same signal as the `cwd: null` "take the daemon default" the
-create payload keeps distinct on the wire; sending `''` as a `cwd` would ask the daemon to create in its
-own process directory. `renderServerTrees` compares the group's *key* against the sentinel and withholds
-the callback there — never against `UNKNOWN_WORKSPACE_LABEL` — so a real directory a user happens to name
-"Unknown workspace" is an ordinary group and keeps its plus.
+**#1179 turned the threaded value from a bare callback into one object carrying a name too.**
+`WorkspaceRow` used to hard-code `CREATE_CHAT_CONTROL_LABEL` on the plus's `aria-label`; once the
+Channels tree needed its own label ("Create channel"), a second optional prop beside `onCreate?` would
+have admitted a handler with no name and a name with no handler. Instead `CollapsibleWorkspaceGroup` and
+`WorkspaceRow` both take one `create?: WorkspaceCreateControl` (`{ readonly label: string; readonly
+onCreate: () => void }`, module-private to `ChannelList.tsx`), so the invariant is structural rather than
+disciplined: a tree either offers a named create or offers none. See [Create-channel
+dialog](create-channel-dialog.md) for the dialog itself, the `requestNewChannel` command constructor, and
+the container state that opens it.
+
+**The unknown-workspace group is withheld by its key, never by its label — in both trees since #1179.**
+`groupByWorkspace`'s fallback bucket keys on `UNKNOWN_WORKSPACE_KEY` (`''`, exported by this ticket for
+its first outside consumer), which names no directory and is **not** the same signal as the `cwd: null`
+"take the daemon default" the create payload keeps distinct on the wire; sending `''` as a `cwd` would
+ask the daemon to create in its own process directory. `renderServerTrees` compares the group's *key*
+against the sentinel and withholds the `create` control there — never against `UNKNOWN_WORKSPACE_LABEL`
+— so a real directory a user happens to name "Unknown workspace" is an ordinary group and keeps its
+plus. #1179 reuses this same withhold for the Channels-tree plus with no new condition, since one
+`create === undefined || group.key === UNKNOWN_WORKSPACE_KEY` check now gates both trees' controls.
 
 **Security review note, carried forward because it is the first time this value crosses this
 boundary:** `group.key` is `row.cwd`, daemon-asserted text that until now the sidebar only ever used as
@@ -450,23 +463,33 @@ partially written.
 
 **The control's name**, `CREATE_CHAT_CONTROL_LABEL = 'Create chat'`, is a client-owned module constant
 read by the plus's `aria-label`, in the `RENAME_CONTROL_LABEL` / `SAVE_AS_CHANNEL_CONTROL_LABEL` idiom
-two rows up; #1181's tooltip pill becomes its second reader. The daemon-supplied workspace label never
+two rows up; #1181's tooltip pill becomes its second reader. #1179 added its sibling,
+`CREATE_CHANNEL_CONTROL_LABEL = 'Create channel'`, for the Channels-tree plus — the two words differ
+because the two trees create different things (an unnamed ad-hoc chat vs. a named, promoted channel),
+and both constants are read exclusively at `renderBody`'s two `renderServerTrees` calls now, bundled
+into their tree's `WorkspaceCreateControl` (see above). The daemon-supplied workspace label never
 reaches an attribute of the control, on the same four-sink rule (`title`, `id`, a URL, a CSS custom
 property) `WorkspaceRow`'s own comment already declines for the disclosure above it.
 
 **Testing.** `ChannelList.test.tsx` counts `aria-label="Create chat"` once per Chats group and zero times
-in the Channels slice, checks the plus's `<svg>` for `width="16" height="16"`, and reconfirms
-`WORKSPACE_ROW_MARKER`/`WORKSPACE_LABEL_OPEN` still match byte for byte at one per group now that the
-wrapper sits above the disclosure button. `e2e/sidebar-tree-geometry.spec.ts` retargets
-`WORKSPACE_ICON_X` to `CARD_INSET_PX + 28` and adds `WORKSPACE_LABEL_X`, asserted equal to `TITLE_X`. The
-new `e2e/sidebar-workspace-create.spec.ts` seeds its clicked group's `cwd` at a path **other than** the
-fake harness's `DEFAULT_CREATED_CWD` (`conversationStateFake` mints a created row at
-`payload.cwd ?? DEFAULT_CREATED_CWD`, which happens to equal the default seed's own workspace) —
-otherwise a plus that silently sent `null` would still land its row in the same group and the drive would
-pass with the bug present. It reads the plus's box and opacity at rest/hover/focus (the last via a real
-Tab traversal, not `locator.focus()` — the same `:focus-visible` modality trap #1171 already documents
-above), then clicks it and reads the row count and the group's own row count going up before reading
-`aria-expanded` unchanged.
+in the Channels slice, `aria-label="Create channel"` the reverse (since #1179), checks the plus's `<svg>`
+for `width="16" height="16"`, and reconfirms `WORKSPACE_ROW_MARKER`/`WORKSPACE_LABEL_OPEN` still match
+byte for byte at one per group now that the wrapper sits above the disclosure button. `createTagsIn`
+widened from asserting one control to asserting both by their distinct labels — the one assertion #1179's
+plan named as the cost of sharing `.channel-list__workspace-create` across both trees.
+`e2e/sidebar-tree-geometry.spec.ts` retargets `WORKSPACE_ICON_X` to `CARD_INSET_PX + 28` and adds
+`WORKSPACE_LABEL_X`, asserted equal to `TITLE_X`. `e2e/sidebar-workspace-create.spec.ts` (the Chats-tree
+plus's own drive) seeds its clicked group's `cwd` at a path **other than** the fake harness's
+`DEFAULT_CREATED_CWD` (`conversationStateFake` mints a created row at `payload.cwd ?? DEFAULT_CREATED_CWD`,
+which happens to equal the default seed's own workspace) — otherwise a plus that silently sent `null`
+would still land its row in the same group and the drive would pass with the bug present. It reads the
+plus's box and opacity at rest/hover/focus (the last via a real Tab traversal, not `locator.focus()` —
+the same `:focus-visible` modality trap #1171 already documents above), then clicks it and reads the row
+count and the group's own row count going up before reading `aria-expanded` unchanged. Its seed is a
+single **unpromoted** row, so #1179's Channels-tree plus renders no group at all and this spec's strict
+`.channel-list__workspace-create` locator still resolves to exactly one element even though both trees
+now draw that class — which is why #1179 needed no edit here. The Channels-tree plus's own drive,
+covering the dialog it opens, is [`e2e/sidebar-create-channel.spec.ts`](create-channel-dialog.md#testing).
 
 ## Related
 
@@ -478,6 +501,9 @@ above), then clicks it and reads the row count and the group's own row count goi
 - [#1172 spec](../../specs/architecture/1172-row-control-name-pill.md) — the control's own name pill.
 - [#1178 spec](../../specs/architecture/1178-workspace-row-nest-and-create-chat-plus.md) — the workspace
   row's own 20px nest and its create-chat plus.
+- [Create-channel dialog](create-channel-dialog.md) (#1179) — the Channels-tree plus's own dialog, the
+  `requestNewChannel` command constructor and the `WorkspaceCreateControl` reshape this section
+  documents.
 - [Composer attach — the name pill](composer-attach-name-pill.md) — the treatment this restates, #1265,
   shipped first.
 - [Save-as-channel dialog](save-as-channel-dialog.md), [Rename conversation dialog](rename-conversation-dialog.md)

@@ -7,6 +7,12 @@ depends on that choice. The dialog collects input and dispatches only; it never 
 the row moving Recent → Channels is [#275](../codebase/275.md)'s job, reacting to the daemon's
 `conversation_updated` broadcast.
 
+Promoting an existing chat was, until [#1179](create-channel-dialog.md), the *only* way a channel
+could come into being. This dialog keeps its location choice for exactly that reason — it still
+serves the promote-a-chat case, where the chat's own `cwd` is a real "keep in scratch" option —
+where [the Create-channel dialog](create-channel-dialog.md) that now creates one directly has none:
+its workspace is fixed by the sidebar row whose plus was clicked, so there is nothing to choose.
+
 Built across two tickets against the same Figma node: [#274](../codebase/274.md) (split from #143)
 shipped the naming half — title, Name field, Cancel/Save, dispatching `promoteConversation` with
 the row's existing `cwd` ("keep in scratch"). [#288](../codebase/288.md) added the **location
@@ -279,6 +285,9 @@ requestCreateChannelFolder(sendCommand, name)
 - [Create-folder round-trip store](new-folder-store.md) / [#397 codebase notes](../codebase/397.md)
   — the `newFolderStore` + `NewFolderData` bridge this dialog mounts and reads; its second real
   consumer after [#398](../codebase/398.md)'s `CreateFolderDialog`.
+- [Create-channel dialog](create-channel-dialog.md) (#1179) — the first path to a channel that
+  skips promotion; keeps this dialog's location choice, since only the promote case has a chat's
+  own `cwd` to offer as an alternative.
 - [#398 codebase notes](../codebase/398.md) — the create→observe→act container shape this dialog
   clones, swapping the tail from `requestChangeWorkspace` to `requestPromoteConversation`.
 - [#396 codebase notes](../codebase/396.md) — the bare `workspaceFolderRejected` correlation this

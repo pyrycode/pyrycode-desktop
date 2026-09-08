@@ -6,6 +6,15 @@ and, when the daemon confirms with a `conversationCreated` event, navigates the 
 shell](paired-shell.md) from `list` to `thread` by reusing the existing `open` transition. Mirrors
 mobile #347.
 
+Two later tickets added their own callers of the same command, both reusing this FAB's
+`conversationCreated` → `useConversationCreatedNav` nav below unchanged: the per-workspace
+"Create chat" plus on a Chats-tree row ([#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178))
+and the Channels-tree plus's own [Create-channel dialog](create-channel-dialog.md) (#1179), which
+sends the command's *other* fixed payload shape (`is_promoted: true` plus a typed name) through a
+sibling constructor, `requestNewChannel`. This FAB stays the one caller whose `cwd` is a **client
+setting** (the [default-workspace store](default-workspace-store.md)'s saved value, or `null` for
+the daemon's own default) rather than a daemon-asserted workspace path lifted from a sidebar group.
+
 Introduced in [#242](../codebase/242.md), split from [#142](../codebase/142.md); the sibling
 transport ticket [#241](../codebase/241.md) (the `createConversation` command / `conversationCreated`
 event) shipped first and is consumed here unchanged. Renderer-only — no transport, IPC, store, or
@@ -167,3 +176,6 @@ Fill/glyph use the M3 primary-container FAB role tokens (`--color-primary-contai
   widened `requestNewConversation` with the `defaultCwd` parameter this FAB now supplies.
 - [#242 codebase notes](../codebase/242.md) — implementation summary, patterns, lessons.
 - Spec: `docs/specs/architecture/242-new-discussion-fab.md`.
+- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+  (#1178) and [Create-channel dialog](create-channel-dialog.md) (#1179) — the two later callers of
+  `createConversation`, both reusing this FAB's `useConversationCreatedNav` wiring unchanged.

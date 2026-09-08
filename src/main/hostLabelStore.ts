@@ -11,8 +11,12 @@
 // ALONGSIDE the un-keyed one rather than replacing it — the Strangler Fig shape #1069 used on
 // pairedServerStore — so no existing caller had to move at once.
 //
-// #1156 moved the writers. The pairing confirm now calls saveFor and the per-server unpair calls
-// clearFor, so the envelope is what an installed app holds the moment it pairs. The un-keyed `save`
+// #1156 moved the writers. The pairing confirm calls saveFor and the per-server unpair calls
+// clearFor, so the envelope is what an installed app holds the moment it pairs. #1186 gave each of
+// those two a SECOND caller — the keyed host-label set channel, which chooses between them by the
+// trimmed label — so both keyed mutators now answer to a renderer-driven rewrite as well as to the
+// pairing lifecycle. That channel reaches neither un-keyed member: its handle names saveFor and
+// clearFor and nothing else. The un-keyed `save`
 // therefore has NO caller left and is deliberately not taught the envelope: teaching a dead writer a
 // second format would be surface with no reader. `clear` kept ONE caller through #1156 — the
 // whole-collection unpair arm — because it deletes the one blob the keyed collection lives in, so "no
@@ -107,10 +111,11 @@ export interface HostLabelStore {
  * needs no edit either.
  *
  * The triple mirrors the un-keyed `save` / `load` / `clear` one-for-one, which is the pairing the
- * Strangler Fig migration read against. Two of the three now have the callers: #1156 moved the
- * pairing write onto `saveFor` and the per-server unpair onto `clearFor`. `loadFor` is still
- * caller-less — the zero-argument read channel is #1157's and the sidebar's keyed read is #1070's —
- * and the un-keyed three were NOT deleted after, for the reasons the module header gives.
+ * Strangler Fig migration read against. All three now have callers, and the un-keyed three were NOT
+ * deleted after, for the reasons the module header gives. `saveFor` and `clearFor` took the pairing
+ * write and the per-server unpair in #1156 and the keyed set channel in #1186, which picks between
+ * them by the trimmed label; `loadFor` took the keyed read channel in #1157, and #1070 moves the
+ * sidebar onto it.
  *
  * `clearFor` returns void rather than the sibling's `{ matched, remaining }`. Those two questions are
  * already answered for this family by `pairedServerStore.clearServer`, which is what the per-server

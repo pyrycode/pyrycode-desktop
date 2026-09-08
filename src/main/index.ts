@@ -25,7 +25,11 @@ import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairServerHandler } from './unpairHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
-import { registerHostLabelHandler, registerHostLabelServerHandler } from './hostLabelHandler'
+import {
+  registerHostLabelHandler,
+  registerHostLabelServerHandler,
+  registerHostLabelSetHandler
+} from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -294,6 +298,31 @@ app.whenReady().then(() => {
     store: hostLabelStore
   })
   app.on('will-quit', () => unregisterHostLabelServer())
+
+  // The PER-SERVER host-label WRITE (#1186): the seam that lets a host named badly — or left unnamed
+  // — be renamed from inside the app instead of by unpairing and pairing again. Reuse the SAME
+  // hostLabelStore and pairedServerStore constructed above — do not build second ones — so a set is
+  // visible to both reads above on the very next invoke, and so the existence check sees exactly the
+  // records the pairing write and the unpair erase maintain.
+  //
+  // This is the only host-label arm that can mutate at-rest state, and its two handles are what bound
+  // what that means. The label handle is `saveFor`/`clearFor`-only: no `save` or `clear`, so the
+  // un-keyed slot is unreachable, and no `load` or `loadFor`, so it cannot read a label back. The
+  // paired-server handle is `loadById`-only and exists solely to refuse an id naming no paired server
+  // — without that refusal a bogus id would park an orphan label that the un-keyed read would then
+  // answer with, and would let a caller grow the at-rest blob one entry per guessed id. That handle
+  // is also the one place in this family that can materialise a record, and therefore a bearer token;
+  // the handler reduces it to a boolean at the call site and never names a field of it.
+  //
+  // One channel, two store methods, chosen by the trimmed label: blank means "no label" and clears.
+  // Only the three-outcome union crosses back, describing the label as now held, with a guard
+  // refusal, an unpaired id and a throw all indistinguishable. `will-quit` removes the handler,
+  // symmetric with unregisterHostLabelServer. No caller is wired yet — the consumer is #1187.
+  const unregisterHostLabelSet = registerHostLabelSetHandler(ipcMain, {
+    store: hostLabelStore,
+    pairedServers: pairedServerStore
+  })
+  app.on('will-quit', () => unregisterHostLabelSet())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

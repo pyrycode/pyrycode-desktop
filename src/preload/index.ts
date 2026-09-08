@@ -13,6 +13,7 @@ import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import {
   HOST_LABEL_CHANNEL,
   HOST_LABEL_SERVER_CHANNEL,
+  HOST_LABEL_SET_CHANNEL,
   type HostLabelResult
 } from '../shared/ipc/hostLabel'
 import {
@@ -191,6 +192,33 @@ const api = {
    */
   hostLabelFor: (serverId: string): Promise<HostLabelResult> =>
     ipcRenderer.invoke(HOST_LABEL_SERVER_CHANNEL, { serverId }),
+
+  /**
+   * Rewrite the host label stored for ONE NAMED machine (#1186), so a host named badly — or left
+   * unnamed — can be renamed from inside the app instead of by unpairing and pairing again. The write
+   * counterpart to `hostLabelFor` above, on its own fixed channel, so the renderer can reach neither
+   * an arbitrary channel nor either READ by malforming this request; ipcRenderer never crosses the
+   * bridge. The Edit host dialog (#1187) is the caller.
+   *
+   * `serverId` and `label` are the two values that leave the renderer here, and building the request
+   * object in the bridge is a convenience, NOT a defence — the same ruling `hostLabelFor` makes: the
+   * renderer is untrusted and can invoke the channel with anything, so the main side validates both
+   * shapes and both lengths on its own merits regardless.
+   *
+   * Pass the label as typed; main trims it, and a label blank after trimming CLEARS that server's
+   * label rather than storing an empty name. There is no separate clear call, and adding one here
+   * would be a second place deciding whether a label exists.
+   *
+   * The same three-outcome union comes back (stored / not-stored / error), now describing the label
+   * as it is held AFTER the write: `stored` carrying the TRIMMED label, so the response feeds
+   * straight into the same mapper the reads feed with no second round trip; `not-stored` after a
+   * clear; `error` for a guard refusal, an id naming no paired server, and a store failure alike —
+   * indistinguishable on purpose, so a compromised renderer cannot learn which of its guesses was
+   * well-formed. Never the token, server key, relay URL or keychain path, and never the id echoed
+   * back.
+   */
+  setHostLabelFor: (serverId: string, label: string): Promise<HostLabelResult> =>
+    ipcRenderer.invoke(HOST_LABEL_SET_CHANNEL, { serverId, label }),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

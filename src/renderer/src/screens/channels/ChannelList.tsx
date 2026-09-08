@@ -27,9 +27,12 @@ import {
 // #834's read path, shipped dormant by #833 and mounted here, re-keyed by server id in #1199.
 // `HostLabelData` is the headless one-shot invoke; the store binding + keyed selector feed the row.
 // Nothing else in this file touches either.
+// #1299 gave this file the store's SECOND writer: the Edit host dialog records main's answer through the
+// singleton's own action, beside the loader that fills it on mount. The row still only reads.
 import {
   useHostLabelStore,
   selectHostLabelFor,
+  hostLabelStore,
   type HostLabelValue
 } from '../../store/hostLabelStore'
 import { HostLabelData } from '../../store/hostLabelLoader'
@@ -78,6 +81,13 @@ import { CreateChannelDialogView } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `RenameConversationDialog`'s shape.
 import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspaceDialog'
+// #1299 — the same shape one level up the tree, and the host row pen's FIRST caller. Its write helper
+// takes an injected transport rather than `sendCommand`: nothing on that path reaches the daemon.
+import {
+  EditHostDialogView,
+  requestSetHostLabel,
+  type EditHostSaveStatus
+} from './EditHostDialog'
 import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
@@ -198,6 +208,17 @@ export function ChannelList({
   // Cancel starts from what the row actually reads rather than from the abandoned draft.
   const [editWorkspaceCwd, setEditWorkspaceCwd] = useState<string | null>(null)
   const [editWorkspaceName, setEditWorkspaceName] = useState('')
+  // The Edit-host dialog's own per-interaction cells (#1299), independent of the four above for their
+  // stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open at once
+  // and no mutual-exclusion logic is needed. `editHostServerId` is the MACHINE being renamed — the id the
+  // clicked pen closed over — and holding it HERE is what keeps it out of the dialog view entirely: the
+  // view never sees an id at all, it sees a name and a status. `editHostName` is the controlled field,
+  // seeded on every open with that server's STORED label (`hostRowEditSeed`, empty when none is stored),
+  // so a reopen after a Cancel starts from what is actually held rather than from the abandoned draft.
+  // `editHostStatus` is the round trip this dialog has and the four above do not.
+  const [editHostServerId, setEditHostServerId] = useState<string | null>(null)
+  const [editHostName, setEditHostName] = useState('')
+  const [editHostStatus, setEditHostStatus] = useState<EditHostSaveStatus>('idle')
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -252,6 +273,16 @@ export function ChannelList({
         onEditWorkspace={(cwd, label) => {
           setEditWorkspaceCwd(cwd)
           setEditWorkspaceName(label)
+        }}
+        // #1299 — the host row's pen OPENS A DIALOG and writes nothing: the machine is fixed by the row
+        // that was clicked, and the new name still has to be typed. All three cells are seeded together,
+        // the field from that server's STORED label — which is `hostRowEditSeed`'s answer and emphatically
+        // NOT `hostRowLabel`'s: the row displays the generic word for every non-name outcome, and seeding
+        // an editable field with it would invite storing that word as the machine's actual name.
+        onEditHost={(serverId, seedLabel) => {
+          setEditHostServerId(serverId)
+          setEditHostName(seedLabel)
+          setEditHostStatus('idle')
         }}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
@@ -325,6 +356,49 @@ export function ChannelList({
           }}
         />
       )}
+      {/* #1299 — gated on an explicit `!== null` and NEVER on truthiness, and here that is not a
+          theoretical trap the way it is for the two `cwd` dialogs above: `isHostLabelServerRequest`
+          deliberately ACCEPTS the empty string as a server id, so an empty id is storable and a truthy
+          gate would collapse a real machine's dialog into "none open". */}
+      {editHostServerId !== null && (
+        <EditHostDialogView
+          name={editHostName}
+          status={editHostStatus}
+          onNameChange={setEditHostName}
+          // Cancel closes and writes nothing (AC1). It is never disabled, so it is the exit even while a
+          // write is outstanding; the next open re-seeds all three cells, so there is nothing to clear.
+          onCancel={() => setEditHostServerId(null)}
+          onSave={() => {
+            // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
+            // `onNewConversation` discipline. The helper trims the name and classifies the answer; this
+            // arrow decides only what to do with it.
+            //
+            // ⭐ THE STORE WRITE IS KEYED BY THE ID CAPTURED IN THIS CLOSURE, never by anything the
+            // response carried — `HostLabelResult` names no server at all, and this id came off the
+            // client's own paired-server list. It is fixed BEFORE the await and never re-read from state
+            // after it, which is `loadHostLabelFor`'s stated rule applied to the write: keying off
+            // anything else would let one machine's answer land on another machine's row.
+            //
+            // `void`, never floating: `requestSetHostLabel` always resolves, so there is no rejection to
+            // handle and nothing here can surface as an unhandled rejection in React. A Cancel or a
+            // navigation away mid-write leaves this resolution writing a store slot that is still
+            // CORRECT — main has already persisted it — and two setState calls that are inert on a
+            // closed or unmounted dialog.
+            const serverId = editHostServerId
+            setEditHostStatus('saving')
+            void requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName).then(
+              (next) => {
+                if (next === null) {
+                  setEditHostStatus('failed')
+                  return
+                }
+                hostLabelStore.getState().setHostLabelFor(serverId, next)
+                setEditHostServerId(null)
+              }
+            )
+          }}
+        />
+      )}
     </>
   )
 }
@@ -352,6 +426,7 @@ export function ChannelListView({
   onCreateChat,
   onCreateChannel,
   onEditWorkspace,
+  onEditHost,
   onSaveAsChannel,
   onRename
 }: {
@@ -395,6 +470,14 @@ export function ChannelListView({
   // both travel verbatim. Like `onCreateChannel` it does NOT send a command — the dialog's Save does,
   // once a name has been typed.
   onEditWorkspace: (cwd: string, label: string) => void
+  // #1299 — open the Edit host dialog for the named machine. REQUIRED for its three siblings' reason: a
+  // defaulted prop would let a future caller silently render a sidebar whose host pen opens nothing, which
+  // is precisely the state #1185 shipped and this ticket ends. It takes the server id AND that machine's
+  // STORED label — the second argument is what the dialog's field is seeded from, and it is resolved by
+  // `HostRowControl`, the level that holds the store slice, rather than re-derived here. Neither is
+  // inspected on the way through; both travel verbatim. Like `onEditWorkspace` it sends no command — and
+  // unlike it, the dialog's Save sends none either.
+  onEditHost: (serverId: string, seedLabel: string) => void
   onSaveAsChannel: (row: ConversationSummary) => void
   onRename: (row: ConversationSummary) => void
 }): JSX.Element {
@@ -415,6 +498,7 @@ export function ChannelListView({
         onCreateChat,
         onCreateChannel,
         onEditWorkspace,
+        onEditHost,
         onSaveAsChannel,
         onRename
       )}
@@ -553,6 +637,33 @@ const HOST_ROW_FALLBACK_LABEL = 'Server'
 export function hostRowLabel(value: HostLabelValue): string {
   if (value.status === 'stored' && value.label.trim() !== '') return value.label
   return HOST_ROW_FALLBACK_LABEL
+}
+
+/**
+ * What the Edit host dialog's field OPENS WITH (#1299) — and deliberately a DIFFERENT collapse from
+ * `hostRowLabel` above, not a reuse of it.
+ *
+ * That one answers "what does the row DISPLAY", turning every non-name outcome into the generic word;
+ * this one answers "what is STORED". Seeding the field from the display collapse would put `Server` in an
+ * editable box in front of a user who came to name their machine, and a Save on it would store that word
+ * as the machine's actual name — the row would then read `Server` because it IS called Server, which is
+ * indistinguishable on screen from the state it was in before and undoable only by clearing it again.
+ *
+ * So `loading`, `not-stored` and `error` all seed EMPTY (AC1's second half): nothing is stored, or nothing
+ * could be read, and an empty field says exactly that while leaving Save enabled — a blank name is a valid
+ * answer on this dialog, meaning "no label".
+ *
+ * A `stored` label seeds VERBATIM: no trim, no slice, no fallback on a blank one. The store holds it
+ * verbatim and the dialog is where a `'   '` label is fixed, so showing anything else would be showing the
+ * user a value that differs from what their machine is actually called. `''` and `'   '` therefore seed
+ * exactly themselves, and Save trims — which turns both into the clear.
+ *
+ * EXPORTED for `hostRowLabel`'s reason: `HostRowControl` below is unreachable from the unit tier (a
+ * zustand singleton seeded before `renderToStaticMarkup` is invisible to it), so this is the only seam the
+ * four-arm matrix can be proven through.
+ */
+export function hostRowEditSeed(value: HostLabelValue): string {
+  return value.status === 'stored' ? value.label : ''
 }
 
 // The host row heading each server's subtree (Figma 106:3094 in 103:2959) — which machine that subtree's
@@ -757,8 +868,20 @@ export function HostRow({
 }
 
 // The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
-// single shipped slice, pass it through the pure collapse, render the pure view. Nothing else. The row
-// READS and never writes; `setHostLabelFor` keeps exactly one caller, the loader mounted in `ChannelList`.
+// single shipped slice, pass it through the pure collapse, render the pure view. Nothing else.
+//
+// THE ROW STILL READS AND NEVER WRITES, but the store no longer has one writer (#1299). It has two: the
+// loader mounted in `ChannelList` fills every slot on mount, and the Edit host dialog records main's answer
+// into one slot on a successful Save. That write is the container's, not this component's, and it is still
+// not a two-way binding — nothing here feeds a rendered value back into the store. What HAS changed is that
+// a row can now move because a DIALOG asked it to, so a slice changing under this component is no longer
+// evidence that a load resolved.
+//
+// #1299 also gave it the pen. `onEditHost` arrives as a handler taking the machine, and this level closes
+// over BOTH the id it was drawn for and the label it is holding, handing `HostRow` the nullary handler that
+// row's header requires. The seed is `hostRowEditSeed`'s answer and NOT the `hostRowLabel` one rendered
+// beside it — see that function for why the two must differ. Both of a machine's two rows (one per section)
+// pass the same id, so either pen opens the same dialog about the same machine.
 // Module-private like its neighbour: production renders it from `renderBody` alone, and the unit tier
 // reaches everything it can prove through `hostRowLabel` and `HostRow` instead.
 // #1199 resolved WHICH server this row is about; #1070 turned that read into the loop's ARGUMENT. The id
@@ -772,9 +895,21 @@ export function HostRow({
 // machine's row, which is precisely the failure that read exists to prevent. `groupByServer` keeps the
 // direction intact one level up: it iterates the client's ids and only ever TESTS a row's stamp against
 // them, so a stamp can select among existing keys and can never mint one.
-function HostRowControl({ serverId }: { serverId: string }): JSX.Element {
+function HostRowControl({
+  serverId,
+  onEditHost
+}: {
+  serverId: string
+  onEditHost: (serverId: string, seedLabel: string) => void
+}): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
-  return <HostRow label={hostRowLabel(hostLabel)} serverId={serverId} />
+  return (
+    <HostRow
+      label={hostRowLabel(hostLabel)}
+      serverId={serverId}
+      onEditHost={() => onEditHost(serverId, hostRowEditSeed(hostLabel))}
+    />
+  )
 }
 
 /**
@@ -1290,6 +1425,13 @@ function renderServerTrees(
   rows: readonly SidebarRow[],
   serverIds: readonly string[],
   renderRow: (row: SidebarRow) => JSX.Element,
+  // #1299 — open the Edit host dialog for one machine. REQUIRED, and placed BEFORE the two optional
+  // control objects below rather than beside them: both calls supply it, every host row draws the pen, and
+  // an optional parameter ahead of them would be a fourth way to render a sidebar whose pen opens nothing.
+  // A bare handler rather than a `{ label, onEdit }` object — the pen's accessible name is a compile-time
+  // constant inside `HostRow` and is deliberately NOT a prop (#1185's security decision, which stands), so
+  // there is no per-tree label to carry and no field for a name to arrive in.
+  onEditHost: (serverId: string, seedLabel: string) => void,
   // #1178, reshaped by #1179 — the trailing create control this tree draws on each of its workspace
   // rows, or `undefined` for a tree that offers none. OPTIONAL and trailing, which is what carries the
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
@@ -1355,7 +1497,7 @@ function renderServerTrees(
     <>
       {servers.map((server) => (
         <Fragment key={server.serverId}>
-          <HostRowControl serverId={server.serverId} />
+          <HostRowControl serverId={server.serverId} onEditHost={onEditHost} />
           {workspaceGroups(server.rows)}
         </Fragment>
       ))}
@@ -1385,6 +1527,10 @@ function renderBody(
   // creates above it: this is the one trailing control that is not a per-tree difference. The container
   // turns it into dialog state; nothing is sent until the dialog's Save.
   onEditWorkspace: (cwd: string, label: string) => void,
+  // #1299 — open the Edit host dialog for a named machine. Handed to BOTH trees, like `onEditWorkspace`
+  // above it: every host row draws the pen, and both of a machine's two rows open the same dialog for the
+  // same machine. The container turns it into dialog state; nothing is written until the dialog's Save.
+  onEditHost: (serverId: string, seedLabel: string) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -1435,7 +1581,7 @@ function renderBody(
           onOpen={() => onOpen(c)}
           onRename={() => onRename(c)}
         />
-      ), { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
+      ), onEditHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
         // so the pattern reads identically to the create beside it and the label constant stays
         // module-local to this file.
@@ -1461,7 +1607,7 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ), { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
+      ), onEditHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
     </>
   )

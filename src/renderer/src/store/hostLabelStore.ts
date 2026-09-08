@@ -13,8 +13,16 @@
 // them. A single setter rather than a reducer: there is exactly one mutation ("record what the loader
 // mapped"), so a discriminated-union action set would be a one-member union — ceremony without benefit.
 // The VALUE is a discriminated union; the MUTATION is not. Unidirectional is preserved: read-only
-// selector, one write path, and `setHostLabelFor` is invoked only by the loader wiring, never
-// two-way-bound from a component.
+// selector, ONE write path, and `setHostLabelFor` never two-way-bound from a component.
+//
+// #1299 GAVE THAT ONE WRITE PATH A SECOND CALLER, and this paragraph used to say it had exactly one. It
+// has two, and both are wiring rather than components: the loader fills every slot on mount, and the Edit
+// host dialog's container records main's answer for ONE slot after a successful
+// `window.pyry.setHostLabelFor` — a different function that happens to share this action's name. Both go
+// through `mapHostLabel`, so nothing but a mapped `HostLabelResult` ever lands here. What has NOT changed
+// is the direction: no component feeds a rendered value back in, and the row still only reads. A failed
+// write writes NOTHING — see `requestSetHostLabel` for why an `error` answer to a WRITE must not land here
+// the way an `error` answer to a READ does.
 //
 // #1199 RE-KEYED the single slot by server id, following this directory's keyed stores (`sessionStore`'s
 // `statuses`, `conversationListStore`'s `byServer`). With two machines paired the unkeyed slot answered
@@ -128,8 +136,9 @@ export function useHostLabelStore<T>(selector: (s: HostLabelStore) => T): T {
 /**
  * ONE SERVER's held label — the only read surface, a selector factory in the `selectStatusFor` /
  * `selectRelayLinkStatusFor` / `selectConversationsFor` idiom already used across this directory. There
- * is no exposed setter beyond `setHostLabelFor`; it is the sole mutation path and is invoked only by the
- * loader wiring, never two-way-bound from a component.
+ * is no exposed setter beyond `setHostLabelFor`; it is the sole mutation path, and since #1299 its callers
+ * are the loader wiring and the Edit host dialog's container (see the module header) — never a two-way
+ * binding from a component.
  *
  * `null` IS AN ACCEPTED ID, and it is not a map key. It is the frame the sidebar renders before the
  * paired-server one-shot resolves, when the row names nobody yet. It answers the same `loading` constant

@@ -1,11 +1,13 @@
-# Composer attach — pending attachments and the strip (#1039, #1262, #1263, #1264)
+# Composer attach — pending attachments and the strip (#1039, #1262, #1263, #1264, #1265)
 
 Split from [Composer attach](composer-attach.md) on 2026-09-08 to stay under the size cap. Part of the same
 feature: the button (#863), the outcome line, `useAttachmentUpload`, its in-flight progress (#864) and the
-copy module are documented on the parent page; this page covers only the pending-attachments set an upload
+copy module are documented on the parent page; this page covers the pending-attachments set an upload
 completing accumulates (#1039), the tile strip that draws it above the message box (#1262), the picture an
 image-named tile draws instead of the file icon (#1263), and the remove control that takes a tile back out
-of that set before send (#1264).
+of that set before send (#1264). The Pill each tile shows on hover or keyboard focus naming its file
+(#1265) is documented on [its own split page](composer-attach-name-pill.md), split off the same day it
+landed to keep this page under the cap.
 
 ## Pending attachments (#1039) — what an upload completing means to the message not yet sent
 
@@ -342,6 +344,15 @@ control closes over (still the array index the strip's `map` hands it, unrelated
 identity React reconciles fibers by (now the qualified key). They answer different questions and happen to
 have been the same number only while the list was append-only.
 
+## The name pill (#1265) — telling tiles apart on hover and focus
+
+Documented, tested and security-reviewed on its own split page — [Composer attach — the name
+pill](composer-attach-name-pill.md) — the Pill each tile shows on `:hover` or `:focus-within` of its
+`.composer__attachment-slot`, naming the file so two identical tiles (two PDFs, two screenshots pasted a
+minute apart) stop being indistinguishable once #1264 gave each one a remove control. It declined the
+shared-accessible-name NIT #1264's review carried forward (no id to hang `aria-describedby` off, by
+design) and left the focus-after-removal NIT untouched — both stay open for a future ticket.
+
 ## Testing
 
 Renderer specs are static server renders (`environment: 'node'`, no DOM). `ComposerAttach.test.tsx` walks
@@ -427,6 +438,11 @@ drive as the reproduction. The rework landed as `1caf659`, re-reviewed and passe
 and its six unit tests, the second e2e drive, and the corrected docblocks in `ComposerAttach.tsx` are all
 part of that rework leg, not the original plan.
 
+**#1265's tests are on its own split page** — [Composer attach — the name
+pill](composer-attach-name-pill.md#testing) — including the rework that found the same "name reaches no
+attribute" shape shipped in two more specs than the plan named
+(`composer-attach.spec.ts`, `composer-attachment-image.spec.ts`).
+
 ## Security
 
 **#1039's review, PASS.** No new channel, no new bridge member, no new capability — the pending set only
@@ -487,6 +503,11 @@ including the concurrency note (removal interleaving with an upload completing o
 synchronous, so no interleaving is reachable) and the MUST FIX rework's own re-confirmation that the key
 change alters no security property, since `renderToStaticMarkup` drops React keys outright.
 
+**#1265's review, also PASS — on its own split page** — [Composer attach — the name
+pill](composer-attach-name-pill.md#security) — the strip's first render sink for an untrusted string
+(unlike #1264, which added none), length-bounded twice before this pill sees it and escaped as React
+children with no raw-markup sink.
+
 ## Related
 
 - [Composer attach](composer-attach.md) — the parent page: the button, the outcome line, in-flight
@@ -503,9 +524,8 @@ change alters no security property, since `renderToStaticMarkup` drops React key
   this page's tile relies on.
 - [Attachment bytes](attachment-bytes.md) — the sole-writer rule for the app-private attachment directory,
   which is why #1263 fetches rather than retaining the picked file.
-- #1265 (the name-on-hover tooltip) is the last slice of this family and is still open — it is also where
-  the two NITs #1264's review carried forward (every remove control sharing one accessible name; focus
-  landing on `<body>` after a removal) get decided, since it already revisits this control's naming.
+- [Composer attach — the name pill](composer-attach-name-pill.md) (#1265) — landed; split to its own page
+  2026-09-08. The Pill naming a tile's file on hover and keyboard focus, the last slice of this family.
 - [PR #1269](https://github.com/pyrycode/pyrycode-desktop/pull/1269),
   [PR #1270](https://github.com/pyrycode/pyrycode-desktop/pull/1270),
   [PR #1271](https://github.com/pyrycode/pyrycode-desktop/pull/1271),

@@ -2,9 +2,9 @@
 
 The renderer's held copy of the open conversation's stored system prompt, and whether the running
 session was started with a different one — a dedicated, single-slot Zustand store closing the read
-half of [System prompt send](system-prompt-send.md)'s transport leg. Nothing renders it yet: the
-editor surface is [#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078); this store and
-its bridge ship dormant.
+half of [System prompt send](system-prompt-send.md)'s transport leg. Read by the [Channel info sheet's
+System prompt section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)
+(#1078), the store's first and only consumer.
 
 Introduced in [#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231), split from #1078.
 [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) built the transport (the
@@ -205,11 +205,11 @@ daemon → system_prompt reply → systemPromptReceived{conversationId, systemPr
 
 ## Configuration and usage
 
-- **Import surface** (no consumer yet): `import { useSystemPromptStore, selectSystemPromptReading }
-  from '@renderer/store/systemPromptStore'`.
+- **Import surface**: `import { useSystemPromptStore, selectSystemPromptReading } from
+  '@renderer/store/systemPromptStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, the twelfth headless leaf.
-- Consumed by nothing today. [#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078) is the
-  first and only planned reader, and inherits the render discipline named below.
+- Consumed by [`SystemPromptSection`](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)
+  (#1078), the store's first and only reader, which inherits the render discipline named below.
 
 ## Security
 
@@ -225,12 +225,19 @@ a rendering-and-editing surface, exactly where a skimmed inherited contract goes
 against three constants, the id resolved in main from this app's own outbound request — so no daemon
 string crosses on either field.
 
+[#1078](conversation-shell-session-and-channel-info.md#system-prompt-section-1078) discharged this
+deny-list rather than inheriting it by reference: the value reaches exactly one sink, a controlled
+`<textarea value={…}>` — an escaped React text child server-side, a DOM property in the browser, never
+a serialized attribute — with no `dangerouslySetInnerHTML`, URL, filename, cache key, lookup path or
+React `key` anywhere on that path.
+
 ## Edge cases and limitations
 
 - **`reading === null` after an activation is ambiguous, and that is permanent, not a gap to close.**
   `system_prompt` is reply-only, so a still-`null` reading means either "still in flight" or "never
-  coming" — a consumer cannot tell which. #1078 must not block its editor on this value or design a
-  loading spinner keyed on it.
+  coming" — a consumer cannot tell which. #1078's section does not distinguish the two: its `loading`
+  arm (no editor, no Save, no Clear) covers both, fail-closed by construction rather than a spinner
+  keyed on a distinction the store cannot make.
 - **No `connected`-edge refresh, no turn-end refresh — deliberately.** Unlike [Run configuration
   store](run-config-store.md)'s two extra refresh edges, this store's only ingress is the activation
   ask. A reconnect to the same daemon does not invalidate a stored prompt, and a daemon-wide edge has
@@ -262,9 +269,10 @@ string crosses on either field.
 - **[#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)** — built the transport this
   store and bridge are the first consumer of; shipped with all four exhaustive bridges' no-op arms
   already in place.
-- **[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)** — the editor surface; the
-  first and only planned reader of `selectSystemPromptReading`, and the owner of the render/escape/
-  length-bound discipline this store's header states but does not itself enforce.
+- **[Conversation shell — session boundaries and channel info § System prompt
+  section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** (#1078) — the
+  editor surface; the first and only reader of `selectSystemPromptReading`, and the owner of the
+  render/escape/length-bound discipline this store's header states but does not itself enforce.
 - [System prompt write](system-prompt-write.md) — the write leg (#1249) and its window-side store
   (#1250, `systemPromptWriteStore`): a fourth arrow on the same `clearRunConfig` seam, answering "did my
   save land" rather than "what does this conversation hold." Its `reading === null` argument for keeping

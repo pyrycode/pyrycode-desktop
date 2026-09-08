@@ -4,7 +4,8 @@ The **write half's transport leg**: an outbound conversation-keyed `set_system_p
 tri-state prompt, a renderer→main command member with its boundary guard, a client-side byte bound on
 the operator's text, and the two correlated outcomes — a confirmation resolved off the reused
 `conversation_updated` ack, and a refusal resolved off the existing `daemon-error` path — crossing to
-the window as typed events. Nothing in the window sends it yet (#1250) and nothing renders it (#1078).
+the window as typed events. #1250 added the window-side send and store; #1078's [System prompt
+section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078) renders it.
 
 Introduced in [#1249](../codebase/1249.md), split from #1232. The daemon side is `pyrycode/pyrycode`
 \#2149 (storage) / #2150 (applied at next spawn) / #2151 (this write verb) / #2152 (the read verb, the

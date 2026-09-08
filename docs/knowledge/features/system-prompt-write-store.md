@@ -3,9 +3,10 @@
 The window's half of the `set_system_prompt` write: a submit path the renderer can call, and a
 dedicated Zustand store that says whether a named conversation's write is in flight, confirmed, or
 refused. Closes the window-side gap [System prompt write](system-prompt-write.md)'s transport leg
-(#1249) left open. Nothing renders it yet: the editor surface is
-[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078); this store and its bridge ship
-dormant, exactly as [System-prompt store](system-prompt-store.md) (#1231) did on the read side.
+(#1249) left open. Submitted by the [Channel info sheet's System prompt
+section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078) (#1078), the
+store's first and only caller — exactly as [System-prompt store](system-prompt-store.md) (#1231) was
+on the read side until the same ticket landed.
 
 Introduced in [#1250](https://github.com/pyrycode/pyrycode-desktop/issues/1250), split from #1232.
 Three of the four client legs were merged first: #1230 built the transport read, #1231 fired the ask
@@ -199,14 +200,20 @@ so `__proto__`/`constructor` are ordinary keys reaching nothing) and the id is c
 write side and the read side, so no attacker-chosen string reaches the key position at all. A plain
 object literal here would have been a MUST FIX.
 
+[#1078](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)'s own review found
+this store's design already closes the two-writes ambiguity behaviourally rather than needing a fix
+here: the section gates Save and Clear on the in-flight state, so holding a control cannot flood an
+on-path relay with `set_system_prompt` frames at click rate.
+
 No async work is started anywhere in this slice — no promise, no timer, no retry — so the whole
 cancellation path is the subscription's off-handle, returned as `SystemPromptWriteData`'s effect
 cleanup.
 
 **Known limitation, inherited from the transport leg and unresolved here.** Two writes to the same
 conversation in flight at once produce two outcomes, each naming that conversation, and nothing
-distinguishes which write each settles. #1078 closes the gap behaviourally by gating its submit on the
-in-flight state rather than by minting an identity this slice was told not to invent.
+distinguishes which write each settles. [#1078](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)
+closes the gap behaviourally by gating its submit on the in-flight state (both Save and Clear disabled
+while a write is outstanding) rather than by minting an identity this slice was told not to invent.
 
 ## Testing strategy
 
@@ -235,6 +242,8 @@ The three `clearRunConfig` bodies and `App.tsx`'s mount are structurally uncover
   shell — conversation exits and stamps § The run-configuration
   clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167)
   — the shared `clearRunConfig` seam this ticket joined as a fourth member.
-- **[#1078](https://github.com/pyrycode/pyrycode-desktop/issues/1078)** — the editor surface; the first
-  and only planned reader of `submitSystemPrompt` and `selectSystemPromptWriteFor`, and the owner of
-  gating a submit on the in-flight state to work around the two-writes ambiguity.
+- **[Conversation shell — session boundaries and channel info § System prompt
+  section](conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** (#1078) — the
+  editor surface; the first and only caller of `submitSystemPrompt` and reader of
+  `selectSystemPromptWriteFor`, and the owner of gating a submit on the in-flight state to work around
+  the two-writes ambiguity.

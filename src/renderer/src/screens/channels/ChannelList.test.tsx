@@ -471,6 +471,45 @@ describe('ChannelListView', () => {
     )
   })
 
+  // #1172 — the name pill each control shows on hover or keyboard focus. Only the MARKUP is assertable
+  // here: the reveal, the drawing and the box all need a layout engine and live in
+  // e2e/sidebar-control-name-pill.spec.ts.
+  //
+  // Asserted as the closing-tag ADJACENCY rather than as two independent substrings, which is what makes
+  // this a detector for the one placement that would break the shipped tier: the glyph's opening run is
+  // asserted whole two tests up, so a pill that drifted in FRONT of the <svg> would redden there — but
+  // only this assertion says WHERE the pill is, and only it fails if the pill moves out of the button
+  // altogether (a sibling of the control would still contain both substrings).
+  //
+  // The `aria-hidden` is in the same run on purpose. A button's `aria-label` already overrides its child
+  // text for the accessible name, so this attribute is belt-and-braces — which is exactly why it needs
+  // pinning: nothing else in either tier would redden if it were dropped.
+  it('names the Save-as-channel control in an aria-hidden pill inside the button (#1172 AC1/AC4)', () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(
+      '</svg><span class="channel-list__control-name" aria-hidden="true">Save as channel</span>'
+    )
+  })
+
+  it('names the Rename control in an aria-hidden pill inside the button (#1172 AC1/AC4)', () => {
+    const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(markup).toContain(
+      '</svg><span class="channel-list__control-name" aria-hidden="true">Rename</span>'
+    )
+  })
+
+  // The pill text and the `aria-label` come off ONE constant each, so this is the drift guard: a row
+  // carrying the control carries the accessible name and the pill text, and the two read the same words.
+  // Counted rather than merely contained — a second pill on a row that draws one control would show here.
+  it('keeps each control’s pill text and accessible name in step (#1172 AC1)', () => {
+    const saved = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(countOf(saved, RENAME_MARKER)).toBe(1)
+    expect(countOf(saved, '>Rename</span>')).toBe(1)
+    const recent = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(countOf(recent, SAVE_MARKER)).toBe(1)
+    expect(countOf(recent, '>Save as channel</span>')).toBe(1)
+  })
+
   it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {
     // The FAB is a sibling of the list body, so it is present whether the list is not-loaded, empty,
     // or populated — the affordance to start a conversation must always be reachable.

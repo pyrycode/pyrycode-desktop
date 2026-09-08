@@ -806,6 +806,17 @@ export function CollapsibleWorkspaceGroup({
 /** One row as the sidebar sees it: the wire fields plus the server stamp #1086 rides beside them. */
 type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 
+// #1172 — the two trailing controls' names, each a client-owned module-level constant in the
+// HOST_ROW_FALLBACK_LABEL / SERVER_ROW_LABEL idiom and never a daemon string. Each is read TWICE, by the
+// control's `aria-label` and by the pill that names it on hover, so the two cannot drift: a screen reader
+// and a pointer are told the same word by construction rather than by two literals kept in step by hand.
+//
+// NOT merged with anything. `.conversation`'s own Rename entry in the thread overflow menu carries the
+// same six characters, and folding the two together would couple two surfaces' copy across a cross-screen
+// import for one word — the ruling `HOST_ROW_FALLBACK_LABEL` already records for `SERVER_ROW_LABEL`.
+const RENAME_CONTROL_LABEL = 'Rename'
+const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
+
 /**
  * One section's rows, grouped by server and then by workspace (#1070) — the level the design has always
  * drawn (103:2959) and the app has never rendered, because the host row came from a single global.
@@ -1121,7 +1132,7 @@ function Row({
         <button
           type="button"
           className="channel-list__rename"
-          aria-label="Rename"
+          aria-label={RENAME_CONTROL_LABEL}
           onClick={onRename}
         >
           <svg
@@ -1134,6 +1145,18 @@ function Row({
           >
             <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
           </svg>
+          {/* #1172 — the name pill, APPENDED after the glyph and never inserted before it: the unit tier
+              asserts each `<svg …>` opening run whole, and a child after the closing tag leaves both
+              byte-identical (the append discipline #1265 records for the composer's own pill). Hidden by
+              `channels.css` until this control's own `:hover` or `:focus-visible` — the CONTROL's, not
+              the row's, which is the whole of "hovering the title alone shows no pill".
+
+              `aria-hidden` is belt-and-braces rather than the mechanism: the button's `aria-label`
+              already overrides child text for the accessible name. It is what makes the claim true by
+              construction instead of by a computation rule a reader has to know. */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {RENAME_CONTROL_LABEL}
+          </span>
         </button>
       )}
       {onSaveAsChannel && (
@@ -1151,7 +1174,7 @@ function Row({
         <button
           type="button"
           className="channel-list__save"
-          aria-label="Save as channel"
+          aria-label={SAVE_AS_CHANNEL_CONTROL_LABEL}
           onClick={onSaveAsChannel}
         >
           <svg
@@ -1164,6 +1187,13 @@ function Row({
           >
             <path d="M11.7859 5.26026C12.2311 5.70553 12.2311 6.42553 11.7859 6.86605C11.3406 7.30658 10.6206 7.31132 10.1801 6.86605L6.05902 2.745L1.93796 6.86605C1.4927 7.31132 0.7727 7.31132 0.332173 6.86605C-0.108353 6.42079 -0.11309 5.70079 0.332173 5.26026L5.24902 0.333947C5.69428 -0.111316 6.41428 -0.111316 6.85481 0.333947L11.7859 5.26026Z" />
           </svg>
+          {/* The Rename control's pill above, on the other tree's affordance — same class, same append
+              discipline, same reason. The two blocks are verbatim but for the word, which is this file's
+              shipped idiom for these two controls (`.channel-list__rename` restates `.channel-list__save`
+              declaration for declaration in `channels.css`, and its comment says why). */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {SAVE_AS_CHANNEL_CONTROL_LABEL}
+          </span>
         </button>
       )}
     </div>

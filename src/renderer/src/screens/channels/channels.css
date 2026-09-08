@@ -630,6 +630,102 @@
   display: block;
 }
 
+/* #1172 — THE NAME PILL both trailing controls show on hover or keyboard focus (Figma Pill 347:6617).
+   Since #1171 each control is a bare 12px glyph revealed by the row's hover, so nothing named them; this
+   is that name, drawn in the Pill's own treatment.
+
+   ⭐ THE TWO COLOURS ARE READ BY NAME AND THE EXPORT'S HEXES ARE NOT USED. `get_design_context` on the
+   node prints `bg-[var(--schemes/primary-container,#cfe4ff)]` over
+   `text-[color:var(--schemes/on-primary-container,#134a74)]` — the pair TRANSPOSED against tokens.css,
+   where --color-primary-container is #134a74 and --color-on-primary-container is #cfe4ff. The node's own
+   screenshot settles it: dark ground, light ink, which is what the tokens by name produce. #1262, #969
+   and #1265 each hit this trap; `e2e/sidebar-control-name-pill.spec.ts`'s two computed-colour constants
+   are the only detector for it, since nothing in the static tier can see a colour at all.
+
+   A SIDEBAR-SCOPED RESTATEMENT of `.composer__attachment-name`, not a lift of it (#1093's family landed
+   first and shipped that class scoped to the composer). `conversation.css` and `ComposerAttach.tsx` are
+   untouched: a BEM lift would turn `class="composer__attachment-name"` into a two-class mix and silently
+   degrade the composer specs that assert on whole attribute runs. Both blocks read the same tokens by
+   name and both are anchored to the same node, so the drift risk sits in the token layer.
+
+   ⭐ PLACEMENT: THE ROW'S OWN VERTICAL BAND, RIGHT-ALIGNED TO THE CONTROL — the one placement that makes
+   the containment criterion hold on every row rather than on the rows a test happens to reach. The
+   arithmetic is entirely the control block's above:
+     - the control is `top: 50%` + `translateY(-50%)` at `height: --space-6`, a 24px box centred on a row
+       whose 24px is itself derived (a 16px line box plus the open button's 4px), so the control's box and
+       the row's band COINCIDE;
+     - this pill is centred the same way inside it and is itself 24px tall (--space-1 + the 16px
+       body-small line + --space-1), so it coincides with the band too. Containment inside `.channel-list`
+       then follows from the ROW being in view, at any scroll position and on the first row and the last
+       alike. That matters because `.channel-list` is `overflow-y: auto`, which forces overflow-x off
+       `visible` as well, so it clips on BOTH axes — and a clipped box still reports its geometry, so no
+       `toBeVisible()` and no box read could tell a clipped pill from a drawn one.
+     - `right: 0` pins it to the control's padding-box right edge, which is the row's right edge, which is
+       `.channel-list`'s content right edge. So the pill grows LEFTWARD and reaches neither horizontal
+       edge — and an out-of-flow box adds scrollable overflow only where it overflows right or bottom, so
+       the sidebar gains no horizontal scroll.
+   Declined: flipping below when there is no room above solves a problem this placement does not have, and
+   rendering outside the scroller needs a portal plus a scroll-synced position for the same result.
+
+   THE BAND IS WHAT THE E2E PINS, and the pinning is MEASURED. Re-pointing this rule at the composer
+   pill's own placement (`bottom: calc(100% + var(--space-2))`, one row up) and rebuilding moves the first
+   row's pill exactly 32px off its row's top edge and reddens that spec's band assertion. Its CONTAINMENT
+   assertions stay green under the same mutation, because `.channel-list__actions` is sticky at the
+   scroller's top-right and keeps every hoverable control at least its own height below the top edge — so
+   containment is the criterion this ticket owes, and the band is the thing that makes it true.
+
+   THE COST, STATED: while a control is hovered its pill covers the trailing ~104px of that row's title.
+   Accepted (the ticket names it) — the pill is up only while the pointer sits on a 36 × 24 control.
+
+   `display: none` → `block` and NEVER opacity/visibility, #1265's reason: a hidden pill then holds no
+   accessibility-tree entry and reports NO BOX AT ALL, so a test tells "showing" from "hidden" by the KIND
+   of answer rather than by comparing a number against itself. This is the opposite of the ruling on the
+   CONTROL twenty lines up, which must stay `opacity: 0` because nine shipped specs focus or click it
+   without hovering first. Two different elements, two different rulings, no conflict.
+
+   `pointer-events: none` — the pill overlays the row's own open button, and a click aimed at the row (or
+   Playwright's hit test on those nine specs) must read straight through it. It also stops the pill
+   hovering itself, so there is no feedback loop with the trigger below.
+
+   NO `max-width` AND NO ELLIPSIS CHAIN, which is where this parts company with the composer's pill: that
+   one bounds an untrusted daemon filename of unbounded length. Both strings here are client-owned
+   compile-time constants, the longer computing to ~104px inside a 332px row (the 400px sidebar less two
+   --space-5 and the row's --space-7 inset), so a bound would defend a case that cannot occur. `nowrap`
+   alone is what makes it the drawing's one line. */
+.channel-list__control-name {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The trigger — THE CONTROL'S OWN `:hover`, never the row's, which is the whole of "hovering the row's
+   title alone shows no pill". The reveal of the GLYPH hangs off the row (so the glyph is already there
+   when the pointer arrives at it); the reveal of its NAME hangs off the control, so the two are
+   deliberately different scopes rather than an inconsistency.
+
+   `:focus-visible` and not `:focus`, matching the control's own opacity rule directly above it: the same
+   pseudo-class turns the control opaque and its pill `block`, so the keyboard case cannot half-fire. Four
+   selectors rather than a descendant-of-any-button form — `.channel-list__row-open` is a button too, and
+   naming the two controls says which elements can carry a pill. */
+.channel-list__save:hover .channel-list__control-name,
+.channel-list__save:focus-visible .channel-list__control-name,
+.channel-list__rename:hover .channel-list__control-name,
+.channel-list__rename:focus-visible .channel-list__control-name {
+  display: block;
+}
+
 /* The label run — the row's only text, and since #1097 the DESKTOP node's `M3/body/small` (103:2968:
    12/16, tracking 0.4, weight 400) in `Schemes/On Surface`, replacing the mobile node's title-medium.
    Every one of those four values already had an exact token, so this is a token swap and adds no literal.

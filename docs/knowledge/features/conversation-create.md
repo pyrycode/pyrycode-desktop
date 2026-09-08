@@ -179,6 +179,13 @@ itself stays exactly the two-field literal it always was. Until #1179 a channel 
 being by [promoting an existing chat](save-as-channel-dialog.md); this is the first path that creates one
 directly. See [Create-channel dialog](create-channel-dialog.md) for the dialog, the container state, and
 the security review of the second untrusted value (`name`) this adds to the same outgoing command.
+[#1308](channel-list-host-row.md#the-add-workspace-dialog-1308) then gave the command a **third sibling
+constructor**, `requestNewWorkspaceChat`, one level up from #1178's: an operator-typed folder rather than
+an existing group's own `cwd`, and a top-level `serverId` that is *required* rather than optional — the
+host row's Add-workspace dialog always knows which machine's plus was clicked, and main refuses an unnamed
+`createConversation` as ambiguous once more than one server is paired (#1120). Its payload is
+`requestNewConversation`'s byte for byte; only the routing key differs, which is why it is a third sibling
+rather than a widened parameter on either existing helper.
 [#515](../codebase/515.md)
 later added a second, independent consumer on the same event: the [conversation list
 store](conversation-list-store.md)'s `subscribeConversations` now also re-requests the list on
@@ -211,7 +218,7 @@ daemon → conversation_created frame → onDriverEvent 'message' → parseInbou
 | `payload` not an object, or a required field missing/mistyped | `parseConversationCreatedPayload` | throws `WireDecodeError`, category-only message; frame dropped, no partial event |
 | `name: null` on the wire | `requireStringOrNull` | decodes to `null` — a valid distinct value, never `''` |
 | Oversized plaintext | existing `MAX_PLAINTEXT_BYTES` guard | throws before parsing begins |
-| Daemon rejects the create (a `cwd` that does not exist, or escapes the daemon's home) | main-side correlation (below) | bare `conversationCreateRejected`; no consumer yet (#1308) |
+| Daemon rejects the create (a `cwd` that does not exist, or escapes the daemon's home) | main-side correlation (below) | bare `conversationCreateRejected`; consumed by [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog while its own create is outstanding, ignored otherwise |
 
 ## The success reply stays uncorrelated; the rejection, since #1307, does not
 
@@ -227,18 +234,19 @@ envelope id in a module-scope `pendingCreateConversations: Set<number>` (`daemon
 daemon `error` back to it by `Envelope.in_reply_to`, and on a match emits a bare `{ type:
 'conversationCreateRejected' }` — never a field read off the untrusted error payload. It exists because a
 create that cannot succeed was previously indistinguishable from one that simply produced no reply yet: the
-FAB and the Channels-tree workspace plus (#1179) both had no failure path at all. Ships with **no
-consumer** — [#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308)'s Add-workspace dialog is
-the first caller that can actually receive a daemon rejection (a folder path that does not exist or
-escapes `$HOME`), so it is also the first to need this event.
+FAB and the Channels-tree workspace plus (#1179) both had no failure path at all. Shipped with no consumer;
+[#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog is the first — and,
+as of #1308, the only — caller that can actually receive a daemon rejection (a folder path that does not
+exist or escapes `$HOME`).
 
-Bare by construction, not because only one caller exists — `create_conversation` already has two live
-callers today and #1308 adds a third, so the arm **cannot** say whose rejection it is reporting. A future
-consumer must gate on its own in-flight state and separately accept that a concurrent caller's rejection is
-indistinguishable from its own. See [Daemon connection correlation § Create-conversation rejected
-correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) for the full
-store design, the accepted unbounded-growth argument, and the corrected bareness rationale (a code-review
-finding during #1307 caught the shipped code comment overstating the single-caller case).
+Bare by construction, not because only one caller exists — `create_conversation` has three live callers
+now that #1308 shipped, so the arm **cannot** say whose rejection it is reporting. #1308's dialog gates on
+its own in-flight state (`status === 'creating'`) and accepts that a concurrent caller's rejection is
+indistinguishable from its own while its create is outstanding — the residue fails toward a false failure
+report on a create that will still land, never a false success. See [Daemon connection correlation §
+Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+for the full store design, the accepted unbounded-growth argument, and the corrected bareness rationale (a
+code-review finding during #1307 caught the shipped code comment overstating the single-caller case).
 
 ## Out of scope
 
@@ -251,8 +259,9 @@ finding during #1307 caught the shipped code comment overstating the single-call
 
 - [Daemon connection correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
   (#1307) — the `pendingCreateConversations` store, the bare `conversationCreateRejected` arm, and the
-  corrected bareness rationale (a rejection cannot be attributed to a caller — there are two today, a third
-  once #1308 lands). Ships with no consumer.
+  corrected bareness rationale (a rejection cannot be attributed to a caller — three live today).
+- [Channel List — the host row § The Add workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308)
+  (#1308) — the third caller, `requestNewWorkspaceChat`, and the first consumer of the rejection arm above.
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)

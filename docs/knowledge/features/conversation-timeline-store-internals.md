@@ -150,6 +150,16 @@ there's no counter to discard on the falling edge. The reducer arm collapses to 
 `state.compacting === event.active ? state : {…}` ternary — the edge *is* the state, with no
 rising/falling branch split needed.
 
+`thinkingProgress` ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at
+[#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) joins the `null` fall-through group
+here — **dormantly**, unlike `slashCommandList`/`modelList`/`historyPageReceived`/`historyRequestFailed`/
+`systemPromptReceived`/`workspaceUpdated` above it in declaration order, which this bridge nulls
+permanently. It is the member of this group a reader is most likely to want owned here: a mid-turn
+reading of how much claude thought reads like thread chrome for the running turn, the same test
+`apiRetry`/`compacting` pass. Whether it lands as a seventh owned arm the way those two eventually did,
+or through a fifth independent subscriber the way `questionShown` (#885) and `slashCommandList` (#954)
+did instead, is left to whichever ticket claims it — nothing here decides the shape in advance.
+
 ## The opening ask (#1259)
 
 ```ts

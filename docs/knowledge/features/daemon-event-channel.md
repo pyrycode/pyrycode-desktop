@@ -140,7 +140,7 @@ Gives the background process **one typed function** to emit a sealed daemon-even
 
 Since #1068, every event carries `serverId: string | null` — the id of the paired server it came from,
 or `null` where no paired record was in hand when the emitter was bound. This rides beside the union
-(`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside it, so the 43 arms below are
+(`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside it, so the 42 arms below are
 unchanged; see [Emit and subscribe](daemon-event-channel-plumbing.md) for `bindServerOrigin` and the
 full design. It is a no-op for every bridge today — nothing keys state on it yet — laid down for a
 future per-server connection registry (#1084) that needs a way to tell two live connections' events
@@ -210,6 +210,21 @@ Three pieces, three layers:
   consumer is #1250. **Not reflected in [the sealed union reference](daemon-event-channel-sealed-union.md)**
   — that file is at its 50000-byte cap with no heading structure to split at; `src/shared/ipc/events.ts`
   and this bullet are authoritative for these two members until it is split.
+- **`thinkingProgress` is `modelAnnounced`'s shape peer, but a reading with no rising or falling
+  edge.** [#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313) (decoded at
+  [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) wired `emitDaemonEvent` for it
+  from `daemonConnection.ts`'s inbound switch, placed directly after `model-announced`; a fresh
+  `{ type: 'thinkingProgress', estimatedTokens, conversationId }` literal copied by name from the
+  decoded payload (never a spread), with `estimated_tokens_delta` the one field dropped — nothing
+  consumes it, and the payload's own contract forbids summing it into a total. Like `apiRetry`/
+  `compacting`, the emit is deliberately stateless: no dedup, no coalescing, no last-value memo — the
+  wire re-fires as the count climbs and restarts near zero at every inference-request boundary, so a
+  monotonic filter would eat legitimate traffic. Unlike either, it carries no `daemonTs`: the decode
+  arm takes no `FrameTimestamp`, since a stored `thinking_progress` is still skipped and there is no
+  served-page half to join against. Proven by a round-trip test asserting the exact emitted-event
+  sequence (including a same-value repeat and a climb-then-restart sequence) and an exact
+  `['conversationId','estimatedTokens','type']` key set. Ships dormant across all four exhaustive
+  bridges — three permanently, `timelineBridge` dormantly — awaiting #1314.
 
 ## Security posture
 

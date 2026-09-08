@@ -163,7 +163,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all forty `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all forty-two `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -195,6 +195,7 @@ A `switch (event.type)` over all forty `DaemonEvent` arms with a `default: retur
 | `sessionSettingsRejected` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#269) |
 | `relayLinkChanged` | `null` | consumed by none of the three existing bridges; the real consumer is the [relay-link store](relay-link-store.md)'s own bridge (#329, shipped) — present only for exhaustiveness (#328) |
 | `backgroundTaskStarted` | `null` | consumed by none of the three existing bridges; present only for exhaustiveness (#564). Ships dormant — [the roster store (#573, shipped)](../codebase/573.md) consumes only `backgroundTaskRoster`, not this arm; awaiting #574. First of three sibling frame arms (#565/#566 follow) |
+| `thinkingProgress` | `null` | consumed by none of the three existing bridges; the session store has no thinking state at all — present only for exhaustiveness ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)). **Permanently** null here, on the `questionShown` grounds rather than `stallDetected`'s: the arm is a mid-turn reading with no rising and no falling edge, so there is no status scalar here for it to ever flip. See [Daemon event channel — the sealed union: per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md) for the full per-field rationale |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 

@@ -293,6 +293,75 @@ coordinate from the card's edge: proved red first at the header's 0-for-20 again
 The trailing edge is read off `.channel-list`'s `clientWidth` so a classic scrollbar on the host machine
 cannot move it. `host-label-sidebar.spec.ts`'s trailing-inset constant went from 16 to 0 with the dots.
 
+## The control's own name, on hover or keyboard focus (#1172)
+
+Since #1171 each trailing control is a bare 12px glyph, invisible until the row's hover reveals it. This
+names it: hovering (or keyboard-focusing) **the control itself, never the row** shows a Pill (Figma
+`347:6617`) reading `Rename` or `Save as channel`, restated as `.channel-list__control-name` in this file
+rather than lifted from [`.composer__attachment-name`](composer-attach-name-pill.md) (#1265, shipped
+first). Two reasons, not one: verbatim duplication for these two controls is already this file's shipped
+idiom (`.channel-list__rename` restates `.channel-list__save` declaration for declaration), and a BEM lift
+would turn `class="composer__attachment-name"` into a two-class mix that silently degrades the composer
+specs asserting whole attribute runs. Both blocks read the same tokens by name and anchor to the same
+node, so drift risk sits in the token layer, not in shared markup.
+
+**The two colours are transposed in the Figma export — the same trap as #1265, #1262 and #969.**
+`get_design_context` on 347:6617 prints the ground and ink swapped against `tokens.css`
+(`--color-primary-container` `#134a74` / `--color-on-primary-container` `#cfe4ff`); the node's own
+screenshot — dark ground, light ink — is what settles it, by name rather than by the exported hex. Only
+`e2e/sidebar-control-name-pill.spec.ts`'s two computed-colour constants can detect a regression here,
+since nothing in the static tier renders a colour.
+
+**Both names are one module constant each, read by the control's own `aria-label` and by its pill, so the
+two cannot drift:** `RENAME_CONTROL_LABEL`, `SAVE_AS_CHANNEL_CONTROL_LABEL` in `ChannelList.tsx`. Not
+merged with `.conversation`'s own Rename entry in the thread overflow menu, despite the same six
+characters — the `HOST_ROW_FALLBACK_LABEL`/`SERVER_ROW_LABEL` ruling against a cross-screen import for one
+word applies here too.
+
+**Placement: the row's own vertical band, right-aligned to the control — not above it.** The control is
+already a 24px box (`top: 50%`, `translateY(-50%)`, `height: var(--space-6)`) centred on the row; the pill
+is centred inside it the same way and is itself 24px tall (`--space-1` + the 16px body-small line +
+`--space-1`), so its box coincides with the row band on every row, at any scroll position — containment
+inside `.channel-list` (`overflow-y: auto`, which clips both axes, per § The redrawn frame above) then
+follows from the control being in view, rather than needing a per-row proof. `right: 0` pins it to the
+control's padding-box right edge, i.e. the row's right edge, so it grows leftward and adds no scrollable
+overflow on either axis. The cost, accepted rather than hidden: a hovered control's pill covers roughly
+the trailing 104px of that row's title, for as long as the pointer sits on the 36×24 control.
+
+**Why not above the row, the composer pill's own placement — measured, not just reasoned.**
+`.channel-list__actions` sits sticky at the scroller's top-right with `z-index: 1`, covering the same
+corner a row's trailing control occupies, so the highest row a pointer can actually reach always carries a
+live 32px of headroom above it once the actions cluster is accounted for — the in-band placement was
+chosen because it needs no headroom at all, not because none exists. Proving that third geometry case took
+two failed drafts: each scrolled a row flush against the scroller's own top edge and hovered its control,
+and both came back with the row 700px down the viewport, because Playwright's `hover()` **relocates** its
+target when the row it computed is unhittable (the sticky cluster physically covers the control) rather
+than failing on it — a false "still passes" the same shape as a clipped box still reporting geometry. The
+block now reads the actions cluster's own bottom edge at runtime, parks the probe row immediately under
+it, and re-reads that row's position after the hover, so a relocation fails the block instead of silently
+weakening the proof it was meant to be.
+
+**Mechanism, matching #1265 throughout:** `display: none → block`, never `opacity`/`visibility`, so a
+hidden pill reports no box at all and a test tells "showing" from "hidden" by the *kind* of answer;
+`pointer-events: none` — here because the pill overlays the row's own open button, and a click aimed at
+the row (or Playwright's hit test on the nine pre-existing specs that click these controls without
+hovering first) must read straight through it; `aria-hidden="true"` plus append-after-the-`<svg>` markup
+order, so `ChannelList.test.tsx`'s existing `<svg …>` opening-run and `aria-label` assertions stay
+byte-identical. No `max-width`/ellipsis: both strings are client-owned compile-time constants (the longer
+computes to ~104px inside a 332px row), unlike the composer pill's unbounded daemon filename.
+
+**Testing.** `ChannelList.test.tsx` adds the closing-tag adjacency `</svg><span
+class="channel-list__control-name" aria-hidden="true">…</span>` per control — not two independent
+substrings, since a pill that drifted to a row-level sibling would still contain both and only adjacency
+catches it — plus a drift guard counting the pill text and the `aria-label` together.
+`e2e/sidebar-control-name-pill.spec.ts` (new) drives one launch against a tall, post-launch-pushed list
+(the fixture's own strict single-row click can't seed a multi-row list at launch): resting state (every
+pill mounted and hidden), each control's own hover (text, every computed style including both colours,
+siblings still hidden), containment on the first row, the last row, and the highest reachable row per the
+measured case above, hovering the row's title alone showing no pill (the scoping is the control's own
+`:hover`, never the row's), leaving, and the keyboard path (`Tab` onto the open row, never
+`locator.focus()`, matching § The redrawn frame's own `:focus-visible` reasoning).
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent doc.
@@ -300,5 +369,8 @@ cannot move it. `host-label-sidebar.spec.ts`'s trailing-inset constant went from
 - [#1098 spec](../../specs/architecture/1098-sidebar-open-row-fill.md) — the open row's fill.
 - [#1171 spec](../../specs/architecture/1171-sidebar-row-inset-and-hover-control.md) — the redrawn 8px
   inset and the hover-revealed trailing control.
+- [#1172 spec](../../specs/architecture/1172-row-control-name-pill.md) — the control's own name pill.
+- [Composer attach — the name pill](composer-attach-name-pill.md) — the treatment this restates, #1265,
+  shipped first.
 - [Save-as-channel dialog](save-as-channel-dialog.md), [Rename conversation dialog](rename-conversation-dialog.md)
   — the two dialogs the trailing controls open; their own CSS summaries were corrected for #1171's redraw.

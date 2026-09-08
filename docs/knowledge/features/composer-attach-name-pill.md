@@ -113,3 +113,6 @@ See `docs/specs/architecture/1265-attachment-name-pill.md` § Security review fo
 - [Composer attach](composer-attach.md) — the family's root page: the button, the outcome line and the
   copy module.
 - `docs/specs/architecture/1265-attachment-name-pill.md` — the full plan and its security review.
+- [Channel List — the row's desktop geometry § The control's own name](channel-list-desktop-row-geometry.md#the-controls-own-name-on-hover-or-keyboard-focus-1172)
+  — #1172 restates this treatment, sidebar-scoped, onto the Rename/Save-as-channel controls rather than
+  lifting this class; the two colours' Figma-export transposition is the same trap in both places.

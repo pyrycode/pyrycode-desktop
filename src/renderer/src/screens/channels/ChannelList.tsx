@@ -75,6 +75,9 @@ import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/Convers
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import { CreateChannelDialogView } from './CreateChannelDialog'
+// #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
+// one sender and no shipped twin to sit beside, which is `RenameConversationDialog`'s shape.
+import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspaceDialog'
 import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
@@ -185,6 +188,16 @@ export function ChannelList({
   // seeded EMPTY on every open (there is no current name to seed from, this being a create).
   const [createChannelCwd, setCreateChannelCwd] = useState<string | null>(null)
   const [createChannelName, setCreateChannelName] = useState('')
+  // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
+  // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
+  // at once and no mutual-exclusion logic is needed. `editWorkspaceCwd` is the WORKSPACE being renamed
+  // — the group key the clicked pen closed over — and holding it HERE is what keeps that daemon-asserted
+  // path out of every component below `renderServerTrees`; the dialog receives it as a display string
+  // and as the send's `path`, and as nothing else. `editWorkspaceName` is the controlled field, seeded
+  // on every open with the row's CURRENT label (this being an edit, not a create), so a reopen after a
+  // Cancel starts from what the row actually reads rather than from the abandoned draft.
+  const [editWorkspaceCwd, setEditWorkspaceCwd] = useState<string | null>(null)
+  const [editWorkspaceName, setEditWorkspaceName] = useState('')
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -230,6 +243,15 @@ export function ChannelList({
         onCreateChannel={(cwd) => {
           setCreateChannelCwd(cwd)
           setCreateChannelName('')
+        }}
+        // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
+        // clicked, and the new name still has to be typed. Both cells are seeded together, the field
+        // from the group's CURRENT label — which is the daemon-held `workspace_label` when there is one
+        // and the folder segment otherwise, resolved by `groupByWorkspace` and indistinguishable here
+        // on purpose (AC4 asks for "the row's current label", which is exactly what the row renders).
+        onEditWorkspace={(cwd, label) => {
+          setEditWorkspaceCwd(cwd)
+          setEditWorkspaceName(label)
         }}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
@@ -278,6 +300,31 @@ export function ChannelList({
           }}
         />
       )}
+      {/* #1180 — gated on an explicit `!== null` and NEVER on truthiness, for #1179's stated reason
+          one dialog up: an empty-string `cwd` would collapse into "no dialog open" under a truthy
+          test. It is unreachable today because `renderServerTrees` withholds the pen from the
+          unknown-workspace group, whose key IS the empty string — and writing the check this way is
+          what keeps that withhold load-bearing for one reason rather than two. */}
+      {editWorkspaceCwd !== null && (
+        <EditWorkspaceDialogView
+          name={editWorkspaceName}
+          // The held `cwd`, handed down as a DISPLAY STRING. The view renders it as an escaped child
+          // and nothing else — no attribute of the dialog derives from it (the module's own header
+          // states the full sink list).
+          path={editWorkspaceCwd}
+          onNameChange={setEditWorkspaceName}
+          // Cancel closes and sends nothing (AC4). The next open re-seeds both cells from the row, so
+          // there is nothing to clear here.
+          onCancel={() => setEditWorkspaceCwd(null)}
+          onSave={() => {
+            // Fire-and-forget, then close (AC5). `window.pyry` is dereferenced HERE, at interaction
+            // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
+            // the helper trims the name and decides the `null`.
+            requestRenameWorkspace(window.pyry.sendCommand, editWorkspaceCwd, editWorkspaceName)
+            setEditWorkspaceCwd(null)
+          }}
+        />
+      )}
     </>
   )
 }
@@ -304,6 +351,7 @@ export function ChannelListView({
   onNewConversation,
   onCreateChat,
   onCreateChannel,
+  onEditWorkspace,
   onSaveAsChannel,
   onRename
 }: {
@@ -339,6 +387,14 @@ export function ChannelListView({
   // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
   // the dialog's Create does, once a name has been typed.
   onCreateChannel: (cwd: string) => void
+  // #1180 — open the Edit-workspace dialog for the named workspace. REQUIRED for its two siblings'
+  // reason: a defaulted prop would let a future caller silently render a sidebar whose pen opens
+  // nothing. It takes the group's `cwd` AND the label the row is currently showing — the second
+  // argument is what the dialog's field is seeded from, and it is passed rather than re-derived so the
+  // dialog cannot disagree with the row about what the workspace is called. Neither is inspected here;
+  // both travel verbatim. Like `onCreateChannel` it does NOT send a command — the dialog's Save does,
+  // once a name has been typed.
+  onEditWorkspace: (cwd: string, label: string) => void
   onSaveAsChannel: (row: ConversationSummary) => void
   onRename: (row: ConversationSummary) => void
 }): JSX.Element {
@@ -358,6 +414,7 @@ export function ChannelListView({
         onOpen,
         onCreateChat,
         onCreateChannel,
+        onEditWorkspace,
         onSaveAsChannel,
         onRename
       )}
@@ -819,16 +876,35 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 // `createLabel?` beside `onCreate?` would admit a handler with no name and a name with no handler, and
 // would need a default that silently mislabels one of the two trees. Bundled, the invariant is
 // structural: a tree either offers a create — named — or offers none.
+//
+// #1180 GAVE THE ROW A SECOND TRAILING CONTROL, the pen that opens the Edit-workspace dialog, and it
+// arrives as its own optional object rather than as a second field on `create`'s: the two controls are
+// independently withheld in principle (a tree could offer one and not the other) and they say different
+// words, so bundling them would couple two affordances that differ in everything but position. Its
+// `onEdit` is nullary for `create.onCreate`'s reason — `renderServerTrees` closes over the group, so no
+// component here handles a `cwd` — and its name is a client-owned constant, so neither the workspace
+// label nor the path reaches any of its attributes.
+//
+// ⭐ IT IS RENDERED AFTER THE PLUS, AND THAT IS FORCED RATHER THAN CHOSEN. Both controls are absolutely
+// positioned, so DOM order drives neither the layout nor the drawn result (the pen still sits LEFT of
+// the plus). What it drives is the tab order, and `e2e/sidebar-workspace-create.spec.ts` focuses this
+// row's disclosure button, presses Tab ONCE and asserts the plus receives focus — a pen inserted before
+// the plus takes that Tab and reddens a shipped spec this ticket must leave untouched. The cost, stated
+// rather than hidden: a keyboard user reaches the two trailing controls right-to-left. Re-ordering the
+// pair is that spec's change to make, not this ticket's, and `ChannelList.test.tsx` pins the order here
+// so a future reorder fails a unit test rather than an e2e run.
 function WorkspaceRow({
   label,
   expanded,
   onToggle,
-  create
+  create,
+  edit
 }: {
   label: string
   expanded: boolean
   onToggle: () => void
   create?: WorkspaceCreateControl
+  edit?: WorkspaceEditControl
 }): JSX.Element {
   return (
     <div className="channel-list__workspace-head">
@@ -896,6 +972,49 @@ function WorkspaceRow({
           </span>
         </button>
       )}
+      {edit && (
+        // #1180 — the pen, the plus's block one control over. Icon-only button: `aria-label` supplies
+        // the accessible name since the glyph carries no text, and the value is `edit.label`, read
+        // TWICE (here and by the pill below) so the spoken name and the drawn one cannot drift.
+        //
+        // Its own CSS class rather than the plus's, which is the opposite call #1179 made for the two
+        // plusses and for the opposite reason: those two ARE one drawn control differing only in name,
+        // where this one is a different size (14 vs 16) at a different inset (28 vs 2), so sharing a
+        // class would mean a modifier that overrode half of it. The class ends in a token of its own
+        // and carries its closing quote in every marker, so it joins neither `.channel-list__workspace`
+        // nor `.channel-list__workspace-create` in a CSS selector or in a unit-tier attribute scan.
+        //
+        // Invisible at rest and revealed by the ROW's hover or by its own keyboard focus, on the plus's
+        // rules verbatim; `channels.css` says why that reveal is `opacity` and never `display: none`.
+        <button
+          type="button"
+          className="channel-list__workspace-edit"
+          aria-label={edit.label}
+          onClick={edit.onEdit}
+        >
+          {/* The drawing's own export (Font Awesome pen, the 14 × 14 "Icon Edgeless" the Hover variant
+              places at right 28, top 7.01). The path is `.channel-list__rename-icon`'s — the same glyph
+              the conversation row's Rename control already carries — so its 12-unit viewBox is reused
+              verbatim and the art is scaled to 14 by the box rather than re-exported at a second size. */}
+          <svg
+            className="channel-list__workspace-edit-icon"
+            viewBox="0 0 12 12"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
+          </svg>
+          {/* The plus's name pill (#1181) on the control beside it — same class, same append discipline
+              (a child AFTER the closing tag leaves the glyph's opening run byte-identical), same
+              reason. `aria-hidden` is belt-and-braces rather than the mechanism: the button's
+              `aria-label` already overrides child text for the accessible name. */}
+          <span className="channel-list__control-name" aria-hidden="true">
+            {edit.label}
+          </span>
+        </button>
+      )}
     </div>
   )
 }
@@ -941,6 +1060,7 @@ export function CollapsibleWorkspaceGroup({
   label,
   defaultExpanded = true,
   create,
+  edit,
   children
 }: {
   label: string
@@ -951,6 +1071,11 @@ export function CollapsibleWorkspaceGroup({
   // component never handles a daemon-derived path at all. The `label` rides along so the name and the
   // handler cannot drift — see `WorkspaceRow`'s header for why they are one object.
   create?: WorkspaceCreateControl
+  // #1180 — the trailing edit control this group offers, or `undefined` for a group that offers none
+  // (the unknown-workspace group, in either tree). Pure pass-through, exactly like `create`: nullary
+  // `onEdit`, because `renderServerTrees` is the level that holds the group's key and the label, so
+  // this component handles neither.
+  edit?: WorkspaceEditControl
   children: ReactNode
 }): JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -960,6 +1085,7 @@ export function CollapsibleWorkspaceGroup({
         label={label}
         expanded={expanded}
         create={create}
+        edit={edit}
         // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render
         // and is a check-then-act race against React's batching (ToolRow:746 / UnrecognizedRow:858).
         onToggle={() => setExpanded((open) => !open)}
@@ -1010,6 +1136,28 @@ type WorkspaceCreateControl = {
   readonly onCreate: () => void
 }
 
+// #1180 — the pen's name, in the same client-owned idiom and for the same reasons. ONE constant serves
+// BOTH trees, unlike `create`'s two: the pen says the same word above the divider and below it, because
+// a workspace is the same thing in each and editing it means the same thing. A second constant would be
+// two literals kept in step by hand for no distinction. Read TWICE, by the control's `aria-label` and
+// by the pill that names it on hover, so a screen reader and a pointer are told the same word by
+// construction. The workspace label reaches it in neither tree: `Edit ${label}` would put daemon text
+// in an attribute, which is the MUST FIX #696's review named.
+const EDIT_WORKSPACE_CONTROL_LABEL = 'Edit workspace'
+
+/**
+ * A workspace row's trailing edit control (#1180): what it is CALLED and what clicking it does, as one
+ * value — `WorkspaceCreateControl`'s shape one control over, and separate from it because the two
+ * differ in name, in size and in inset, so a single object would couple two independent affordances.
+ * Module-private; the one that exists is built at `renderBody`'s two `renderServerTrees` calls.
+ * `onEdit` is nullary below `renderServerTrees`, which is the level that closes over the group's key
+ * AND its label, so no component underneath handles a daemon-derived path or re-derives a name.
+ */
+type WorkspaceEditControl = {
+  readonly label: string
+  readonly onEdit: () => void
+}
+
 /**
  * One section's rows, grouped by server and then by workspace (#1070) — the level the design has always
  * drawn (103:2959) and the app has never rendered, because the host row came from a single global.
@@ -1049,7 +1197,13 @@ function renderServerTrees(
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
   // they differ in the two fields of this object alone. `onCreate` takes the `cwd` rather than the
   // group, so the caller states exactly what crosses this seam.
-  create?: { readonly label: string; readonly onCreate: (cwd: string) => void }
+  create?: { readonly label: string; readonly onCreate: (cwd: string) => void },
+  // #1180 — the trailing edit control this tree draws on each of its workspace rows. OPTIONAL and
+  // trailing like `create`, but BOTH calls supply the SAME object: the pen is not a per-tree
+  // difference, which is why its label is one constant rather than two. `onEdit` takes the group's
+  // `cwd` AND its resolved label, so the caller states exactly what crosses this seam — the path the
+  // rename will name, and the string the dialog's field is seeded from.
+  edit?: { readonly label: string; readonly onEdit: (cwd: string, label: string) => void }
 ): JSX.Element {
   const { servers, unattributed } = groupByServer(serverIds, rows)
   const workspaceGroups = (serverRows: readonly SidebarRow[]): JSX.Element[] =>
@@ -1078,6 +1232,22 @@ function renderServerTrees(
           create === undefined || group.key === UNKNOWN_WORKSPACE_KEY
             ? undefined
             : { label: create.label, onCreate: () => create.onCreate(group.key) }
+        }
+        // #1180 — the pen, withheld on exactly the same terms and by the same test. Its key is
+        // `UNKNOWN_WORKSPACE_KEY`, the empty string, which names no directory, so a rename sent with
+        // it would address nothing; and the test is on the KEY, never on the label, so a real
+        // directory named "Unknown workspace" is an ordinary group and keeps its pen.
+        //
+        // The closure passes the group's key AND its LABEL. The key travels VERBATIM — daemon-asserted
+        // text making a round trip back out as a command field, so echoing exactly what was received
+        // is the only safe handling, and main re-validates it at the untrusted IPC boundary. The label
+        // is `groupByWorkspace`'s resolved display string (the daemon's `workspace_label` when there is
+        // one, the folder segment otherwise) and it is passed rather than re-derived so the dialog's
+        // field cannot disagree with the row about what the workspace is currently called.
+        edit={
+          edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+            ? undefined
+            : { label: edit.label, onEdit: () => edit.onEdit(group.key, group.label) }
         }
       >
         {group.rows.map(renderRow)}
@@ -1113,6 +1283,10 @@ function renderBody(
   // #1179 — open the Create-channel dialog for a named workspace. Handed to the `channels` tree alone.
   // The container turns it into dialog state; nothing is sent until the dialog's Create.
   onCreateChannel: (cwd: string) => void,
+  // #1180 — open the Edit-workspace dialog for a named workspace. Handed to BOTH trees, unlike the two
+  // creates above it: this is the one trailing control that is not a per-tree difference. The container
+  // turns it into dialog state; nothing is sent until the dialog's Save.
+  onEditWorkspace: (cwd: string, label: string) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -1163,7 +1337,11 @@ function renderBody(
           onOpen={() => onOpen(c)}
           onRename={() => onRename(c)}
         />
-      ), { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel })}
+      ), { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
+        // #1180 — the same control object in both trees, built at each call site rather than hoisted,
+        // so the pattern reads identically to the create beside it and the label constant stays
+        // module-local to this file.
+        { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
       <div className="channel-list__divider" />
       {/* The header reads "Chats" (#709, Figma 106:3258); the code-level partition is still `discussions`
           — renaming that vocabulary was explicitly out of scope.
@@ -1185,7 +1363,8 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ), { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat })}
+      ), { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
+        { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
     </>
   )
 }

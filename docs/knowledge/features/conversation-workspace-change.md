@@ -96,11 +96,13 @@ opposite axes: `changeWorkspace` by conversation (`router.route(payload.conversa
 to the host, not to any one chat.
 
 Introduced in [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), split from #1182.
-**Nothing in the window sends it yet** — the Edit-workspace dialog is
-[#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180), which is blocked on this ticket.
-The inbound decode and the sidebar's read of the label are the sibling
-[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288), already shipped, so the reply
-this verb draws is decoded and its effect visible on the sidebar the moment this landed.
+Its live caller is the [Edit workspace dialog](edit-workspace-dialog.md)
+([#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180)) — the workspace row's hover pen,
+which shipped after this ticket and after the reply's inbound half. The inbound decode and the
+sidebar's read of the label are the sibling
+[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288), shipped first, so the reply this
+verb draws was already decoded, with its effect visible on the sidebar, before #1180 gave the app a
+sender.
 
 ### The wire contract
 
@@ -182,6 +184,8 @@ no unit test of its own.
 
 ## Related
 
+- [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — this verb's live caller: the workspace
+  row's hover pen, the dialog it opens, and the `label: null`-on-folder-segment send rule.
 - [Conversation rename (transport)](conversation-rename.md) / [#359](../codebase/359.md) — the
   structural and guard twin this slice clones (two required strings, second field renamed).
 - [Conversation promote (transport)](conversation-promote.md) / [#273](../codebase/273.md) — origin

@@ -292,12 +292,12 @@ member would assert something false about the others. And a **non-null label is 
 blank included** — no trim, no blank-to-fallback guard, the deliberate opposite of `titleFor`. The
 label is state a user set from some other client; silently rewriting a blank one here would make
 this desktop disagree with every other client about the workspace's name. Rejecting a blank belongs
-to the daemon and, client-side, to the dialog that sends the rename
-([#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180), not yet built) — the transport verb
-that carries it, [`renameWorkspace`](https://github.com/pyrycode/pyrycode-desktop/issues/1289), shipped
-with no client-side emptiness or length check of its own (type only, the same posture every guard in
-this neighbourhood takes), so a blank label is refused only where it can be shown to the user's face,
-never silently here.
+to the daemon and, client-side, to the dialog that sends the rename —
+[the Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the transport verb that carries it,
+[`renameWorkspace`](https://github.com/pyrycode/pyrycode-desktop/issues/1289), shipped with no
+client-side emptiness or length check of its own (type only, the same posture every guard in this
+neighbourhood takes), so a blank label is refused only where it can be shown to the user's face (the
+dialog's disabled Save), never silently here.
 
 The label reaches the sidebar over the existing `list_conversations` read path and the existing
 `conversation_created`/`conversation_updated` bridges — no new store, no new IPC arm, no
@@ -556,11 +556,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   `renameWorkspace` verb this section's `conversationStateFake` writeup now describes; see
   [Conversation workspace change § Workspace rename](conversation-workspace-change.md#workspace-rename-label-change-1289)
   for the full wire contract and the six-piece transport it ships.
+- [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the hover pen beside the create plus on
+  every workspace row, and the dialog it opens: a rename showing the workspace's full path, sent as
+  `renameWorkspace` (#1289) and reflected here via #1288's re-list.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), #716 (same-last-segment workspace label ambiguity — narrower since
   [#1287](https://github.com/pyrycode/pyrycode-desktop/issues/1287): two workspaces can now be told
-  apart by giving them distinct daemon labels, though a rename is not yet settable *by this client* —
-  [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289) shipped the transport, but the sole
-  sender, the Edit-workspace dialog [#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180),
-  is still unbuilt), a possible follow-up to suppress the idle dot's announced label (see [the row's
-  status dot](channel-list-status-dot.md)).
+  apart by giving them distinct daemon labels, settable by this client since
+  [#1180](edit-workspace-dialog.md) shipped the Edit-workspace dialog), a possible follow-up to
+  suppress the idle dot's announced label (see [the row's status dot](channel-list-status-dot.md)).

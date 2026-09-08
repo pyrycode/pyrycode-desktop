@@ -93,7 +93,8 @@ export interface ExitActiveConversationDeps {
  * and clears the announced running model, and neither belongs here: the pairing has NOT ended — the
  * daemon connection is alive and the operator lands on a working Channel List — so resetting the session
  * store would blank a live connection status into a false disconnected state, and the announced model is
- * daemon-scoped, not conversation-scoped (activateConversation clears neither on a conversation switch).
+ * held per conversation since #1146, so a departed conversation's record is inert rather than stale
+ * (activateConversation clears neither on a conversation switch).
  * The keyed clear splits the same way, and that difference is the whole of #757: the pairing ending
  * invalidates EVERY conversation's thread, while a conversation being deleted invalidates that one and
  * leaves the operator's others live and his — so this helper drops one key where that one drops the map.
@@ -108,7 +109,13 @@ export interface ExitActiveConversationDeps {
  *  - `queueStore` — the backlog is selected by matching the active conversation id, and a null active id
  *    yields the stable empty backlog via the `''` sentinel (ConversationScreen.tsx:1294-1299). No stale
  *    queued row can render, so none can be dropped.
- *  - `announcedModelStore`, `sessionStore` — pairing-scoped, not conversation-scoped (see above).
+ *  - `sessionStore` — pairing-scoped, not conversation-scoped (see above).
+ *  - `announcedModelStore` — keyed by conversation since #1146, and it still gains nothing here. A
+ *    departed conversation's key is inert once nothing can select it, and the last-server clear still
+ *    drops the whole map, so a per-conversation drop would be a second lifetime to keep in agreement
+ *    with that one. Scoping a departed SERVER's keys is the migration `clearServerScopedState` parks
+ *    alongside `queueStore`, the background-task roster and `modalPrompts` — out of scope, not out of
+ *    reach.
  *  - `conversationLastReadStore` — pairing-scoped too (#779 clears it there): a conversation being
  *    deleted or archived leaves the operator's OTHER chats live and their marks meaningful, and the
  *    departing conversation's own mark is inert once nothing can read it.

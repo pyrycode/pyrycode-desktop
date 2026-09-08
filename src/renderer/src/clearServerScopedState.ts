@@ -151,9 +151,13 @@ export interface ClearServerScopedStateDeps extends ExitActiveConversationDeps {
  * roster is the sharpest of the three, since a held `local_bash` task's `description` is the literal
  * command line claude ran. `conversationLastReadStore` USED TO BE ON THIS LIST as the deliberately
  * separate sibling ticket; #1197 landed it, and it is now the last effect in the body.
- * `announcedModelStore`, `sessionIdStore`, `slashCommandListStore` and `modelListStore` are app-wide
- * single slots with no server key at all; keying them is the separate migration #1145 and #1146 are the
- * open bugs on. Do NOT key a store here to make its clear scopeable.
+ * `sessionIdStore` is an app-wide single slot with no server key at all. `slashCommandListStore`,
+ * `modelListStore` and — since #1146 — `announcedModelStore` are keyed by CONVERSATION rather than by
+ * server, so their keys are scopeable with the same departed-conversation set computed above and are out
+ * of SCOPE here rather than out of reach, exactly like the three named in the paragraph above. #1145 and
+ * #1146 closed the two open misattribution bugs by keying, which is a different thing from making a
+ * clear server-scopeable and does not oblige this helper to grow a member. Do NOT key a store here to
+ * make its clear scopeable.
  */
 export function clearServerScopedState(
   deps: ClearServerScopedStateDeps,

@@ -9,7 +9,7 @@ import {
 } from '../../store/modelListStore'
 import {
   useAnnouncedModelStore,
-  selectAnnouncedModel,
+  selectAnnouncedModelFor,
   type AnnouncedModel
 } from '../../store/announcedModelStore'
 import {
@@ -734,9 +734,19 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
   // every store tick — the composition runs in the render body instead.
   const writeState = useRunSettingsWriteStore((s) => s)
   // #560: a fourth narrow-slice read, passed straight down — no derivation here, no setter. A repeat
-  // announcement produces a fresh object identity (announcedModelStore.ts:88-95) and so re-renders this
-  // section with identical output; that is anticipated by the store and needs no memoisation.
-  const announced = useAnnouncedModelStore(selectAnnouncedModel)
+  // announcement produces a fresh record identity and so re-renders this section with identical output;
+  // that is anticipated by the store and needs no memoisation.
+  //
+  // #1146 made it per-conversation, so this is a useMemo-stable selector per id exactly like the model
+  // list below it — a fresh closure each render would churn the subscription, and a null conversation
+  // selects nothing THROUGH THE SAME PATH, with no invented key and no second branch downstream. A
+  // conversation that has announced nothing reads `null` here even while another chat's announcement is
+  // held, which is the whole of this ticket: the sheet says nothing rather than the other server's model.
+  const selectAnnounced = useMemo(
+    () => (conversationId === null ? () => null : selectAnnouncedModelFor(conversationId)),
+    [conversationId]
+  )
+  const announced = useAnnouncedModelStore(selectAnnounced)
   // #975: a useMemo-stable selector per id (the ComposerSlashCommandTypeAhead / BackgroundTaskPanel
   // idiom) — a fresh closure each render would churn the subscription. A null conversation selects
   // nothing THROUGH THE SAME PATH, with no invented key and no second branch downstream, and `null` is

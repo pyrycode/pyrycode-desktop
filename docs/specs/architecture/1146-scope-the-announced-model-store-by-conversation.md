@@ -266,6 +266,22 @@ fail before either module changes.
   existing body is already correct under the map, the guard only saves a listener wake nothing has asked
   for, and adding it is a behaviour change outside the ask.
 
+## Revisions
+
+**2026-09-08 — the size claim, corrected against the actual.** The plan asserted total written work sat
+"at the ceiling rather than over it". It came in over: 585 added lines across 11 files (8 production, 3
+test) plus this 344-line plan, ≈930 against the 800-line line of the table. The shortfall was in the test
+estimate — migrating `announcedModelStore.test.ts` to a keyed selector rewrote most of the file rather
+than threading an argument through it, since each case needed a bound-selector read and the new keyed,
+hostile-key and clear groups landed as a further ~150 lines. Nothing else moved: the design, the file
+list and every contract are as committed, and the four criteria are covered by the suites the plan named.
+Recorded rather than unwound — the work is complete and green, and the miss is in the estimate, not the
+slice. The file-count overage (8 against 5) is the one the Context section argued in advance and is
+unchanged.
+
+No design decision changed during implementation. Both Open Questions resolved as the plan predicted:
+the state field keeps the name `announced`, and the clear stays unguarded.
+
 ## Security review
 
 **Verdict:** PASS

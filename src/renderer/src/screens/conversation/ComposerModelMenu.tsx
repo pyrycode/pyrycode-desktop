@@ -4,7 +4,7 @@ import { useModelListStore, selectModelListFor, type ModelListEntry } from '../.
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
-import { useAnnouncedModelStore, selectAnnouncedModel } from '../../store/announcedModelStore'
+import { useAnnouncedModelStore, selectAnnouncedModelFor } from '../../store/announcedModelStore'
 import { publishedRowFor } from './RunConfigSections'
 import { changeSetting } from './runSettingsControls'
 
@@ -49,10 +49,10 @@ const CHEVRON_PATH =
 /** #1053 — the three layers this control lays over one another, resolved in this order: a
  *  pending-or-confirmed PICK, then what claude ANNOUNCED for the running turn, then the snapshot's
  *  STORED choice, then nothing. The ticket settled that ordering and it is not re-litigated here: the
- *  announcement carries no ordering information relative to a pick (announcedModelStore holds one record
- *  with no sequence and no timestamp), so ranking it above a CONFIRMED pick would let a stale
- *  announcement beat the pick at the moment the daemon confirms — making a confirm and a rejection look
- *  identical.
+ *  announcement carries no ordering information relative to a pick (a held announcement has no sequence
+ *  and no timestamp, which #1146's keying left true PER KEY), so ranking it above a CONFIRMED pick would
+ *  let a stale announcement beat the pick at the moment the daemon confirms — making a confirm and a
+ *  rejection look identical.
  *
  *  '' MEANS "NOTHING AT THIS LAYER", uniformly across all three. That is this control's existing posture
  *  rather than a new decision: it already drew nothing for an unset session model. It is also what lets
@@ -343,12 +343,17 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
   // selector: it returns a fresh object every call, which defeats Object.is and re-renders on every store
   // tick — the composition runs in the render body instead (RunConfigSections.tsx:660-663).
   const writeState = useRunSettingsWriteStore((s) => s)
-  // #1053 — the app-lifetime announcement, the same value the run-configuration sheet's Running model
-  // section reads. It is DAEMON-scoped rather than conversation-scoped (translateModelAnnounced drops the
-  // conversation id deliberately, and exitActiveConversation.ts records that), so a second conversation
-  // with no pick and no stored choice shows this one. Accepted: the sheet already reads the same app-wide
-  // value under the same conditions, and scoping the store is a store-plus-bridge change of its own.
-  const announced = useAnnouncedModelStore(selectAnnouncedModel)
+  // #1053 — the announcement for THIS conversation, the same value the run-configuration sheet's Running
+  // model section reads for it. It was daemon-scoped rather than conversation-scoped until #1146, so a
+  // second conversation with no pick and no stored choice showed the previous daemon's announcement; the
+  // store is keyed now and this reads its own chat's or nothing. A useMemo-stable selector per id, like
+  // the model list below — a fresh closure each render would churn the subscription, and a null
+  // conversation selects nothing through the same path.
+  const selectAnnounced = useMemo(
+    () => (conversationId === null ? () => null : selectAnnouncedModelFor(conversationId)),
+    [conversationId]
+  )
+  const announced = useAnnouncedModelStore(selectAnnounced)
   // A useMemo-stable selector per id — a fresh closure each render would churn the subscription. A null
   // conversation selects nothing THROUGH THE SAME PATH, with no invented key and no second branch
   // downstream, and `null` is a stable reference.

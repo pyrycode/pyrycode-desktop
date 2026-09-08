@@ -8,11 +8,22 @@ import {
   subscribeAnnouncedModel,
   AnnouncedModelData
 } from './announcedModelBridge'
-import { createAnnouncedModelStore, selectAnnouncedModel } from './announcedModelStore'
+import { createAnnouncedModelStore, selectAnnouncedModelFor } from './announcedModelStore'
 
 // Framework-free data-path tests with injected spies (the sessionIdBridge
 // idiom): no React, no Electron. The real store is wired only for the not-yet-announced → announced
 // seam tests.
+//
+// #1146: the translate carries `conversationId` onward instead of dropping it, so every expectation
+// below names the routing key the event arrived with. The store reads go through a selector bound to
+// one id, which is what makes "landed under ITS OWN key" assertable at all.
+
+/** Read one conversation's announcement out of a real store instance. */
+const announcedFor = (
+  store: ReturnType<typeof createAnnouncedModelStore>,
+  conversationId: string
+): { model: string; truncated: boolean } | null =>
+  selectAnnouncedModelFor(conversationId)(store.getState())
 
 const message: MessagePayload = {
   conversation_id: 'c',
@@ -31,7 +42,8 @@ describe('translateModelAnnounced', () => {
     }
     expect(translateModelAnnounced(event)).toEqual({
       model: 'claude-haiku-4-5-20251001',
-      truncated: false
+      truncated: false,
+      conversationId: 'conv-1'
     })
   })
 
@@ -42,7 +54,11 @@ describe('translateModelAnnounced', () => {
       truncated: true,
       conversationId: 'conv-1'
     }
-    expect(translateModelAnnounced(event)).toEqual({ model: 'claude-opus-4-5', truncated: true })
+    expect(translateModelAnnounced(event)).toEqual({
+      model: 'claude-opus-4-5',
+      truncated: true,
+      conversationId: 'conv-1'
+    })
   })
 
   it('maps an empty-model modelAnnounced to { model: "", truncated } — not null (AC4)', () => {
@@ -53,7 +69,11 @@ describe('translateModelAnnounced', () => {
       conversationId: 'conv-1'
     }
     expect(translateModelAnnounced(event)).not.toBeNull()
-    expect(translateModelAnnounced(event)).toEqual({ model: '', truncated: false })
+    expect(translateModelAnnounced(event)).toEqual({
+      model: '',
+      truncated: false,
+      conversationId: 'conv-1'
+    })
   })
 
   it('returns a FRESH literal, not the event — `type` never reaches the store', () => {
@@ -67,6 +87,26 @@ describe('translateModelAnnounced', () => {
     expect(result).not.toBeNull()
     expect(result === null || 'type' in result).toBe(false)
     expect(result).not.toBe(event)
+  })
+
+  it('carries the routing key VERBATIM, whatever the daemon asserted (#1146 AC3)', () => {
+    // The id is daemon-asserted and is NOT normalised, allow-listed or checked against the open
+    // conversation here — it is carried onward as the map key it will become, and an id matching no
+    // conversation a reader can select simply lands under its own key. `__proto__` is an ordinary id to
+    // this path, which is the property the store's `ReadonlyMap` keeps true downstream.
+    for (const conversationId of ['matches-no-conversation', '__proto__', '']) {
+      const event: DaemonEvent = {
+        type: 'modelAnnounced',
+        model: 'claude-opus-4-5',
+        truncated: false,
+        conversationId
+      }
+      expect(translateModelAnnounced(event)).toEqual({
+        model: 'claude-opus-4-5',
+        truncated: false,
+        conversationId
+      })
+    }
   })
 
   it('returns null for a sample of unrelated daemon events, INCLUDING the name-colliding arm', () => {
@@ -138,7 +178,8 @@ describe('subscribeAnnouncedModel', () => {
     expect(setAnnouncedModel).toHaveBeenCalledTimes(1)
     expect(setAnnouncedModel).toHaveBeenCalledWith({
       model: 'claude-haiku-4-5',
-      truncated: false
+      truncated: false,
+      conversationId: 'conv-1'
     })
   })
 
@@ -162,7 +203,8 @@ describe('subscribeAnnouncedModel', () => {
     expect(setAnnouncedModel).toHaveBeenCalledTimes(2)
     expect(setAnnouncedModel).toHaveBeenLastCalledWith({
       model: 'second-model',
-      truncated: true
+      truncated: true,
+      conversationId: 'conv-1'
     })
   })
 
@@ -174,7 +216,11 @@ describe('subscribeAnnouncedModel', () => {
     bridge.emit({ type: 'modelAnnounced', model: '', truncated: false, conversationId: 'conv-1' })
     expect(setAnnouncedModel).toHaveBeenCalledTimes(1)
     // `truncated` survives too: an `if (announced?.model)` guard would have dropped both fields.
-    expect(setAnnouncedModel).toHaveBeenCalledWith({ model: '', truncated: false })
+    expect(setAnnouncedModel).toHaveBeenCalledWith({
+      model: '',
+      truncated: false,
+      conversationId: 'conv-1'
+    })
   })
 
   it('does not call setAnnouncedModel for an unrelated event', () => {
@@ -198,14 +244,14 @@ describe('subscribeAnnouncedModel', () => {
     const store = createAnnouncedModelStore()
     subscribeAnnouncedModel(bridge.onDaemonEvent, (a) => store.getState().setAnnouncedModel(a))
 
-    expect(selectAnnouncedModel(store.getState())).toBeNull()
+    expect(announcedFor(store, 'conv-1')).toBeNull()
     bridge.emit({
       type: 'modelAnnounced',
       model: 'claude-haiku-4-5',
       truncated: true,
       conversationId: 'conv-1'
     })
-    expect(selectAnnouncedModel(store.getState())).toEqual({
+    expect(announcedFor(store, 'conv-1')).toEqual({
       model: 'claude-haiku-4-5',
       truncated: true
     })
@@ -228,10 +274,38 @@ describe('subscribeAnnouncedModel', () => {
       truncated: false,
       conversationId: 'conv-1'
     })
-    expect(selectAnnouncedModel(store.getState())).toEqual({
+    expect(announcedFor(store, 'conv-1')).toEqual({
       model: 'new-model',
       truncated: false
     })
+  })
+
+  it('lands two conversations’ announcements under their own keys — neither displaces the other (#1146 AC1, AC2)', () => {
+    const bridge = fakeBridge()
+    const store = createAnnouncedModelStore()
+    subscribeAnnouncedModel(bridge.onDaemonEvent, (a) => store.getState().setAnnouncedModel(a))
+
+    // The reproduction, end to end through the real store: server A's conversation announces, then
+    // server B's does. Before #1146 the second write clobbered the first and every reader saw it.
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'model-on-A',
+      truncated: true,
+      conversationId: 'on-server-a'
+    })
+    expect(announcedFor(store, 'on-server-b')).toBeNull()
+
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'model-on-B',
+      truncated: false,
+      conversationId: 'on-server-b'
+    })
+
+    expect(announcedFor(store, 'on-server-a')).toEqual({ model: 'model-on-A', truncated: true })
+    expect(announcedFor(store, 'on-server-b')).toEqual({ model: 'model-on-B', truncated: false })
+    // ...and a conversation neither announcement named still reads nothing.
+    expect(announcedFor(store, 'never-announced')).toBeNull()
   })
 
   it('leaves the store untouched on a runConfigReceived carrying an override model', () => {
@@ -251,7 +325,7 @@ describe('subscribeAnnouncedModel', () => {
       used_tokens: 0,
       window_tokens: 0
     })
-    expect(selectAnnouncedModel(store.getState())).toBeNull()
+    expect(announcedFor(store, 'conv-1')).toBeNull()
   })
 })
 

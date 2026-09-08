@@ -571,10 +571,46 @@ export function hostRowLabel(value: HostLabelValue): string {
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
-// Not interactive: a plain <div>, no <button>, no onClick, no aria-label. The label carries the row's
+// The ROW is not interactive: a plain <div>, no onClick, no aria-label. The label carries the row's
 // meaning, so the glyph is aria-hidden — a second accessible name would be noise. The two connection dots
 // #672 reserved this row's trailing edge for landed in #718, as the store-bound leaf below; the row itself
 // stays non-interactive, and the dots are named individually rather than through the row.
+//
+// ITS SUBTREE STOPPED BEING NON-INTERACTIVE IN #1185, which is why that paragraph now says "the row"
+// rather than "this". The row grew the pen and plus the drawing puts in the dots' slot on hover (Host
+// 399:1366, Hover 399:1408) — two <button> SIBLINGS of the label, never a wrapper around it and never
+// nested in each other, so the row's own tag is untouched and clicking the glyph or the name still does
+// nothing. `channels.css` owns the swap: the pair is `opacity: 0` at rest and the dots `opacity: 1`, and
+// a hover or a control's `:focus-visible` inverts both.
+//
+// ⭐ THE SWAP IS GUARDED ON A CONTROL BEING DRAWN, and that guard is the ticket rather than a detail.
+// Each control renders only when its handler is passed and THIS TICKET ADDS NO CALLER — the Edit host
+// dialog (#1187) and the Add workspace dialog (#1189) pass them, against the `serverId` this row already
+// carries. A hover rule keyed on the row alone would therefore blank the SHIPPED app's connection dots
+// into an empty slot for as long as those two take, so `channels.css`'s rule is keyed on the row
+// CONTAINING a control (`:has()`); a row drawn with neither handler hovers exactly as it does today.
+// `e2e/host-row-hover-controls.spec.ts` is what reads that back from the running window.
+//
+// Nullary handlers, `WorkspaceRow`'s `onEdit` shape: the caller closes over the machine it is drawing, so
+// `serverId` never becomes an argument this view handles. `() => void` also refuses a function declaring
+// a parameter, so React's synthetic event cannot reach a caller's handler and no caller can come to
+// depend on it.
+//
+// THE TWO NAMES ARE COMPILE-TIME CONSTANTS AND DELIBERATELY NOT PROPS — the security decision this
+// slice turns on, not a convenience. `WorkspaceRow` bundles `{ label, onCreate }` because its two trees
+// say different words; these two say one word each, so a `label` field would buy nothing and would admit
+// a caller passing `Edit ${hostLabel}` — untrusted operator text interpolated into an attribute, the
+// exact shape #696's review made a MUST FIX. With handlers only, there is no field for a name to arrive
+// in. The four declined sinks below therefore hold over the two controls as well: neither carries the
+// label in any attribute, and `ChannelList.test.tsx` pins that the label occurs exactly ONCE in the
+// two-control render, as the label span's text child.
+//
+// DOM ORDER IS PEN THEN PLUS, deliberately the reverse of `WorkspaceRow`'s. Both controls are absolutely
+// positioned, so order drives neither the layout nor the drawn result (the pen still sits LEFT of the
+// plus) — only the tab order. `WorkspaceRow`'s header records its own plus-first order as a stated COST
+// forced by `e2e/sidebar-workspace-create.spec.ts`'s single-Tab assertion, not as a preference, and no
+// shipped spec constrains the order here; propagating a documented cost for symmetry's sake would be the
+// wrong trade. Pinned in `ChannelList.test.tsx` so a reorder fails a unit test rather than nothing.
 //
 // The class names deliberately share no token — and no substring — with `channel-list__row`, `__row-open`
 // or `__section-header`, and the visible label contains neither "Channels" nor "Chats". Playwright locators
@@ -633,12 +669,19 @@ export function hostRowLabel(value: HostLabelValue): string {
 // The alternative is worse than the doc edit: an index key would cross-wire fold state and per-row
 // instances between machines whenever the paired list reorders. `ChannelList.test.tsx` pins the claim by
 // rendering a sentinel id and asserting it appears nowhere in the markup.
+const ADD_WORKSPACE_CONTROL_LABEL = 'Add workspace'
+const EDIT_HOST_CONTROL_LABEL = 'Edit host'
+
 export function HostRow({
   label,
-  serverId
+  serverId,
+  onAddWorkspace,
+  onEditHost
 }: {
   label: string
   serverId: string
+  onAddWorkspace?: () => void
+  onEditHost?: () => void
 }): JSX.Element {
   return (
     <div className="channel-list__host">
@@ -654,6 +697,61 @@ export function HostRow({
       </svg>
       <span className="channel-list__host-label">{label}</span>
       <HostConnectionDotsControl serverId={serverId} />
+      {onEditHost && (
+        // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
+        // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
+        // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
+        // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
+        // level up, minus its `.channel-list__control-name` pill, which is #1190's ticket.
+        //
+        // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
+        // the same 12-unit viewBox scaled to the drawing's 14 by the box.
+        <button
+          type="button"
+          className="channel-list__host-edit"
+          aria-label={EDIT_HOST_CONTROL_LABEL}
+          onClick={onEditHost}
+        >
+          <svg
+            className="channel-list__host-edit-icon"
+            viewBox="0 0 12 12"
+            width="14"
+            height="14"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
+          </svg>
+        </button>
+      )}
+      {onAddWorkspace && (
+        // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
+        // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
+        // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, again without the
+        // name pill.
+        //
+        // ITS OWN CLASS RATHER THAN THE WORKSPACE PLUS'S, the call #1180 made for the pen beside it: the
+        // two are the same drawn control at the same size and inset, but they hang off different rows,
+        // and a shared class would have to be revealed by two unrelated `:hover` ancestors — a selector
+        // list that grows with every row family rather than a block that says where it lives.
+        <button
+          type="button"
+          className="channel-list__host-add"
+          aria-label={ADD_WORKSPACE_CONTROL_LABEL}
+          onClick={onAddWorkspace}
+        >
+          <svg
+            className="channel-list__host-add-icon"
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
+          </svg>
+        </button>
+      )}
     </div>
   )
 }

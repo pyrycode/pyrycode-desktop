@@ -7,11 +7,14 @@ past it: the sidebar's host row and its two trailing connection dots. Everything
 
 ## The host row (`ChannelList.tsx`, added by #710, the operator's label by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834))
 
-`HostRow({ label, serverId }): JSX.Element` — the file's sixth inline-glyph idiom instance, alongside
-`SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save buttons — is an **exported
-pure view**, mirroring `HostConnectionDots`/`HostConnectionDotsControl` below it (§ next). It renders a
-non-interactive `<div className="channel-list__host">` holding a 12px inline Material `dns` (server-rack)
-glyph and `<span className="channel-list__host-label">{label}</span>`. A module-private
+`HostRow({ label, serverId, onAddWorkspace?, onEditHost? }): JSX.Element` — the file's sixth inline-glyph
+idiom instance, alongside `SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save
+buttons — is an **exported pure view**, mirroring `HostConnectionDots`/`HostConnectionDotsControl` below
+it (§ next). It renders `<div className="channel-list__host">` holding a 12px inline Material `dns`
+(server-rack) glyph, `<span className="channel-list__host-label">{label}</span>`, the connection dots (§
+below) and, since [#1185](#the-rows-pen-and-plus-on-hover-1185), two conditionally-drawn trailing
+`<button>`s. **The row tag itself is still not interactive** — no `onClick`, no `aria-label`, no `title` —
+only its subtree grew controls. A module-private
 `HostRowControl(): JSX.Element` resolves which server the row names, reads that server's label, passes it
 through `hostRowLabel` (below), and renders `<HostRow label={…} serverId={…} />`; `renderBody` mounts
 `HostRowControl`, not `HostRow`, at both call sites. The pure/container split exists for the same reason as
@@ -214,6 +217,111 @@ other word would re-derive the label half of #330's contract, and the dot report
 the machine — a machine can be up while `pyry` is not, and since #1199 that is specifically the paired
 server this row names, not any other paired machine.
 
+## The row's pen and plus on hover (#1185)
+
+The host row was the last row family in the sidebar tree with no controls of its own — the workspace row
+below it grew a create plus ([#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178))
+and an edit pen ([#1180](edit-workspace-dialog.md)); the channel rows had carried theirs since #1172. This
+ticket brings the same pair up one level, into the slot the two connection dots (§ above) occupy at rest,
+matching the redrawn Host component (Figma 399:1366, Hover variant 399:1408).
+
+**Two new optional, nullary props — `onAddWorkspace?: () => void` and `onEditHost?: () => void`.** Each
+control renders only when its own handler is passed, the same withheld-by-presence shape
+`WorkspaceRow`'s `create`/`edit` use, minus the bundled label: the two names here are fixed by this
+ticket, not by the caller, so there is nothing to bundle. `ADD_WORKSPACE_CONTROL_LABEL = 'Add workspace'`
+and `EDIT_HOST_CONTROL_LABEL = 'Edit host'` are module-private constants beside
+`CREATE_CHAT_CONTROL_LABEL`, read by each button's `aria-label` and never by the caller. **This is the
+security decision the slice turns on, not a convenience**: a `{ label, onEdit }` bundle would have
+admitted a caller passing `` `Edit ${hostLabel}` `` — untrusted operator text interpolated into an
+attribute, the shape #696's review made a MUST FIX and this row's own header already declines four ways
+for `label` itself. With handlers only, there is no field for a name to arrive in.
+`ChannelList.test.tsx` pins a sentinel label occurring exactly once in the two-control render, as the
+label span's text child and nowhere else.
+
+Nullary rather than `(serverId) => void`, matching `WorkspaceRow`'s `onEdit`: the caller closes over the
+machine it is drawing (#1187/#1189 will, against the `serverId` this row already carries), so the id
+never becomes an argument this view handles, and `() => void` also refuses a handler declaring a
+parameter — React's synthetic event cannot reach it.
+
+**This ticket ships no caller.** The Edit host dialog is #1187 and the Add workspace dialog is #1189;
+until those land, every production `<HostRowControl>` passes neither prop, so the row draws neither
+`<button>` and hovers exactly as it did before this ticket.
+
+**The swap is guarded on a control actually being drawn, not on the row alone being hovered** — the whole
+point of the ticket, and the reason it needed a `:has()` rule rather than the obvious `.channel-list__host:hover
+.channel-list__host-status { opacity: 0 }`. With no caller yet, that obvious form would blank the
+*shipped* app's connection dots into an empty slot on every hover for as long as #1187/#1189 take.
+`channels.css` instead keys the suppression on the row containing a drawn control:
+
+```css
+.channel-list__host:hover:has(> .channel-list__host-edit, > .channel-list__host-add)
+  .channel-list__host-status,
+.channel-list__host:has(
+    > .channel-list__host-edit:focus-visible,
+    > .channel-list__host-add:focus-visible
+  )
+  .channel-list__host-status { opacity: 0 }
+```
+
+`:has()` over a `~` sibling combinator deliberately: `~` would encode "a control *precedes* the dots in
+DOM order," coupling the rule to a DOM order chosen for tab-order reasons alone (see below) and free to
+change; `:has()` states the condition actually meant. Electron 33 is Chromium 130, and `channels.css`
+already carries one `:has()` consumer (`.channel-list__row:has(> .channel-list__row-open[…])`).
+`e2e/host-row-hover-controls.spec.ts` is the one spec that can read this back — the unit tier renders
+markup in a node environment and never evaluates CSS. It hovers a **workspace** row first and watches its
+plus appear/disappear as a same-mechanism proof that `:hover` reaches the tree at all, then hovers the
+production host row and asserts `.channel-list__host-status` still computes `opacity: 1` with neither
+control class in the DOM — deleting the `:has()` guard, or "simplifying" it to a bare `:hover`, reddens
+that read at the dot-opacity assertion, not at the calibration step.
+
+Both reveals (the pair's suppression, each control's own appearance) use `opacity` and never `display:
+none`/`visibility: hidden` — #1171's ruling, load-bearing twice here: a display-none control cannot take
+focus, and `e2e/connection-dot-colours.spec.ts`/`host-label-sidebar.spec.ts` count and read the dots'
+computed style without ever hovering.
+
+**Geometry**, both boxes 20×20 (`--space-5`) hit targets reusing `.channel-list__workspace-create`'s and
+`.channel-list__workspace-edit`'s blocks with the ancestor swapped rather than the shared classes reused
+— a shared class would need a `:hover` selector list that grows with every row family that adopts the
+control, where a per-row block says where it lives. The plus (`.channel-list__host-add`) sits at `right:
+0; top: var(--space-1)`, centring its 16px glyph at right 2 — exactly the dots' own slot (341…359 of the
+360-wide content box vs. the plus's 342…358), which is what makes this a *swap* rather than an addition.
+The pen (`.channel-list__host-edit`) sits at `right: calc(var(--space-7) - 3px); top: var(--space-1)`,
+centring its 14px glyph at right 28, 10px clear of the plus. Both filled `--color-primary`, no
+background, no hover circle, `fill="currentColor"`/`aria-hidden="true"` on the SVGs, the file's
+`:focus-visible` outline convention. Neither carries a `.channel-list__control-name` pill —
+[#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) gave
+the workspace pair one, and copying those buttons wholesale would have pulled it in; the host row's pill
+is #1190's ticket.
+
+**The row's right padding goes from 0 to 52px** (`calc(var(--space-8) + var(--space-5))`,
+`.channel-list__workspace`'s own value) **in both states, not only on hover** — reserving the trailing
+slot unconditionally is what stops a long label re-truncating the moment the pointer arrives. The row
+also takes `position: relative` for the first time, which is what lets the two controls (and the dots,
+next) position against it rather than against the nearer `.channel-list` containing block — the same
+idiom `.channel-list__row` and `.channel-list__workspace-head` already use, and it slots this row into
+the same painting step (6) those two already occupy, above the card's hover wash.
+
+**The dots moved from `margin-left: auto` to `position: absolute; right: 0` and did not move by a
+pixel.** `margin-left: auto` depended on the row having no other trailing content to push against; once
+the row reserves 52px of padding unconditionally, an in-flow auto margin would have parked the dots at
+the *padding* edge, 52px short of where they are drawn. `right: 0` resolves against the row's padding
+box — its content edge — so the pair stays exactly where #718 and the 2026-09-05 inset fix put it, and
+[`host-label-sidebar.spec.ts`'s `ROW_INSET_PX = 0`](channel-list-desktop-row-geometry.md#the-trees-inset-channelscss-the-2026-09-05-inset-fix)
+stays literally true. See that page's own note on the now-superseded "right padding goes to 0" bullet.
+
+**DOM order is pen, then plus** — the reverse of `WorkspaceRow`'s plus-first order. Both controls are
+absolutely positioned, so order drives neither layout nor the drawn result (the pen still sits left of
+the plus), only tab order. `WorkspaceRow`'s own header records its plus-first order as a *cost* forced by
+`e2e/sidebar-workspace-create.spec.ts`'s single-Tab assertion, not a preference; no shipped spec
+constrains the order here, so this row puts tab order back in visual order instead of propagating that
+cost for symmetry's sake. `ChannelList.test.tsx` pins it.
+
+**Not yet observable end to end.** The drawn geometry and "clicking fires the handler" both need a
+caller and land with #1187/#1189, which draw the controls for the first time; the static unit tier is
+what pins the markup contract in the meantime. The one criterion `e2e/host-row-hover-controls.spec.ts`
+does cover today is the no-caller case above — behaviour already in a user's hands, unlike the rest of
+the ticket.
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent page: the view-model, the row's save/rename
@@ -241,6 +349,11 @@ server this row names, not any other paired machine.
   screen's dots via the shared mapping with no edit at the time.
 - [#1199 spec](../../specs/architecture/1199-host-row-names-one-server.md) — the per-server re-keying of
   both the label read and the two connection-dot reads.
+- [Channel List § Workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178) /
+  [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — the workspace row's plus/pen pair, one level
+  down, that #1185 brought up to the host row; the template rather than a loose analogy.
+- #1185 spec — put the pen/plus swap above the two connection dots, guarded on a control actually being
+  drawn (`:has()`) so a production row with no caller yet (#1187, #1189) hovers unchanged. See § above.
 - [Channel List § Server grouping](channel-list.md#server-grouping-channellistviewmodelts--channellisttsx-added-by-1070) /
   [#1070 spec](../../specs/architecture/1070-sidebar-grouped-by-server.md) — draws one host row (and one
   dot pair) per paired server, in pairing order, by looping `renderServerTrees` over the same

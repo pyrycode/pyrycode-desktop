@@ -270,6 +270,10 @@ Sidebar 132:3902 and fixed directly, five declarations in one stylesheet:
   #718 had kept them 16px in, reading the design's absolute dot coordinates as artefacts of a 360-wide
   design row against a 400-wide shipped one; with the row now 360 wide they read literally, 1px from the
   edge, and 1px has no slot on the scale. The dots now end where the channel rows' fill ends.
+  **Superseded by [#1185](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185):** the padding is
+  52px in both states, reserving the trailing slot its own hover-revealed pen and plus occupy, and the
+  dots left the flex flow for `position: absolute; right: 0`, which keeps this same flush edge without
+  riding the padding at all.
 - **`.channel-list__row` gains `margin-left: var(--space-5)`** ("Channel list" 103:2985, pl-[20px]): a
   row is 340 wide in the 360 box, the dot at 56 and the title at 72 from the card's edge, and the open
   row's fill starts 40 in. A margin per row rather than padding on a wrapper because there is no
@@ -555,3 +559,6 @@ no prior hover. Code review PASS, no findings.
   — the two dialogs the trailing controls open; their own CSS summaries were corrected for #1171's redraw.
 - [Conversation create](conversation-create.md) — `requestNewConversation`'s constructor and the
   `conversationCreated` event-driven nav the plus's click resolves through; the FAB's own consumer doc.
+- [Channel List — the host row's pen and plus on hover](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)
+  (#1185) — this section's plus/pen pair brought up one level onto the host row, in the connection dots'
+  own slot; superseded the "right padding goes to 0" bullet above.

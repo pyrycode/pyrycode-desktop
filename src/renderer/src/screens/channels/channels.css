@@ -41,14 +41,16 @@
 
    `position: relative` is #1058's only other edit here, and it is a STACKING fix, not decoration. An
    absolutely positioned ::before at z-index: auto paints in step 6 of the painting order — above every
-   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header and
-   .channel-list__host are unpositioned, while .channel-list__row — and, since #1178,
-   .channel-list__workspace-head — are already relative
+   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header is unpositioned,
+   while .channel-list__row — and, since #1178, .channel-list__workspace-head, and since #1185
+   .channel-list__host — are already relative
    and .channel-list__actions / .channel-list__fab are sticky at z-index: 1. Without this one declaration
-   the headers and host rows would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
+   the headers would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
    defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
-   turns e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
-   `blocked by .paired-shell__sidebar`. Lifting this element into step 6 takes the whole subtree with it,
+   turned e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
+   `blocked by .paired-shell__sidebar`. That measurement predates #1185, which positioned the host row
+   for its own trailing controls; the section header is the element the argument now rests on, and the
+   measurement has NOT been retaken against it. Lifting this element into step 6 takes the whole subtree with it,
    and tree order puts it after the wrapper's ::before. The same idiom, for the same reason, as
    .composer__input over .composer__row::before and .pairing-field__row.
 
@@ -86,18 +88,41 @@
   font-weight: var(--text-label-large-weight);
 }
 
-/* The host row heading each tree (#710, Figma 106:3094) — the machine the tree's conversations live on,
-   sitting between the section label and that tree's rows. The 16px LEFT padding is the design's px-16;
-   the right padding is 0 because the design floats its two connection dots inside that padding, 1px in
-   from the row's edge (see `.channel-list__host-status`), and 1px has no slot on the scale. Centering the
+/* The host row heading each tree (#710, Figma 106:3094; redrawn by #1185 as Host 399:1366) — the machine
+   the tree's conversations live on, sitting between the section label and that tree's rows. The 16px LEFT
+   padding is the design's px-16. Centering the
    12px glyph against the label's 20px line box reproduces the design's 20px-tall `Row icon` wrapper
-   frame (106:3107) without needing a wrapper element. Not interactive in this slice, so no radius,
-   background, hover or focus rule — the Figma's 6px corner has nothing to clip. */
+   frame (106:3107) without needing a wrapper element. The row ITSELF is still not interactive — no
+   radius, background, hover or focus rule, and the Figma's 6px corner still has nothing to clip; the two
+   controls #1185 put in its subtree are positioned over it and carry their own.
+
+   THE RIGHT PADDING IS #1185'S 52, up from 0, and it is written as the SUM `--space-8 + --space-5` —
+   the slot the plus is positioned over, plus the pen's own 20px box — so the arithmetic stays legible
+   rather than hiding behind a token the scale does not have. It is `.channel-list__workspace`'s value
+   verbatim, which is also what stops the two rows' labels at one inset.
+
+   IT IS THE HOVER NUMBER IN BOTH STATES, WHICH IS THE POINT AND NOT AN OVERSIGHT — the workspace row's
+   argument one level down, and it arrives here for the same reason: padding the row at rest and widening
+   it on hover would re-truncate a long label the moment the pointer arrived. Reserving the trailing 52
+   unconditionally is what makes "no glyph of the label is painted under either control" true at rest as
+   well as on hover. Neither control is laid out in this padding — nor are the dots since #1185 — so the
+   row's derived 28px height is untouched either way.
+
+   It is deliberately NOT the component frame's own `pr-[28px]`: 28 reserves the drawn GLYPH's slot, 52
+   reserves the pen's full 20px hit box (which ends 45 in) with slack. Deviation stated, not silent.
+
+   `position: relative` (z-index auto) is the second half of #1185 and the reason the controls can be
+   positioned at all: `.channel-list` is itself relative for the stacking reason its own rule states, so
+   without a nearer containing block each control would pin itself to the SCROLL COLUMN rather than to
+   this row. `.channel-list__row`'s idiom exactly, and `.channel-list__workspace-head`'s. The file's head
+   paragraph tracks what that does to the painting order: this row joins those two in step 6, where they
+   already sit above the card wash. */
 .channel-list__host {
   display: flex;
   align-items: center;
+  position: relative;
   gap: var(--space-3);
-  padding: var(--space-1) 0 var(--space-1) var(--space-4);
+  padding: var(--space-1) calc(var(--space-8) + var(--space-5)) var(--space-1) var(--space-4);
   /* #1070 — the design's 16px between one machine's subtree and the next (103:2959's `Hosts` column,
      gap-[16px]). It rides the host row rather than a per-server wrapper because this file's rendered
      sequence is deliberately FLAT: React fragments emit no element, so there is no `Host container` box
@@ -135,11 +160,13 @@
    the min-width lifts the flexbox min-content floor and the default `flex-shrink: 1` then shrinks and
    ellipsizes the label.
 
-   DELIBERATELY NOT the fourth thing that rule carries, `flex: 1 1 auto`. `flex-grow: 1` would make the
-   label absorb the row's free space and render `.channel-list__host-status`'s `margin-left: auto` inert —
-   replacing a shipped, documented mechanism for pinning the dots to the trailing edge with an implicit
-   one. The workspace row has no trailing element and no such mechanism to preserve, which is the whole
-   reason the two rules differ here. Do not "fix" this into a copy of its neighbour. */
+   STILL NOT the fourth thing that rule carries, `flex: 1 1 auto` — BUT THE REASON CHANGED IN #1185 and
+   the old one is gone, so do not cite it. It used to be that `flex-grow: 1` would absorb the row's free
+   space and render `.channel-list__host-status`'s `margin-left: auto` inert, replacing a shipped,
+   documented mechanism for pinning the dots with an implicit one. That mechanism no longer exists: the
+   dots are absolutely positioned, so grow has nothing left to render inert. It stays out because it now
+   buys nothing — the label already shrinks and ellipsizes inside the slot the row's 52px right padding
+   reserves, and growing its BOX to that padding edge would move no text and no dot. */
 .channel-list__host-label {
   min-width: 0;
   overflow: hidden;
@@ -152,23 +179,188 @@
   font-weight: var(--text-label-large-weight);
 }
 
-/* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114). `margin-left: auto` is the
-   whole point of this rule: `.channel-list__host` had no trailing element before this slice, so riding its
-   `gap` alone would leave the pair sitting beside the label instead of at the row's trailing edge.
+/* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114; the Idle variant of Host
+   399:1366 since #1185).
+
+   #1185 REPLACED `margin-left: auto` WITH ABSOLUTE POSITIONING, and the pair did not move by a pixel.
+   That rule was this block's whole point for two tickets — `.channel-list__host` had no trailing element
+   before #718, so riding its `gap` alone would have left the pair beside the label — and it expired the
+   moment the row grew a 52px right padding to reserve the controls' slot: an in-flow `margin-left: auto`
+   would have parked the dots at the PADDING edge, 52px in from where they are drawn. `right: 0` resolves
+   against the row's padding BOX, i.e. its right border edge, so the pair stays exactly where it was and
+   the row's own reservation cannot push it. `top: --space-1` over a 20px box centres it at 14 in the
+   28px row — where `align-items: center` had it — so the vertical position is unchanged too.
 
    The pair sits FLUSH with that edge, which since the 2026-09-05 inset fix is also the channel rows'
    trailing edge. #718 had inset it 16px on the row's padding, reasoning that the design's absolute x
    coordinates (341 and 353) were measured in a 360-wide design row against a 400-wide shipped one. Now
    that `.channel-list` carries the card's 20px inset the row IS 360 wide and those coordinates read
-   literally: the design floats the pair inside the row's px-16, 1px from its edge. The 1px is below the
-   scale and the eye, so the row's right padding is 0 rather than a literal. The relative geometry is
-   unchanged: 6px diameter, 6px gap, host leg first. e2e/host-label-sidebar.spec.ts pins the flush edge. */
+   literally: the design floats the pair inside the row's px-16, 1px from its edge, and the 1px is below
+   the scale and the eye. The relative geometry is unchanged: 6px diameter, 6px gap, host leg first.
+   e2e/host-label-sidebar.spec.ts pins the flush edge and is what would catch a regression in any of it.
+
+   `opacity: 1` IS DECLARED RATHER THAN INHERITED FROM THE INITIAL VALUE, so the swap below reads as the
+   pair it is: at rest the dots are 1 and the two controls are 0, and a hover on a row that HAS controls
+   inverts both. */
 .channel-list__host-status {
-  margin-left: auto;
+  position: absolute;
+  right: 0;
+  top: var(--space-1);
+  height: var(--space-5);
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
+  opacity: 1;
+}
+
+/* ⭐ THE SWAP (#1185, Host Hover 399:1408) — the dots give way to the pen and the plus, and the guard is
+   the ticket rather than a detail.
+
+   THE `:has()` IS LOAD-BEARING AND MUST NOT BE "SIMPLIFIED" AWAY. Each control renders only when its
+   handler is passed, and #1185 SHIPPED NO CALLER: the Edit host dialog (#1187) and the Add workspace
+   dialog (#1189) pass them. So `.channel-list__host:hover .channel-list__host-status { opacity: 0 }` —
+   the obvious form — would blank the SHIPPED app's connection dots into an empty slot on every hover
+   for as long as those two tickets take. Keyed on the row CONTAINING a drawn control, a row with
+   neither handler hovers exactly as it did before this ticket.
+
+   WHICH GATE READS THAT BACK: `e2e/host-row-hover-controls.spec.ts`, which hovers the production host
+   row and asserts these dots still compute opacity 1. Nothing else can — the unit tier renders markup in
+   a node environment and sees no CSS at all. That spec hovers a WORKSPACE row first and watches its
+   plus appear, so a hover that silently failed to fire cannot pass it vacuously.
+
+   MEASURED, NOT PREDICTED: replacing this rule with the obvious form above and rebuilding fails that
+   spec at its dot-opacity read (expected "1", received "0"), with both workspace-plus calibration reads
+   still passing — so the red is the guard's, not a hover that never fired.
+
+   `:has()` rather than a `~` sibling combinator, which is the other way to write "a control is drawn".
+   `~` would state the condition as "a control PRECEDES the dots in DOM order", coupling this rule to an
+   order `ChannelList.tsx` picked on tab-order grounds and is free to change. `:has()` states the
+   condition that is meant. Its forgiving parsing is the cost, and it is why both class names are pinned
+   in `ChannelList.test.tsx`: a renamed control would drop out of the list here SILENTLY rather than
+   invalidating the rule. `.channel-list__row:has(> .channel-list__row-open[aria-current='true'])` is
+   this file's existing consumer; conversation.css has several; Electron 33 is Chromium 130.
+
+   `opacity` and never `display: none` / `visibility: hidden`, #1171's ruling — here it is the DOTS that
+   would vanish from the box tree, and `connection-dot-colours.spec.ts` and `host-label-sidebar.spec.ts`
+   both count and measure them without ever hovering. */
+.channel-list__host:hover:has(> .channel-list__host-edit, > .channel-list__host-add)
+  .channel-list__host-status,
+.channel-list__host:has(
+    > .channel-list__host-edit:focus-visible,
+    > .channel-list__host-add:focus-visible
+  )
+  .channel-list__host-status {
+  opacity: 0;
+}
+
+/* THE EDIT-HOST PEN (#1185, Figma "Icon Edgeless" I405:7920;399:1413 in the Hover variant) — the
+   workspace row's own pen block one level up the tree, with the revealing ancestor changed.
+
+   THE BOX IS 20 × 20 AND THE GLYPH IS 14 × 14, WHICH REPRODUCES THE DRAWING WITH NO 28px LITERAL. The
+   node places its 14px box at `right: 28px`, vertically centred in the 28px row. A 20px (`--space-5`)
+   box at `right: calc(--space-7 - 3px)` = 25, offset `--space-1` from the top, centring a 14px glyph,
+   lands that glyph at right 25 + (20 - 14)/2 = 28 and top 4 + 3 = 7 — centre 14, which is the row's own
+   centre. The `- 3px` IS the box's halved slack made explicit; it is the one place the arithmetic could
+   not be written in tokens alone, and hiding it behind a 25px literal would make the 28 unreadable.
+
+   THE TWO HIT BOXES DO NOT OVERLAP: the plus spans 0…20 from the row's trailing edge and this one spans
+   25…45, so each click lands on the control it was aimed at, and the drawn glyphs sit 10px apart exactly
+   as the node places them. The row's 52px reservation clears this box's 45 — that is where the label
+   stops, in every state. The 20px box is deliberately not a 14px one snug to the glyph: a 14px pointer
+   target is below any reasonable minimum, and the extra 6px is invisible (no background, no radius).
+
+   `--color-primary` (#9dcbfc) is the drawn fill. INVISIBLE AT REST, `opacity` and never `display: none`
+   — load-bearing rather than stylistic: a display-none control cannot take focus, so the pen would leave
+   the tab order and the accessibility tree, which is precisely what AC4's "keyboard-reachable at all
+   times" forbids. The reveal hangs off THE ROW's hover so the glyph is already there when the pointer
+   arrives at a 20px box it could not otherwise see, and off the control's own `:focus-visible` so Tab
+   reaches it. Playwright counts an opacity-0 element as visible and moves the pointer onto it before
+   clicking, which hovers the row on the way, so a drive needs no explicit hover. */
+.channel-list__host-edit {
+  position: absolute;
+  right: calc(var(--space-7) - 3px);
+  top: var(--space-1);
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__host-edit:focus-visible {
+  outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+.channel-list__host:hover .channel-list__host-edit {
+  opacity: 1;
+}
+
+/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+.channel-list__host-edit-icon {
+  display: block;
+}
+
+/* THE ADD-WORKSPACE PLUS (#1185, Figma "Icon Edgeless" I405:7920;399:1414) — the pen's block above with
+   two numbers changed, sitting 10px to its right, IN THE DOTS' OWN SLOT. That last part is what makes
+   the drawing a swap rather than an addition: the node puts this 16px box at 342…358 in the 360 content
+   box and the dot pair occupies 341…359, so the plus lands on top of what it replaces.
+
+   THE BOX IS 20 × 20 AND THE GLYPH IS 16 × 16, WHICH REPRODUCES THE DRAWING WITH NO 2px LITERAL. A 20px
+   box at `right: 0`, offset `--space-1` from the top, centring a 16px glyph, lands that glyph at right 2
+   (the box's 4px of slack, halved) and top 4 + 2 = 6 — centre 14, the row's centre, and the drawn
+   rectangle derived from tokens rather than restated as an inset. It also leaves the row's 28px height
+   untouched, because the control is out of the flex flow entirely.
+
+   ITS OWN CLASS RATHER THAN `.channel-list__workspace-create`'s, though the two are the same drawn
+   control at the same size and inset — the call #1180 made for its own pen, for a reason that is about
+   the SELECTORS and not the geometry: the two hang off different rows, so a shared class would need a
+   reveal rule whose ancestor list grows with every row family that adopts the control. A block that says
+   where it lives stays readable; a selector list of four unrelated `:hover` ancestors does not.
+
+   Its box sits directly under the workspace row's plus one level down, so the column of trailing marks
+   lines up across the host row, the workspace row and the channel rows' controls: all of them end flush
+   with the card's content edge.
+
+   `--color-primary`, the `opacity` reveal and the `:focus-visible` outline are the pen's block verbatim
+   and for its reasons. NO `.channel-list__control-name` PILL on either control — the workspace pair wears
+   one (#1181) and copying those buttons wholesale would have pulled it in; the host row's pill is
+   #1190's ticket. */
+.channel-list__host-add {
+  position: absolute;
+  right: 0;
+  top: var(--space-1);
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__host-add:focus-visible {
+  outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+.channel-list__host:hover .channel-list__host-add {
+  opacity: 1;
+}
+
+/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+.channel-list__host-add-icon {
+  display: block;
 }
 
 /* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`,

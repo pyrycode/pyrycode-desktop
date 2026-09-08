@@ -353,6 +353,12 @@ channel" plus opening a dialog on a Channels-tree row — withheld on both trees
 an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
 for the direct path.
 
+Both of those are creators *within* an existing group. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)
+added a **third**, one level up on the host row, that creates a group that has never existed: since this
+whole tree is derived from the conversation list alone, a workspace is drawn only while a live conversation
+sits in it, so a folder gets a row here for the first time the moment its first chat is created — never
+before. See that dialog's write-up for the caller.
+
 **Fixture note.** `conversationStateFake` (`e2e/fixtures/conversationStateFake.ts`) has to hold one
 label per `cwd`, the same invariant the daemon holds, or the suite's two-trees idiom lies:
 `workspace-collapse.spec.ts`'s pattern of seeding one promoted row and minting a second, unpromoted

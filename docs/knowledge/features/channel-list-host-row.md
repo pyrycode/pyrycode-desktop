@@ -243,10 +243,10 @@ machine it is drawing (#1187/#1189 will, against the `serverId` this row already
 never becomes an argument this view handles, and `() => void` also refuses a handler declaring a
 parameter — React's synthetic event cannot reach it.
 
-**This ticket shipped no caller — since corrected.**
-[#1299](#the-edit-host-dialog-1299) (split from #1187) gave `onEditHost` its first caller: every
-production host row now draws the pen. `onAddWorkspace`/the plus is still capless, #1189's, so a
-hovered row today shows the pen in its slot and an empty one where the plus belongs.
+**This ticket shipped no caller for either handler — both since corrected.**
+[#1299](#the-edit-host-dialog-1299) (split from #1187) gave `onEditHost` its first caller, and
+[#1308](#the-add-workspace-dialog-1308) gave `onAddWorkspace` its own: every production host row now draws
+both controls.
 
 **The swap is guarded on a control actually being drawn, not on the row alone being hovered** — the whole
 point of the ticket, and the reason it needed a `:has()` rule rather than the obvious `.channel-list__host:hover
@@ -332,11 +332,11 @@ the plus), only tab order. `WorkspaceRow`'s own header records its plus-first or
 constrains the order here, so this row puts tab order back in visual order instead of propagating that
 cost for symmetry's sake. `ChannelList.test.tsx` pins it.
 
-**The pen is now observable end to end; the plus is not, yet.** [#1299](#the-edit-host-dialog-1299) gave
-`onEditHost` its caller, so the pen's drawn geometry, its hover reveal, and what clicking it opens are
-all covered by e2e now (`e2e/host-row-hover-controls.spec.ts`'s rewrite and the new
-`e2e/sidebar-host-edit.spec.ts`, § below). The plus still needs #1189's caller before its geometry and
-click behaviour are observable past the static unit tier.
+**Both controls are now observable end to end.** [#1299](#the-edit-host-dialog-1299) gave `onEditHost` its
+caller and [#1308](#the-add-workspace-dialog-1308) gave `onAddWorkspace` its own, so each control's drawn
+geometry, its hover reveal, and what clicking it opens are all covered by e2e now
+(`e2e/host-row-hover-controls.spec.ts`'s rewrite, twice, plus `e2e/sidebar-host-edit.spec.ts` and
+`e2e/sidebar-add-workspace.spec.ts`, § below).
 
 ## The Edit host dialog (#1299)
 
@@ -463,10 +463,68 @@ loopback one), and machine B's pen opens a dialog carrying B's own pair, asserte
 text rather than substring (`fake-daemon` is a prefix of `fake-daemon-2`, so a `toContainText` would
 pass on the wrong row).
 
+## The Add workspace dialog (#1308)
+
+[#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308) gave the plus its first caller: clicking
+it opens `AddWorkspaceDialogView` (new, `src/renderer/src/screens/channels/AddWorkspaceDialog.tsx`), a
+near-clone of [`CreateChannelDialogView`](create-channel-dialog.md) (#1179) with a round trip added, which
+makes `EditHostDialogView` (§ above) the closer relative below the field: a three-arm status (`idle` /
+`creating` / `rejected`), a frozen field while the answer is outstanding, a client-owned failure line, and a
+Cancel that is never disabled — load-bearing here specifically, since nothing times out the
+`createConversation` round trip and a silent daemon would otherwise leave the dialog frozen with no exit.
+
+**What it sends.** One absolute folder path, typed by the operator — `''.startsWith('/')` both refuses a
+blank field and is the whole of the client-side rule, since the daemon owns confinement and existence
+checks server-side and a client-side normalisation would silently split one sidebar group into two (`~/foo`
+vs `/home/x/foo`). `requestNewWorkspaceChat` (new, `conversationCreatedBridge.ts`) is a **third sibling**
+beside `requestNewConversation`/`requestNewChannel` rather than a widened parameter: same
+`{is_promoted: false, name: null, cwd}` literal, with a top-level `serverId` main refuses to leave unnamed
+once more than one server is paired — required, not optional, since this caller always knows which row's
+plus was clicked. See [Conversation create](conversation-create.md) for the dispatch and [Daemon connection
+correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+for the round trip's daemon-side half.
+
+**The in-flight gate is the whole of the round trip**, and it discharges #1307's obligation rather than
+rediscovering it: both listeners (`conversationCreated`, `conversationCreateRejected`) act only while
+`status === 'creating'`, read through a ref rather than a closure (the `useConversationCreatedNav` idiom).
+A rejection at `idle` or `rejected` changes nothing. While the dialog's own create genuinely is
+outstanding, a rejection belonging to the FAB's or the Channels-tree workspace plus's concurrent create is
+**indistinguishable from its own** — the arm is nullary, so there is no per-request field to correlate on
+even in principle. Accepted rather than designed away: it fails toward a false failure report on a create
+that will still land, never a false success. Closing on confirmation does not match `cwd` for the matching
+reason — a daemon that normalises the string would otherwise strand the dialog open over a chat it already
+created.
+
+**Container state lives inside `AddWorkspaceDialog` itself**, not in `ChannelList` — unlike the Edit host
+dialog's three cells above. `ChannelList` holds only the open cell, `addWorkspaceServerId: string | null`,
+gated on `!== null` for `editHostServerId`'s reason and keyed by server id so a reopen against a different
+machine remounts rather than reuses.
+
+**Sinks.** The typed path reaches only the controlled input's `value`; `HostRow`'s four declined sinks (no
+`title`, no `aria-label`, no id/key/lookup path, no log line) hold in full, and the rejection arm carries no
+daemon byte at all to interpolate even by a future edit. **CSS:** `.add-workspace*` is its own class family
+in `channels.css`, cloned from `.edit-host*` (the disabled-field/error-line pair) for the Playwright
+strict-mode reason `.edit-host*` itself was kept separate from `.edit-workspace*`.
+
+**Tests.** Unit: `AddWorkspaceDialog.test.tsx` — the disabled matrix, the three statuses' chrome, the sink
+guard. E2E, fake tier: `e2e/sidebar-add-workspace.spec.ts` (new) — a happy-path launch and a refusal launch
+against `conversationStateFake`'s new `createOutcome: 'rejected'` option (the first daemon refusal that
+fake models at all), both reading the open row's title through `.channel-list__row-open[aria-current="true"]`
+captured *before* the create so each read is a mutation check rather than a locator that could pass before
+the click's async work resolves — a correction recorded in
+`docs/specs/architecture/1308-host-row-add-workspace-dialog.md` § Revisions after the first run proved a
+naive `.composer`-count assertion vacuous (`launchPairedApp` already leaves a composer on screen at
+launch). `e2e/host-row-hover-controls.spec.ts` inverts rather than replaces its two "no Add workspace
+button" reads — see the correction above.
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent page: the view-model, the row's save/rename
   affordances, workspace grouping, and the CSS this section's classes live in.
+- [Conversation create](conversation-create.md) / [Daemon connection correlation § Create-conversation
+  rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) —
+  the transport `requestNewWorkspaceChat` sends over and the round trip § The Add workspace dialog above
+  consumes.
 - [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
   the store `HostRowControl` reads and the loader `<HostLabelData />` mounts; re-keyed by server id in
   [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199).

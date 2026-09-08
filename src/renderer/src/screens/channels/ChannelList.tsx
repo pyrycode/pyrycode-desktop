@@ -88,6 +88,10 @@ import {
   requestSetHostLabel,
   type EditHostSaveStatus
 } from './EditHostDialog'
+// #1308 — the host row PLUS's first caller, and the only dialog on this screen imported as a CONTAINER
+// rather than as a view. Its round trip (an outstanding create, and #1307's rejection arm) is its whole
+// substance, so its state and its two subscriptions live with its markup, the `SaveAsChannelDialog` shape.
+import { AddWorkspaceDialog } from './AddWorkspaceDialog'
 import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
@@ -225,6 +229,15 @@ export function ChannelList({
   const [editHostServerId, setEditHostServerId] = useState<string | null>(null)
   const [editHostName, setEditHostName] = useState('')
   const [editHostStatus, setEditHostStatus] = useState<EditHostSaveStatus>('idle')
+  // The Add-workspace dialog's open cell (#1308) — ONE cell, not the pairs above it, because the path and
+  // the round-trip status live in the dialog container rather than here: it is mounted only while this
+  // holds a server id, so its subscription's lifetime IS the dialog's open lifetime, which is what makes
+  // AC4's closed-dialog case true by construction rather than by a guard. It is independent of the five
+  // above for their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be
+  // open at once and no mutual-exclusion logic is needed. `addWorkspaceServerId` is the MACHINE the chat
+  // will be created on — the id the clicked plus closed over — and holding it HERE is what keeps it out of
+  // the dialog view entirely: that view never sees an id at all, it sees a path and a status.
+  const [addWorkspaceServerId, setAddWorkspaceServerId] = useState<string | null>(null)
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -291,6 +304,11 @@ export function ChannelList({
           setEditHostName(seedLabel)
           setEditHostStatus('idle')
         }}
+        // #1308 — the host row's plus OPENS A DIALOG and sends nothing: the machine is fixed by the row
+        // that was clicked, and the folder still has to be typed. ONE cell to seed, and nothing to clear
+        // on close: `ChannelList` mounts a fresh dialog container per open, so the field and the status
+        // always start empty and `idle` without a reset here.
+        onAddWorkspace={(serverId) => setAddWorkspaceServerId(serverId)}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
@@ -422,6 +440,24 @@ export function ChannelList({
           }}
         />
       )}
+      {/* #1308 — gated on an explicit `!== null` and NEVER on truthiness, `editHostServerId`'s reason
+          exactly: `isHostLabelServerRequest` deliberately ACCEPTS the empty string as a server id, so an
+          empty id is a real machine's and a truthy gate would collapse its dialog into "none open".
+
+          KEYED BY THE SERVER ID so a reopen — or an open against a DIFFERENT machine while one is somehow
+          mounted — remounts the container rather than reusing it, which is what guarantees the empty field
+          and the `idle` status this file's other four dialogs get from re-seeding their cells on open. */}
+      {addWorkspaceServerId !== null && (
+        <AddWorkspaceDialog
+          key={addWorkspaceServerId}
+          serverId={addWorkspaceServerId}
+          // Cancel closes and sends nothing (AC1); a confirmed create closes it too (AC2). One handler
+          // serves both — there is nothing to record on the way out, the new row arriving through the
+          // daemon's confirmation and the thread being opened by `useConversationCreatedNav` in
+          // PairedShell, exactly as the FAB's create already is.
+          onDismiss={() => setAddWorkspaceServerId(null)}
+        />
+      )}
     </>
   )
 }
@@ -451,6 +487,7 @@ export function ChannelListView({
   onCreateChannel,
   onEditWorkspace,
   onEditHost,
+  onAddWorkspace,
   onSaveAsChannel,
   onRename
 }: {
@@ -508,6 +545,13 @@ export function ChannelListView({
   // inspected on the way through; both travel verbatim. Like `onEditWorkspace` it sends no command — and
   // unlike it, the dialog's Save sends none either.
   onEditHost: (serverId: string, seedLabel: string) => void
+  // #1308 — open the Add workspace dialog for the named machine. REQUIRED for its four siblings' reason: a
+  // defaulted prop would let a future caller silently render a sidebar whose host plus opens nothing, which
+  // is precisely the state #1185 shipped and this ticket ends. It takes the server id ALONE — unlike
+  // `onEditHost` there is no seed to carry, the field opening empty on every open — and that id is resolved
+  // by `HostRowControl`, the level already drawn for one machine. It is not inspected on the way through;
+  // it travels verbatim. Like `onEditHost` it sends no command — the dialog's Start chat does.
+  onAddWorkspace: (serverId: string) => void
   onSaveAsChannel: (row: ConversationSummary) => void
   onRename: (row: ConversationSummary) => void
 }): JSX.Element {
@@ -530,6 +574,7 @@ export function ChannelListView({
         onCreateChannel,
         onEditWorkspace,
         onEditHost,
+        onAddWorkspace,
         onSaveAsChannel,
         onRename
       )}
@@ -926,12 +971,20 @@ export function HostRow({
 // machine's row, which is precisely the failure that read exists to prevent. `groupByServer` keeps the
 // direction intact one level up: it iterates the client's ids and only ever TESTS a row's stamp against
 // them, so a stamp can select among existing keys and can never mint one.
+//
+// #1308 gave it the PLUS as well, so this level now closes over its machine for both controls and the row
+// above is finally drawn as `HostRow` has been able to draw it since #1185. Unlike the pen the plus carries
+// NO seed: the dialog's field opens empty, so the closure passes the id alone and this component reads
+// nothing extra to build it. Both of a machine's two rows pass the same id, so either plus opens the same
+// dialog about the same machine.
 function HostRowControl({
   serverId,
-  onEditHost
+  onEditHost,
+  onAddWorkspace
 }: {
   serverId: string
   onEditHost: (serverId: string, seedLabel: string) => void
+  onAddWorkspace: (serverId: string) => void
 }): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
   return (
@@ -939,6 +992,7 @@ function HostRowControl({
       label={hostRowLabel(hostLabel)}
       serverId={serverId}
       onEditHost={() => onEditHost(serverId, hostRowEditSeed(hostLabel))}
+      onAddWorkspace={() => onAddWorkspace(serverId)}
     />
   )
 }
@@ -1463,6 +1517,13 @@ function renderServerTrees(
   // constant inside `HostRow` and is deliberately NOT a prop (#1185's security decision, which stands), so
   // there is no per-tree label to carry and no field for a name to arrive in.
   onEditHost: (serverId: string, seedLabel: string) => void,
+  // #1308 — open the Add workspace dialog for one machine. REQUIRED and placed beside `onEditHost` rather
+  // than among the optional control objects below, for that parameter's stated reason: both calls supply
+  // it, every host row draws the plus, and an optional parameter would be a further way to render a
+  // sidebar whose plus opens nothing. A bare handler rather than a `{ label, onCreate }` object — the
+  // plus's accessible name is a compile-time constant inside `HostRow` and is deliberately NOT a prop
+  // (#1185's security decision, which stands), so there is no per-tree label to carry.
+  onAddWorkspace: (serverId: string) => void,
   // #1178, reshaped by #1179 — the trailing create control this tree draws on each of its workspace
   // rows, or `undefined` for a tree that offers none. OPTIONAL and trailing, which is what carries the
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
@@ -1528,7 +1589,11 @@ function renderServerTrees(
     <>
       {servers.map((server) => (
         <Fragment key={server.serverId}>
-          <HostRowControl serverId={server.serverId} onEditHost={onEditHost} />
+          <HostRowControl
+            serverId={server.serverId}
+            onEditHost={onEditHost}
+            onAddWorkspace={onAddWorkspace}
+          />
           {workspaceGroups(server.rows)}
         </Fragment>
       ))}
@@ -1654,6 +1719,10 @@ function renderBody(
   // above it: every host row draws the pen, and both of a machine's two rows open the same dialog for the
   // same machine. The container turns it into dialog state; nothing is written until the dialog's Save.
   onEditHost: (serverId: string, seedLabel: string) => void,
+  // #1308 — open the Add workspace dialog for a named machine. Handed to BOTH trees, like `onEditHost`
+  // above it: every host row draws the plus, and both of a machine's two rows open the same dialog for the
+  // same machine. The container turns it into dialog state; nothing is sent until the dialog's Start chat.
+  onAddWorkspace: (serverId: string) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -1704,7 +1773,7 @@ function renderBody(
           onOpen={() => onOpen(c)}
           onRename={() => onRename(c)}
         />
-      ), onEditHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
+      ), onEditHost, onAddWorkspace, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
         // so the pattern reads identically to the create beside it and the label constant stays
         // module-local to this file.
@@ -1730,7 +1799,7 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ), onEditHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
+      ), onEditHost, onAddWorkspace, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
     </>
   )

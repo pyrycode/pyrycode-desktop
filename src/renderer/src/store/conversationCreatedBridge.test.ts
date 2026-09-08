@@ -4,8 +4,10 @@ import type { ConversationCreatedPayload, MessagePayload } from '@shared/wire/ty
 import {
   requestNewConversation,
   requestNewChannel,
+  requestNewWorkspaceChat,
   translateConversationCreated,
-  subscribeConversationCreated
+  subscribeConversationCreated,
+  subscribeConversationCreateRejected
 } from './conversationCreatedBridge'
 
 // Framework-free data-path tests with injected spies (the conversationListBridge idiom): no React, no
@@ -102,6 +104,34 @@ describe('requestNewChannel', () => {
   })
 })
 
+// #1308 — the third fixed shape: the FAB's payload plus the top-level routing key. Single-literal
+// assertions again, and the `serverId` sits OUTSIDE `payload` in every one of them — the property that
+// keeps it off the wire by construction, since the envelope builders consume `payload` alone.
+describe('requestNewWorkspaceChat', () => {
+  it('fires exactly one createConversation carrying the cwd and the row server (AC2)', () => {
+    const sendCommand = vi.fn()
+    requestNewWorkspaceChat(sendCommand, '/home/pyry/project', 'server-a')
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: false, name: null, cwd: '/home/pyry/project' },
+      serverId: 'server-a'
+    })
+  })
+
+  it('trims edge whitespace off the typed path and otherwise carries it verbatim (AC2)', () => {
+    const sendCommand = vi.fn()
+    // No normalisation of any kind: no `path` module, no `..` collapse, no trailing-slash rule. The
+    // trimmed string IS the group key the sidebar will draw, and the daemon confines it server-side.
+    requestNewWorkspaceChat(sendCommand, '  /home/pyry//project/../project  ', 'server-a')
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: false, name: null, cwd: '/home/pyry//project/../project' },
+      serverId: 'server-a'
+    })
+  })
+})
+
 describe('translateConversationCreated', () => {
   it('maps a conversationCreated to its payload (the owned arm)', () => {
     const event: DaemonEvent = { type: 'conversationCreated', conversation: created }
@@ -150,6 +180,45 @@ describe('subscribeConversationCreated', () => {
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
     const cleanup = subscribeConversationCreated(bridge.onDaemonEvent, vi.fn())
+    expect(bridge.off).not.toHaveBeenCalled()
+    cleanup()
+    expect(bridge.off).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1308 — the rejection sibling. No `translate*` companion to test: the arm is nullary, so there is
+// nothing to map and the whole filter is the `case` label itself.
+describe('subscribeConversationCreateRejected', () => {
+  it('subscribes exactly once', () => {
+    const bridge = fakeBridge()
+    subscribeConversationCreateRejected(bridge.onDaemonEvent, vi.fn())
+    expect(bridge.onDaemonEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('invokes onRejected once per rejection, with no arguments to carry (AC3)', () => {
+    const bridge = fakeBridge()
+    const onRejected = vi.fn()
+    subscribeConversationCreateRejected(bridge.onDaemonEvent, onRejected)
+
+    bridge.emit({ type: 'conversationCreateRejected' })
+    expect(onRejected).toHaveBeenCalledTimes(1)
+    expect(onRejected).toHaveBeenCalledWith()
+  })
+
+  it('ignores every unrelated daemon event, the confirmation included (AC4)', () => {
+    const bridge = fakeBridge()
+    const onRejected = vi.fn()
+    subscribeConversationCreateRejected(bridge.onDaemonEvent, onRejected)
+
+    bridge.emit({ type: 'conversationCreated', conversation: created })
+    bridge.emit({ type: 'messageReceived', message })
+    bridge.emit({ type: 'conversationsReceived', conversations: [] })
+    expect(onRejected).not.toHaveBeenCalled()
+  })
+
+  it('returns the off handle from onDaemonEvent as the cleanup', () => {
+    const bridge = fakeBridge()
+    const cleanup = subscribeConversationCreateRejected(bridge.onDaemonEvent, vi.fn())
     expect(bridge.off).not.toHaveBeenCalled()
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)

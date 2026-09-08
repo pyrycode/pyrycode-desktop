@@ -134,25 +134,32 @@ no gate checks, and this one does not add a third claim to keep straight.
   `conversation_created` also serves as an unsolicited broadcast, so a late error for an already-created
   conversation still emits a rejection. The obligation this pushes downstream is real, not hypothetical: a
   consumer must gate on its own in-flight state the way `pendingCreateFolders`' `newFolderStore` already
-  does, and [#1308](https://github.com/pyrycode/pyrycode-desktop/issues/1308)'s Add-workspace dialog
-  inherits it. Unbounded, on `pendingHistoryRequests`' accepted argument: an entry costs one number, only
-  this client's own sends add one, every match or dial removes one.
-- **Bareness does not mean single-caller, and the shipped code comment overstates that it does.** The
-  #396 code review caught this during #1307's own review: `create_conversation` has **two** live callers
-  today (the FAB and the Channels-tree workspace plus), and #1308's dialog will sit beside them as a third,
-  so more than one request can be outstanding at once. The bare arm therefore cannot say *whose* rejection
-  it is reporting — not because only one caller exists (it doesn't), but because the ticket scoped a
-  per-entry payload out regardless (the daemon's own refusal message never echoes the path, so there is
-  nothing to carry even if a field were added). A consumer must do two things, not one: gate on its own
-  in-flight state, **and** accept that a concurrent caller's rejection is indistinguishable from its own.
-  #1308 must design for both; do not repeat the "only one dialog is ever open" reasoning `pendingCreateFolders`
-  earned honestly (that store really does have exactly one caller) when writing this store's next consumer.
+  does. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog is that
+  consumer, and its `status === 'creating'` gate discharges this specific obligation *by construction*
+  rather than by a runtime check: the dialog closes and unmounts on its own confirmation, tearing down both
+  listeners, so a rejection that arrives after the fact has no listener left to reach. Unbounded, on
+  `pendingHistoryRequests`' accepted argument: an entry costs one number, only this client's own sends add
+  one, every match or dial removes one.
+- **Bareness does not mean single-caller, and the shipped code comment overstated that it did.** The
+  #396 code review caught this during #1307's own review: `create_conversation` has **three** live callers
+  now that #1308 shipped (the FAB, the Channels-tree workspace plus, and the host row's Add-workspace
+  dialog), so more than one request can be outstanding at once. The bare arm therefore cannot say *whose*
+  rejection it is reporting — not because only one caller exists, but because the ticket scoped a per-entry
+  payload out regardless (the daemon's own refusal message never echoes the path, so there is nothing to
+  carry even if a field were added). #1308's dialog does both things a consumer must: it gates on its own
+  in-flight state, **and** it accepts, rather than tries to fix, that a concurrent caller's rejection is
+  indistinguishable from its own while its own create is genuinely outstanding — that residue is unfixable
+  without a per-request payload the daemon does not send, and it fails toward a false failure report on a
+  create that will still land, never a false success. Do not repeat the "only one dialog is ever open"
+  reasoning `pendingCreateFolders` earned honestly (that store really does have exactly one caller) when
+  writing this store's next consumer.
 
 `security-sensitive`, builder self-review **PASS**, one accepted SHOULD FIX (the unbounded set, the
-`pendingCreateFolders`/`pendingHistoryRequests` posture) and one open SHOULD FIX inherited by #1308 (a
-daemon that answers a create it already confirmed can still produce a rejection after the fact — a false
-failure report, never a false success). See [Conversation create](conversation-create.md) for the full
-transport slice this correlation attaches to.
+`pendingCreateFolders`/`pendingHistoryRequests` posture) and one SHOULD FIX #1308 discharged by
+construction rather than by a fix (the stale-rejection-after-confirmation case, above); the residual
+concurrent-caller ambiguity while a create is genuinely in flight is accepted as structural, not tracked as
+an open item. See [Conversation create](conversation-create.md) for the full transport slice this
+correlation attaches to.
 
 # Attachment-upload correlation ([#861](https://github.com/pyrycode/pyrycode-desktop/issues/861))
 

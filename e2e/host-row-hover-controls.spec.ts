@@ -11,9 +11,11 @@ import type { Locator } from '@playwright/test'
 // replaced here rather than deleted: the guard is still the subject, only its answer has moved from "no
 // control, so the dots stay" to "a control, so the dots give way".
 //
-// The half that has NOT moved is the plus. #1299 draws the pen alone, so the two "no Add workspace button"
-// reads below are unchanged from the version this replaces — that half of the guard is still #1189's, and
-// the hovered row shows the pen in its slot and an empty one where the plus belongs.
+// ⭐ AND ITS SECOND HALF INVERTED IN #1308, for the same reason and by the same rule. The version this
+// replaces asserted "no Add workspace button" at count 0 and named #1189 (now #1308) as where those two
+// reads would land; wiring the plus reddens both, so they are replaced rather than deleted — the guard is
+// still the subject, its answer has simply moved from "the slot is empty" to "the plus is drawn there".
+// The hovered row now shows BOTH controls, which is the state the drawing has always described.
 //
 // Only this tier can answer any of it: `vitest.config.ts` sets `environment: 'node'` and every renderer
 // spec is a `renderToStaticMarkup` string assertion, so no CSS is evaluated anywhere but here.
@@ -90,10 +92,11 @@ test('the host row swaps its connection dots for the pen on hover', async ({ lau
   await expect(page.locator('.channel-list__host-edit')).toHaveCount(HOST_ROW_COUNT)
   await expect(page.getByRole('button', { name: 'Edit host' })).toHaveCount(HOST_ROW_COUNT)
 
-  // --- 2. The plus is still NOT drawn — #1189's half of the swap, unchanged from the version of this
-  // spec that #1299 replaced. Both reads kept: a class count and an accessibility-tree count. ---
-  await expect(page.locator('.channel-list__host-add')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Add workspace' })).toHaveCount(0)
+  // --- 2. The plus is drawn too, on every host row — #1308's half of the swap, inverted from the version
+  // of this spec that #1299 left standing. Both reads kept in the same two shapes: a class count and an
+  // accessibility-tree count. ---
+  await expect(page.locator('.channel-list__host-add')).toHaveCount(HOST_ROW_COUNT)
+  await expect(page.getByRole('button', { name: 'Add workspace' })).toHaveCount(HOST_ROW_COUNT)
 
   // --- 3. AT REST, with the pointer parked off every row: the dots up, the pen invisible, in every row.
   // The fixture's launch click left the pointer over the seeded conversation row, so reading an "at rest"
@@ -105,6 +108,12 @@ test('the host row swaps its connection dots for the pen on hover', async ({ lau
       SHOWN_OPACITY
     )
     expect(await computed(hostRows.nth(i).locator('.channel-list__host-edit'), 'opacity')).toBe(
+      HIDDEN_OPACITY
+    )
+    // #1308 — the plus rides the same swap and now that it is drawn it is readable here. Its own rule is
+    // a separate block from the pen's (the two hang off one row but wear different classes), so a
+    // regression in either is independent and both are read.
+    expect(await computed(hostRows.nth(i).locator('.channel-list__host-add'), 'opacity')).toBe(
       HIDDEN_OPACITY
     )
   }
@@ -121,6 +130,7 @@ test('the host row swaps its connection dots for the pen on hover', async ({ lau
   // control was drawn. ---
   await hostLabel.hover()
   expect(await computed(pen, 'opacity')).toBe(SHOWN_OPACITY)
+  expect(await computed(hostRow.locator('.channel-list__host-add'), 'opacity')).toBe(SHOWN_OPACITY)
   expect(await computed(hostStatus, 'opacity')).toBe(HIDDEN_OPACITY)
 
   // --- 5. The pen's drawn rectangle, readable for the first time in a running window (#1185 shipped the

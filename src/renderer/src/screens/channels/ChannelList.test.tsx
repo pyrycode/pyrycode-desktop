@@ -139,6 +139,10 @@ const render = (
       onCreateChannel={noop}
       onEditWorkspace={noop}
       onEditHost={noop}
+      // #1308 — the host row's plus. Defaulted to `noop` here for its four siblings' reason: every call
+      // site written before this ticket keeps rendering, and the plus is now drawn in all of them, which
+      // is the point (it is a REQUIRED prop on the view, so the container must decide).
+      onAddWorkspace={noop}
       onPairNewHost={noop}
       onSaveAsChannel={noop}
       onRename={noop}
@@ -849,10 +853,10 @@ describe('ChannelListView', () => {
       })
     })
 
-    describe('the pen is DRAWN on every host row now that a caller passes it (#1299)', () => {
+    describe('the pen and the plus are DRAWN on every host row (#1299, #1308)', () => {
       // #1185 shipped `HostRow`'s two optional handlers with no caller, so the running app drew neither
-      // control; this ticket is the pen's first caller and the assertions below are what that changes at
-      // the view level. The plus stays undrawn — that half is still #1189's.
+      // control; #1299 was the pen's first caller and #1308 is the plus's, which is what the assertions
+      // below now read back at the view level. BOTH halves of the swap are finally wired.
       const EDIT_NAME_MARKER = 'aria-label="Edit host"'
       const ADD_NAME_MARKER = 'aria-label="Add workspace"'
       const HOST_ROW_MARKER = 'class="channel-list__host"'
@@ -873,8 +877,20 @@ describe('ChannelListView', () => {
         expect(occurrences(markup, EDIT_NAME_MARKER)).toBe(4)
       })
 
-      it('still draws NO plus — that half of the swap is #1189’s (AC5)', () => {
-        expect(render([row({ id: 'a' })])).not.toContain(ADD_NAME_MARKER)
+      it('draws exactly one plus per host row, in both trees (#1308 AC1)', () => {
+        const markup = render([row({ id: 'a' })])
+        const rows = occurrences(markup, HOST_ROW_MARKER)
+        expect(rows).toBe(2)
+        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(rows)
+      })
+
+      it('draws one plus per row for EVERY paired machine, rows or not (#1308 AC1)', () => {
+        // The second machine holds NO conversation here, which is AC1's "a paired host that has no
+        // conversations at all": `groupByServer` buckets every paired id whether or not it holds rows,
+        // so that machine's two host rows are drawn and each carries the plus that starts its first chat.
+        const markup = render([row({ id: 'a' })], null, ['server-a', 'server-b'])
+        expect(occurrences(markup, HOST_ROW_MARKER)).toBe(4)
+        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(4)
       })
     })
 

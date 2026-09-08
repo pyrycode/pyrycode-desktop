@@ -76,16 +76,21 @@ Composer
   `attachmentUploadOutcomeCopy(outcome)`. `<div>`s, not `<p>`s — this repo ships no margin reset and it is
   a flex item in the composer column, so a `<p>`'s UA margin would move the message box for no semantic
   gain (`ComposerErrorChip`'s ruling verbatim).
-- **`ComposerAttachmentStrip({ attachments })`** (#1262) — the pending set, drawn. `null` for an empty set,
-  not an empty element, applying `ComposerAttachOutcome`'s own rule to the column's *first* child instead
-  of its last: `.composer` is a flex column with a `--space-1` gap, so an element that mounted empty would
-  move the message box down forever. Otherwise a `.composer__attachments` `<div>` holding one
-  `AttachmentFileIcon` per attachment, keyed by array index (`BubbleAttachmentRow`'s reason: the list only
-  appends and is cleared wholesale, so index identity is stable). Every attachment draws the file tile,
+- **`ComposerAttachmentStrip({ attachments, onRemove })`** (#1262, `onRemove` since #1264) — the pending
+  set, drawn. `null` for an empty set, not an empty element, applying `ComposerAttachOutcome`'s own rule to
+  the column's *first* child instead of its last: `.composer` is a flex column with a `--space-1` gap, so an
+  element that mounted empty would move the message box down forever. Otherwise a `.composer__attachments`
+  `<div>` holding one `.composer__attachment-slot` per attachment, each wrapping `AttachmentFileIcon` (or,
+  for an image name, `ComposerAttachmentImage`) plus a remove control as its sibling. **Keyed by
+  `${attachmentId}#${occurrence}`, not by array index** — #1262 shipped an index key on the recorded ground
+  that the list only appends and is cleared wholesale, and #1264 falsified that ground by making the list
+  removable from the middle; see [Composer attach — pending attachments and the strip §
+  The remove control](composer-attach-pending.md#the-remove-control-1264--taking-a-tile-back-out-before-send)
+  for the stale-fiber defect an index key produces once a tile can be removed. Every attachment draws the file tile,
   image or not — #1263's picture-bearing tile needs this as its own undecodable fallback, so it is a
   shipped state rather than scaffolding. See [Composer attach — pending attachments and the
-  strip](composer-attach-pending.md) for the shared `AttachmentFileIcon` drawing and the pending set it
-  renders.
+  strip](composer-attach-pending.md) for the shared `AttachmentFileIcon` drawing, the pending set it
+  renders, and the remove control each tile carries (#1264).
 - **`useAttachmentUpload()`** — `useState<AttachmentUploadEvent | null>(null)` plus one `useEffect`
   returning the bridge's own unsubscribe handle as cleanup, `[]` deps — one live listener per mount, the
   `LogDataSection` / daemon-event-bridge idiom. `requestAttach` clears the held outcome **and then** sends
@@ -284,7 +289,12 @@ plus the drop-target rule below:
   otherwise inherit, and `color: var(--color-primary)`. No horizontal padding — the strip's left edge is
   `.composer__row`'s, which is the design's x=0. Shares no whole class token with `.composer__attach`,
   `.composer__attach-outcome` or `.composer__attach-progress`, so no shipped locator or whole-attribute-run
-  assertion can reach it.
+  assertion can reach it. **`.composer__attachment-slot` / `.composer__attachment-remove` /
+  `.composer__attachment-remove-disc`** (#1264) sit alongside these four — the slot is the flex item now,
+  positioned outside `.composer__attachment`'s clip so the remove control's 5px overhang paints rather than
+  gets cut away — see [Composer attach — pending attachments and the
+  strip](composer-attach-pending.md#the-remove-control-1264--taking-a-tile-back-out-before-send) for the
+  full rule set.
 - **`.composer--drop-target`** (#890) — `outline: 1px solid var(--color-primary); outline-offset: -1px`,
   the drop-in-progress edge. `outline`, not `border`: `.composer` has no resting border at all — it is
   padding over the pane card, with no paint of its own since #1099 — so a `border:` in the active state
@@ -407,11 +417,12 @@ renderer memory on a timeline item) and the strip's is the new DOM sink the deri
 - [Composer attach — the paste entry](composer-attach-paste.md) (#1033) — landed; clipboard paste, split to
   its own page 2026-09-04. A third concurrent-upload entry alongside the click and the drop, interleaving
   into the same one-slot outcome the same way; adds no correlation either.
-- [Composer attach — pending attachments and the strip](composer-attach-pending.md) (#1039, #1262, #1263) —
-  landed; split to its own page 2026-09-08. The pending set an upload completing accumulates, the row of
-  file tiles above the message box that draws it (replacing the completion sentence), and the picture an
-  image-named tile draws instead of the file icon. #1264 (the remove control) and #1265 (the name-on-hover
-  tooltip) are the next two slices of this family and are still open.
+- [Composer attach — pending attachments and the strip](composer-attach-pending.md)
+  (#1039, #1262, #1263, #1264) — landed; split to its own page 2026-09-08. The pending set an upload
+  completing accumulates, the row of file tiles above the message box that draws it (replacing the
+  completion sentence), the picture an image-named tile draws instead of the file icon, and the remove
+  control each tile carries to take a file back out before send. #1265 (the name-on-hover tooltip) is the
+  last slice of this family and is still open.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),

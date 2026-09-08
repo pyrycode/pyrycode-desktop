@@ -8,14 +8,17 @@ import {
   ComposerAttachOutcome,
   ComposerAttachmentStrip,
   NO_PENDING_ATTACHMENTS,
+  REMOVE_ATTACHMENT_LABEL,
   composerClassName,
   dragCarriesFiles,
   drainPendingAttachments,
   fileToAttach,
   mirrorTakeToDisplay,
   pasteCarriesImageOnly,
+  pendingAttachmentKeys,
   reduceFileDropDepth,
-  reducePendingAttachments
+  reducePendingAttachments,
+  removePendingAttachment
 } from './ComposerAttach'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
@@ -485,6 +488,137 @@ describe('drainPendingAttachments', () => {
   })
 })
 
+// #1264 — the third pure rule, and pure for its two siblings' reason: the click that calls it belongs to
+// a tier that cannot render, and the hook that holds it belongs to a tier that cannot click. What is
+// proved here is the fold; that the CONTROL reaches it is e2e/composer-attachment-remove.spec.ts.
+describe('removePendingAttachment (#1264 AC2)', () => {
+  const REPORT = { attachmentId: 'u-1', filename: 'report.pdf' }
+  const BUNDLE = { attachmentId: 'u-2', filename: 'bundle.zip' }
+  const NOTES = { attachmentId: 'u-3', filename: 'notes.txt' }
+
+  it('takes out the named position and leaves the rest in order', () => {
+    expect(removePendingAttachment([REPORT, BUNDLE, NOTES], 1)).toEqual([REPORT, NOTES])
+    expect(removePendingAttachment([REPORT, BUNDLE, NOTES], 0)).toEqual([BUNDLE, NOTES])
+    expect(removePendingAttachment([REPORT, BUNDLE, NOTES], 2)).toEqual([REPORT, BUNDLE])
+  })
+
+  // ⭐ AC2's SECOND CLAUSE, and the whole reason the parameter is an index rather than an id: the same
+  // file attached twice completes twice, so two tiles can carry one `attachmentId`. Removing by id would
+  // take both for one click — a file the operator never asked to drop off a message they are still
+  // writing. Position is also what the strip's own `map` hands each control, so the control's index and the
+  // set's index are the same number by construction rather than by correlation. (The strip's REACT key is a
+  // different thing and is deliberately not the position — see `pendingAttachmentKeys` below.)
+  it('removes tiles carrying the SAME attachmentId independently', () => {
+    const twice: readonly MessageAttachment[] = [REPORT, { ...REPORT }, BUNDLE]
+    const once = removePendingAttachment(twice, 0)
+    expect(once).toHaveLength(2)
+    expect(once).toEqual([REPORT, BUNDLE])
+    expect(removePendingAttachment(once, 0)).toEqual([BUNDLE])
+  })
+
+  // The SAME REFERENCE for an index that names no tile — `reducePendingAttachments`'s idiom for "this
+  // changes nothing", structural rather than incidental. It is what makes an impossible index unable to
+  // clear a set: a removal racing a send (the take empties first) folds against `[]`, where every index
+  // is out of range.
+  it('answers the same reference for an index that names no tile', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, BUNDLE]
+    expect(removePendingAttachment(pending, -1)).toBe(pending)
+    expect(removePendingAttachment(pending, 2)).toBe(pending)
+    expect(removePendingAttachment(pending, 99)).toBe(pending)
+    expect(removePendingAttachment(NO_PENDING_ATTACHMENTS, 0)).toBe(NO_PENDING_ATTACHMENTS)
+  })
+
+  it('does not mutate the set it was given', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, BUNDLE]
+    removePendingAttachment(pending, 0)
+    expect(pending).toEqual([REPORT, BUNDLE])
+  })
+
+  // Removing the last tile leaves the set the strip renders NOTHING for — the empty-set case its own
+  // describe pins, reached this way for the first time.
+  it('empties a one-tile set', () => {
+    expect(removePendingAttachment([REPORT], 0)).toEqual([])
+  })
+})
+
+// ⭐ #1264 — THE KEY RULE, AND WHY IT IS A PURE FUNCTION AT ALL. `renderToStaticMarkup` drops React keys
+// outright, so no static render can see one and a key living inline in the strip's `map` would be provable
+// nowhere; the click that exercises it belongs to a tier that cannot render. So the rule is lifted out and
+// pinned here, and the BEHAVIOUR it buys — the survivor keeps its own picture and asks the host for nothing —
+// is driven over two image tiles in e2e/composer-attachment-remove.spec.ts.
+//
+// What an index key cost, restated as the property below: reconciliation reuses a fiber whenever two renders
+// agree on a key, and the tile behind a key owns state plus a refcounted object URL. So the claim that has to
+// hold across a removal is that every SURVIVING entry keeps the key it had.
+describe('pendingAttachmentKeys (#1264 — the identity a mid-list removal needs)', () => {
+  const REPORT = { attachmentId: 'u-1', filename: 'report.pdf' }
+  const BUNDLE = { attachmentId: 'u-2', filename: 'bundle.zip' }
+  const NOTES = { attachmentId: 'u-3', filename: 'notes.txt' }
+
+  it('gives one key per position, in order', () => {
+    expect(pendingAttachmentKeys([REPORT, BUNDLE, NOTES])).toEqual(['u-1#0', 'u-2#0', 'u-3#0'])
+    expect(pendingAttachmentKeys([])).toEqual([])
+  })
+
+  // AC2's duplicate case, which is what rules a bare `attachmentId` out: two tiles can carry one id and must
+  // remove independently, so the id alone is not a key — duplicate React keys are undefined behaviour.
+  it('qualifies a repeated attachmentId by which occurrence it is', () => {
+    const keys = pendingAttachmentKeys([REPORT, { ...REPORT }, BUNDLE, { ...REPORT }])
+    expect(keys).toEqual(['u-1#0', 'u-1#1', 'u-2#0', 'u-1#2'])
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  // ⭐ THE PROPERTY THE VERIFIED DEFECT NEEDED, stated over every position of every removal: a survivor's key
+  // is the key it already had. Under the index key this is false for every entry after the removed one, which
+  // is exactly how a survivor came to be drawn by the removed tile's fiber.
+  it('leaves every surviving entry’s key unchanged by a removal at any position', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, BUNDLE, NOTES]
+    const before = pendingAttachmentKeys(pending)
+    for (let removed = 0; removed < pending.length; removed += 1) {
+      const after = pendingAttachmentKeys(removePendingAttachment(pending, removed))
+      expect(after).toEqual(before.filter((_, index) => index !== removed))
+    }
+  })
+
+  // The same property where it is least obvious: the survivors of a duplicate-id run. Removing the FIRST of
+  // three tiles sharing an id renumbers the two behind it — `u-1#1` and `u-1#2` become `u-1#0` and `u-1#1` —
+  // so a fiber IS reused across the shift here. That is sound rather than tolerated: a key match implies an
+  // id match, and a tile drawing the same attachment already holds the right state, the right URL and an
+  // unchanged effect dep. The distinct-id neighbour is what must not move, and does not.
+  it('reuses a key across a duplicate-id shift only between tiles drawing the same attachment', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, { ...REPORT }, BUNDLE, { ...REPORT }]
+    const after = pendingAttachmentKeys(removePendingAttachment(pending, 0))
+    expect(after).toEqual(['u-1#0', 'u-2#0', 'u-1#1'])
+    // Each surviving key still addresses the attachment its own position draws — which is the whole of "a
+    // reused fiber is only ever reused for the same attachment".
+    expect(after.map((key) => key.slice(0, key.lastIndexOf('#')))).toEqual(['u-1', 'u-2', 'u-1'])
+  })
+
+  // The key is injective in (id, occurrence) even for an id carrying the separator, because the occurrence is
+  // a decimal that never does: the LAST `#` splits a key back into exactly one pair. An untrusted id cannot
+  // therefore collide two distinct tiles into one fiber.
+  it('cannot collide two positions, even for an id carrying the separator', () => {
+    const keys = pendingAttachmentKeys([
+      { attachmentId: 'u#1', filename: 'a.pdf' },
+      { attachmentId: 'u', filename: 'b.pdf' },
+      { attachmentId: 'u', filename: 'c.pdf' }
+    ])
+    expect(keys).toEqual(['u#1#0', 'u#0', 'u#1'])
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  // The id reaches the key and nothing else: keys are consumed by the reconciler and emitted nowhere, so
+  // #1262's "the host's storage handle stays out of the DOM" survives this change byte for byte.
+  it('puts the attachmentId in the key and not in the markup', () => {
+    const attachmentId = 'b3f1c0de-0000-4000-8000-000000000000'
+    expect(pendingAttachmentKeys([{ attachmentId, filename: 'a.pdf' }])).toEqual([`${attachmentId}#0`])
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[{ attachmentId, filename: 'a.pdf' }]} onRemove={() => {}} />
+    )
+    expect(markup).not.toContain(attachmentId)
+  })
+})
+
 describe('fileToAttach', () => {
   // Generic over the element, so this tier needs no `File`: what is being decided is the COUNT, and
   // nothing about the file is read to decide it.
@@ -509,19 +643,35 @@ describe('fileToAttach', () => {
 describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1, AC5)', () => {
   const tile = (filename: string): MessageAttachment => ({ attachmentId: 'att-1', filename })
 
-  // Counts the tile frame without also counting `-glyph` / `-ext`, which share the prefix — the
-  // `rowCount` idiom the bubble's own spec established for exactly this hazard.
+  // Counts the tile frame without also counting `-glyph` / `-ext` / `-slot` / `-remove`, which share the
+  // prefix — the `rowCount` idiom the bubble's own spec established for exactly this hazard. #1264's two
+  // new classes are covered by the same closing quote: the count stays one per attachment.
   const tileCount = (markup: string): number =>
     markup.match(/class="composer__attachment"/g)?.length ?? 0
+
+  // #1264: every render below now supplies the removal callback, which a static render drops along with
+  // every other handler — the click is e2e/composer-attachment-remove.spec.ts's.
+  const noop = (): void => {}
+
+  // #1264: the markup of each tile's SLOT, in DOM order — the wrapper that holds the tile and its control
+  // as siblings outside the frame's clip. Splitting on the slot's own open tag is what lets an assertion
+  // speak about one tile's drawing without counting characters, which is what the `indexOf` arithmetic
+  // this replaces was doing.
+  const slots = (markup: string): string[] =>
+    markup.split('<span class="composer__attachment-slot">').slice(1)
 
   // ⭐ AC1's LAST CLAUSE, and the reason this is an equality rather than a not.toContain: `.composer` is a
   // flex column with a gap, so an element that mounts empty is not free — it would move the message box
   // down on every launch, in every spec, forever. `ComposerAttachOutcome`'s shipped ruling, one component
   // over, applied to the column's FIRST child instead of its last.
   it('renders nothing at all when nothing is pending — not an empty element', () => {
-    expect(renderToStaticMarkup(<ComposerAttachmentStrip attachments={[]} />)).toBe('')
+    expect(renderToStaticMarkup(<ComposerAttachmentStrip attachments={[]} onRemove={noop} />)).toBe(
+      ''
+    )
     expect(
-      renderToStaticMarkup(<ComposerAttachmentStrip attachments={NO_PENDING_ATTACHMENTS} />)
+      renderToStaticMarkup(
+        <ComposerAttachmentStrip attachments={NO_PENDING_ATTACHMENTS} onRemove={noop} />
+      )
     ).toBe('')
   })
 
@@ -529,6 +679,7 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     const markup = renderToStaticMarkup(
       <ComposerAttachmentStrip
         attachments={[tile('first.pdf'), tile('second.txt'), tile('third.zip')]}
+        onRemove={noop}
       />
     )
     expect(tileCount(markup)).toBe(3)
@@ -540,7 +691,9 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
   // asserted here as the three class runs the strip passes down, since a second transcription would be
   // free to drift from the first.
   it('wears its own three classes, sharing no whole class token with the outcome line', () => {
-    const markup = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('a.pdf')]} />)
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[tile('a.pdf')]} onRemove={noop} />
+    )
     expect(markup).toContain('<div class="composer__attachments">')
     expect(markup).toContain('<span class="composer__attachment">')
     expect(markup).toContain('class="composer__attachment-glyph"')
@@ -559,6 +712,7 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     const markup = renderToStaticMarkup(
       <ComposerAttachmentStrip
         attachments={[tile('shot.png'), tile('notes.pdf'), tile('grab.JPEG')]}
+        onRemove={noop}
       />
     )
     expect(tileCount(markup)).toBe(3)
@@ -568,16 +722,18 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     expect(markup).toContain('>PDF</span>')
     expect(markup).not.toContain('>PNG</span>')
     expect(markup).not.toContain('>JPEG</span>')
-    // Order is the set's own, unchanged by the branch: image, file, image. Asserted at the two ENDS, where an
-    // empty frame is unambiguous — the file tile's own frame is never empty, so a branch that drew the wrong
-    // drawing at either end fails here rather than being absorbed by a substring match somewhere in the middle.
+    // Order is the set's own, unchanged by the branch: image, file, image. Asserted per SLOT rather than at
+    // the two ends — #1264 hung a control after each tile, so neither end of the strip is a frame any more,
+    // and the claim is stated where it actually lives instead of by counting characters. Each drawing is
+    // read at the START of its own slot, where an empty frame is unambiguous: the file tile's frame is never
+    // empty, so a branch that drew the wrong drawing in any position fails here rather than being absorbed
+    // by a substring match somewhere in the middle.
+    expect(slots(markup)).toHaveLength(3)
+    expect(slots(markup)[0].startsWith('<span class="composer__attachment"></span>')).toBe(true)
     expect(
-      markup.startsWith('<div class="composer__attachments"><span class="composer__attachment"></span>')
+      slots(markup)[1].startsWith('<span class="composer__attachment"><svg class="composer__attachment-glyph"')
     ).toBe(true)
-    expect(markup.endsWith('<span class="composer__attachment"></span></div>')).toBe(true)
-    expect(markup.indexOf('composer__attachment-glyph')).toBeGreaterThan(
-      '<div class="composer__attachments"><span class="composer__attachment"></span>'.length - 1
-    )
+    expect(slots(markup)[2].startsWith('<span class="composer__attachment"></span>')).toBe(true)
   })
 
   // ⭐ AC5, AND THE ELEMENT THE SHIPPED e2e NEGATIVES ARE RE-AIMED AT. Against an outcome line that no
@@ -588,24 +744,77 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     const attachmentId = 'b3f1c0de-0000-4000-8000-000000000000'
     const filename = '../../etc/passwd"><img src=x onerror=alert(1)>.pdf'
     const markup = renderToStaticMarkup(
-      <ComposerAttachmentStrip attachments={[{ attachmentId, filename }]} />
+      <ComposerAttachmentStrip attachments={[{ attachmentId, filename }]} onRemove={noop} />
     )
     expect(markup).not.toContain(attachmentId)
     expect(markup).not.toContain(filename)
     expect(markup).not.toContain('passwd')
     expect(markup).not.toContain('onerror')
     expect(markup).toContain('>PDF</span>')
-    // No title, no alt, no aria-label: the name reaches no attribute at all, which is the sink the
-    // drawing's aria-hidden children exist to keep closed.
+    // No title and no alt: the name reaches no attribute at all, which is the sink the drawing's
+    // aria-hidden children exist to keep closed.
     expect(markup).not.toContain('title=')
     expect(markup).not.toContain('alt=')
-    expect(markup).not.toContain('aria-label')
+    // ⭐ #1264 AC4, AND THE ONE ASSERTION THIS TICKET RE-AIMED. This line read `not.toContain('aria-label')`
+    // while the strip had no control in it; the remove control has one BY DESIGN, so the criterion is
+    // restated as what it always meant — an ENUMERATION of every aria-label the strip renders, each of which
+    // must be the client-owned constant. Stronger than the negative it replaces: a name interpolated into an
+    // otherwise-correct label fails here, where a `not.toContain` on the attribute NAME could not see it.
+    expect(markup.match(/aria-label="[^"]*"/g)).toEqual([`aria-label="${REMOVE_ATTACHMENT_LABEL}"`])
+  })
+
+  // ⭐ #1264 AC1's structural half — the criterion the geometry in e2e can only measure once the element
+  // exists. One control per tile, and it is a SIBLING of the frame rather than a child: `.composer__attachment`
+  // declares `overflow: hidden` for #1263's `cover` picture, so a control rendered inside it would be clipped
+  // away with nothing in this repo reddening to say so. The slot is what it hangs on instead.
+  it('hangs one remove control per tile, outside the frame that clips', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[tile('a.pdf'), tile('b.png'), tile('c.zip')]}
+        onRemove={noop}
+      />
+    )
+    expect(slots(markup)).toHaveLength(3)
+    // One slot per tile and one tile per slot: the wrapper does not double the count the shipped e2e
+    // locators and the regex above both read.
+    expect(tileCount(markup)).toBe(3)
+    expect(markup.match(/class="composer__attachment-remove"/g)?.length ?? 0).toBe(3)
+    // Every control opens AFTER a frame closed — never inside one.
+    expect(
+      markup.match(/<\/span><button type="button" class="composer__attachment-remove"/g)?.length ?? 0
+    ).toBe(3)
+    // A real button with a real type: the strip sits inside the composer, and a submit-typed control there
+    // would send the message it exists to edit.
+    expect(markup).toContain(
+      `<button type="button" class="composer__attachment-remove" aria-label="${REMOVE_ATTACHMENT_LABEL}">`
+    )
+    // The two inks: the glyph off the button's own `currentColor`, the disc off its own class, because a
+    // presentation attribute cannot hold a var().
+    expect(markup).toContain('class="composer__attachment-remove-disc"')
+    expect(markup).toContain('fill="currentColor"')
+  })
+
+  // The name is a CLIENT-OWNED CONSTANT and says what the control does, not which file it drops. The
+  // filename is untrusted display text; naming the button after it would put that string in an attribute.
+  it('names the control with a constant that carries no file name', () => {
+    expect(REMOVE_ATTACHMENT_LABEL).toBe('Remove attachment')
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[{ attachmentId: 'att-9', filename: 'quarterly-secrets.pdf' }]}
+        onRemove={noop}
+      />
+    )
+    expect(markup).toContain(`aria-label="${REMOVE_ATTACHMENT_LABEL}"`)
+    expect(markup).not.toContain('quarterly')
+    expect(markup).not.toContain('secrets')
   })
 
   // A name with no usable extension draws an empty label rather than a fallback word — the derivation's
   // designed empty case. The glyph holds the tile's size regardless, so the tile is still 45x60.
   it('draws a tile for a name with no usable extension', () => {
-    const markup = renderToStaticMarkup(<ComposerAttachmentStrip attachments={[tile('README')]} />)
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[tile('README')]} onRemove={noop} />
+    )
     expect(tileCount(markup)).toBe(1)
     expect(markup).toContain('<span class="composer__attachment-ext" aria-hidden="true"></span>')
   })

@@ -323,6 +323,49 @@ export function ComposerAttachOutcome({
 }
 
 /**
+ * #1264 — one stable reconciliation key per position: the attachment's id, qualified by WHICH OCCURRENCE of
+ * that id this entry is. `[X, Y, X]` keys as `X#0`, `Y#0`, `X#1`.
+ *
+ * ⭐ WHY THE ARRAY INDEX STOPPED WORKING, precisely. #1262 keyed by index on the recorded ground that the
+ * pending list only appends and is cleared wholesale; this ticket makes it removable from the MIDDLE, and
+ * index keys reconcile `[A, B] → [B]` as "key 0 reused with new props, key 1 deleted". The tile behind key 0
+ * is `ComposerAttachmentImage`, which owns a `useState` and an effect keyed on the attachment id — so the
+ * REUSED fiber keeps A's state (`{ ready, url: A's picture }`) while its props now name B. React runs every
+ * passive destroy before every create, so B's own fiber releases B's URL before the reused one asks for it
+ * again: the refcount hits zero, `attachmentImageSource` revokes, and the survivor takes the COLD path back
+ * to the host. For that whole round trip the operator watches the tile they just removed keep its picture on
+ * the tile that survived. Nothing in this repo reddens on it — renderer specs are static renders with no
+ * effects, and a strip of non-image tiles cannot reach the stateful component at all.
+ *
+ * ⭐ A BARE `attachmentId` WOULD NOT DO, which is why this qualifies it. Two completions can carry one id
+ * (the same file attached twice) and AC2 requires those tiles to remove independently, so the id alone is
+ * not unique and duplicate React keys are undefined behaviour. Qualifying by occurrence makes the key
+ * injective — the decimal occurrence contains no `#`, so the last `#` splits a key back into exactly one
+ * (id, occurrence) pair — and gives the property that actually matters: two entries share a key only if they
+ * share an id, so a fiber is only ever reused between tiles drawing the SAME attachment, where its state and
+ * its held URL are already correct and its effect dep does not change.
+ *
+ * A CLIENT-MINTED SEQUENCE NUMBER was the alternative and is not taken: it would have to be carried on the
+ * record, which means a new element type threaded through `reducePendingAttachments`, `drainPendingAttachments`,
+ * `PendingAttachmentTake` and `submitMessage`'s `attachment_ids` map — a wide change to hold a number this
+ * function derives from the set it already has.
+ *
+ * THE ID IN A KEY IS NOT THE ID IN THE MARKUP. #1262 kept `attachmentId` out of the render path to keep it
+ * out of the DOM; a React key is consumed by the reconciler and emitted nowhere (`renderToStaticMarkup` drops
+ * keys outright), so the strip's markup is byte-identical and the shipped assertion that no part of the record
+ * reaches the DOM still holds. The `Map` below is keyed by that untrusted string safely — a `Map` has no
+ * prototype chain to walk.
+ */
+export function pendingAttachmentKeys(pending: readonly MessageAttachment[]): readonly string[] {
+  const occurrences = new Map<string, number>()
+  return pending.map((attachment) => {
+    const occurrence = occurrences.get(attachment.attachmentId) ?? 0
+    occurrences.set(attachment.attachmentId, occurrence + 1)
+    return `${attachment.attachmentId}#${occurrence}`
+  })
+}
+
+/**
  * #1262 — the pending set, drawn: a row of file tiles between the status row and the message box (Figma
  * `Attachment area` 390:7136), in the set's own completion order.
  *
@@ -339,11 +382,10 @@ export function ComposerAttachOutcome({
  * 45x60 box, which is why the strip's tile count and each tile's position are a property of this SET and not of
  * what any picture is doing.
  *
- * THE KEY IS THE ARRAY INDEX, `BubbleAttachmentRow`'s recorded reason: this list only ever appends and is
- * cleared wholesale, so index identity is stable — and a name-derived key is the step that makes
- * `id={filename}` look natural next. `attachmentId` would key correctly and is deliberately not used
- * either: it is a host-side storage handle with no display value, and keeping it out of the render path is
- * what keeps it out of the markup.
+ * ⭐ #1264 FALSIFIED THE ARRAY-INDEX KEY THIS STRIP INHERITED, and the replacement is `pendingAttachmentKeys`
+ * below. #1262's reason for the index — "this list only ever appends and is cleared wholesale, so index
+ * identity is stable" — was true of an append-only list and stopped being true the moment a tile could be
+ * taken out of the MIDDLE. See that function for what an index key costs once it can.
  *
  * ITS OWN THREE CLASSES, sharing no whole class token with `.composer__attach`,
  * `.composer__attach-outcome` or `.composer__attach-progress`, so no shipped locator and no
@@ -351,27 +393,110 @@ export function ComposerAttachOutcome({
  * `AttachmentFileIcon` — see that module for why the classes are passed down rather than shared.
  */
 export function ComposerAttachmentStrip({
-  attachments
+  attachments,
+  onRemove
 }: {
   attachments: readonly MessageAttachment[]
+  /** #1264 — take the tile at this POSITION back out of the pending set. By position rather than by id
+   *  because two completions can carry one `attachmentId`; see `removePendingAttachment`. */
+  onRemove: (index: number) => void
 }): JSX.Element | null {
   if (attachments.length === 0) return null
+  // Computed once for the whole row rather than per item, because an entry's key depends on the entries
+  // BEFORE it — which occurrence of its id this one is. See `pendingAttachmentKeys`.
+  const keys = pendingAttachmentKeys(attachments)
   return (
     <div className="composer__attachments">
-      {attachments.map((attachment, index) =>
-        isImageAttachmentName(attachment.filename) ? (
-          <ComposerAttachmentImage key={index} attachment={attachment} />
-        ) : (
-          <AttachmentFileIcon
-            key={index}
-            filename={attachment.filename}
-            frameClassName="composer__attachment"
-            glyphClassName="composer__attachment-glyph"
-            labelClassName="composer__attachment-ext"
-          />
-        )
-      )}
+      {attachments.map((attachment, index) => (
+        // ⭐ #1264 — THE SLOT, AND WHY THE CONTROL IS THE TILE'S SIBLING RATHER THAN ITS CHILD.
+        // `.composer__attachment` declares `overflow: hidden` and that clip is #1263's: its picture is
+        // `object-fit: cover` and overflows the 45px frame by 7.5px each side. This control overhangs the
+        // frame by 5px on both axes, so rendered INSIDE it it is simply invisible — and nothing in this
+        // repo reddens to say so. Dropping the clip to make room would un-cut the picture. So the tile
+        // keeps its frame untouched and the control hangs on a wrapper outside it.
+        //
+        // The wrapper takes the tile's own 45x60 box and becomes the flex item in its place, so every
+        // tile's POSITION in the row is arithmetically unchanged (the shipped x = 0 / 57 geometry reads
+        // the same numbers). It shares no WHOLE class token with `.composer__attachment` — a class
+        // selector does not prefix-match, and both unit tests count tiles with `class="composer__attachment"`
+        // including the closing quote — so no shipped locator, tile count or `toHaveText('PDF')` can reach
+        // it. The control contributes no text to the tile for the same reason: it is not inside it.
+        //
+        // THE KEY MOVES OUT HERE with the outermost element per item, and it is no longer the array index:
+        // this ticket is exactly what falsified that choice, since the list it was justified against was one
+        // that only appended. `pendingAttachmentKeys` above carries the mechanism and the alternatives.
+        <span className="composer__attachment-slot" key={keys[index]}>
+          {isImageAttachmentName(attachment.filename) ? (
+            <ComposerAttachmentImage attachment={attachment} />
+          ) : (
+            <AttachmentFileIcon
+              filename={attachment.filename}
+              frameClassName="composer__attachment"
+              glyphClassName="composer__attachment-glyph"
+              labelClassName="composer__attachment-ext"
+            />
+          )}
+          {/* The index is closed over at render, which is what makes "this tile and only this tile" a
+              property of the drawing rather than of a lookup: nothing is searched for at click time, so
+              two tiles carrying one attachmentId cannot be confused for each other. */}
+          <ComposerAttachmentRemoveButton onRemove={() => onRemove(index)} />
+        </span>
+      ))}
     </div>
+  )
+}
+
+/** The control's accessible name (#1264 AC4). A CLIENT-OWNED CONSTANT saying what the control does, never
+ *  which file it drops: the filename is untrusted display text arriving over `ipcRenderer.on`, and an
+ *  `aria-label` is an attribute — the sink CLAUDE.md's 2026-08-20 ruling closes and #696's security review
+ *  rejected as a MUST FIX. #1265's tooltip renders the name as escaped CHILDREN, which is the other half of
+ *  that same rule rather than an exception to it. */
+export const REMOVE_ATTACHMENT_LABEL = 'Remove attachment'
+
+/** Figma `Icon` 390:7183 — Font Awesome's `circle-xmark-solid`, the solid disc whose cross is a CUT-OUT
+ *  rather than a stroke. That is why the export puts a plain circle behind it: the cut-out is where the
+ *  darker circle shows through, so the cross reads dark on a light disc. The export's clip-path is dropped,
+ *  its rect being the full viewBox (ATTACHMENT_PATH's ruling, and FILE_GLYPH_PATH's), as are its
+ *  `preserveAspectRatio="none"` and `overflow="visible"`, which mean something only to the <img> wrapper
+ *  Figma generates around it. */
+const REMOVE_GLYPH_PATH =
+  'M10 20C15.5234 20 20 15.5234 20 10C20 4.47656 15.5234 0 10 0C4.47656 0 0 4.47656 0 10C0 15.5234 4.47656 20 10 20ZM6.52344 6.52344C6.89062 6.15625 7.48437 6.15625 7.84766 6.52344L9.99609 8.67188L12.1445 6.52344C12.5117 6.15625 13.1055 6.15625 13.4687 6.52344C13.832 6.89062 13.8359 7.48437 13.4687 7.84766L11.3203 9.99609L13.4687 12.1445C13.8359 12.5117 13.8359 13.1055 13.4687 13.4687C13.1016 13.832 12.5078 13.8359 12.1445 13.4687L9.99609 11.3203L7.84766 13.4687C7.48047 13.8359 6.88672 13.8359 6.52344 13.4687C6.16016 13.1016 6.15625 12.5078 6.52344 12.1445L8.67188 9.99609L6.52344 7.84766C6.15625 7.48047 6.15625 6.88672 6.52344 6.52344Z'
+
+/**
+ * #1264 — one tile's remove control, hung off its slot's top-right corner.
+ *
+ * A REAL <button type="button">, `ComposerAttachButton`'s idiom for an icon-only control: <button> is not
+ * on ARIA's name-prohibited list, so an `aria-label` names it, where a <span> would map to role="generic"
+ * and have its name dropped. The `type` is explicit because this control sits inside the composer, where a
+ * submit-typed button would send the message it exists to edit.
+ *
+ * ⭐ TWO INKS OUT OF ONE DRAWING, `AttachmentFileIcon`'s seam applied to a fill instead of a stroke. A
+ * presentation attribute cannot hold a `var()`, so the glyph takes `fill="currentColor"` and resolves the
+ * button's own `color: var(--color-primary)`, while the disc carries its own class and resolves
+ * `--color-on-primary` there. A directly declared `fill` beats an inherited presentation attribute, so the
+ * two never fight. No colour prop and no `style` attribute.
+ *
+ * INLINED, NEVER REFERENCED: Figma hands back an `https://` asset URL for this glyph, and the renderer's
+ * CSP is `default-src 'self'` — it would fail closed AND be a third-party request on every render.
+ *
+ * NOTHING CROSSES THE WIRE when this is clicked. The attachment family is `attachment_chunk` /
+ * `attachment_stored` / `request_attachment` — there is no delete verb — so removal is an edit to a message
+ * not yet sent and the host keeps the file it stored. This component closes over no bridge, and the strip
+ * hands it no sender.
+ */
+function ComposerAttachmentRemoveButton({ onRemove }: { onRemove: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="composer__attachment-remove"
+      aria-label={REMOVE_ATTACHMENT_LABEL}
+      onClick={onRemove}
+    >
+      <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" aria-hidden="true">
+        <circle className="composer__attachment-remove-disc" cx="10" cy="10" r="7" />
+        <path d={REMOVE_GLYPH_PATH} />
+      </svg>
+    </button>
   )
 }
 
@@ -428,6 +553,36 @@ export function reducePendingAttachments(
     case 'progress':
       return pending
   }
+}
+
+/**
+ * #1264 — take one tile back out of the pending set, so the next send does not name its id.
+ *
+ * The third pure rule beside the two around it, and pure for their reason twice over: the gesture that
+ * calls it belongs to a tier that cannot render, and the holder it writes belongs to a tier that cannot
+ * click, so a rule living inside the hook would be reachable by no test anywhere.
+ *
+ * ⭐ BY POSITION, NEVER BY ID. Two completions can carry the same `attachmentId` — the same file attached
+ * twice — and removing by id would take both tiles for one click, dropping a file the operator never asked
+ * to drop from a message they are still writing. Position is what the strip's own `map` hands each control,
+ * so the control's index and the set's index are the same number by construction rather than by correlation,
+ * and nothing is searched for at click time. (The strip's REACT key is a different thing and is deliberately
+ * NOT the position — see `pendingAttachmentKeys` for why removal is what forced them apart.)
+ *
+ * THE SAME REFERENCE FOR AN INDEX THAT NAMES NO TILE, `reducePendingAttachments`'s idiom for "this changes
+ * nothing" — structural rather than incidental, and what makes an impossible index unable to clear a set.
+ * The pathological ordering is a removal landing after a send's take: it folds against an emptied set,
+ * where every index is out of range, so it is a no-op by this rule rather than by timing.
+ *
+ * NOTHING CROSSES THE WIRE. There is no delete verb in the attachment family, and none is wanted: the
+ * operator is editing an unsent message, not deleting a file the host has already stored.
+ */
+export function removePendingAttachment(
+  pending: readonly MessageAttachment[],
+  index: number
+): readonly MessageAttachment[] {
+  if (index < 0 || index >= pending.length) return pending
+  return [...pending.slice(0, index), ...pending.slice(index + 1)]
 }
 
 /**
@@ -557,6 +712,7 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
   dropFile: (file: File) => void
   pasteImage: () => void
   takePendingAttachments: () => PendingAttachmentTake
+  removePending: (index: number) => void
 } {
   const [outcome, setOutcome] = useState<AttachmentUploadEvent | null>(null)
   // #1039: the files whose uploads have completed since the last send. See the ref-not-state paragraph
@@ -683,7 +839,35 @@ export function useAttachmentUpload({ conversationId }: { conversationId: string
   const takePendingAttachments = (): PendingAttachmentTake =>
     mirrorTakeToDisplay(drainPendingAttachments(pendingRef), setPending)
 
-  return { outcome, pending, requestAttach, dropFile, pasteImage, takePendingAttachments }
+  /**
+   * #1264 — the removal, bound to this mount's two holdings. ONE FOLD, TWO WRITES: the upload listener's
+   * shape exactly, and for its reason. The set is held twice on purpose — the ref is the record
+   * `takePendingAttachments` reads, the `useState` is the display's own copy — and folding once into both
+   * is what keeps them unable to disagree about which tiles are gone. The take is NOT made to read the
+   * state to save this write; doing so reopens the drop window the ref exists to close, silently.
+   *
+   * THE REF FIRST, then the display: the mirror of `mirrorTakeToDisplay`'s ordering argument. There is no
+   * instant at which the record names an attachment the strip is no longer drawing.
+   *
+   * It does NOT clear the outcome line, unlike the three gesture entries above: this gesture is about one
+   * tile, and clearing a refusal the operator has not read because they took a different file back would
+   * be the same conflation those entries are kept apart from.
+   */
+  const removePending = (index: number): void => {
+    const next = removePendingAttachment(pendingRef.current, index)
+    pendingRef.current = next
+    setPending(next)
+  }
+
+  return {
+    outcome,
+    pending,
+    requestAttach,
+    dropFile,
+    pasteImage,
+    takePendingAttachments,
+    removePending
+  }
 }
 
 /**

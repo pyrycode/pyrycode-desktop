@@ -1,10 +1,11 @@
-# Composer attach — pending attachments and the strip (#1039, #1262, #1263)
+# Composer attach — pending attachments and the strip (#1039, #1262, #1263, #1264)
 
 Split from [Composer attach](composer-attach.md) on 2026-09-08 to stay under the size cap. Part of the same
 feature: the button (#863), the outcome line, `useAttachmentUpload`, its in-flight progress (#864) and the
 copy module are documented on the parent page; this page covers only the pending-attachments set an upload
-completing accumulates (#1039), the tile strip that draws it above the message box (#1262), and the picture
-an image-named tile draws instead of the file icon (#1263).
+completing accumulates (#1039), the tile strip that draws it above the message box (#1262), the picture an
+image-named tile draws instead of the file icon (#1263), and the remove control that takes a tile back out
+of that set before send (#1264).
 
 ## Pending attachments (#1039) — what an upload completing means to the message not yet sent
 
@@ -235,6 +236,112 @@ uses exactly this to turn "the frame is drawn while bytes are in flight" from a 
 position assertion on the *neighbouring* tile (a permanently-pending first tile puts the second tile's left
 edge at 57px rather than 0 — the tell that the in-flight arm reserves the box rather than collapsing it).
 
+## The remove control (#1264) — taking a tile back out before send
+
+A 20×20 `circle-xmark-solid` control hangs off each tile's top-right corner (Figma `Icon` 390:7183, at
+`x = 30, y = -5` against the 45×60 tile, 5px overhang on both axes), so the operator can take a file back
+out of a message not yet sent instead of having to send it or abandon the draft. Nothing crosses the wire:
+the attachment family is `attachment_chunk` / `attachment_stored` / `request_attachment` — there is no
+delete verb — so the host keeps the file it stored, and removal is purely an edit to the pending set.
+
+**The frame's clip is load-bearing, so the control cannot render inside it.** `.composer__attachment`
+declares `overflow: hidden` for #1263's picture (`object-fit: cover`, overflowing the 45px slot by 7.5px
+each side), and this control's 5px overhang would simply be cut away by that same clip — dropping it to
+make room would un-cut the picture. `ComposerAttachmentStrip` instead wraps each tile in a sibling
+positioning context, `.composer__attachment-slot` (`position: relative`, no `overflow`, the tile's own
+45×60 box), and renders the control as the tile's sibling rather than its child:
+
+```
+<span class="composer__attachment-slot">
+  …the tile, unchanged — <ComposerAttachmentImage> or <AttachmentFileIcon>…
+  <button type="button" class="composer__attachment-remove" aria-label="Remove attachment">…</button>
+</span>
+```
+
+The slot shares no whole class token with `.composer__attachment` — a class selector does not
+prefix-match, and both unit tests count tiles with `class="composer__attachment"` including the closing
+quote — so `AttachmentFileIcon`, `ComposerAttachmentTile`'s three arms, every shipped tile-count regex and
+the x = 0 / 57 geometry are all untouched. `AttachmentFileIcon` in particular stays untouched because its
+third consumer is the message bubble's attachment row, which must gain no control.
+
+**The drawing.** One `<svg viewBox="0 0 20 20">`: a `circle r="7"` filled `--color-on-primary` beneath the
+FA path filled `currentColor` (the button's own `color: var(--color-primary)`) — two inks off one drawing,
+`AttachmentFileIcon`'s seam applied to a fill instead of a stroke, since a presentation attribute can't hold
+a `var()`. The disc is not decoration: `circle-xmark-solid`'s cross is a **cut-out** of the solid disc, not
+a stroke, so the plain circle behind it is what makes the cross read dark rather than drawing a filled blob
+with a transparent X. `filter: drop-shadow(0 2px 1.5px rgba(0,0,0,0.25))`, never `box-shadow` — the button's
+box is a 20×20 square, and a `box-shadow` would draw a rounded square around the disc rather than following
+its silhouette. No hover state (a pointer already says which control it's over) and one `:focus-visible`
+ring, this file's twenty-rule idiom — the design draws neither, and Juhana's 2026-09-02 ruling is existing
+tokens until one lands. Inlined SVG, never a Figma asset URL: the renderer's CSP is `default-src 'self'`.
+Both inks read off Figma variables that corroborate their own baked hexes (`Schemes/Primary` `#9dcbfc`,
+`Schemes/On Primary` `#003355`, both `tokens.css` values exactly) — worth recording next to #1262's warning
+about a *transposed* pair on a neighbouring node in the same file: neither half is authoritative alone, and
+here both agree.
+
+**The rule — `removePendingAttachment(pending, index)`.** A fourth pure rule beside `reducePendingAttachments`,
+`drainPendingAttachments` and (below) `pendingAttachmentKeys`. **By position, never by id**: two completions
+can carry the same `attachmentId` (the same file attached twice), and AC2 requires those tiles to remove
+independently, so id-keyed removal would take both for one click. An out-of-range index returns the
+**same reference** — the other rules' idiom for "this changes nothing," which also makes the pathological
+ordering (a removal landing after a send's take, against an emptied set) a no-op by construction rather than
+by timing. The input is never mutated.
+
+**`useAttachmentUpload` gains `removePending(index)`, one fold, two writes** — the upload listener's own
+shape: write the ref first, then the `useState` mirror, so there is no instant at which the record names an
+attachment the strip is no longer drawing. It does **not** clear the outcome line the way the three gesture
+entries do, since a removal is about one tile and the operator may not have read a refusal about a
+different one yet. **The take is still not made to read the display state** — collapsing the two holdings
+to save this write would reopen the drop window the ref exists to close, silently and with no test
+reddening; this is the one thing the security review names as what a later ticket must not do, restated
+here because this is the first ticket with a real chance to do it.
+
+**The control's accessible name is the client-owned constant `REMOVE_ATTACHMENT_LABEL`, never the
+filename** — an `aria-label` is an attribute, the sink CLAUDE.md's 2026-08-20 ruling closes and #696's
+security review rejected as a MUST FIX. Every control in a strip of several therefore shares one accessible
+name; distinguishing them for assistive technology (a visually-hidden child naming the file, which the
+ruling *does* permit as escaped children) is a deliberate deferral to #1265's tooltip slice, not an
+oversight. Likewise, a removed control's document focus lands on `<body>` rather than being retained or
+moved to a neighbour — no focus-management idiom exists in this file to follow and the design draws none,
+so this too is left for #1265 to decide deliberately.
+
+### The React key had to move off the array index — a MUST FIX rework, not part of the original plan
+
+\#1262 keyed each tile by array index on the recorded ground that the pending list only ever appends and is
+cleared wholesale, so index identity was stable. **This ticket is exactly what falsifies that premise**: it
+makes the list removable from the middle, and `ComposerAttachmentImage` (the tile behind the key) owns a
+`useState` plus an effect keyed on `attachment.attachmentId`.
+
+The mechanism, shipped first and caught in review: with index keys, `[A, B] → [B]` reconciles as "key 0
+reused with new props, key 1 deleted." The reused fiber keeps A's `{ ready, url: A's picture }` while its
+props now name B. React runs every passive destroy before every create, so B's own fiber releases B's `blob:`
+URL (refcount to zero → [attachment image source](attachment-image-source.md) revokes it) *before* the
+reused fiber's dependency change re-requests it — which then takes the **cold path** back to the host. For
+that whole round trip the survivor tile shows the picture of the file the operator just took back: the exact
+confusion the control exists to remove. No tier reddened on it — renderer specs are static renders with no
+effects, and the shipped removal drive used `.pdf`/`.zip` tiles, whose `AttachmentFileIcon` is hook-free and
+so cannot reach the defect at all.
+
+**The fix, `pendingAttachmentKeys(pending): readonly string[]`**, a fifth pure rule beside the others. It
+gives each position `${attachmentId}#${occurrence}`, where the occurrence is which instance of that id the
+entry is — computed once per render over the whole row, since an entry's key depends on how many of the same
+id came before it. Two entries share a key only if they share an id, so a fiber is only ever reused between
+tiles drawing the *same* attachment, where its state, its held URL and its effect dependency are already
+correct. The key is injective because a decimal occurrence contains no `#`, so the last `#` in a key splits
+it back into exactly one `(id, occurrence)` pair — duplicate keys are unreachable. A bare `attachmentId`
+would not do (AC2's same-id tiles must remove independently, and duplicate React keys are undefined
+behaviour); a client-minted sequence number was the other candidate and was rejected as it would have to
+ride the record itself, threading a new element type through `reducePendingAttachments`,
+`drainPendingAttachments`, `PendingAttachmentTake` and `submitMessage`'s `attachment_ids` map to carry a
+number the set already determines. Security posture is unchanged: a React key is consumed by the reconciler
+and emitted nowhere (`renderToStaticMarkup` drops keys outright), so the host's storage handle still never
+reaches the DOM, asserted directly by a unit test.
+
+**Removal by *position* is unchanged and still correct.** What this rework separates is the position the
+control closes over (still the array index the strip's `map` hands it, unrelated to identity) from the
+identity React reconciles fibers by (now the qualified key). They answer different questions and happen to
+have been the same number only while the list was append-only.
+
 ## Testing
 
 Renderer specs are static server renders (`environment: 'node'`, no DOM). `ComposerAttach.test.tsx` walks
@@ -281,6 +388,45 @@ CSP detector: a refused source never decodes and reads 0). `real-claude-attachme
 which used to assert the tile's text against `attachmentExtensionLabel`, now polls the tile's `<img>` for
 `naturalWidth > 0` — a stronger gate, and the one AC4 above rests on.
 
+**#1264's tests.** `ComposerAttach.test.tsx` covers `removePendingAttachment` (the named position and only
+it; surviving order preserved; two same-`attachmentId` entries remove independently; a negative index,
+`index === length` and an index past the end each return the same reference via `toBe`; the input is never
+mutated) and `pendingAttachmentKeys` (distinct ids key in order; repeated ids qualify by occurrence,
+`['u', 'u', 'u'] → ['u#0', 'u#1', 'u#2']`; the load-bearing property — a removal at any position leaves
+*every surviving entry whose id is unique* keyed unchanged, stated precisely because a removal from the
+front of a *duplicate-id* run renumbers the survivors behind it, e.g. `['x#1', 'x#2'] → ['x#0', 'x#1']` after
+the first `x` is removed; the id is recoverable from the key and never appears in rendered markup). The
+strip's markup tests confirm one slot and one control per tile (the slot does not double the tile count),
+the control is a `<button type="button">` whose accessible name is exactly `REMOVE_ATTACHMENT_LABEL`, and
+the shipped hostile-name test is re-aimed from `not.toContain('aria-label')` to an enumeration — every
+`aria-label` in the strip's markup equals the constant — a stricter statement of the same criterion now that
+an `aria-label` genuinely exists in the markup.
+
+`e2e/composer-attachment-remove.spec.ts` (new, fake transport) carries two drives. The first mints two
+tiles by extension (`.pdf`/`.zip`) and proves the geometry (20×20 at tile-x+30/tile-y−5, `toBeCloseTo` with
+\#868's `-0` normalisation), that a click removes only the clicked tile (positive wait on the survivor's own
+label, ordered before any absence check), that the accessible name is the constant with neither file name
+in the markup, and AC3 — an outbound-frame count captured *before* the click, asserted unchanged after,
+with the following send as the mutation check that the count could ever move. This first drive is also
+where a **hit-test proof lives**, discovered as a lesson of this ticket: `boundingBox()` reports an
+element's full layout box regardless of ancestor clipping, and `toBeVisible()` doesn't inspect ancestor
+clipping either — so the obvious geometry assertions for a 5px overhang all pass even with the overhang cut
+away by `.composer__attachment`'s clip. The actual detector is `document.elementFromPoint` at a coordinate
+inside the drawn disc and outside the tile frame, resolving to the control; mutation-checked by adding
+`overflow: hidden` to the slot and rebuilding, which reddens both hit-test probes while every box assertion
+stays green. The second drive, added in the MUST FIX rework below, is the regression proof for the key
+defect: two **image** tiles with different natural sizes, where the survivor's `blob:` URL is read **once**
+(not polled — an auto-retrying read would wait out the cold refetch and pass against the wrong URL) and
+compared for identity to what it held before the click, paired with a held-interval count on
+`request_attachment` as a second, independent way for the same defect to fail.
+
+**A verifier MUST FIX on PR #1271 is why the key story above exists at all.** The plan as designed and
+initially built kept #1262's array-index key on the new slot wrapper; the verifier caught the stale-fiber
+defect (`## The React key had to move off the array index` above) before merge, with the two-image-tile
+drive as the reproduction. The rework landed as `1caf659`, re-reviewed and passed. `pendingAttachmentKeys`
+and its six unit tests, the second e2e drive, and the corrected docblocks in `ComposerAttach.tsx` are all
+part of that rework leg, not the original plan.
+
 ## Security
 
 **#1039's review, PASS.** No new channel, no new bridge member, no new capability — the pending set only
@@ -300,8 +446,10 @@ pure function of the pending set the composer already held, and the drawing is o
 toward main). The one SHOULD-FIX — a hostile `filename` reaching a new DOM sink — is discharged by
 `attachmentExtensionLabel`'s existing bound (`[A-Za-z0-9]`, capped at four characters, linear time) rather
 than a new sanitiser, and is asserted directly against a name carrying markup and a path. `attachmentId`
-reaches no attribute and is not the React key (index is), which is what re-aiming the AC5 negatives at the
-tile now actually guards. The glyph is inlined, never a Figma `https://` asset URL, inheriting
+reaches no attribute, which is what re-aiming the AC5 negatives at the tile now actually guards — it was
+also not the React key at the time (index was), a claim #1264 below superseded by qualifying the key with
+the id itself, still kept out of the rendered markup. The glyph is inlined, never a Figma `https://` asset
+URL, inheriting
 `BubbleAttachmentRow`'s CSP ruling. See `docs/specs/architecture/1262-composer-attachment-strip.md` §
 Security review for the full write-up, including the concurrency note that the take must keep reading the
 ref rather than the display mirror.
@@ -325,6 +473,20 @@ send still names the attachment by id regardless of what drew, so the risk is mi
 misdirected destination). Both are named follow-ups, not gaps this slice must close. See
 `docs/specs/architecture/1263-image-attachment-tile.md` § Security review for the full write-up.
 
+**#1264's review, PASS.** No new channel, no new bridge member, no new `ipcMain` handler, and the
+renderer→main boundary is not crossed at all — removal writes two renderer-local holdings and sends
+nothing, discharging AC3 as a security criterion and not just a behavioural one (a control that emitted a
+frame per click would give a hostile page-level bug a cheap send primitive, and would let removal double as
+a host-side delete the operator never asked for). No new sink for `filename`: the control's only text is the
+constant `REMOVE_ATTACHMENT_LABEL`. `attachmentId` stays out of the render path in the markup sense — the
+one place it now does reach is the React key, addressed above and asserted absent from rendered output
+directly. The pending attachment removed here leaves bytes on the host that no message references — the
+daemon's own retention concern, named and deferred rather than a gap. See
+`docs/specs/architecture/1264-attachment-remove-control.md` § Security review for the full write-up,
+including the concurrency note (removal interleaving with an upload completing or a send's take, both
+synchronous, so no interleaving is reachable) and the MUST FIX rework's own re-confirmation that the key
+change alters no security property, since `renderToStaticMarkup` drops React keys outright.
+
 ## Related
 
 - [Composer attach](composer-attach.md) — the parent page: the button, the outcome line, in-flight
@@ -341,10 +503,13 @@ misdirected destination). Both are named follow-ups, not gaps this slice must cl
   this page's tile relies on.
 - [Attachment bytes](attachment-bytes.md) — the sole-writer rule for the app-private attachment directory,
   which is why #1263 fetches rather than retaining the picked file.
-- #1264 (the remove control) and #1265 (the name-on-hover tooltip) are the next two slices of this family
-  and are still open.
+- #1265 (the name-on-hover tooltip) is the last slice of this family and is still open — it is also where
+  the two NITs #1264's review carried forward (every remove control sharing one accessible name; focus
+  landing on `<body>` after a removal) get decided, since it already revisits this control's naming.
 - [PR #1269](https://github.com/pyrycode/pyrycode-desktop/pull/1269),
   [PR #1270](https://github.com/pyrycode/pyrycode-desktop/pull/1270),
+  [PR #1271](https://github.com/pyrycode/pyrycode-desktop/pull/1271),
   `docs/specs/architecture/1039-record-sent-attachments-on-timeline-item.md`,
-  `docs/specs/architecture/1262-composer-attachment-strip.md` and
-  `docs/specs/architecture/1263-image-attachment-tile.md` for the full plans and their security reviews.
+  `docs/specs/architecture/1262-composer-attachment-strip.md`,
+  `docs/specs/architecture/1263-image-attachment-tile.md` and
+  `docs/specs/architecture/1264-attachment-remove-control.md` for the full plans and their security reviews.

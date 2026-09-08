@@ -3143,7 +3143,9 @@ function Composer({
           with the message box and the footer — nothing new to hide. And a conversation switch clears it
           for free: PairedShellView keys the chat pane on the conversation id, so this composer is rebuilt
           around a fresh holder. */}
-      <ComposerAttachmentStrip attachments={attach.pending} />
+      {/* #1264: each tile's remove control takes that tile back out of the pending set, so the next send
+          does not name its id. Nothing crosses the wire — the hook writes its two holdings and stops. */}
+      <ComposerAttachmentStrip attachments={attach.pending} onRemove={attach.removePending} />
       {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
           positions against it (`position: relative` in conversation.css) and inherits the clamp's
           --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,

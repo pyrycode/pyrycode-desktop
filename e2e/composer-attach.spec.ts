@@ -272,8 +272,22 @@ test('composer footer: the attach button dispatches the intent and states the la
   // half a unit test cannot reach: a preload that helpfully stringified the whole event into the strip
   // would pass ComposerAttach.test.tsx and fail here.
   await expect(strip).not.toContainText(COMPLETED.uploadId)
-  await expect(strip).not.toContainText(COMPLETED.filename)
-  // The label is what draws, and it is the extension of that name.
+  // ⭐ #1265 RE-AIMED THE NAME HALF, for the reason the paragraph above re-aimed both in the first place:
+  // its premise stopped being true. The tile now hangs a PILL carrying its file's name, drawn on hover and
+  // on focus, so "the name is nowhere in the strip" is false BY DESIGN — while the claim it stood for is
+  // not. That claim is CLAUDE.md's 2026-08-20 ruling: the name may be rendered, escaped and bounded, and
+  // may reach no attribute, no URL and no log. So the text assertion becomes an enumeration of every
+  // attribute of every element in the strip, which is what the bridge half of this test was always about:
+  // a preload that stringified the whole event into an attribute still fails here.
+  const stripAttributes = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.composer__attachments, .composer__attachments *')).flatMap(
+      (element) => Array.from(element.attributes).map((attribute) => attribute.value)
+    )
+  )
+  expect(stripAttributes.filter((value) => value.includes(COMPLETED.filename))).toEqual([])
+  expect(stripAttributes.filter((value) => value.includes(COMPLETED.uploadId))).toEqual([])
+  // The label is what draws INSIDE the tile, and it is the extension of that name — the pill is the tile's
+  // sibling in the slot, not its child, so it contributes no text here.
   await expect(tiles.first()).toHaveText('PDF')
 
   // --- #864, AC1 and AC3: an in-flight report takes the slot the terminal was in, ADVANCES as further

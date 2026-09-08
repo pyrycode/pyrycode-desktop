@@ -2678,6 +2678,95 @@
   fill: var(--color-on-primary);
 }
 
+/* #1265 — the tile's file name, one row up (Figma `Pill` 347:6617). The design draws the pill and not where
+   it hangs; above the tile, left-aligned to it, over the status row is the ticket's stated assumption.
+
+   ⭐ THE OFFSET IS ARITHMETIC, and it lands the pill exactly one row up. `bottom` resolves against the
+   slot's 60px box, so `100% + --space-2` puts the pill's bottom edge 8px above the slot's top — and the
+   slot's top IS .composer's content top, because this column's padding-top is --space-2 and nothing else
+   sits between. So the pill's bottom edge falls on .composer's border-box top and its 24px height
+   (4 + 16 + 4) is exactly .composer-status's own min-height above it: the pill occupies that row's bottom
+   24px, which paints nothing and clips nothing. It also clears .composer__attachment-remove's 5px top
+   overhang by 3px, so the control and the pill never touch.
+
+   OUT OF FLOW IS THE WHOLE OF "IT MOVES NOTHING". Absolutely positioned, so a showing pill cannot change
+   the strip's height or the message box's position — the criterion holds by construction rather than by a
+   measurement that has to be re-taken.
+
+   NO z-index AND NONE IS NEEDED. A positioned descendant paints in the positioned layer, above
+   .composer-status's in-flow content, and .composer__attachment-slot is z-index: auto so it opens no
+   stacking context. Between two showing pills the later slot's paints over the earlier one's, which is
+   accepted rather than solved: two at once needs a pointer hover PLUS a keyboard focus on a different tile,
+   so arbitrating would mean JS state for a case a pointer alone cannot produce.
+
+   pointer-events: none, for the :focus-within case specifically. While the pill shows on focus the pointer
+   is free to roam and the pill is sitting over the status row; without this it could swallow a pointer
+   event aimed at something there. It is a non-interactive overlay in every state, so nothing is lost.
+
+   ⭐ THE BOUND IS .conversation__workspace-chip-cwd'S CHAIN, the untrusted-cwd precedent — and deliberately
+   NOT .bubble__file-name's, which ships with no rule of its own, WRAPS by inheriting .bubble's break-word,
+   and has a computed `normal` pinned by e2e/attachment-file-row.spec.ts. min-width: 0 is not restated from
+   that chain: it is a flex-item declaration and this element is absolutely positioned, where shrink-to-fit
+   already bounds at max-width.
+
+   200px IS DERIVED AGAINST THE COMPOSER'S NARROWEST WIDTH, not picked. At the 800px minimum window the pane
+   is 800 - 20 - 400 - 20 - 20 = 340 (the shell's padding, the 400px sidebar, the 20px gap) and .composer's
+   horizontal padding is --space-3 each side, so the strip is 316 wide. There is no global box-sizing reset,
+   so max-width bounds the CONTENT run and the pill's border box tops out at 216 — under two thirds of that
+   strip, and inside the pane from the first three slot positions (x = 0, 57, 114).
+   THE RESIDUAL, NAMED: a full row at that width wraps after the slot at x = 228, which leaves 88px of strip
+   plus .composer's 12px padding before .paired-shell__pane's clip, so a 216px pill hung there is cut. It
+   needs the narrowest supported window, five or more pending attachments, a name long enough to fill the
+   bound and a hover on the row's last tile at once. Conditional anchoring (position-try-fallbacks:
+   flip-inline) is the fix if it is ever observed. A smaller bound is the alternative and is worse: the
+   largest that cannot be clipped from ANY slot position is 100px, which truncates two same-prefix
+   screenshot names to the same string and closes none of the failure this rule exists for.
+
+   REGULAR, NOT EMPHASIZED — the one type value that differs from .composer__attachment-ext beside it, and
+   the node's own (M3/body/small, weight 400). No font-family: this column already resolves --font-sans, and
+   restating it is a second place for it to drift.
+
+   The tokens are read by NAME. The export bakes bg #cfe4ff under `--schemes/primary-container` and text
+   #134a74 under `--schemes/on-primary-container`, which is the pair TRANSPOSED against tokens.css — the
+   light scheme, the same trap #1262 and #969 each hit. The rendered node settles it in favour of the names:
+   dark ground, light text. Neither hex appears here. */
+.composer__attachment-name {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--space-2));
+  display: none;
+  max-width: 200px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The two triggers, on the SLOT rather than on the tile. Hover on the slot is the tile's own 45x60 box
+   (they coincide exactly) and additionally covers the control's 5px overhang, since :hover matches every
+   ancestor of the hovered element. :focus-within is the half the tile could not carry at all — the control
+   is the tile's sibling, so a tile-scoped selector could never fire from it.
+
+   :focus-within and not :has(:focus-visible). The criterion says focusing the control shows the pill, with
+   no qualification, and the keyboard operator is who needs it; a click that focuses the control is a click
+   that is about to remove the tile anyway.
+
+   `display`, not visibility or opacity: a hidden pill then holds no accessibility tree entry, takes no hit
+   test and reports no box at all — the last of which is what lets a test tell "showing" from "hidden" by
+   the KIND of answer it gets rather than by comparing a number against itself. */
+.composer__attachment-slot:hover .composer__attachment-name,
+.composer__attachment-slot:focus-within .composer__attachment-name {
+  display: block;
+}
+
 /* One tile: the 45x60 frame, the positioning context its extension overlay hangs on, and the GLYPH's ink.
    The measurements are the drawn constants with no theme role, .bubble__file-icon's ruling for the same
    drawing one region over — and `flex: 0 0 auto` states there, as it does here, that this item never

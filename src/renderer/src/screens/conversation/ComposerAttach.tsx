@@ -440,6 +440,12 @@ export function ComposerAttachmentStrip({
               property of the drawing rather than of a lookup: nothing is searched for at click time, so
               two tiles carrying one attachmentId cannot be confused for each other. */}
           <ComposerAttachmentRemoveButton onRemove={() => onRemove(index)} />
+          {/* ⭐ #1265 — LAST IN THE SLOT, and that position is load-bearing rather than a preference. Two
+              shipped assertions read this markup by ADJACENCY: each slot must still OPEN with the frame,
+              and the control must still follow the frame's own closing tag. Appending leaves both
+              byte-identical, and it puts the pill last in paint order within the slot, which is what a
+              transient overlay wants. */}
+          <ComposerAttachmentNamePill filename={attachment.filename} />
         </span>
       ))}
     </div>
@@ -498,6 +504,54 @@ function ComposerAttachmentRemoveButton({ onRemove }: { onRemove: () => void }):
       </svg>
     </button>
   )
+}
+
+/**
+ * #1265 — one tile's file name, stated above it while the tile is hovered or its control is focused
+ * (Figma `Pill` 347:6617).
+ *
+ * ⭐ WHY THE STRIP NEEDS THIS AT ALL. A tile shows an extension label or a thumbnail, and neither
+ * identifies a FILE: two PDFs are two identical tiles and two screenshots pasted a minute apart are two
+ * similar ones. #1264 is what made that dangerous rather than merely vague — with a remove control on each
+ * tile, indistinguishable tiles mean removing the wrong one.
+ *
+ * ⭐ THE NAME IS CHILDREN, NEVER AN ATTRIBUTE, AND `title=` IS THE FORBIDDEN SHAPE. The filename is
+ * untrusted display text: a picker or drop name is the basename of an operator-chosen path and a paste
+ * name is client-minted, and all three arrive over `ipcRenderer.on`. CLAUDE.md's 2026-08-20 ruling is that
+ * daemon text may be RENDERED, escaped and length-bounded, and may never reach a raw-markup sink, an
+ * attribute, a URL, a filename, a cache key or a log — and #696's security review rejected
+ * `title={daemonText}` as a MUST FIX for exactly this string. So: React children of a plain <span>, which
+ * escapes `& < > " '` on the way out, and `.bubble__file-name` one screen region over is the shipped
+ * precedent for the same string in the same form.
+ *
+ * BOTH HALVES OF THAT RULING ARE ALREADY MET WHEN THIS RENDERS. `sanitizeAttachmentFilename` normalises the
+ * name in the background process and `driveUpload` emits it trimmed to ATTACHMENT_FILENAME_MAX_BYTES, so
+ * "length-bounded" holds before the window sees the string; the `max-width` on this pill is a DISPLAY bound
+ * on top of that, not the only one. It is also why nothing is truncated here in JS — that would put a
+ * derived string where the raw one is already safe, and would still need the CSS bound for a name with no
+ * break opportunity.
+ *
+ * NO `aria-hidden`, and no `aria-describedby` FROM THE CONTROL. This is the only place the name is exposed
+ * at all, and `display: none` already keeps it out of the accessibility tree until it shows — so it enters
+ * the tree exactly when a keyboard operator focuses the control, which is the criterion. Describing the
+ * control by it would need a unique `id`, and the only unique thing to mint one from is `attachmentId`,
+ * which #1262 deliberately keeps out of the DOM.
+ *
+ * ⭐ IT HANGS ON THE SLOT, NOT ON THE TILE, and the tree already said so. `.composer__attachment` declares
+ * `overflow: hidden` — the clip #1263's `object-fit: cover` picture needs — so a pill rendered inside the
+ * frame is simply invisible, and NOTHING IN THIS REPO REDDENS TO SAY SO: a Playwright box is reported
+ * whether or not an ancestor clipped the pixels away. `.composer__attachment-slot` is the unclipped wrapper
+ * #1264 introduced for this, already `position: relative` and declaring no overflow, so the pill needs no
+ * new positioning context. That same fact settles the trigger: the remove control is the tile's SIBLING, so
+ * `:focus-within` on the tile could never fire from it. The slot carries both pseudo-classes.
+ *
+ * THE TWO STATES ARE THE BROWSER'S, NOT THIS APP'S — two selectors in conversation.css and no `useState`,
+ * no handler and no prop. That is also why two pills can show at once (a pointer hover plus a keyboard
+ * focus elsewhere) and why that is accepted rather than arbitrated: a pointer alone cannot reach it, so
+ * arbitration would be JS state for a case that needs none.
+ */
+function ComposerAttachmentNamePill({ filename }: { filename: string }): JSX.Element {
+  return <span className="composer__attachment-name">{filename}</span>
 }
 
 // ================================================================================================

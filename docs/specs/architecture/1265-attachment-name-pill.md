@@ -321,3 +321,38 @@ pill's band and neither hovers.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+### 2026-09-08 — three shipped e2e specs carried the "the name is nowhere" negative, not one
+
+**What drove it:** the Testing strategy above named only `e2e/composer-attachment-remove.spec.ts` as
+needing its name negatives re-aimed. Running the sibling strip specs after the implementation went green
+found the same shape in two more, both red for the same reason:
+
+- `e2e/composer-attach.spec.ts` — `await expect(strip).not.toContainText(COMPLETED.filename)`.
+- `e2e/composer-attachment-image.spec.ts` — a four-name loop over `not.toContainText(leaked)`, with the
+  four `attachmentId`s in the same array.
+
+**Why the plan missed them.** Its reading list reached `composer-attachment-remove.spec.ts` because that
+is the spec this ticket's own drive is modelled on, and stopped there. The assertion is not attached to
+any symbol this ticket touches — it is a string comparison against a locator — so no reading of
+`ComposerAttach.tsx` or of the strip's CSS would have surfaced it. The find that would have was a grep for
+`not.toContainText` across `e2e/` at plan time, keyed on the *criterion* rather than on the code.
+
+**The fix is the same one the plan already specifies**, applied three times instead of once: each name
+negative becomes an enumeration of every attribute of every element in the strip, none of which may carry
+a fragment of a name. Every `attachmentId` negative is left exactly as it stands, and in the image spec
+the ids are additionally checked against the attribute list — that spec's `alt` / `title` / `aria-label`
+reads on the picture were three instances of the claim the enumeration now makes exhaustively. No
+production behaviour changed and no assertion was weakened: a text negative could never tell a name in an
+attribute from a name in a text node, and the enumeration can.
+
+**Both Open Questions resolved with no design change.** The 8px offset clears the remove control — the
+drive reads the pill's bottom edge on `.composer`'s top, which is 3px above the control's `top: -5px`, and
+`e2e/composer-attachment-remove.spec.ts`'s own control geometry still passes unchanged. The narrow-window
+clip stays an accepted residual, recorded in the stylesheet beside the bound it belongs to.
+
+**Detector mutation-checked.** Deleting `.composer__attachment-slot:hover` from the trigger selector and
+rebuilding fails the new drive at its hover assertion; restoring it passes. The show/hide claim is
+measuring the stylesheet rather than waiting out a race.

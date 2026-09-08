@@ -207,8 +207,11 @@ requestCreateChannelFolder(sendCommand, name)
 
 ### CSS (`channels.css`)
 
-- `.channel-list__save`: icon-only, `flex: 0 0 auto`, round hover/focus target, de-emphasized
-  (`--color-on-surface-variant`) vs. the row title.
+- `.channel-list__save`: icon-only, absolutely positioned at the row's trailing edge since
+  [#1171](channel-list-desktop-row-geometry.md), invisible at rest (`opacity: 0`) and revealed by the
+  row's hover or the control's own `:focus-visible`, `--color-primary` with no hover circle and no
+  background behind the glyph. It wore `flex: 0 0 auto`, a round hover target and
+  `--color-on-surface-variant` before that ticket redrew it.
 - `.save-as-channel-overlay`: `position: fixed; inset: 0; z-index: 2` — **fixed, not absolute**,
   because `.channel-list` is itself the `overflow-y: auto` scroll column; an absolute overlay would
   scroll with the rows. `z-index: 2` lifts it above the FAB's own `z-index: 1` sticky stacking

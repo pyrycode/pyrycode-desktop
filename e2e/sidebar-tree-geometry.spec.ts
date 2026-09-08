@@ -30,8 +30,10 @@ import type { Locator } from '@playwright/test'
 
 // "Channels and chats" 103:2959 p-[20px]: the inset every level shares.
 const CARD_INSET_PX = 20
-// "Channel list" 103:2985 pl-[20px]: the rows sit one step in from the host and workspace rows.
-const LIST_INSET_PX = 20
+// The channel list's own indent: the rows sit one step in from the host and workspace rows. 28 since
+// #1171 read the REDRAWN frame, where the list sits inside a `Workspace` wrapper together with the
+// workspace row; the first read of 103:2985 gave 20.
+const LIST_INSET_PX = 28
 
 // Host 106:3094 px-[16px]: the glyph at 16 inside the row, the label 12 (icon) + 12 (gap) further.
 const HOST_ICON_X = CARD_INSET_PX + 16
@@ -39,11 +41,13 @@ const HOST_LABEL_X = HOST_ICON_X + 12 + 12
 // Workspace 106:3098 pl-[24px]. (Its label is NOT pinned: the design's 10px icon→label gap has no slot on
 // the 4px scale and the row keeps --space-3, a 2px deviation channels.css records at the rule.)
 const WORKSPACE_ICON_X = CARD_INSET_PX + 24
-// Channel 103:2968 px-[16px] with the 6px dot then a 10px gap: dot at 16, title at 32 inside the row —
-// #801's leading geometry, unchanged, now offset by the two insets.
+// The redrawn Channel row (Hover 398:7266): an 8px left inset, then the 6px dot, then an 8px gap — dot
+// at 8 and title at 22 inside the row, where #801's leading geometry had them at 16 and 32. Offset by
+// the two insets, the title lands 70 from the card's edge and 50 from its content edge: the same left
+// edge #1178 gives the workspace label above it.
 const ROW_X = CARD_INSET_PX + LIST_INSET_PX
-const DOT_X = ROW_X + 16
-const TITLE_X = ROW_X + 32
+const DOT_X = ROW_X + 8
+const TITLE_X = ROW_X + 22
 
 // Section 103:2966: the header is a bare 20px line and the hosts frame starts 12 below it (gap-[12px]).
 const HEADER_TO_HOST_PX = 32
@@ -81,7 +85,7 @@ const expectAbout = (actual: number, expected: number): void => {
 
 const gapBetween = (above: Box, below: Box): number => below.y - (above.y + above.height)
 
-test('the sidebar tree sits at the desktop card inset: 20px card, 20px list indent, 28px around the divider', async ({
+test('the sidebar tree sits at the desktop card inset: 20px card, 28px list indent, 28px around the divider', async ({
   launchPairedApp
 }) => {
   const buildReplyFrames = conversationStateFake({
@@ -132,7 +136,10 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 20px list inde
   for (const row of await rows.all()) expectAbout((await boxOf(row, 'sidebar row')).x - left, ROW_X)
 
   // --- 2. The row spans to the content edge — the open row's fill (#1098) ends where the card's inset
-  // begins, 340 wide in the 360 content box. Read on both rows: one is the open one, one is resting. ---
+  // begins, 332 wide in the 360 content box since #1171 widened the indent to 28. This is the assertion
+  // that keeps that widening a MOVE rather than a shrink: block 1 pins the leading edge and this one
+  // pins the trailing edge, so a row that got narrower on both sides would redden here. Read on both
+  // rows: one is the open one, one is resting. ---
   for (const row of await rows.all()) {
     const box = await boxOf(row, 'sidebar row')
     expectAbout(right - (box.x + box.width), CARD_INSET_PX)

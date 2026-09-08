@@ -447,6 +447,30 @@ describe('ChannelListView', () => {
     expect(markup).not.toContain(RENAME_MARKER)
   })
 
+  // #1171 — the drawing's own exports at the drawn 12×12, replacing #1097's 16px Material glyphs.
+  // Only the SIZE and its coordinate system are unit-assertable here: the `--color-primary` fill, the
+  // 8px right inset, the centre on the row and the hover reveal all need a layout engine and live in
+  // e2e/sidebar-row-geometry.spec.ts. The viewBox is asserted WITH the size because the two are one
+  // measurement — a 12×12 <svg> left on the old 24-unit viewBox would draw the glyph at quarter scale
+  // and sail through a size-only check. Asserted as one attribute run, including the icon's own class,
+  // so the two controls cannot satisfy each other's case.
+  it("draws the Save-as-channel control as the drawing's 12px chevron (#1171 AC2)", () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(
+      '<svg class="channel-list__save-icon" viewBox="0 -2.46 12.12 12.12" width="12" height="12"'
+    )
+  })
+
+  // The chevron's art is 12.12 × 7.2 and the pen's is a 12-unit square, so only the pen's viewBox
+  // starts at the origin: the chevron is centred in its 12px box by the viewBox's own y origin
+  // (-2.46 of 12.12, above and below), which keeps the exported path byte-identical.
+  it("draws the Rename control as the drawing's 12px pen (#1171 AC2)", () => {
+    const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(markup).toContain(
+      '<svg class="channel-list__rename-icon" viewBox="0 0 12 12" width="12" height="12"'
+    )
+  })
+
   it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {
     // The FAB is a sibling of the list body, so it is present whether the list is not-loaded, empty,
     // or populated — the affordance to start a conversation must always be reachable.
@@ -1363,9 +1387,10 @@ describe('the open chat’s row (#1098)', () => {
     // here as a substring hit and nowhere else.
     //
     // The inline glyphs are stripped first, and that is a correctness fix rather than a loosening: this
-    // file's seven Material `<path d>` runs are client-owned compile-time constants full of coordinate
-    // pairs like `14c1.1`, which contain a short id as a substring and made the first draft of this test
-    // fail against geometry no id can ever reach. Nothing daemon-derived renders inside an <svg> here.
+    // file's seven `<path d>` runs — five Material, and since #1171 the two design exports on the row's
+    // trailing controls — are client-owned compile-time constants full of coordinate pairs like `14c1.1`,
+    // which contain a short id as a substring and made the first draft of this test fail against geometry
+    // no id can ever reach. Nothing daemon-derived renders inside an <svg> here.
     const withoutGlyphs = (markup: string): string => markup.replace(/<svg[\s\S]*?<\/svg>/g, '')
     const markup = withoutGlyphs(render(threeRows(), 'd1'))
     for (const id of ['c1', 'd1', 'd2']) expect(markup).not.toContain(id)

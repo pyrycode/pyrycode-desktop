@@ -1028,12 +1028,15 @@ function ConversationStatusDotControl({
 //
 // #1097 — the desktop row (node 103:2968) is a label and nothing else: the trailing last-activity time
 // this row used to draw is DELETED, not hidden, so the row reads no clock and takes no `now`. The 24px
-// height is derived in `channels.css` from the label's line box plus the row's padding, never declared
-// — which is also why the two trailing affordances below carry 16px glyphs rather than 24px ones: at
-// --space-2 padding each was a 40px box that would have held the flex row open at 40.
+// height is derived in `channels.css` from the label's line box plus the row's padding, never declared.
+// Until #1171 that also set the two trailing affordances' glyph size, since a taller one would have held
+// the centred flex line open; #1171 lifted them out of the flow altogether, so the derived 24 now answers
+// to the button alone and `e2e/sidebar-row-geometry.spec.ts` pins each control's box directly instead.
 //
 // The open action is its own button; the optional trailing affordances (Save-as-channel #274, Rename
-// #360) are SIBLINGS, not nested controls — an interactive control cannot nest inside a <button>.
+// #360) are SIBLINGS, not nested controls — an interactive control cannot nest inside a <button>. Since
+// #1171 that sibling relation is also why the row's hover FILL sits on the wrapper: a fill on the button
+// would drop the moment the pointer crossed onto a control that is not its child.
 // `.channel-list__row` is a flex wrapper; the old row button-reset/hover/focus rules now live on
 // `.channel-list__row-open`. The two affordances are disjoint by section: Recent rows pass
 // `onSaveAsChannel` (→ Save-as renders, Rename absent); saved Channel rows pass `onRename` (→ Rename
@@ -1089,7 +1092,8 @@ function Row({
           should say what activating it does. RunConfigSections.tsx:270-280 already declined exactly this
           for the unselected radios. As a sibling the dot stays fully announced in reading order while the
           button's name stays the row's title — since #1097 that is the button's whole text, where it used
-          to read title + time. `channels.css` positions it absolutely at the design's 16px inset so the
+          to read title + time. `channels.css` positions it absolutely at the drawing's 8px inset (16 until
+          #1171) so the
           button still spans the row and its hover/focus rectangles are unchanged; nothing about
           `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
       <ConversationStatusDotControl conversationId={row.id} />
@@ -1105,10 +1109,15 @@ function Row({
       </button>
       {onRename && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
-        // since the glyph alone carries no text. The Material `edit` (pencil) glyph is a reasonable
-        // stand-in: no Figma node pins this row-level control (19:14 is the dialog); a specific glyph is a
-        // small architect swap, the save affordance's bookmark-glyph precedent. Drawn at 16px since
-        // #1097 — the 24 it used to carry made a 40px box that would have held the 24px row open.
+        // since the glyph alone carries no text. Since #1171 the glyph is the DRAWING'S OWN export
+        // (Font Awesome `pen-solid`, the "Icon Edgeless" instance the Hover variant places at 12×12),
+        // replacing the Material `edit` pencil that stood in while no Figma node pinned this control.
+        // It is the CHANNELS tree's glyph: promoted rows are the ones that take a Rename.
+        //
+        // The control is invisible at rest and revealed by the ROW's hover or by its own keyboard focus
+        // (`channels.css` says why the reveal is `opacity` and never `display: none`). Nothing here
+        // changes for it: the reveal hangs off the wrapper's existing class, so no markup moves and the
+        // unit tier's attribute runs stay byte-identical.
         <button
           type="button"
           className="channel-list__rename"
@@ -1117,21 +1126,28 @@ function Row({
         >
           <svg
             className="channel-list__rename-icon"
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
+            viewBox="0 0 12 12"
+            width="12"
+            height="12"
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
           </svg>
         </button>
       )}
       {onSaveAsChannel && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__fab pattern),
-        // since the glyph alone carries no text. The Material bookmark glyph is a reasonable stand-in: no
-        // Figma node pins this row-level control (19:24 is the dialog); a specific glyph is a small swap.
-        // Drawn at 16px since #1097, for the reason recorded on the Rename glyph above.
+        // since the glyph alone carries no text. Since #1171 the glyph is the drawing's own export for
+        // the CHATS tree: a bold chevron-up, replacing the Material bookmark that stood in. The layer it
+        // comes from is named `circle-chevron-up-solid`, but the drawing draws the chevron ALONE — there
+        // is no circle, and none is added here.
+        //
+        // Its art is 12.12 × 7.2 where the pen's is a 12-unit square, so this is the one glyph whose
+        // viewBox does not start at the origin. `-2.46` centres the art in the 12px box the drawing
+        // gives it (12.12 - 7.2 = 4.92, half above and half below) using the viewBox's own y origin, so
+        // the exported path stays byte-identical rather than being re-based by hand. The drawing's 22.5%
+        // top and 17.5% bottom insets round to centred, which is the ruling this reproduces.
         <button
           type="button"
           className="channel-list__save"
@@ -1140,13 +1156,13 @@ function Row({
         >
           <svg
             className="channel-list__save-icon"
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
+            viewBox="0 -2.46 12.12 12.12"
+            width="12"
+            height="12"
             fill="currentColor"
             aria-hidden="true"
           >
-            <path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z" />
+            <path d="M11.7859 5.26026C12.2311 5.70553 12.2311 6.42553 11.7859 6.86605C11.3406 7.30658 10.6206 7.31132 10.1801 6.86605L6.05902 2.745L1.93796 6.86605C1.4927 7.31132 0.7727 7.31132 0.332173 6.86605C-0.108353 6.42079 -0.11309 5.70079 0.332173 5.26026L5.24902 0.333947C5.69428 -0.111316 6.41428 -0.111316 6.85481 0.333947L11.7859 5.26026Z" />
           </svg>
         </button>
       )}

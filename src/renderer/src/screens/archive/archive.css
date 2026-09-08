@@ -188,8 +188,10 @@
 }
 
 /* The restore affordance (Figma 18:23's 40px frame around the 18:24 glyph) — an icon-only trailing
-   button. Clones .channel-list__save: de-emphasized on-surface-variant, a round hover target, a
-   focus-visible outline. --space-2 padding around the 24px glyph makes the ~40px frame. */
+   button. The screen's own de-emphasized on-surface-variant, a round hover target, a focus-visible
+   outline — the treatment .channel-list__save wore when this was written; #1171 redrew that one as a
+   hover-revealed --color-primary glyph and the archive row deliberately did not follow, so the shared
+   idiom is now this rule's alone. --space-2 padding around the 24px glyph makes the ~40px frame. */
 .archive__restore {
   flex: 0 0 auto;
   display: inline-flex;

@@ -56,12 +56,27 @@ const OPEN_FILL_RGB = 'rgb(0, 51, 85)'
 // What an unfilled row computes to: `background: none` resolves to a transparent colour, never to the
 // window's ground, so "this row is not the open one" is an exact string and not an approximation.
 const NO_FILL_RGBA = 'rgba(0, 0, 0, 0)'
-// `--color-surface-container` #1d2024 — today's hover fill, which every row EXCEPT the open one keeps.
-const HOVER_FILL_RGB = 'rgb(29, 32, 36)'
+// #1171's hover fill — `--color-primary-container` #134a74, the Hover variant's (398:7258) drawn fill,
+// which every row EXCEPT the open one takes under the pointer. It replaced `--color-surface-container`
+// #1d2024 AND moved off the button onto the row wrapper, so every read of it below is a wrapper read.
+const HOVER_FILL_RGB = 'rgb(19, 74, 116)'
+
+// #1171's trailing control: a 12px glyph whose right edge sits 8px in from the row's right edge, drawn
+// in `--color-primary` #9dcbfc. Invisible at rest and revealed by the row's hover or the control's own
+// keyboard focus — as an OPACITY, which is why the nine shipped specs that click or await these controls
+// without hovering first need no edit (Playwright counts an opacity-0 element as visible, and moves the
+// pointer onto it before clicking, which hovers the row on the way).
+const GLYPH_PX = 12
+const GLYPH_RIGHT_INSET_PX = 8
+const GLYPH_RGB = 'rgb(157, 203, 252)'
+const HIDDEN_OPACITY = '0'
+const SHOWN_OPACITY = '1'
 
 // Sub-pixel tolerance for a device-pixel-ratio-scaled layout, copied from host-label-sidebar.spec.ts.
 // One physical pixel of slack: enough that a fractional box coordinate cannot flake, far too little to
-// hide the design's 3px dot drop (the offset AC5 rules out) or a trailing control stuck at its old 40px.
+// hide the 3px dot drop #1097 ruled out, or #1171's 8px glyph inset landing anywhere but where it is
+// drawn. The control's own box is fractional by construction — the drawing centres a 12px glyph in a
+// 24px line — so the slack is doing real work on those reads rather than only guarding the DPR scale.
 const GEOMETRY_TOLERANCE_PX = 1
 
 // The cwd `conversationStateFake` resolves a null-cwd `create_conversation` to. Both seeds use it so a
@@ -132,6 +147,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const title = page.locator('.channel-list__title')
   const dot = page.locator('.channel-list__row .conversation-status-dot')
   const save = page.locator('.channel-list__save')
+  const saveIcon = page.locator('.channel-list__save-icon')
 
   await expect(row).toHaveCount(1)
   await expect(save).toHaveCount(1)
@@ -150,11 +166,13 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // longhands are read individually rather than through the shorthand so a failure names the side. ---
   expect(await computed(open, 'padding-top')).toBe('4px')
   expect(await computed(open, 'padding-bottom')).toBe('4px')
-  expect(await computed(open, 'padding-right')).toBe('16px')
-  // 32px, unchanged since #801: the node's title inset (16px dot inset + 6px dot + the node's 10px gap),
-  // which is also why the row itself declares no gap. Pinned so a future retune of the row's leading
-  // geometry has to come here first.
-  expect(await computed(open, 'padding-left')).toBe('32px')
+  // The horizontal pair is asymmetric and both halves are drawn (#1171; they were 16 and 32 before it).
+  // 28 on the right is the trailing padding the drawing reserves for the Hover variant's control, which
+  // is positioned OVER it rather than laid out in it. 22 on the left is the row's title inset — the
+  // drawing's 8px inset, the 6px dot, the 8px gap — which is also why the row itself declares no gap.
+  // Both pinned so a future retune of the row's leading geometry has to come here first.
+  expect(await computed(open, 'padding-right')).toBe('28px')
+  expect(await computed(open, 'padding-left')).toBe('22px')
   expect(await computed(open, 'border-top-left-radius')).toBe(`${ROW_CORNER_PX}px`)
   expect(await computed(open, 'border-bottom-right-radius')).toBe(`${ROW_CORNER_PX}px`)
 
@@ -180,24 +198,28 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
   expect(await computed(row, 'border-top-left-radius')).toBe(`${ROW_CORNER_PX}px`)
   expect(await computed(row, 'border-bottom-right-radius')).toBe(`${ROW_CORNER_PX}px`)
-  // AC1's first clause, stated so it can actually fail: the painted element is WIDER than the button,
-  // and the button itself paints nothing. Move the fill onto `.channel-list__row-open` and the first
-  // assertion flips to the fill and the second to transparent — this row carries a Save-as-channel
-  // control, so the two boxes really do differ.
-  expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
-  expect((await boxOf(row, 'sidebar row')).width).toBeGreaterThan(
-    (await boxOf(open, 'open button')).width
-  )
-
-  // --- 3c. AC4: hovering the OPEN row leaves its fill exactly as it is. `--color-surface-container` is
-  // opaque, so an unsuppressed `.channel-list__row-open:hover` would paint over the fill across the
-  // button's share of the row.
+  // The fill lives on the wrapper and the button paints NOTHING — still the assertion that would flip if
+  // the fill were moved onto `.channel-list__row-open`.
   //
-  // THE FIRST ASSERTION IS THE DETECTOR AND THE SECOND IS NOT — worth saying, because the second reads
-  // like the stronger one. A wrapper's computed `background-color` is unaffected by whatever a child
-  // paints on top of it, so it would keep reporting the fill while the row visibly went grey; only the
-  // BUTTON's own computed background can tell. Measured: deleting the suppression rule and rebuilding
-  // reddens the first line here with `rgb(29, 32, 36)` and leaves the second passing. ---
+  // ITS COMPANION INVERTED AT #1171 AND IS KEPT, INVERTED, RATHER THAN DELETED. Until then the row was
+  // WIDER than the button, because the trailing control was an in-flow flex sibling that ate the row's
+  // tail; #1171 positioned the control absolutely so the button spans the whole row, which is the point
+  // of that move — the open button's focus rectangle no longer shrinks on a row that carries a control.
+  // So the claim becomes an EQUALITY, and it is a detector for exactly the regression that move could
+  // cause: put either control back in the flex flow and the button gives up its tail again.
+  expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
+  expectAbout((await boxOf(row, 'sidebar row')).width, (await boxOf(open, 'open button')).width)
+
+  // --- 3c. AC4: hovering the OPEN row leaves its fill exactly as it is, rather than taking #1171's
+  // `--color-primary-container` hover.
+  //
+  // THE SECOND ASSERTION IS NOW THE DETECTOR, WHICH INVERTS WHAT THIS BLOCK USED TO SAY. While the hover
+  // fill sat on the BUTTON, a wrapper read could not see it — a parent's computed `background-color` is
+  // unaffected by whatever a child paints on top of it — so only the button's own background could tell
+  // the two apart. #1171 moved the hover fill onto the wrapper, so both candidate fills now paint on the
+  // SAME element and the wrapper read genuinely separates `--color-on-primary` from the hover colour.
+  // The button read is kept as the standing guard that nothing has painted its way back onto the button.
+  // ---
   await open.hover()
   expect(await computed(open, 'background-color')).toBe(NO_FILL_RGBA)
   expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
@@ -208,18 +230,36 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // their own unit tests. ---
   await expect(page.locator('.channel-list__time')).toHaveCount(0)
 
-  // --- 5. AC4, first half: the Save-as-channel control sits INSIDE the 24px row without growing it.
-  // `.channel-list__row` is a centred flex line, so its tallest child sets its height — this is the pair
-  // of assertions that would redden together if the control's 16px glyph or its --space-1 padding were
-  // reverted to the 24px/--space-2 pair that made a 40px box. ---
+  // --- 5. #1171's AC2, the control's own rectangle. THE HEIGHT ASSERTION ABOVE NO LONGER COVERS THIS
+  // and that is why these exist. While the control was an in-flow child of the centred flex line its box
+  // set the row's height, so "the row is still 24" was the detector for a control at the wrong size;
+  // #1171 positioned it absolutely, so it cannot size the row at all any more and the row read would sit
+  // there green whatever the control did. Pinned directly instead: the drawn 12×12 glyph, its right edge
+  // 8px in from the row's right edge, its box centred on the row, in the drawn `--color-primary`. The
+  // GLYPH is measured rather than the button, because the acceptance pins the glyph's rectangle and the
+  // button is a deliberately larger pointer target around it. The control's box is still asserted not to
+  // exceed the row, since an absolutely positioned box can overflow where an in-flow one could not. ---
   const saveBox = await boxOf(save, 'Save-as-channel control')
   expect(saveBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
   expectAbout((await boxOf(row, 'sidebar row')).height, ROW_HEIGHT_PX)
 
-  // --- 6. AC5: the dot's centre sits on the ROW's centre. The design's own frame drops its dot 3px (its
-  // circle sits at cy=11 inside a 14px wrapper the app does not draw), and #1097 ruled that offset out as
-  // an artifact of that wrapper. This assertion is what would redden if it were ported: 3px is three times
-  // the tolerance. ---
+  const glyphBox = await boxOf(saveIcon, 'Save-as-channel glyph')
+  const glyphRowBox = await boxOf(row, 'sidebar row')
+  expectAbout(glyphBox.width, GLYPH_PX)
+  expectAbout(glyphBox.height, GLYPH_PX)
+  expectAbout(
+    glyphRowBox.x + glyphRowBox.width - (glyphBox.x + glyphBox.width),
+    GLYPH_RIGHT_INSET_PX
+  )
+  expectAbout(glyphBox.y + glyphBox.height / 2, glyphRowBox.y + glyphRowBox.height / 2)
+  expect(await computed(save, 'color')).toBe(GLYPH_RGB)
+
+  // --- 6. AC5: the dot's centre sits on the ROW's centre. #1097 ruled that from a frame whose dot was
+  // dropped 3px (a 14px-tall wrapper the app does not draw, with its circle at cy=11), rejecting the
+  // offset as an artifact of that wrapper. The redrawn instance agrees with the ruling outright: a 6×11
+  // frame top-aligned in the row's 16px content box with its circle at cy=8 puts the centre at y=12 in a
+  // 24px row. So this assertion outlived the argument it was written to settle, and it still detects the
+  // same regression — 3px is three times the tolerance. ---
   const rowBox = await boxOf(row, 'sidebar row')
   const dotBox = await boxOf(dot, 'status dot')
   expectAbout(dotBox.y + dotBox.height / 2, rowBox.y + rowBox.height / 2)
@@ -261,19 +301,75 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   const weights = await computedAll(title, 'font-weight')
   expect([...weights].sort()).toEqual([LABEL_WEIGHT_RESTING, LABEL_WEIGHT_OPEN])
 
-  // --- 9. AC4's other half: a row that is NOT the open one keeps today's hover fill, and hovering it
-  // does not fill its wrapper. Addressed by the state attribute's ABSENCE, which needs no seed text. ---
+  // --- 9. #1171's AC3: a row that is NOT the open one takes the drawn hover fill, and it takes it ON
+  // THE WRAPPER — the fill moved off the button with that ticket, so the read moved with it. Addressed
+  // by the state attribute's ABSENCE, which needs no seed text. Stated as a SET over both wrappers, so
+  // it says both halves at once: the hovered row fills and the open one keeps its own colour. ---
   const resting = page.locator('.channel-list__row-open:not([aria-current])')
+  const restingRow = page.locator('.channel-list__row').filter({ has: resting })
   await expect(resting).toHaveCount(1)
   await resting.hover()
-  expect(await computed(resting, 'background-color')).toBe(HOVER_FILL_RGB)
   const fillsWhileHovering = await computedAll(row, 'background-color')
-  expect(fillsWhileHovering.filter((colour) => colour === OPEN_FILL_RGB)).toHaveLength(1)
-  expect(fillsWhileHovering.filter((colour) => colour === NO_FILL_RGBA)).toHaveLength(1)
+  expect([...fillsWhileHovering].sort()).toEqual([OPEN_FILL_RGB, HOVER_FILL_RGB].sort())
 
-  // --- 10. AC4, first half's other clause: the shrunken control still OPENS its dialog. Geometry that
-  // silently broke the click would satisfy every assertion above. `.first()` because there are two rows
-  // by now; either row's control proves the same thing. ---
+  // --- 10. #1171's AC2, the reveal. AT REST EVERY control is transparent, THE OPEN ROW'S INCLUDED —
+  // read as a set over both rows, so the open row is covered by the same read rather than by a locator
+  // that would have to name it. The pointer is parked at the window's top-left corner first, which is
+  // the actions cluster and not a row: `hover()` above left it over the resting row, and this block's
+  // whole claim is about the pointer being AWAY.
+  //
+  // OPACITY IS THE ASSERTED PROPERTY, not visibility, and that is the point rather than a convenience.
+  // The control has to keep its box, its place in the accessibility tree and its focusability while
+  // hidden — nine shipped specs click or await it without hovering first, five of them `real-daemon-*`
+  // readiness gates under a handshake timeout. `display: none` or `visibility: hidden` would satisfy a
+  // "not visible" assertion and hang those gates; this one fails against both. ---
+  await page.mouse.move(0, 0)
+  expect(await computedAll(save, 'opacity')).toEqual([HIDDEN_OPACITY, HIDDEN_OPACITY])
+  await expect(save).toHaveCount(2)
+
+  // Hovering a row reveals ITS control and leaves the other row's alone — sorted, so this is a set claim
+  // and not an ordering one. A reveal hung off the wrong scope (the control's own `:hover`, or the whole
+  // list's) would give two zeroes or two ones here.
+  await resting.hover()
+  const opacities = await computedAll(save, 'opacity')
+  expect([...opacities].sort()).toEqual([HIDDEN_OPACITY, SHOWN_OPACITY])
+
+  // --- 11. #1171's AC3, the clause the whole fill move exists for: the fill does not drop as the
+  // pointer travels from the title onto the glyph. The control is a SIBLING of the button, not its
+  // child, so a fill left on the button would lose `:hover` the instant the pointer crossed onto the
+  // control that sits over its trailing padding, and the row would flicker. Same set as block 9, with
+  // the pointer somewhere block 9 never put it. ---
+  await restingRow.locator('.channel-list__save-icon').hover()
+  const fillsOverGlyph = await computedAll(row, 'background-color')
+  expect([...fillsOverGlyph].sort()).toEqual([OPEN_FILL_RGB, HOVER_FILL_RGB].sort())
+
+  // --- 12. #1171's AC4, first clause: a click on the DOT still opens the conversation. The dot is a
+  // sibling of the open button and sits over it, so this holds only because it is out of flow and
+  // `pointer-events: none` — put it back in the flex flow, or give it back its events, and the click
+  // lands on a <span> that does nothing while every other assertion in this file stays green.
+  //
+  // Driven through `page.mouse` at the dot's own centre rather than `locator.click()`, which would
+  // retarget to the element that actually receives the event and prove nothing about the coordinate.
+  // The row is identified by its box's `y` before and after, never by its text — the hygiene posture. ---
+  const restingRowBox = await boxOf(restingRow, 'resting sidebar row')
+  const restingDot = await boxOf(
+    restingRow.locator('.conversation-status-dot'),
+    'resting row status dot'
+  )
+  await page.mouse.click(
+    restingDot.x + restingDot.width / 2,
+    restingDot.y + restingDot.height / 2
+  )
+  const openedRow = page
+    .locator('.channel-list__row')
+    .filter({ has: page.locator('.channel-list__row-open[aria-current="true"]') })
+  await expect(openedRow).toHaveCount(1)
+  expectAbout((await boxOf(openedRow, 'the row the dot click opened')).y, restingRowBox.y)
+
+  // --- 13. The control still OPENS its dialog. Geometry or a reveal that silently broke the click would
+  // satisfy every assertion above. `.first()` because there are two rows by now; either row's control
+  // proves the same thing — and neither is hovered first, which is the same unedited-spec path AC4
+  // promises the nine shipped callers. ---
   await save.first().click()
   await expect(page.locator('.save-as-channel-overlay')).toBeVisible()
 })
@@ -298,9 +394,9 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   // The disjointness the affordance's own contract rests on, restated as this block's precondition.
   await expect(page.locator('.channel-list__save')).toHaveCount(0)
 
-  // AC4, second half: the Rename control sits inside the 24px row without growing it. Same pair of
-  // assertions as the Save control's, against the rule that carries its own copy of the 16px/--space-1
-  // treatment — so reverting either rule alone reddens exactly one of the two blocks.
+  // AC4, second half: the Rename control sits inside the 24px row without growing it. Same assertions as
+  // the Save control's, against the rule that carries its own copy of the treatment — so reverting either
+  // rule alone reddens exactly one of the two blocks.
   const rowHeight = async (): Promise<number> => (await boxOf(row, 'sidebar row')).height
   await expect.poll(rowHeight).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
   expectAbout(await rowHeight(), ROW_HEIGHT_PX)
@@ -308,13 +404,29 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   const renameBox = await boxOf(rename, 'Rename control')
   expect(renameBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
 
+  // #1171's AC2 on the Channels tree: the drawn 12×12 pen, its right edge 8px in from the row's right
+  // edge, its box centred on the row, in `--color-primary`. One `Row` serves both trees, so this and the
+  // chevron's block above differ only in which glyph the section places — a per-tree divergence in the
+  // BOX would be the regression, and it would show as one of the two blocks reddening alone.
+  const penBox = await boxOf(page.locator('.channel-list__rename-icon'), 'Rename glyph')
+  const penRowBox = await boxOf(row, 'sidebar row')
+  expectAbout(penBox.width, GLYPH_PX)
+  expectAbout(penBox.height, GLYPH_PX)
+  expectAbout(penRowBox.x + penRowBox.width - (penBox.x + penBox.width), GLYPH_RIGHT_INSET_PX)
+  expectAbout(penBox.y + penBox.height / 2, penRowBox.y + penRowBox.height / 2)
+  expect(await computed(rename, 'color')).toBe(GLYPH_RGB)
+
   // #1098 on the CHANNELS tree — one `Row` serves both trees, so a per-tree special case would be a
   // regression rather than a feature, and this seed is the only promoted row either block launches with.
   // It also pins the fill spanning a Rename control rather than a Save-as-channel one: same clause of
   // AC1, the other affordance.
   expect(await computed(row, 'background-color')).toBe(OPEN_FILL_RGB)
   expect(await computed(page.locator('.channel-list__title'), 'font-weight')).toBe(LABEL_WEIGHT_OPEN)
-  expect((await boxOf(row, 'sidebar row')).width).toBeGreaterThan(
+  // The open button spans the whole row since #1171 took the control out of the flex flow, so its focus
+  // rectangle does not shrink on a row that carries one. This read WAS `toBeGreaterThan`; see the other
+  // block for why the claim inverted rather than went away.
+  expectAbout(
+    (await boxOf(row, 'sidebar row')).width,
     (await boxOf(page.locator('.channel-list__row-open'), 'open button')).width
   )
 
@@ -322,7 +434,25 @@ test('a Channels row holds the Rename control inside the same 24px row', async (
   // for promoted rows only would pass the other block.
   await expect(page.locator('.channel-list__time')).toHaveCount(0)
 
-  // And it still opens its dialog.
+  // #1171's AC2 on THE OPEN ROW: it shows no control at rest either. Juhana's ruling, 2026-09-06 — the
+  // Active variant as drawn carries a pen, and that pen is a leftover of building Active from Hover, so
+  // the open row behaves like every other row here. This block's single row is the open one (the fixture
+  // reached the thread by clicking it), which is what makes this the place to assert it.
+  await page.mouse.move(0, 0)
+  expect(await computed(rename, 'opacity')).toBe(HIDDEN_OPACITY)
+
+  // ...and KEYBOARD FOCUS ALONE reveals it, so Tab still reaches a control the pointer never touched.
+  // Reached by focusing the open button and pressing Tab, NOT by `locator.focus()`: `:focus-visible` is
+  // Chromium's keyboard-modality heuristic, and a programmatic focus after a pointer interaction does not
+  // match it — the assertion would then be testing the heuristic rather than the rule. The Tab keypress
+  // itself sets that modality, and the control is the next focusable element in the row.
+  await page.locator('.channel-list__row-open').focus()
+  await page.keyboard.press('Tab')
+  await expect(rename).toBeFocused()
+  expect(await computed(rename, 'opacity')).toBe(SHOWN_OPACITY)
+
+  // And it still opens its dialog — reached with a plain click and no hover first, the same path the nine
+  // shipped specs that address these controls take.
   await rename.click()
   await expect(page.locator('.rename-conversation-overlay')).toBeVisible()
 })

@@ -136,8 +136,10 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 
 ### CSS (`channels.css`)
 
-- `.channel-list__rename`: cloned from `.channel-list__save` — icon-only, `flex: 0 0 auto`, round
-  hover/focus target, de-emphasized (`--color-on-surface-variant`).
+- `.channel-list__rename`: cloned from `.channel-list__save`, including that control's
+  [#1171](channel-list-desktop-row-geometry.md) redraw — icon-only, absolutely positioned at the row's
+  trailing edge, invisible at rest and revealed by the row's hover or its own `:focus-visible`,
+  `--color-primary` with no hover circle and no background behind the glyph.
 - `.rename-conversation-overlay`/`.rename-conversation*`: cloned from `.save-as-channel*` — same
   `position: fixed; inset: 0; z-index: 2` overlay (needed because `.channel-list` is itself the
   `overflow-y: auto` scroll column, and `z-index: 2` must clear the FAB's sticky `z-index: 1`; see

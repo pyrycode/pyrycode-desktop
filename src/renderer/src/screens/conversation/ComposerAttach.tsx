@@ -323,6 +323,49 @@ export function ComposerAttachOutcome({
 }
 
 /**
+ * #1264 — one stable reconciliation key per position: the attachment's id, qualified by WHICH OCCURRENCE of
+ * that id this entry is. `[X, Y, X]` keys as `X#0`, `Y#0`, `X#1`.
+ *
+ * ⭐ WHY THE ARRAY INDEX STOPPED WORKING, precisely. #1262 keyed by index on the recorded ground that the
+ * pending list only appends and is cleared wholesale; this ticket makes it removable from the MIDDLE, and
+ * index keys reconcile `[A, B] → [B]` as "key 0 reused with new props, key 1 deleted". The tile behind key 0
+ * is `ComposerAttachmentImage`, which owns a `useState` and an effect keyed on the attachment id — so the
+ * REUSED fiber keeps A's state (`{ ready, url: A's picture }`) while its props now name B. React runs every
+ * passive destroy before every create, so B's own fiber releases B's URL before the reused one asks for it
+ * again: the refcount hits zero, `attachmentImageSource` revokes, and the survivor takes the COLD path back
+ * to the host. For that whole round trip the operator watches the tile they just removed keep its picture on
+ * the tile that survived. Nothing in this repo reddens on it — renderer specs are static renders with no
+ * effects, and a strip of non-image tiles cannot reach the stateful component at all.
+ *
+ * ⭐ A BARE `attachmentId` WOULD NOT DO, which is why this qualifies it. Two completions can carry one id
+ * (the same file attached twice) and AC2 requires those tiles to remove independently, so the id alone is
+ * not unique and duplicate React keys are undefined behaviour. Qualifying by occurrence makes the key
+ * injective — the decimal occurrence contains no `#`, so the last `#` splits a key back into exactly one
+ * (id, occurrence) pair — and gives the property that actually matters: two entries share a key only if they
+ * share an id, so a fiber is only ever reused between tiles drawing the SAME attachment, where its state and
+ * its held URL are already correct and its effect dep does not change.
+ *
+ * A CLIENT-MINTED SEQUENCE NUMBER was the alternative and is not taken: it would have to be carried on the
+ * record, which means a new element type threaded through `reducePendingAttachments`, `drainPendingAttachments`,
+ * `PendingAttachmentTake` and `submitMessage`'s `attachment_ids` map — a wide change to hold a number this
+ * function derives from the set it already has.
+ *
+ * THE ID IN A KEY IS NOT THE ID IN THE MARKUP. #1262 kept `attachmentId` out of the render path to keep it
+ * out of the DOM; a React key is consumed by the reconciler and emitted nowhere (`renderToStaticMarkup` drops
+ * keys outright), so the strip's markup is byte-identical and the shipped assertion that no part of the record
+ * reaches the DOM still holds. The `Map` below is keyed by that untrusted string safely — a `Map` has no
+ * prototype chain to walk.
+ */
+export function pendingAttachmentKeys(pending: readonly MessageAttachment[]): readonly string[] {
+  const occurrences = new Map<string, number>()
+  return pending.map((attachment) => {
+    const occurrence = occurrences.get(attachment.attachmentId) ?? 0
+    occurrences.set(attachment.attachmentId, occurrence + 1)
+    return `${attachment.attachmentId}#${occurrence}`
+  })
+}
+
+/**
  * #1262 — the pending set, drawn: a row of file tiles between the status row and the message box (Figma
  * `Attachment area` 390:7136), in the set's own completion order.
  *
@@ -339,11 +382,10 @@ export function ComposerAttachOutcome({
  * 45x60 box, which is why the strip's tile count and each tile's position are a property of this SET and not of
  * what any picture is doing.
  *
- * THE KEY IS THE ARRAY INDEX, `BubbleAttachmentRow`'s recorded reason: this list only ever appends and is
- * cleared wholesale, so index identity is stable — and a name-derived key is the step that makes
- * `id={filename}` look natural next. `attachmentId` would key correctly and is deliberately not used
- * either: it is a host-side storage handle with no display value, and keeping it out of the render path is
- * what keeps it out of the markup.
+ * ⭐ #1264 FALSIFIED THE ARRAY-INDEX KEY THIS STRIP INHERITED, and the replacement is `pendingAttachmentKeys`
+ * below. #1262's reason for the index — "this list only ever appends and is cleared wholesale, so index
+ * identity is stable" — was true of an append-only list and stopped being true the moment a tile could be
+ * taken out of the MIDDLE. See that function for what an index key costs once it can.
  *
  * ITS OWN THREE CLASSES, sharing no whole class token with `.composer__attach`,
  * `.composer__attach-outcome` or `.composer__attach-progress`, so no shipped locator and no
@@ -360,6 +402,9 @@ export function ComposerAttachmentStrip({
   onRemove: (index: number) => void
 }): JSX.Element | null {
   if (attachments.length === 0) return null
+  // Computed once for the whole row rather than per item, because an entry's key depends on the entries
+  // BEFORE it — which occurrence of its id this one is. See `pendingAttachmentKeys`.
+  const keys = pendingAttachmentKeys(attachments)
   return (
     <div className="composer__attachments">
       {attachments.map((attachment, index) => (
@@ -377,10 +422,10 @@ export function ComposerAttachmentStrip({
         // including the closing quote — so no shipped locator, tile count or `toHaveText('PDF')` can reach
         // it. The control contributes no text to the tile for the same reason: it is not inside it.
         //
-        // THE KEY MOVES OUT HERE with the outermost element per item, and is still the array index for
-        // #1262's recorded reason — index identity is stable in a list that appends and clears wholesale,
-        // and a name-derived key is the step that makes `id={filename}` look natural next.
-        <span className="composer__attachment-slot" key={index}>
+        // THE KEY MOVES OUT HERE with the outermost element per item, and it is no longer the array index:
+        // this ticket is exactly what falsified that choice, since the list it was justified against was one
+        // that only appended. `pendingAttachmentKeys` above carries the mechanism and the alternatives.
+        <span className="composer__attachment-slot" key={keys[index]}>
           {isImageAttachmentName(attachment.filename) ? (
             <ComposerAttachmentImage attachment={attachment} />
           ) : (
@@ -519,9 +564,10 @@ export function reducePendingAttachments(
  *
  * ⭐ BY POSITION, NEVER BY ID. Two completions can carry the same `attachmentId` — the same file attached
  * twice — and removing by id would take both tiles for one click, dropping a file the operator never asked
- * to drop from a message they are still writing. Position is what the strip already keys on, so the
- * control's index and the set's index are the same number by construction rather than by correlation, and
- * nothing is searched for at click time.
+ * to drop from a message they are still writing. Position is what the strip's own `map` hands each control,
+ * so the control's index and the set's index are the same number by construction rather than by correlation,
+ * and nothing is searched for at click time. (The strip's REACT key is a different thing and is deliberately
+ * NOT the position — see `pendingAttachmentKeys` for why removal is what forced them apart.)
  *
  * THE SAME REFERENCE FOR AN INDEX THAT NAMES NO TILE, `reducePendingAttachments`'s idiom for "this changes
  * nothing" — structural rather than incidental, and what makes an impossible index unable to clear a set.

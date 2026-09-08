@@ -1,6 +1,11 @@
+import { createHash } from 'node:crypto'
 import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
-import { decodeEnvelope } from '../src/main/transport/codec'
-import type { SendMessagePayload } from '../src/shared/wire/types'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import type {
+  AttachmentChunkPayload,
+  RequestAttachmentPayload,
+  SendMessagePayload
+} from '../src/shared/wire/types'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
 import { REMOVE_ATTACHMENT_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
@@ -189,4 +194,184 @@ test('a tile’s remove control takes that file back before send, and sends noth
   // The removed file's id is NOT named, and the surviving one IS — the two halves of the criterion, which
   // an assertion on either alone would leave half open.
   expect(sent.attachmentIds).toEqual([SECOND.uploadId])
+})
+
+// ================================================================================================
+// ⭐ THE SECOND DRIVE, AND WHY IT IS OVER TWO IMAGE TILES. The drive above removes a `.pdf` in front of a
+// `.zip`, and both draw `AttachmentFileIcon` — a hook-free component with no state and nothing held. So it
+// cannot reach the defect a mid-list removal actually creates: the tile behind an image name is
+// `ComposerAttachmentImage`, which owns a `useState` and a refcounted `blob:` URL, and reconciliation
+// decides which fiber a survivor is drawn by.
+//
+// Under the array-index key this strip inherited from #1262, `[A, B] → [B]` reuses A's fiber for B — A's
+// state, A's `<img src>` — while React's passive phase revokes B's URL before the reused fiber asks for it
+// again, sending the survivor back to the host on the cold path. The operator watches the picture they just
+// removed sit on the tile that survived. `pendingAttachmentKeys` is the fix; the two assertions below are
+// its detector, and BOTH are timing-free rather than a race against the refetch:
+//
+//   - the survivor's `src` is the SAME blob: URL it held before the click. Under the bug it is A's URL for
+//     the length of a round trip and a FRESHLY MINTED one after (the old one was revoked and
+//     `createObjectURL` mints a random UUID), so no reading of it can equal what was captured.
+//   - no envelope reaches the host. The refetch is a `request_attachment` on the wire, so AC3's own absence
+//     assertion — baseline before, unchanged after — is what catches it, on image tiles.
+// ================================================================================================
+
+// Canonical ids: `resolveAttachmentPath`'s CANONICAL_ATTACHMENT_ID is /^[0-9a-f-]{1,64}$/ and it gates both
+// the store write and the read back, so a `e2e-remove-1`-shaped id would be refused at storage and turn
+// every picture into the file-tile fallback — which would quietly put this spec back on hook-free tiles.
+const ID_WIDE = '1a2b3c4d-5e6f-4a7b-8c9d-1e2f3a4b5c6d'
+const ID_SHORT = '2b3c4d5e-6f7a-4b8c-9d0e-2f3a4b5c6d7e'
+
+// Two pictures with DIFFERENT natural sizes, so "which file's picture is this tile drawing" is answerable
+// from the DOM rather than only inferable. The first is composer-attachment-image.spec.ts's 800x100; the
+// second is a 120x40 generated for this spec. Both are a few hundred bytes, far under
+// ATTACHMENT_CHUNK_DATA_BYTES, so each rides exactly one chunk. Neither carries any information.
+const WIDE_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAyAAAABkCAIAAADxM8PYAAABkUlEQVR42u3WMQ0AAAzDsEIZlEEd1JHoackIciW3AwBAUSQAADBYAAAGCwDAYAEAYLAAAAwWAIDBAgDAYAEAGCwAAIMFAIDBAgAwWAAABgsAwGABAGCwAAAMFgCAwQIAwGABABgsAACDBQCAwQIAMFgAAAYLAACDBQBgsAAADBYAgMECAMBgAQAYLAAAgwUAgMECADBYAAAGCwAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAIMFAIDBAgAwWAAABgsAAIMFAGCwAAAMFgAABgsAwGABABgsAAAMFgCAwQIAMFgAAAYLAACDBQBgsAAADBYAAAYLAMBgAQAYLAAADBYAgMECADBYAAAGCwAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAAwWAIDBAgAwWAAAGCwAAIMFAGCwAAAMFgAABgsAwGABABgsAAAMFgCAwQIAMFgAABgsAACDBQBgsAAAMFgAAAYLAMBgAQAYLAAADBYAgMECADBYAAAYLAAAgwUAYLAAADBYAAAGCwDAYAEAYLAAANoej5+SST6U8/EAAAAASUVORK5CYII='
+const SHORT_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAHgAAAAoCAIAAAC6iKlyAAAAUklEQVR42u3QQQ0AAAgEoItjHCMa1RbOBxsJSPVwIApEi0a0aNEWRItGtGjRFkSLRrRo0YgWjWjRohEtGtGiRSNaNKJFi0a0aESLFo1o0Yj+ZwG7nYMtQsFOZQAAAABJRU5ErkJggg=='
+const WIDE_NATURAL_WIDTH = 800
+const SHORT_NATURAL_WIDTH = 120
+
+const SERVED = new Map<string, Buffer>([
+  [ID_WIDE, Buffer.from(WIDE_PNG_BASE64, 'base64')],
+  [ID_SHORT, Buffer.from(SHORT_PNG_BASE64, 'base64')]
+])
+
+/** The daemon's answer to one `request_attachment`: a single `attachment_chunk` carrying the whole file —
+ *  composer-attachment-image.spec.ts's own fixture, whose digest is COMPUTED because `attachmentReassembler`
+ *  verifies an exact lowercase-hex SHA-256 and a hand-written one fails closed into the fallback tile. */
+function serveAttachmentFrame(requestId: number, ask: RequestAttachmentPayload): Uint8Array[] {
+  const bytes = SERVED.get(ask.attachment_id)
+  if (bytes === undefined) return []
+  const payload: AttachmentChunkPayload = {
+    // Empty on the retrieval direction: the chunk is correlated by `in_reply_to` to a request that already
+    // named the conversation, so the field is emitted empty and ignored.
+    conversation_id: '',
+    attachment_id: ask.attachment_id,
+    index: 0,
+    total_chunks: 1,
+    filename: 'served-bytes',
+    mime_type: 'image/png',
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    data: bytes.toString('base64')
+  }
+  return [
+    encodeEnvelope({
+      id: 900 + requestId,
+      type: 'attachment_chunk',
+      ts: '2026-07-07T12:00:00.000Z',
+      in_reply_to: requestId,
+      payload
+    })
+  ]
+}
+
+test('removing an image tile leaves the survivor drawing its own picture, and asks the host for nothing', async ({
+  launchPairedApp
+}) => {
+  const inbound: { type: string; attachmentIds?: readonly string[] }[] = []
+  const { page, app } = await launchPairedApp({
+    buildReplyFrames: (plaintext: Uint8Array): Uint8Array[] => {
+      const envelope = decodeEnvelope(plaintext)
+      inbound.push(
+        envelope.type === 'send_message'
+          ? {
+              type: envelope.type,
+              attachmentIds: (envelope.payload as SendMessagePayload).attachment_ids
+            }
+          : { type: envelope.type }
+      )
+      if (envelope.type === 'request_attachment') {
+        return serveAttachmentFrame(envelope.id, envelope.payload as RequestAttachmentPayload)
+      }
+      return envelope.type === 'send_message' ? [] : [seedConversationsFrame()]
+    }
+  })
+
+  const tiles = page.locator('.composer__attachment')
+  const pictures = page.locator('.composer__attachment-image')
+  const controls = page.getByRole('button', { name: REMOVE_ATTACHMENT_LABEL, exact: true })
+
+  const push = (event: AttachmentUploadEvent): Promise<void> =>
+    app.evaluate(
+      ({ BrowserWindow }, payload) => {
+        const [window] = BrowserWindow.getAllWindows()
+        window.webContents.send(payload.channel, payload.event)
+      },
+      { channel: ATTACHMENT_UPLOAD_EVENT_CHANNEL, event }
+    )
+
+  await push({ type: 'completed', uploadId: ID_WIDE, filename: 'panorama.png' })
+  await push({ type: 'completed', uploadId: ID_SHORT, filename: 'thumbnail.png' })
+
+  // Both pictures have to be DRAWN before the removal, not merely requested: a survivor that never had a URL
+  // of its own could not be shown to have kept it.
+  await expect(tiles).toHaveCount(2, { timeout: TIMEOUT_MS })
+  await expect(pictures).toHaveCount(2, { timeout: TIMEOUT_MS })
+  const drawnBefore = await pictures.evaluateAll((elements) =>
+    elements.map((element) => ({
+      src: element.getAttribute('src') ?? '',
+      naturalWidth: (element as HTMLImageElement).naturalWidth
+    }))
+  )
+  expect(drawnBefore.map((picture) => picture.naturalWidth)).toEqual([
+    WIDE_NATURAL_WIDTH,
+    SHORT_NATURAL_WIDTH
+  ])
+  // Two distinct object URLs — one per attachment, which is what makes the equality below say something.
+  expect(drawnBefore[0].src).not.toBe(drawnBefore[1].src)
+
+  const envelopesBeforeClick = inbound.length
+  const fetchesBeforeClick = inbound.filter(
+    (envelope) => envelope.type === 'request_attachment'
+  ).length
+  expect(envelopesBeforeClick).toBeGreaterThan(0)
+  // Each picture cost one fetch, and that is the baseline a third would show against.
+  expect(fetchesBeforeClick).toBeGreaterThanOrEqual(2)
+
+  // The positive, auto-waiting read of the click's own effect comes first, ahead of every absence below.
+  await controls.nth(0).click()
+  await expect(tiles).toHaveCount(1, { timeout: TIMEOUT_MS })
+  await expect(pictures).toHaveCount(1, { timeout: TIMEOUT_MS })
+
+  // ⭐ THE DETECTOR. Read ONCE rather than polled: an auto-retrying assertion would wait out the bug's cold
+  // refetch and pass on the replacement URL. Under the fix the survivor's fiber was never touched, so this is
+  // the identical URL it was drawing before the click; under the bug it is the removed tile's URL, or a fresh
+  // one minted after its own was revoked — never this one.
+  const drawnAfter = await pictures.evaluateAll((elements) =>
+    elements.map((element) => ({
+      src: element.getAttribute('src') ?? '',
+      naturalWidth: (element as HTMLImageElement).naturalWidth,
+      complete: (element as HTMLImageElement).complete
+    }))
+  )
+  expect(drawnAfter[0].src).toBe(drawnBefore[1].src)
+  expect(drawnAfter[0].naturalWidth).toBe(SHORT_NATURAL_WIDTH)
+  // Never a blink through the empty frame either: the picture was decoded before the click and stayed so.
+  expect(drawnAfter[0].complete).toBe(true)
+
+  // AC3, on image tiles: the removal sent nothing. The cold refetch the index key forced IS a
+  // `request_attachment` on the wire, so this is the same absence the first drive asserts, now with a second
+  // way to fail. Held over a real interval so a frame sent late still fails it.
+  await page.waitForTimeout(250)
+  expect(inbound.filter((envelope) => envelope.type === 'request_attachment').length).toBe(
+    fetchesBeforeClick
+  )
+  expect(inbound.length).toBe(envelopesBeforeClick)
+
+  // The mutation check for that count, and AC2 on the wire for an image attachment: the send that follows
+  // moves it, and names only the tile still standing.
+  await page.getByPlaceholder('Message…').fill('the thumbnail is still attached')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect
+    .poll(() => inbound.filter((envelope) => envelope.type === 'send_message').length, {
+      timeout: TIMEOUT_MS
+    })
+    .toBe(1)
+  expect(inbound.length).toBeGreaterThan(envelopesBeforeClick)
+  expect(inbound.filter((envelope) => envelope.type === 'send_message')[0].attachmentIds).toEqual([
+    ID_SHORT
+  ])
 })

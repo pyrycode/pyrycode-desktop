@@ -15,6 +15,7 @@ import {
   fileToAttach,
   mirrorTakeToDisplay,
   pasteCarriesImageOnly,
+  pendingAttachmentKeys,
   reduceFileDropDepth,
   reducePendingAttachments,
   removePendingAttachment
@@ -504,8 +505,9 @@ describe('removePendingAttachment (#1264 AC2)', () => {
   // ⭐ AC2's SECOND CLAUSE, and the whole reason the parameter is an index rather than an id: the same
   // file attached twice completes twice, so two tiles can carry one `attachmentId`. Removing by id would
   // take both for one click — a file the operator never asked to drop off a message they are still
-  // writing. Position is also what the strip already keys on, so the control's index and the set's index
-  // are the same number by construction rather than by correlation.
+  // writing. Position is also what the strip's own `map` hands each control, so the control's index and the
+  // set's index are the same number by construction rather than by correlation. (The strip's REACT key is a
+  // different thing and is deliberately not the position — see `pendingAttachmentKeys` below.)
   it('removes tiles carrying the SAME attachmentId independently', () => {
     const twice: readonly MessageAttachment[] = [REPORT, { ...REPORT }, BUNDLE]
     const once = removePendingAttachment(twice, 0)
@@ -536,6 +538,84 @@ describe('removePendingAttachment (#1264 AC2)', () => {
   // describe pins, reached this way for the first time.
   it('empties a one-tile set', () => {
     expect(removePendingAttachment([REPORT], 0)).toEqual([])
+  })
+})
+
+// ⭐ #1264 — THE KEY RULE, AND WHY IT IS A PURE FUNCTION AT ALL. `renderToStaticMarkup` drops React keys
+// outright, so no static render can see one and a key living inline in the strip's `map` would be provable
+// nowhere; the click that exercises it belongs to a tier that cannot render. So the rule is lifted out and
+// pinned here, and the BEHAVIOUR it buys — the survivor keeps its own picture and asks the host for nothing —
+// is driven over two image tiles in e2e/composer-attachment-remove.spec.ts.
+//
+// What an index key cost, restated as the property below: reconciliation reuses a fiber whenever two renders
+// agree on a key, and the tile behind a key owns state plus a refcounted object URL. So the claim that has to
+// hold across a removal is that every SURVIVING entry keeps the key it had.
+describe('pendingAttachmentKeys (#1264 — the identity a mid-list removal needs)', () => {
+  const REPORT = { attachmentId: 'u-1', filename: 'report.pdf' }
+  const BUNDLE = { attachmentId: 'u-2', filename: 'bundle.zip' }
+  const NOTES = { attachmentId: 'u-3', filename: 'notes.txt' }
+
+  it('gives one key per position, in order', () => {
+    expect(pendingAttachmentKeys([REPORT, BUNDLE, NOTES])).toEqual(['u-1#0', 'u-2#0', 'u-3#0'])
+    expect(pendingAttachmentKeys([])).toEqual([])
+  })
+
+  // AC2's duplicate case, which is what rules a bare `attachmentId` out: two tiles can carry one id and must
+  // remove independently, so the id alone is not a key — duplicate React keys are undefined behaviour.
+  it('qualifies a repeated attachmentId by which occurrence it is', () => {
+    const keys = pendingAttachmentKeys([REPORT, { ...REPORT }, BUNDLE, { ...REPORT }])
+    expect(keys).toEqual(['u-1#0', 'u-1#1', 'u-2#0', 'u-1#2'])
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  // ⭐ THE PROPERTY THE VERIFIED DEFECT NEEDED, stated over every position of every removal: a survivor's key
+  // is the key it already had. Under the index key this is false for every entry after the removed one, which
+  // is exactly how a survivor came to be drawn by the removed tile's fiber.
+  it('leaves every surviving entry’s key unchanged by a removal at any position', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, BUNDLE, NOTES]
+    const before = pendingAttachmentKeys(pending)
+    for (let removed = 0; removed < pending.length; removed += 1) {
+      const after = pendingAttachmentKeys(removePendingAttachment(pending, removed))
+      expect(after).toEqual(before.filter((_, index) => index !== removed))
+    }
+  })
+
+  // The same property where it is least obvious: the survivors of a duplicate-id run. Removing the FIRST of
+  // three tiles sharing an id renumbers the two behind it — `u-1#1` and `u-1#2` become `u-1#0` and `u-1#1` —
+  // so a fiber IS reused across the shift here. That is sound rather than tolerated: a key match implies an
+  // id match, and a tile drawing the same attachment already holds the right state, the right URL and an
+  // unchanged effect dep. The distinct-id neighbour is what must not move, and does not.
+  it('reuses a key across a duplicate-id shift only between tiles drawing the same attachment', () => {
+    const pending: readonly MessageAttachment[] = [REPORT, { ...REPORT }, BUNDLE, { ...REPORT }]
+    const after = pendingAttachmentKeys(removePendingAttachment(pending, 0))
+    expect(after).toEqual(['u-1#0', 'u-2#0', 'u-1#1'])
+    // Each surviving key still addresses the attachment its own position draws — which is the whole of "a
+    // reused fiber is only ever reused for the same attachment".
+    expect(after.map((key) => key.slice(0, key.lastIndexOf('#')))).toEqual(['u-1', 'u-2', 'u-1'])
+  })
+
+  // The key is injective in (id, occurrence) even for an id carrying the separator, because the occurrence is
+  // a decimal that never does: the LAST `#` splits a key back into exactly one pair. An untrusted id cannot
+  // therefore collide two distinct tiles into one fiber.
+  it('cannot collide two positions, even for an id carrying the separator', () => {
+    const keys = pendingAttachmentKeys([
+      { attachmentId: 'u#1', filename: 'a.pdf' },
+      { attachmentId: 'u', filename: 'b.pdf' },
+      { attachmentId: 'u', filename: 'c.pdf' }
+    ])
+    expect(keys).toEqual(['u#1#0', 'u#0', 'u#1'])
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  // The id reaches the key and nothing else: keys are consumed by the reconciler and emitted nowhere, so
+  // #1262's "the host's storage handle stays out of the DOM" survives this change byte for byte.
+  it('puts the attachmentId in the key and not in the markup', () => {
+    const attachmentId = 'b3f1c0de-0000-4000-8000-000000000000'
+    expect(pendingAttachmentKeys([{ attachmentId, filename: 'a.pdf' }])).toEqual([`${attachmentId}#0`])
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[{ attachmentId, filename: 'a.pdf' }]} onRemove={() => {}} />
+    )
+    expect(markup).not.toContain(attachmentId)
   })
 })
 

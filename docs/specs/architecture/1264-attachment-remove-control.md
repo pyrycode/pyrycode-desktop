@@ -304,3 +304,53 @@ Playwright tier's.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+### 2026-09-08 — the strip's React key is no longer the array index
+
+**What drove it:** the verifier's MUST FIX on PR #1271. The plan's Design section wrapped each tile in a
+slot and moved the key out to it, keeping #1262's array index — and that index was justified against a list
+that *only appends and is cleared wholesale*. This ticket is precisely what falsifies that premise: it makes
+the list removable from the middle, and the tile behind a key owns state.
+
+**The defect, end to end.** With index keys, `[A, B] → [B]` reconciles as "key 0 reused with new props, key 1
+deleted". `ComposerAttachmentImage` owns a `useState` and an effect keyed on `attachment.attachmentId`, so
+the reused fiber keeps A's `{ ready, url }` while its props name B. React runs every passive destroy before
+every create, so key 1's unmount releases B's URL (refcount to zero → `attachmentImageSource` revokes it)
+*before* the reused fiber's dep change re-requests it — which then takes the cold path back to the host. For
+the length of that round trip the survivor draws the picture of the file the operator just took back. No tier
+reddened: renderer specs are static renders with no effects, and the shipped removal drive used `.pdf`/`.zip`
+tiles, whose `AttachmentFileIcon` is hook-free.
+
+**The new contract.** `pendingAttachmentKeys(pending): readonly string[]` — a pure rule beside the other
+three in `ComposerAttach.tsx` — gives each position `${attachmentId}#${occurrence}`, where the occurrence is
+which instance of that id the entry is. The strip computes it once per render and keys each slot with it.
+
+- **Not a bare `attachmentId`**: AC2 requires two tiles carrying one id to remove independently, so the id
+  alone is not unique and duplicate React keys are undefined behaviour.
+- **The property it buys**: two entries share a key only if they share an id, so a fiber is only ever reused
+  between tiles drawing the *same* attachment — where its state, its held URL and its effect dep are already
+  correct. The key is injective because the decimal occurrence contains no `#`, so the last `#` splits a key
+  back into exactly one (id, occurrence) pair.
+- **A client-minted sequence number was the alternative and is not taken.** It would have to ride the record,
+  which means a new element type threaded through `reducePendingAttachments`, `drainPendingAttachments`,
+  `PendingAttachmentTake` and `submitMessage`'s `attachment_ids` map — a wide change to carry a number the
+  set already determines.
+- **Security posture unchanged.** A React key is consumed by the reconciler and emitted nowhere
+  (`renderToStaticMarkup` drops keys), so #1262's "the host's storage handle stays out of the DOM" holds
+  byte-for-byte; a unit test asserts the id is in the key and not in the markup. The `Map` the rule folds
+  through is keyed by an untrusted string safely — a `Map` has no prototype chain.
+
+**Proof added.** Six unit tests on the rule in `ComposerAttach.test.tsx`, the load-bearing one being that a
+removal at *any* position leaves every surviving entry's key unchanged. The behavioural detector is a second
+drive in `e2e/composer-attachment-remove.spec.ts` over **two image tiles** with different natural sizes: the
+survivor's `blob:` URL must be the identical one it held before the click (read once, not polled, so an
+auto-retrying assertion cannot wait out the cold refetch), and the removal must send no `request_attachment`.
+Mutation-checked by restoring `key={index}` and rebuilding — the drive fails on the URL equality, and passes
+again with the fix.
+
+**Comments rewritten**, since the falsified justification was recorded in three places: the strip's docblock,
+the slot's inline note, and `removePendingAttachment`'s "position is what the strip already keys on" sentence
+(with its mirror in the test file). Removal by *position* is unchanged and still correct — what moved apart is
+the position the control closes over and the identity React reconciles by.

@@ -39,7 +39,8 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // Anthropic credential, no `.claude.json` — and points `-pyry-claude` at a harness-owned no-op placeholder
 // that is never invoked (rename runs no claude turn). That is the credential-light real-daemon tier for
 // registry-only actions (rename / archive / …). The `seedPromoted` option sets the seeded conversation's
-// `is_promoted`. Both are additive; real-claude.spec.ts sets neither and gets the exact behavior below.
+// `is_promoted`, and #1283's `seedCwdSubdir` moves its `cwd` a level below the daemon's own workdir. All
+// are additive; real-claude.spec.ts sets none and gets the exact behavior below.
 //
 // SKIP-GATING: the harness must SKIP cleanly (never FAIL) on a machine without the real stack. The daemon
 // fixture resolves `pyry` (always) plus `claude` / a credential (claude-spawning mode only) and calls
@@ -136,6 +137,24 @@ export type RealDaemonOptions = {
   // the client's advertised set with the daemon's supported one — a probe advertising nothing
   // learns nothing. See e2e/fixtures/daemonCapabilityGate.ts.
   requiredCapabilities: readonly string[]
+  // #1283 — the seeded conversation's `cwd`, as a subdirectory of the daemon's own `-pyry-workdir`.
+  // `''` (default) seeds `workdir` itself, byte-identical to every spec predating this option; a
+  // non-empty value seeds `<workdir>/<value>` and the fixture creates that directory.
+  //
+  // WHY IT EXISTS. The daemon's `create_conversation` defaults a null payload `cwd` to its own
+  // `-pyry-workdir`, so with the seed sitting in that same directory a create the daemon HONOURED and
+  // one it IGNORED both land in the seed's workspace group — and "the new row joined that group" passes
+  // either way. Moving the seed one level down makes the two outcomes render differently: an honoured
+  // create keeps one workspace group, a defaulted one mints a second labelled after the workdir. That
+  // is the whole non-vacuity mechanism of `real-daemon-create-channel.spec.ts`.
+  //
+  // A SINGLE PLAIN SEGMENT, enforced below rather than documented. The value is spec-authored constant
+  // text today and the guard is what keeps it so: it makes "this can never name a directory outside the
+  // daemon's workdir" structural, the same reasoning `withIsolatedElectronApp` records for taking no path
+  // parameter. The character class also rejects a whitespace-only name, which would be a legal directory
+  // whose group `workspaceLabelFor` labels after the WORKDIR — silently restoring the very vacuity the
+  // option exists to remove.
+  seedCwdSubdir: string
 }
 
 export type RealDaemonFixtures = {
@@ -161,6 +180,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   allowRemotePermissions: [false, { option: true }],
   claudeModel: ['haiku', { option: true }],
   requiredCapabilities: [[], { option: true }],
+  seedCwdSubdir: ['', { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -184,11 +204,27 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       interactiveRunner,
       allowRemotePermissions,
       claudeModel,
-      requiredCapabilities
+      requiredCapabilities,
+      seedCwdSubdir
     },
     use,
     testInfo
   ) => {
+    // --- #1283: validate `seedCwdSubdir` before ANYTHING, resource or skip gate. A bad value is a
+    // programming error in the spec, not an environment fault, so it must FAIL loudly rather than skip —
+    // and throwing here, ahead of the first `mkdtemp`, means the rejection can never strand a resource.
+    // A single plain segment: no separator, no `.`/`..`, no whitespace name (see the option's docblock).
+    // The message names the option and the offending segment — spec-source constant text, never a full
+    // path — keeping this file's no-echo posture intact. ---
+    if (
+      seedCwdSubdir !== '' &&
+      (!/^[A-Za-z0-9._-]+$/.test(seedCwdSubdir) || seedCwdSubdir === '.' || seedCwdSubdir === '..')
+    ) {
+      throw new Error(
+        `real-daemon: seedCwdSubdir must be a single plain path segment matching [A-Za-z0-9._-]+, got ${JSON.stringify(seedCwdSubdir)}`
+      )
+    }
+
     // --- Skip-gating: resolve binaries + creds BEFORE creating any resource, so a skip never leaks. ---
     // `pyry` is the ONLY universal gate — both modes spawn the daemon. The claude binary, the Anthropic
     // credential, and the operator's ~/.claude.json are resolved + gated ONLY in claude-spawning mode
@@ -255,6 +291,13 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       daemonHome = await mkdtemp(join(tmpdir(), 'pyry-daemon-'))
       const workdir = join(daemonHome, 'work')
       await mkdir(workdir, { recursive: true, mode: 0o700 })
+      // #1283 — where the SEEDED conversation lives, which is `workdir` itself unless a spec moved it.
+      // `SpawnedDaemon.workdir` deliberately keeps meaning the daemon's `-pyry-workdir` (#487's consumer
+      // writes its gate file there); only the registry row's `cwd` moves. Created HERE, immediately after
+      // its parent and inside the tracked `try`, so `cleanup`'s recursive `rm` of `daemonHome` reaps it on
+      // every exit path — a `mkdir` placed before `daemonHome` is assigned would leak on a raised setup.
+      const seedCwd = seedCwdSubdir === '' ? workdir : join(workdir, seedCwdSubdir)
+      if (seedCwd !== workdir) await mkdir(seedCwd, { recursive: true, mode: 0o700 })
       if (claudeJsonBytes !== null) {
         // Pre-trust the harness workdir in the seeded .claude.json — OPERATOR-STATE FIDELITY, not an
         // accommodation (#448's fixture rule): live, the default workspace is a folder the operator
@@ -322,7 +365,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
       // Seed the binding BEFORE spawn (the registry loads once at startup, no reload): bind 'default' →
       // the bootstrap pool session so router.Route('default') resolves and the reply stream binds.
-      await seedRegistry(daemonHome, workdir, seedPromoted)
+      await seedRegistry(daemonHome, seedCwd, seedPromoted)
 
       socketDir = await mkdtemp('/tmp/pyry-sock-')
       const socketPath = join(socketDir, 'pyry.sock')
@@ -601,11 +644,16 @@ function decodePairFields(stdout: string): SpawnedDaemon['pairFields'] {
  * Seed <daemonHome>/.pyry/test/ with the bootstrap session + one bound conversation, replicating #854's
  * seedBootstrapRegistry / seedBoundConversation field-for-field (`is_promoted` is the #439 `isPromoted`
  * param, not a hardcoded false; the conversation id is a plain UUID — see BOUND_CONVERSATION_ID's #448
- * note). Mode 0o600, matching the Go seeds. `workdir` goes through JSON.stringify for correct escaping.
+ * note). Mode 0o600, matching the Go seeds. `cwd` goes through JSON.stringify for correct escaping.
+ *
+ * `cwd` was the daemon's `-pyry-workdir` verbatim until #1283 gave it the `seedCwdSubdir` option; it is
+ * still that directory whenever the option is left at its default. It is written RAW: the daemon records
+ * a create's payload `cwd` byte-for-byte too, and the client's `groupByWorkspace` keys on the raw string,
+ * so any normalisation here would split one workspace into two sidebar groups.
  */
 async function seedRegistry(
   daemonHome: string,
-  workdir: string,
+  cwd: string,
   isPromoted: boolean
 ): Promise<void> {
   const regDir = join(daemonHome, '.pyry', 'test')
@@ -618,7 +666,7 @@ async function seedRegistry(
   await writeFile(join(regDir, 'sessions.json'), sessionsJson, { mode: 0o600 })
 
   const conversationsJson =
-    `{"conversations":[{"id":"${BOUND_CONVERSATION_ID}","cwd":${JSON.stringify(workdir)},` +
+    `{"conversations":[{"id":"${BOUND_CONVERSATION_ID}","cwd":${JSON.stringify(cwd)},` +
     `"current_session_id":"${BOOTSTRAP_UUID}","is_promoted":${isPromoted},` +
     '"last_used_at":"2026-01-01T00:00:00Z"}]}'
   await writeFile(join(regDir, 'conversations.json'), conversationsJson, { mode: 0o600 })

@@ -27,10 +27,12 @@ daemon, wait for the seeded conversation's Rename pencil to render, rename it th
 assert the new title lands in the channel list (old title gone). Sibling action specs reused the same
 harness and shipped: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete),
 [#441](../codebase/441.md) (workspace — recent-workspaces + create-folder), [#443](../codebase/443.md)
-(save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly), and
-`e2e/real-daemon-session-settings.spec.ts` (#481 — see below). A fifth verb, dequeue, stayed **demoted to
-Inbox without shipping**: it needs a sustained turn this claude-less mode can't run, so it stays an empty
-observable subset on this tier.
+(save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly),
+`e2e/real-daemon-session-settings.spec.ts` (#481 — see below), and `e2e/real-daemon-create-channel.spec.ts`
+(#1283 — the Channels-tree [Create-channel dialog](create-channel-dialog.md)'s promoted create, see
+§ Proving a promoted create is genuine below). A sixth verb, dequeue, stayed **demoted to Inbox without
+shipping**: it needs a sustained turn this claude-less mode can't run, so it stays an empty observable
+subset on this tier.
 
 **set-session-settings was demoted once, under its original ticket #442, then revisited and shipped
 under #481.** #442's verdict — "the confirmation never touches the DOM, optimistic-first" — is half true
@@ -89,17 +91,54 @@ client-only concern already covered by the fake twin #423. This is the sibling t
 \#949 is fixed — a pre-#949 binary would answer `unsupported` and this spec's core assertion would time
 out.
 
+### Proving a promoted create is genuine, not echoed (#1283)
+
+`e2e/real-daemon-create-channel.spec.ts` is the real-daemon twin of the fake-tier
+[Create-channel dialog](create-channel-dialog.md)'s `e2e/sidebar-create-channel.spec.ts`. The fake twin
+mints its created row *from the request* — `conversationStateFake` echoes back whatever `is_promoted`,
+`name` and `cwd` the client sent — so it proves what the client sends and nothing about what the daemon
+does with it. This is the first exercise of the daemon's promoted-create branch: every create the app had
+sent before #1179 carried `is_promoted: false, name: null`.
+
+**The cwd trap.** `create_conversation` defaults a null payload `cwd` to the daemon's own
+`-pyry-workdir`, and every earlier `real-*` spec seeds its one conversation *in* that directory — so with a
+single seeded workspace, a create whose `cwd` the daemon honoured and one it silently defaulted would both
+land in the seed's workspace group, and "the new row joined that group" would pass either way. #1283 gave
+the fixture a third option, `seedCwdSubdir`, that moves the seed one level *below* the workdir so the two
+outcomes render differently — see below. Confirmed by reading the daemon handler rather than guessing: it
+resolves `cwd := defaultCwd` and overwrites it with the payload's value verbatim, no cleaning and no
+symlink resolution, storing exactly what `groupByWorkspace`'s raw-string key later reads — so the seed's
+registry path and the created row's path are genuinely comparable as the same key.
+
+**A whitespace-only subdirectory name would have silently defeated the whole mechanism.** The client's
+`workspaceLabelFor` trims each path segment as its display predicate, so a seed placed at a
+whitespace-named subdirectory renders labelled after the *parent* segment — the daemon's own workdir
+basename, `work`, the exact label a defaulted create mints. That would make the cwd assertion pass no
+matter what the daemon did with the payload. `seedCwdSubdir` is validated with a whitelist
+(`/^[A-Za-z0-9._-]+$/`, `.`/`..` rejected) rather than a `/`-and-`..` blacklist for this reason as much as
+for path traversal, and the check runs before any resource is created so a bad value throws loudly at
+setup instead of skipping clean.
+
+**No structural way to scope a row to its group.** Both the Channels and Chats trees render a flat run of
+siblings (host, workspace head, rows, …) that 28 other e2e specs already depend on, so there is no group
+ancestor to scope a row locator by. The spec instead asserts the whole ordered list of
+`.channel-list__workspace-label` texts, not a count — deliberately self-diagnosing: a defaulted create
+shows the workdir's `work` label in the diff, while a hypothetical canonicalising daemon (one that
+resolved the seed and the created row's `cwd` to different string forms) would instead show the same label
+twice. A bare `toHaveCount(1)` collapses both failures into the same number and tells you nothing.
+
 ## How it works
 
-### Two option fixtures on the shared `realDaemon.ts` fixture
+### Three option fixtures on the shared `realDaemon.ts` fixture
 
-`e2e/fixtures/realDaemon.ts` ([#420](../codebase/420.md)) now exposes two additive Playwright **option
-fixtures**, added in #439:
+`e2e/fixtures/realDaemon.ts` ([#420](../codebase/420.md)) now exposes three additive Playwright **option
+fixtures**, added across #439 and #1283:
 
 ```ts
 type RealDaemonOptions = {
-  spawnClaude: boolean   // default true  — the claude-spawning mode (real-claude.spec.ts)
-  seedPromoted: boolean  // default false — the seeded conversation's is_promoted
+  spawnClaude: boolean    // default true  — the claude-spawning mode (real-claude.spec.ts)
+  seedPromoted: boolean   // default false — the seeded conversation's is_promoted
+  seedCwdSubdir: string   // default ''    — seeds cwd one level below the daemon's own workdir
 }
 ```
 
@@ -110,7 +149,11 @@ test.use({ spawnClaude: false, seedPromoted: true })
 ```
 
 Defaults reproduce [real-claude liveness e2e](real-claude-liveness-e2e.md)'s exact prior behavior — that
-spec sets neither option, so it still gets `spawnClaude: true` + `seedPromoted: false`, unchanged.
+spec sets none of the three options, so it still gets `spawnClaude: true` + `seedPromoted: false` +
+`seedCwdSubdir: ''`, unchanged. `seedCwdSubdir: ''` also reproduces every pre-#1283 `real-*` spec's `cwd`
+byte-for-byte, since it seeds the conversation at `workdir` itself exactly as before; only a spec that
+opts into a non-empty value gets the seed placed in a subdirectory, and `SpawnedDaemon.workdir` keeps
+meaning the daemon's `-pyry-workdir` either way — the #487 consumer that reads it is untouched.
 
 **Why option fixtures, not a factory/sibling fixture.** The `relay → daemon → page` chain's dependency
 order *is* the LIFO teardown (the app closes first so its supervisor can't churn-reconnect on the
@@ -229,6 +272,9 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
   case; pins pyrycode/pyrycode#949 directly and states the rule's simpler form: a daemon reply gating the
   value directly, no optimistic overlay. No `docs/knowledge/codebase/442.md` or `441.md`-style note exists
   for #481 or #987 — the frozen per-ticket archive stops at 2026-08-26, before both landed.
+- [Create-channel dialog](create-channel-dialog.md) / #1179 — the Channels-tree workspace plus and its
+  dialog; this tier's `real-daemon-create-channel.spec.ts` (#1283) is its real-daemon proof, and the
+  first spec on this tier to exercise `create_conversation`'s promoted branch.
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the outbound write half
   `real-daemon-session-settings.spec.ts` proves against a real daemon: `setSessionSettings`, the
   confirmed/rejected correlation, and the presence contract.

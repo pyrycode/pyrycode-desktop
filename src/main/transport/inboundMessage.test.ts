@@ -372,6 +372,24 @@ const THINKING_PROGRESS = {
   estimated_tokens_delta: 67
 }
 
+/** A `rate_limited` envelope's plaintext bytes, wrapping an arbitrary payload (#1318). */
+function encodeRateLimited(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 31, type: 'rate_limited', ts: FIXED_TS, payload })
+}
+
+/** A well-formed rate_limited payload — the daemon's ONE measured non-benign capture (#1318:
+ *  `allowed_warning` / `seven_day`, 2026-08-22 on claude 2.1.239). Deliberately that reading rather
+ *  than an invented "you are blocked" one, because it is the case a consumer misreads: every turn ran
+ *  normally through it. `resets_at` is a real future instant so the fixture stays distinguishable from
+ *  the `0` ("claude did not report one") case the tests pin separately. */
+const RATE_LIMITED = {
+  conversation_id: 'c1',
+  status: 'allowed_warning',
+  limit_type: 'seven_day',
+  resets_at: 1_756_000_000,
+  truncated_fields: null
+}
+
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
  *  carries a DISTINCT non-empty value, so a field swap or a dropped field fails the round-trip (AC1),
  *  and the `description` is deliberately adversarial: HTML metacharacters, a quote, a shell redirect
@@ -2902,6 +2920,153 @@ describe('parseInboundMessage — thinking_progress fail-closed (#1312)', () => 
       const message = (error as Error).message
       expect(message).not.toContain(SECRET_CONV)
       expect(message).not.toContain('4242')
+    }
+  })
+})
+
+describe('parseInboundMessage — rate_limited recognition (#1318, additive)', () => {
+  it('narrows a full rate_limited into { kind: rate-limited } carrying all five fields', () => {
+    expect(parseInboundMessage(encodeRateLimited(RATE_LIMITED))).toEqual({
+      kind: 'rate-limited',
+      rateLimited: RATE_LIMITED
+    })
+  })
+
+  it('no longer reaches the unmodeled default — the frame is recognised, not dropped (AC2)', () => {
+    // The behaviour this ticket exists to change, asserted as the transition rather than as the end
+    // state: before the arm the type fell through and the decode returned null.
+    expect(parseInboundMessage(encodeRateLimited(RATE_LIMITED))).not.toBeNull()
+  })
+
+  it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
+    // #1225's FrameTimestamp marks exactly the arms decodeHistoryEvent draws. AC5 keeps this type
+    // armless there, so a stamp here would advertise a join nothing can perform.
+    expect(parseInboundMessage(encodeRateLimited(RATE_LIMITED))).not.toHaveProperty('ts')
+  })
+
+  it('drops unknown server keys, keeping exactly the five known fields (forward-compat)', () => {
+    // A fresh five-key literal rather than a spread — which is also what makes the narrower
+    // prototype-pollution-safe against a planted `__proto__`. `turn_id` is the realistic planted key:
+    // the frame is conversation-scoped and must never carry one.
+    const withExtras = { ...RATE_LIMITED, turn_id: 'turn-1', utilization: 0.93 }
+    const decoded = parseInboundMessage(encodeRateLimited(withExtras))
+    expect(decoded).toEqual({ kind: 'rate-limited', rateLimited: RATE_LIMITED })
+    expect(decoded?.kind === 'rate-limited' && Object.keys(decoded.rateLimited).sort()).toEqual([
+      'conversation_id',
+      'limit_type',
+      'resets_at',
+      'status',
+      'truncated_fields'
+    ])
+  })
+})
+
+describe('parseInboundMessage — rate_limited open sets and unvalidated resets_at (#1318, AC3)', () => {
+  // The tests that redden if someone later "hardens" this parser into the shape the daemon forbids.
+  // `status` and `limit_type` are OPEN STRINGS: their value set beyond the one measured-benign status
+  // is unmeasured, no capture of a limit actually in force exists, and closing either set drops the
+  // first real limit that fires. Narrowing is also the first step of branching on a value the daemon
+  // says a client MUST NOT branch security-relevant behaviour on.
+  it.each([
+    ['a status no client has ever seen', { status: 'a_status_from_a_later_claude' }],
+    ['a limit_type no client has ever seen', { limit_type: 'thirty_day' }],
+    ['an EMPTY status — the producer cut it to nothing', { status: '' }],
+    ['an EMPTY limit_type', { limit_type: '' }]
+  ])('decodes %s — the decoder polices type, never membership', (_label, override) => {
+    const payload = { ...RATE_LIMITED, ...override }
+    expect(parseInboundMessage(encodeRateLimited(payload))).toEqual({
+      kind: 'rate-limited',
+      rateLimited: payload
+    })
+  })
+
+  // `resets_at` is CLAUDE's number, unvalidated in both directions: a consumer must not assume it lies
+  // in the future, or in a sane range at all. Rejecting one of these would be a validation rule with
+  // no captured negative case behind it.
+  it.each([
+    ['0 — "claude did not report one", NOT the epoch', 0],
+    ['an instant in the past', 1_000_000_000],
+    ['a negative value', -1],
+    ['an absurd magnitude', 1_262_304_000_000]
+  ])('decodes resets_at at %s', (_label, resets_at) => {
+    const payload = { ...RATE_LIMITED, resets_at }
+    expect(parseInboundMessage(encodeRateLimited(payload))).toEqual({
+      kind: 'rate-limited',
+      rateLimited: payload
+    })
+  })
+})
+
+describe('parseInboundMessage — rate_limited fail-closed and truncated_fields (#1318, AC2/AC4)', () => {
+  it.each([
+    ['conversation_id', 42],
+    ['status', 42],
+    ['limit_type', 42],
+    ['resets_at', '1756000000'],
+    ['truncated_fields', 'status']
+  ])('throws when %s is absent, mistyped, or null', (field, mistyped) => {
+    const absent: Record<string, unknown> = { ...RATE_LIMITED }
+    delete absent[field]
+    const bad: unknown[] = [absent, { ...RATE_LIMITED, [field]: mistyped }]
+    // `truncated_fields` is the ONE field whose `null` is a valid value rather than a failure, so it
+    // is excluded from the null row — that admission is pinned positively two tests down.
+    if (field !== 'truncated_fields') bad.push({ ...RATE_LIMITED, [field]: null })
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeRateLimited(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a rate_limited payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeRateLimited('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeRateLimited(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeRateLimited(null))).toThrow(WireDecodeError)
+  })
+
+  it('decodes a POPULATED truncated_fields, naming the cut fields in producer order', () => {
+    // The producer cuts `status` / `limit_type` and names them under those wire names, in that order.
+    // Deliberately NOT cross-validated against this frame's own field set: the no-cross-validate
+    // posture, so a name a later daemon adds does not fail-close the frame.
+    const cut = { ...RATE_LIMITED, status: 'a_very_long_stat', truncated_fields: ['status', 'limit_type'] }
+    expect(parseInboundMessage(encodeRateLimited(cut))).toEqual({ kind: 'rate-limited', rateLimited: cut })
+  })
+
+  it('distinguishes truncated_fields null from [] — different facts, not two spellings of one', () => {
+    // AC4's sharp case. `null` is the wire VALUE "nothing was cut" and the daemon emits it rather than
+    // an empty array (the Go type has no MarshalJSON, unlike BackgroundTaskRosterPayload.tasks, whose
+    // nil→[] normalisation means the OPPOSITE). A decoder collapsing the two would make a
+    // nothing-was-cut frame indistinguishable from one asserting an empty cut list.
+    const nothingCut = parseInboundMessage(encodeRateLimited({ ...RATE_LIMITED, truncated_fields: null }))
+    const emptyList = parseInboundMessage(encodeRateLimited({ ...RATE_LIMITED, truncated_fields: [] }))
+    expect(nothingCut?.kind === 'rate-limited' && nothingCut.rateLimited.truncated_fields).toBeNull()
+    expect(emptyList?.kind === 'rate-limited' && emptyList.rateLimited.truncated_fields).toEqual([])
+  })
+
+  it('throws on a non-string truncated_fields element — one bad entry fails the WHOLE frame', () => {
+    // Never a partial list: the posture requireStringArrayOrNull documents.
+    expect(() =>
+      parseInboundMessage(encodeRateLimited({ ...RATE_LIMITED, truncated_fields: ['status', 7] }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('names the failure CATEGORY only — no conversation id and no claude-authored text', () => {
+    // `status` and `limit_type` are untrusted, model-influenced text and the id is
+    // conversation-correlating; none may be interpolated into an error a caller can surface.
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_STATUS = 'secret-status-text'
+    try {
+      parseInboundMessage(
+        encodeRateLimited({
+          conversation_id: SECRET_CONV,
+          status: SECRET_STATUS,
+          limit_type: 'seven_day',
+          resets_at: '1756000000'
+        })
+      )
+      expect.unreachable('a mistyped resets_at must throw')
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain(SECRET_STATUS)
     }
   })
 })
@@ -6362,6 +6527,56 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a rate_limited content-free, never the conversation_id, the status or the limit type (#1318)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_STATUS = 'secret-status-text'
+    const SECRET_LIMIT = 'secret-limit-type'
+    const plaintext = encodeRateLimited({
+      conversation_id: SECRET_CONV,
+      status: SECRET_STATUS,
+      limit_type: SECRET_LIMIT,
+      resets_at: 4242,
+      truncated_fields: ['status']
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // AC2: the client-owned type LITERAL, never the wire-supplied envelope.type the `default:` arm
+    // this replaces for the type used to log.
+    expect(record.code).toBe('rate_limited')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new DiagnosticEvent
+    // field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    // `status` and `limit_type` are claude-authored text that crossed the subprocess trust boundary;
+    // logging them would put unsanitized model-influenced strings into a file whose readers assume it
+    // is machine-written. Together the pair also discloses the account's quota posture.
+    expect(lines[0]).not.toContain(SECRET_STATUS)
+    expect(lines[0]).not.toContain(SECRET_LIMIT)
+    expect(lines[0]).not.toContain('4242')
+  })
+
+  it('writes NO inbound-unmodeled record for a rate_limited any more (#1318, AC2)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeRateLimited(RATE_LIMITED), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed rate_limited throw path (#1318)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeRateLimited({ ...RATE_LIMITED, resets_at: '1756000000' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a model_announced content-free, never the conversation_id, the model or the cut flag (#587)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -8320,10 +8535,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first seven
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first eight
   // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
-  // joined them at #1312, which gave it a live-lane parser and deliberately no arm here;
-  // `rate_limited` it still has no parser for at all; the last is a type it has never seen.
+  // joined them at #1312 and `rate_limited` at #1318, each given a live-lane parser and deliberately
+  // no arm here; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -8352,6 +8567,14 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
         })
       ])
     ).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored rate_limited — armless dispatch, not a payload failure (#1318)', () => {
+    // The discriminating version of the row above, and the one that stays honest now that the type
+    // HAS a live-lane parser. That row's payload would fail `parseRateLimitedPayload` anyway, so on
+    // its own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the
+    // payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
+    expect(decodedEntries([historyEntry('rate_limited', RATE_LIMITED)])).toEqual([])
   })
 
   it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {

@@ -27,6 +27,7 @@ export type InboundDaemonMessage =
   | { kind: 'compacting'; compacting: CompactingPayload }       // #495, additive — banner-only
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
+  | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }    // #1318, additive — a usage-limit window report, `status`/`limit_type` OPEN strings, `resets_at` unvalidated, no FrameTimestamp, ships dormant
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -308,6 +309,47 @@ which it is safer than every sibling in its family: there is nothing here for a 
 Ships dormant: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops at this
 boundary until the carry slice claims it, the same two-step `question_shown` (#884/#885) and
 `modal_shown` (#870/#871) already took.
+
+**Extended once more by [#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318), additively.**
+`rate_limited` → `{ kind: 'rate-limited', rateLimited: RateLimitedPayload }` via
+`parseRateLimitedPayload` — claude's usage-limit window report, the daemon's translation of its
+top-level `rate_limit_event` claude line (not a `system/*` subtype like its two neighbours here, which
+is why the daemon's own `system`-subtype count excludes it). `RateLimitedPayload{conversation_id,
+status, limit_type, resets_at, truncated_fields}` is `parseBackgroundTaskStartedPayload`'s shape minus
+two strings plus one number: three `requireString` calls, one `requireNumber` for `resets_at`, and
+`truncated_fields` through the existing `requireStringArrayOrNull` — no new helper.
+
+**`status` and `limit_type` are OPEN STRINGS, never closed enums, and here that is a SECURITY decision
+as well as the usual no-drift one.** The daemon states the value set beyond the one measured-benign
+status is UNMEASURED — no capture of a limit actually in force exists on any claude version — so a
+closed set would drop the first real limit that fires, and narrowing either set is the first step of
+branching on a value the daemon says a client MUST NOT branch security-relevant behaviour on. The empty
+string decodes for both: the producer's cut-to-nothing case, reported by `truncated_fields` rather than
+an absence. **`resets_at` is claude's number, unvalidated in both directions** — `0` means claude did
+not report a reset instant, never the epoch, and negative/past/absurd magnitudes all decode; rejecting
+one would be a validation rule with no captured negative case behind it. The security review named the
+sharper hazard for the eventual carry slice: a "limit lifts" timer computed as `resets_at * 1000 -
+Date.now()` fires *immediately* both when negative and when past `setTimeout`'s ~24.8-day 32-bit clamp
+— `attachment_chunk`'s `total_chunks` "never allocate from a claim" family, one field over. **A FRAME IS
+NOT PROOF THAT ANYTHING WAS BLOCKED** — the daemon's own named realistic client bug: the one measured
+non-benign status, `allowed_warning` (2026-08-22, claude 2.1.239, `limit_type: seven_day`), fired while
+every turn kept running normally, so a carry slice rendering "you are rate limited" would mislead the
+operator.
+
+**Takes no `FrameTimestamp`**, the `thinking_progress`/`model_announced` precedent — the mix-in marks
+exactly the arms `decodeHistoryEvent` draws, and AC5 keeps this kind armless there (a regression pin:
+even a fully well-formed stored `rate_limited` still skips). Content-free-logged as
+`inbound-decoded(code: 'rate_limited')` before the `default` branch; neither `conversation_id`, `status`
+nor `limit_type` ever reaches a log line — `status`/`limit_type` are claude-authored text that crossed
+the subprocess trust boundary, unsanitized, and the pair together discloses the account's quota
+posture. Ships dormant, the same two-step already taken for `question_shown` (#884/#885) and
+`modal_shown` (#870/#871): `daemonConnection.ts`'s inbound switch has no catch-all, so the report stops
+here until the carry slice claims it. This ticket also corrected three comments — the
+`UnrecognizedMessagePayload` `WHAT THIS CLIENT DECODES` docblock, `decodeHistoryEvent`'s docblock, and
+the AC3 skip-table comment in `inboundMessage.test.ts` — that had named `rate_limited` as the one type
+with no parser at all, a claim left behind when [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)
+moved `thinking_progress` off that same list. Full account in [Extension
+history](inbound-message-decode-history.md).
 
 **[#965](https://github.com/pyrycode/pyrycode-desktop/issues/965) widens `daemon-error` by a field, not a
 kind** — the same #642/#773 shape applied to the file's one deliberately content-free kind. Since

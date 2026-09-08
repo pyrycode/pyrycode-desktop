@@ -122,6 +122,18 @@ export type EnvelopeType =
   // ThoughtChunk, which carries the CONTENT of claude's reasoning and is never forwarded (ADR 025).
   // SSOT pyrycode#1386 / internal/protocol/codes.go TypeThinkingProgress; binary → phone only.
   | 'thinking_progress'
+  // The usage-limit window report (#1318). Grouped alone for the daemon's own reason, and it is the
+  // one category `model_announced` above excludes itself from by name: not a turn sub-state with two
+  // edges, not turn-independent work, not a periodic reading, not an identity report — a CONDITION
+  // REPORT ABOUT A WINDOW. Placed beside the two frames above because all three are daemon
+  // translations of a claude line, but it is the one that is NOT a `system/*` subtype: claude reports
+  // it as the top-level `rate_limit_event` line type, which is why the daemon's `system`-subtype count
+  // deliberately excludes it.
+  //
+  // A FRAME IS NOT PROOF THAT ANYTHING WAS BLOCKED — see RateLimitedPayload, where the daemon names
+  // that as the realistic client bug. SSOT pyrycode#1405 (shape) / #1410 (producer) /
+  // internal/protocol/codes.go TypeRateLimited; binary → phone only.
+  | 'rate_limited'
   | 'dequeue_message'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
@@ -855,6 +867,88 @@ export interface ThinkingProgressPayload {
 }
 
 /**
+ * Inbound `rate_limited` event (daemon → client). Mirrors the daemon's RateLimitedPayload
+ * field-for-field (SSOT pyrycode#1405 declared / #1410 emitted, internal/protocol/interactive.go,
+ * docs/protocol-mobile.md § rate_limited), wire order `conversation_id, status, limit_type, resets_at,
+ * truncated_fields` — all five ALWAYS PRESENT (no `omitempty`). Fanned out ONLY to
+ * `interactive`-capable clients: claude's usage-limit window is in a state other than the one
+ * measured-benign one, and this frame says why, which limit, and when claude says it lifts.
+ *
+ * WHY THE FRAME EXISTS. A turn that stops making progress because of a usage limit otherwise says
+ * nothing about why. claude reports the window ONCE PER RUN WHATEVER ITS STATE, so a 1:1 translation
+ * would put a row on every healthy turn and make the frame worthless noise. The daemon gates it
+ * instead: the one measured-benign status is silent, and ANY OTHER NON-EMPTY STATUS EMITS. That
+ * direction is deliberate — an unrecognised status surfaces and a human looks, rather than a real limit
+ * vanishing — and it is also why this client must not narrow the set at the other end.
+ *
+ * A FRAME IS NOT PROOF THAT ANYTHING WAS BLOCKED, and the daemon names this as THE realistic client
+ * bug. The one measured non-benign value is `allowed_warning`, seen 2026-08-22 on claude 2.1.239
+ * against `limit_type: seven_day`: the account was inside its weekly warning band and EVERY TURN STILL
+ * RAN NORMALLY. So the frame's plain reading is "claude said something about the usage window worth
+ * repeating", never "you are rate limited" — a client rendering the latter tells the user they are
+ * blocked while their turns keep working. Warning ahead of the wall is this frame's most useful moment,
+ * the only one where the user can still act, so the answer is wording that does not overclaim rather
+ * than suppression.
+ *
+ * `status` AND `limit_type` ARE OPEN STRINGS, NEVER CLOSED ENUMS, and the daemon gives the reason: the
+ * value set beyond the benign one is UNMEASURED — no capture of a limit actually in force exists on any
+ * claude version. A client that closes either set drops the first real limit that fires. `status` is
+ * claude's own status for the window, carried verbatim precisely so the set gets measured the first
+ * time one does; `limit_type` is which limit the report concerns (`five_hour` and `seven_day` are the
+ * observed values, and two observations do not earn an enum). Neither wire name tracks claude's key —
+ * claude's are `rateLimitType` / `resetsAt` under `rate_limit_info` — so a claude rename lands in one
+ * upstream place instead of breaking every client.
+ *
+ * `resets_at` IS CLAUDE'S NUMBER, NOT THE DAEMON'S CLOCK, and it is unvalidated in BOTH directions.
+ * Unix seconds, with `0` meaning claude did not report one — NOT the epoch. Negative, zero and
+ * year-40000 values are all representable and none is rejected, because rejecting one would be a
+ * validation rule with no captured negative case behind it. Formatting it as a date without a range
+ * check is the second named realistic bug. It is also never a SCHEDULING input: a delay computed from
+ * it can be negative (fires immediately, and spins if the handler re-arms) or past setTimeout's ~24.8-
+ * day clamp, which ALSO fires immediately rather than never. Never schedule, allocate or iterate from
+ * this number — AttachmentChunkPayload's "never allocate from a claim" rule, one field over.
+ *
+ * `truncated_fields` IS LOAD-BEARING, NOT DECORATION: a client ignoring it presents claude's cut text
+ * as complete. It names the fields the producer cut to fit its cap, under THESE wire names (`status`,
+ * `limit_type`, in that order), and is a literal `null` when nothing was cut, NEVER `[]` — which is why
+ * the Go type has no MarshalJSON. That is `BackgroundTask.truncated_fields`'s nullability and
+ * emphatically NOT `BackgroundTaskRosterPayload.tasks`'s fail-closed shape: nil→[] there means the
+ * OPPOSITE (an empty roster is a positive statement, whereas nothing-was-cut is an absence). Both
+ * strings were bounded by the daemon AT CONSTRUCTION, so an oversized value never reaches this wire and
+ * a client re-deciding the maximum would be a second place the limit is decided.
+ *
+ * CONVERSATION-SCOPED, NOT TURN-SCOPED, like ThinkingProgressPayload above: there is no `turn_id`, and
+ * receiving one neither opens nor closes a turn. A usage-limit window is orthogonal to whichever turn
+ * happened to observe it, so attributing it to one would be a claim the daemon cannot honestly make.
+ * The bridge supplies `conversation_id` because the internal event carries none. claude's `session_id`
+ * and `uuid` are deliberately absent — they are claude's session identity and per-line message id,
+ * neither of which is the daemon's conversation identity.
+ *
+ * SECURITY: `status` and `limit_type` are claude-authored strings that crossed the SUBPROCESS TRUST
+ * BOUNDARY. The daemon bounds them but does NOT sanitize them, so they stay untrusted,
+ * model-influenced text all the way here: safe to render as INERT TEXT, never fed to an HTML sink
+ * (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL, and never used as a Map key, a
+ * lookup path or a filename — `limit_type` is exactly the shape of short token that invites an
+ * icon-lookup. THE FRAME IS A REPORT, NEVER A CONTROL INPUT: nothing in the daemon keys a behaviour on
+ * any field (no backoff, throttle, retry, turn suspension or reconnect delay) and a client MUST NOT
+ * branch security-relevant behaviour on `status`. That is what keeps a wrong — or hostile — value
+ * costing at most one misleading row. `conversation_id` is a daemon-asserted routing key, never an
+ * authorization signal and never resolved against a filesystem. Nothing decoded reaches a log: the pair
+ * discloses the account's quota posture, which is a fact about the operator rather than about this
+ * frame. See #1318 (this decode); nothing consumes the decoded arm yet.
+ */
+export interface RateLimitedPayload {
+  conversation_id: string
+  status: string
+  limit_type: string
+  // Go `int64`; a plain `number` like every other integer on this wire — JSON.parse produces no
+  // bigint, and a value past Number.MAX_SAFE_INTEGER is covered by the no-range-check rule above
+  // rather than by a type change.
+  resets_at: number
+  truncated_fields: string[] | null
+}
+
+/**
  * Inbound `background_task_started` event (daemon → client). Mirrors the daemon's
  * BackgroundTaskStartedPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:177,
  * docs/protocol-mobile.md § background_task_started), wire order `conversation_id, task_id, tool_call_id,
@@ -1098,10 +1192,12 @@ export interface BackgroundTaskRosterPayload {
  *     the third consumes unconditionally. `tool_progress` is SUPPRESSION, not mapping: consumed, and
  *     mapped to no frame at all.
  *
- * WHAT THIS CLIENT DECODES of the six frames above: five. `background_task_started` / `_updated` /
- * `_roster`, `model_announced` and — since #1312 — `thinking_progress` have arms in
- * `parseInboundMessage`. `rate_limited` alone has none, so it reaches that `default`, which logs
- * `inbound-unmodeled` content-free and returns null; a separate ticket adds its arm.
+ * WHAT THIS CLIENT DECODES of the six frames above: all six. `background_task_started` / `_updated` /
+ * `_roster` and `model_announced` have arms in `parseInboundMessage`, joined by `thinking_progress` at
+ * #1312 and `rate_limited` at #1318. None of the six reaches that `default` any more, so none is logged
+ * `inbound-unmodeled`; each writes one content-free `inbound-decoded` record under a client-owned type
+ * literal instead. Decoded is not the same as CONSUMED — the last two arms ship dormant until their
+ * carry slices claim them.
  *
  * NOT a claude sub-state, the contrast with its `stall` / `api_retry` / `compacting` neighbours: those
  * report what claude is doing, this reports a gap in the daemon's own mapping. It is conversation-level

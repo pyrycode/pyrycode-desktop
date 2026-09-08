@@ -40,6 +40,7 @@ import type {
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
   ThinkingProgressPayload,
+  RateLimitedPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -435,6 +436,40 @@ interface FrameTimestamp {
  * reading stops here until the carry slice claims it. A consumer that later renders it must not allocate
  * or iterate proportionally to either number, which are unbounded daemon-supplied values.
  *
+ * The `rate-limited` kind (#1318) carries the decoded RateLimitedPayload — the daemon's report that
+ * claude's usage-limit window is in a state other than the one measured-benign one. Conversation-scoped
+ * like the kind above: no `turn_id`, and it opens and closes no turn, because a usage-limit window is
+ * orthogonal to whichever turn observed it. The fail-closed defence is THREE required strings, one
+ * required NUMBER whose `0` is a value ("claude did not report a reset instant", never the epoch), and
+ * one REQUIRED-PRESENT NULLABLE ARRAY (`truncated_fields`: a literal `null` is the value "nothing was
+ * cut", a missing key is an absence and fails closed).
+ *
+ * NEITHER `status` NOR `limit_type` IS NARROWED TO A CLOSED SET, and here that is a SECURITY decision
+ * as much as the usual no-drift one. The house rule applies — a client-invented set fail-closes a valid
+ * future frame — but the sharper reason is the daemon's: the value set beyond the one measured-benign
+ * status is UNMEASURED (no capture of a limit actually in force exists), so a closed set drops the first
+ * real limit that fires, and narrowing is the first step of branching on a value the daemon says a
+ * client MUST NOT branch security-relevant behaviour on. The empty string decodes for each: that is the
+ * producer's cut-to-nothing case, reported by `truncated_fields`, not an absence.
+ *
+ * `resets_at` IS DELIBERATELY NOT RANGE-CHECKED either. It is claude's number, unvalidated upstream in
+ * both directions, so negative, zero and absurd magnitudes are all ordinary traffic here; rejecting one
+ * would be a validation rule with no captured negative case behind it. A consumer must not assume it
+ * lies in the future — and must never SCHEDULE from it, since a delay derived from it fires immediately
+ * both when negative and when past setTimeout's ~24.8-day clamp. See RateLimitedPayload.
+ *
+ * IT TAKES NO FrameTimestamp, for the kind above's reason: that mix-in marks exactly the arms
+ * `decodeHistoryEvent` draws, this type gains no arm there, and stamping it would advertise a join
+ * nothing can perform.
+ *
+ * NOTHING DECODED REACHES THE LOG. `status` and `limit_type` are claude-authored text that crossed the
+ * subprocess trust boundary — untrusted and unsanitized, so logging them would put model-influenced
+ * strings into a file whose readers assume it is machine-written — and the pair together discloses the
+ * account's quota posture. Untrusted DISPLAY text, decoded and never interpreted: a later consumer
+ * renders them as inert text and feeds neither to an HTML sink, an attribute, a URL, a Map key or a
+ * lookup path. Ships dormant — daemonConnection's inbound switch has no catch-all, so the report stops
+ * here until the carry slice claims it.
+ *
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
  * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
@@ -678,6 +713,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
+  | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
@@ -1432,10 +1468,10 @@ export interface DecodedHistoryPage {
  * object used as a map.
  *
  * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
- * seven this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
- * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312 —
- * `thinking_progress`, whose live-lane parser deliberately came with no arm here), the one it has no
- * parser for at all (`rate_limited`), any type a later daemon invents — and `modal_shown` /
+ * eight this client DOES decode on the live lane and never draws in a thread (`background_task_started` /
+ * `_updated` / `_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312 and
+ * #1318 — `thinking_progress` and `rate_limited`, whose live-lane parsers each deliberately came with no
+ * arm here), any type a later daemon invents — and `modal_shown` /
  * `question_shown`. THAT LAST PAIR IS THE SHARPEST CASE: no prompt may ever reach the window from history
  * as something answerable, because resolving a modal that closed hours ago is a real action taken on a
  * replayed frame. Having no arm is what guarantees it, for a future daemon that starts logging one and for
@@ -1985,6 +2021,61 @@ function parseThinkingProgressPayload(payload: unknown): ThinkingProgressPayload
   const estimated_tokens = requireNumber(payload, 'estimated_tokens')
   const estimated_tokens_delta = requireNumber(payload, 'estimated_tokens_delta')
   return { conversation_id, estimated_tokens, estimated_tokens_delta }
+}
+
+/**
+ * Narrow an opaque payload into a RateLimitedPayload (#1318). Fail-closed like
+ * parseBackgroundTaskStartedPayload, whose shape this is minus two strings plus one number: three
+ * `requireString`s, one `requireNumber` for `resets_at`, and `truncated_fields` through the same
+ * requireStringArrayOrNull — the required-present-but-nullable list whose literal `null` means "nothing
+ * was cut" and whose OMITTED key fails closed (the Go field has no `omitempty`, so the key is always on
+ * the wire). No helper is invented here.
+ *
+ * DELIBERATELY NO MEMBERSHIP CHECK on `status` or `limit_type`, and on this frame that is a SECURITY
+ * decision as well as the house no-drift one. The house rule is parseBackgroundTaskStartedPayload's — a
+ * client-invented set fail-closes a valid future frame, the drift risk CLAUDE.md / ADR 0002 rank above
+ * cosmetic robustness. The sharper reason is the daemon's: the value set beyond the one measured-benign
+ * status is UNMEASURED (no capture of a limit actually in force exists on any claude version), the
+ * producer's gate is loud in the same direction on purpose — the benign status is silent and any other
+ * non-empty status emits, so an unrecognised one surfaces and a human looks — and narrowing here is the
+ * first step of branching on a value the daemon states a client MUST NOT branch security-relevant
+ * behaviour on. Rejecting the benign status itself is the same mistake in the other direction: it would
+ * fail-close a frame from a daemon whose gate changed, for a worst case of one extra row.
+ *
+ * An EMPTY `status` or `limit_type` decodes. requireString checks `typeof value !== 'string'`, so `''`
+ * passes free — the type-not-truthiness posture — and an empty value is the producer's cut-to-nothing
+ * case, which `truncated_fields` reports rather than an absence.
+ *
+ * `resets_at` GOES THROUGH requireNumber, WHICH CHECKS THE TYPE AND NOT TRUTHINESS, and gets no range
+ * check. `0` is a legal reading meaning claude did not report a reset instant — never the epoch — and a
+ * truthiness test would read it as an absence. Negative, past and absurd magnitudes all decode, because
+ * the value is claude's and is unvalidated in both directions upstream; rejecting one would be a
+ * validation rule with no captured negative case behind it. This boundary says only that it is a number.
+ *
+ * The `truncated_fields` element names are NOT cross-validated against this frame's own field set (the
+ * parseQueuedItem no-cross-validate posture), and one bad element throws the WHOLE payload rather than
+ * yielding a partial cut list. No per-field length check either: both strings are bounded by the daemon
+ * AT CONSTRUCTION — a second cap here would be a second place the limit is decided and the two could
+ * disagree silently — and the frame-level MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the
+ * oversized case.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value). Returns a fresh five-field
+ * literal, so unknown server-added keys (a spurious `turn_id`, which this conversation-scoped frame must
+ * never have, a `utilization` that is not on the wire, or a planted `__proto__`) are tolerated
+ * (forward-compat) but NOT copied through — which also makes it prototype-pollution-safe. Its messages
+ * name the failure CATEGORY only, never interpolating a value: `status` and `limit_type` are untrusted
+ * claude-authored text and `conversation_id` is a correlating identifier.
+ */
+function parseRateLimitedPayload(payload: unknown): RateLimitedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed rate_limited payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const status = requireString(payload, 'status')
+  const limit_type = requireString(payload, 'limit_type')
+  const resets_at = requireNumber(payload, 'resets_at')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return { conversation_id, status, limit_type, resets_at, truncated_fields }
 }
 
 /**
@@ -3286,6 +3377,29 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'thinking-progress', thinkingProgress }
+    }
+    case 'rate_limited': {
+      // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a JSON-string
+      // `resets_at`, an absent status) throws first and leaves no record. NOTHING decoded is logged —
+      // not `status` or `limit_type`, which are claude-authored text that crossed the subprocess trust
+      // boundary and are unsanitized, and which together disclose the account's quota posture; and not
+      // the conversation_id beside them. Only the frame's byte length + one-way hash, reusing the
+      // existing content-free field set (no new DiagnosticEvent field, so #131's renderer pin is
+      // untouched). Strictly safer than the `default:` arm this replaces for the type, which logged a
+      // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
+      //
+      // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
+      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
+      // report stops here until the carry slice claims it.
+      const rateLimited = parseRateLimitedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'rate_limited',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'rate-limited', rateLimited }
     }
     case 'background_task_started': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string

@@ -183,3 +183,16 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   pin). Ships dormant, the two-step `question_shown` (#884/#885) and `modal_shown` (#870/#871) already
   took: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops at this boundary
   until the carry slice claims it. Full account in [Extension history](inbound-message-decode-history.md).
+- [#1318](https://github.com/pyrycode/pyrycode-desktop/issues/1318) extended it once more, additively:
+  the `rate_limited` kind, `parseRateLimitedPayload` (`parseBackgroundTaskStartedPayload`'s shape minus
+  two strings plus one number — three `requireString` calls, one `requireNumber`, the existing
+  `requireStringArrayOrNull` for `truncated_fields`, no new helper), and claude's usage-limit window
+  report, the daemon's translation of its top-level `rate_limit_event` line. `status`/`limit_type` are
+  deliberately OPEN strings (the value set beyond the one measured-benign status is unmeasured, and a
+  client MUST NOT branch security-relevant behaviour on `status`); `resets_at` is claude's number,
+  deliberately unvalidated — never a scheduling input, since a delay derived from it fires immediately
+  both when negative and when past `setTimeout`'s clamp. Takes no `FrameTimestamp`, and gains no arm in
+  `decodeHistoryEvent` (AC5, a regression pin). Ships dormant, the same two-step: `daemonConnection.ts`'s
+  inbound switch has no catch-all, so the report stops at this boundary until the carry slice claims it.
+  Also corrected three comments left behind by #1312 that had named `rate_limited` as having no parser
+  at all. Full account in [Extension history](inbound-message-decode-history.md).

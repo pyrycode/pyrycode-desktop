@@ -273,6 +273,11 @@ function encodeModelAnnounced(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 29, type: 'model_announced', ts: FIXED_TS, payload })
 }
 
+/** A `thinking_progress` envelope's plaintext bytes, wrapping an arbitrary payload (#1312). */
+function encodeThinkingProgress(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 30, type: 'thinking_progress', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` envelope's plaintext bytes, wrapping an arbitrary payload (#564). */
 function encodeBackgroundTaskStarted(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 26, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -355,6 +360,16 @@ const MODEL_ANNOUNCED = {
   conversation_id: 'c1',
   model: 'claude-haiku-4-5-20251001',
   truncated: true
+}
+
+/** A well-formed thinking_progress payload — one reading from the daemon's committed capture (#1312).
+ *  The two numbers are DELIBERATELY unrelated to each other: the reading is cumulative within one
+ *  inference request while the delta is claude's per-line increment, so a fixture whose delta divided
+ *  its total would invite the arithmetic the wire type forbids. */
+const THINKING_PROGRESS = {
+  conversation_id: 'c1',
+  estimated_tokens: 184,
+  estimated_tokens_delta: 67
 }
 
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
@@ -2777,6 +2792,117 @@ describe('parseInboundMessage — model_announced fail-closed (#587)', () => {
     expect(() => parseInboundMessage(encodeModelAnnounced('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeModelAnnounced(['a']))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeModelAnnounced(null))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — thinking_progress recognition (#1312, additive)', () => {
+  it('narrows a full thinking_progress into { kind: thinking-progress } carrying all three fields', () => {
+    expect(parseInboundMessage(encodeThinkingProgress(THINKING_PROGRESS))).toEqual({
+      kind: 'thinking-progress',
+      thinkingProgress: THINKING_PROGRESS
+    })
+  })
+
+  it('no longer reaches the unmodeled default — the frame is recognised, not dropped (AC2)', () => {
+    // The behaviour this ticket exists to change, asserted as the transition rather than as the
+    // end state: before the arm the type fell through and the decode returned null.
+    expect(parseInboundMessage(encodeThinkingProgress(THINKING_PROGRESS))).not.toBeNull()
+  })
+
+  it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
+    // #1225's FrameTimestamp marks exactly the arms decodeHistoryEvent draws. AC3 keeps this type
+    // armless there, so a stamp here would advertise a join nothing can perform.
+    expect(parseInboundMessage(encodeThinkingProgress(THINKING_PROGRESS))).not.toHaveProperty('ts')
+  })
+
+  it('decodes an all-zero reading — the daemon zero value, neither an absence nor a failure', () => {
+    // Neither Go field carries `omitempty`, so the zero value is real traffic on the wire. Any
+    // truthiness test in the narrower fails this.
+    const zero = { conversation_id: 'c1', estimated_tokens: 0, estimated_tokens_delta: 0 }
+    expect(parseInboundMessage(encodeThinkingProgress(zero))).toEqual({
+      kind: 'thinking-progress',
+      thinkingProgress: zero
+    })
+  })
+
+  it('does NOT range-check either number — the decoder polices type, never magnitude', () => {
+    // `estimated_tokens` restarts near zero at every inference-request boundary (four times inside
+    // the capture's single turn), so a monotonicity or non-negativity rule would fail-close ordinary
+    // traffic. There is no house precedent for range-validating a wire integer, and a
+    // client-invented bound silently drops valid future frames.
+    const odd = { conversation_id: 'c1', estimated_tokens: 9_007_199_254_740_991, estimated_tokens_delta: -12 }
+    expect(parseInboundMessage(encodeThinkingProgress(odd))).toEqual({
+      kind: 'thinking-progress',
+      thinkingProgress: odd
+    })
+  })
+
+  it('drops unknown server keys, keeping exactly the three known fields (forward-compat)', () => {
+    // A fresh three-key literal rather than a spread — which is also what makes the narrower
+    // prototype-pollution-safe against a planted `__proto__`.
+    const withExtras = { ...THINKING_PROGRESS, turn_id: 'turn-1', truncated_fields: null }
+    const decoded = parseInboundMessage(encodeThinkingProgress(withExtras))
+    expect(decoded).toEqual({ kind: 'thinking-progress', thinkingProgress: THINKING_PROGRESS })
+    expect(
+      decoded?.kind === 'thinking-progress' && Object.keys(decoded.thinkingProgress).sort()
+    ).toEqual(['conversation_id', 'estimated_tokens', 'estimated_tokens_delta'])
+  })
+})
+
+describe('parseInboundMessage — thinking_progress fail-closed (#1312)', () => {
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      { estimated_tokens: 184, estimated_tokens_delta: 67 }, // absent
+      { ...THINKING_PROGRESS, conversation_id: 42 },
+      { ...THINKING_PROGRESS, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeThinkingProgress(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when estimated_tokens is absent or a non-number (never a JSON-string number)', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', estimated_tokens_delta: 67 }, // absent
+      { ...THINKING_PROGRESS, estimated_tokens: '184' },
+      { ...THINKING_PROGRESS, estimated_tokens: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeThinkingProgress(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when estimated_tokens_delta is absent or a non-number', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', estimated_tokens: 184 }, // absent
+      { ...THINKING_PROGRESS, estimated_tokens_delta: '67' },
+      { ...THINKING_PROGRESS, estimated_tokens_delta: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeThinkingProgress(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a thinking_progress payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeThinkingProgress('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeThinkingProgress(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeThinkingProgress(null))).toThrow(WireDecodeError)
+  })
+
+  it('names the failure CATEGORY only — no conversation id and no reading in the message', () => {
+    // The two numbers are a side-channel on how much claude thought, and the id is
+    // conversation-correlating; neither may be interpolated into an error a caller can surface.
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeThinkingProgress({ conversation_id: SECRET_CONV, estimated_tokens: 4242, estimated_tokens_delta: '67' })
+      )
+      expect.unreachable('a mistyped delta must throw')
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain('4242')
+    }
   })
 })
 
@@ -6189,6 +6315,53 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a thinking_progress content-free, never the conversation_id or either reading (#1312)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeThinkingProgress({
+      conversation_id: SECRET_CONV,
+      estimated_tokens: 4242,
+      estimated_tokens_delta: 6767
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // AC2: the client-owned type LITERAL, never the wire-supplied envelope.type the `default:` arm
+    // this replaces for the type used to log.
+    expect(record.code).toBe('thinking_progress')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new
+    // DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    // The two numbers are a side-channel on how much claude thought — as unwelcome in a log an
+    // operator may send off-box as the correlating id beside them.
+    expect(lines[0]).not.toContain('4242')
+    expect(lines[0]).not.toContain('6767')
+  })
+
+  it('writes NO inbound-unmodeled record for a thinking_progress any more (#1312, AC2)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeThinkingProgress(THINKING_PROGRESS), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed thinking_progress throw path (#1312)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeThinkingProgress({ ...THINKING_PROGRESS, estimated_tokens: '184' }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a model_announced content-free, never the conversation_id, the model or the cut flag (#587)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -8147,9 +8320,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first six this
-  // client DOES decode on the live lane and never draws in the thread; `thinking_progress` and
-  // `rate_limited` it has no parser for at all; the last is a type it has never seen.
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first seven
+  // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
+  // joined them at #1312, which gave it a live-lane parser and deliberately no arm here;
+  // `rate_limited` it still has no parser for at all; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -8162,6 +8336,22 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'a_frame_type_from_a_later_daemon'
   ])('skips a stored %s — undrawn, and not an error', (type) => {
     expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored thinking_progress — armless dispatch, not a payload failure (#1312)', () => {
+    // The discriminating version of the row above, and the one that stays honest now that the type
+    // HAS a live-lane parser. That row's payload would fail `parseThinkingProgressPayload` anyway,
+    // so on its own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped
+    // because the payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
+    expect(
+      decodedEntries([
+        historyEntry('thinking_progress', {
+          conversation_id: 'c1',
+          estimated_tokens: 184,
+          estimated_tokens_delta: 67
+        })
+      ])
+    ).toEqual([])
   })
 
   it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {

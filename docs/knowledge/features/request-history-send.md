@@ -300,10 +300,10 @@ same reason `HistoryRequestFailure` duplicates `HistoryRejectReason`).
   reaches the window from history, whether a future daemon starts logging one or a hostile one plants
   one in a page. A replayed prompt answered "now" would be a resolution for a modal that closed hours
   ago.
-- **The other `default`-covered types are all ordinary, not errors**: six the live lane decodes but
+- **The other `default`-covered types are all ordinary, not errors**: seven the live lane decodes but
   never draws in a thread (`background_task_started`/`_updated`/`_roster`, `model_announced`,
-  `model_list`, `slash_command_list`), two with no parser at all (`thinking_progress`, `rate_limited`),
-  and any type a later daemon invents.
+  `model_list`, `slash_command_list`, and — since [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312) —
+  `thinking_progress`), one with no parser at all (`rate_limited`), and any type a later daemon invents.
 - **No `conversation_id` crosses on any arm — the daemon-asserted value is dropped, the page's
   correlation-resolved `conversationId` stays the only routing key.** Every one of the eleven parsers
   requires `conversation_id` (it is the live-lane routing key, and that fail-closed read is what makes
@@ -575,8 +575,9 @@ All vitest; no Playwright spec, since nothing in the window reaches this path in
   reddens. Covers both enum-bearing arms and both optional-field arms (`toolUse.input`,
   `toolResult.resultDetail`, pinning `undefined` rather than `{}`/`''`).
 - No `conversation_id` crosses on any arm; `session_transition`'s `previous_session_id` is dropped too.
-- AC3 skip matrix: the six drawn-nowhere-but-decoded-live types, the two with no parser
-  (`thinking_progress`, `rate_limited`), an unseen type, and `modal_shown`/`question_shown` pinned
+- AC3 skip matrix: the seven drawn-nowhere-but-decoded-live types (`thinking_progress` since
+  [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)), the one with no parser
+  (`rate_limited`), an unseen type, and `modal_shown`/`question_shown` pinned
   outright with payloads that *would* parse on the live lane — every one yields an empty page from a
   one-entry page, `cursor`/`atStart` intact.
 - AC4: a payload missing `conversation_id`, an out-of-set enum field, an empty-object payload — each

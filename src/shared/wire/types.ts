@@ -108,6 +108,20 @@ export type EnvelopeType =
   // IDENTITY report — what claude says it IS, for the turn it says it about. SSOT pyrycode#1616 /
   // internal/protocol/codes.go TypeModelAnnounced; binary → phone only.
   | 'model_announced'
+  // The thinking-progress reading (#1312) — claude's only mid-turn proof of life on the stream-json
+  // surface. Placed beside `model_announced` because the two are siblings in provenance: both are the
+  // daemon's translation of a claude `system/*` subtype, and the daemon groups each ALONE rather than
+  // with the status cluster or the background-task three. This one is neither a show/clear sub-state
+  // with two edges nor turn-independent work — it is a periodic READING of work in progress, with no
+  // edges at all.
+  //
+  // THE NAME IS THE DAEMON'S, NOT CLAUDE'S, and the discriminating word is deliberate: the wire follows
+  // internal/turnevent's variant (`progress`, what the daemon reports), never claude's subtype
+  // (`thinking_tokens`), so a claude rename lands in one upstream place instead of breaking every
+  // client at once. Do not key a client on claude's vocabulary. It also disambiguates against
+  // ThoughtChunk, which carries the CONTENT of claude's reasoning and is never forwarded (ADR 025).
+  // SSOT pyrycode#1386 / internal/protocol/codes.go TypeThinkingProgress; binary → phone only.
+  | 'thinking_progress'
   | 'dequeue_message'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
@@ -780,6 +794,67 @@ export interface ModelAnnouncedPayload {
 }
 
 /**
+ * Inbound `thinking_progress` event (daemon → client). Mirrors the daemon's ThinkingProgressPayload
+ * field-for-field (SSOT pyrycode#1386, internal/protocol/interactive.go, docs/protocol-mobile.md
+ * § thinking_progress), wire order `conversation_id, estimated_tokens, estimated_tokens_delta` — all
+ * three ALWAYS PRESENT (no `omitempty`, so the daemon's zero value is legal traffic). Fanned out ONLY
+ * to `interactive`-capable clients: it is the daemon's translation of claude's `system/thinking_tokens`
+ * line, and claude's ONLY mid-turn proof of life on the stream-json surface — during a long assistant
+ * turn nothing else crosses the wire, so a client showing "thinking" for three minutes cannot otherwise
+ * separate a slow answer from a wedged session.
+ *
+ * A READING, NOT A STATE TRANSITION, which is the contrast with every neighbour above. `api_retry` and
+ * `compacting` are sub-states with a rising and a falling edge; this frame has no edges at all, and the
+ * turn's thinking state is already reported by `turn_state: thinking`. Conversation-scoped rather than
+ * turn-scoped, so there is NO `turn_id`, and receiving one neither opens nor closes a turn — the daemon
+ * emits these during an inference request that may not have produced any assistant content yet, so a
+ * turn opened on one would have no guaranteed end.
+ *
+ * IT CARRIES NO REASONING TEXT (ADR 025), and that makes it the one frame in this family with no
+ * untrusted display string at all: the content of claude's thinking is never forwarded on this wire, so
+ * a client that tries to render this as text has nothing to render. For the same reason there is no
+ * `truncated` / `truncated_fields` here, an absence that is a DECISION rather than an omission — this
+ * payload bounds no claude-authored text, so nothing is ever cut and a permanently-null cut list would
+ * claim a bound that does not exist. There is likewise no producer byte cap to mirror.
+ *
+ * THREE THINGS A CONSUMER GETS WRONG BY DEFAULT, each measured upstream on one committed capture of a
+ * single turn rather than inferred:
+ *
+ *   - THE FRAMES ARE RATE-BOUNDED AND DO NOT ENUMERATE CLAUDE'S LINES. The daemon emits at most one
+ *     frame per 64 tokens of accumulated delta: 33 lines became 8 frames. Never treat a frame as
+ *     "claude produced one line", and never count frames to count anything of claude's.
+ *   - `estimated_tokens` IS NOT MONOTONIC. It restarts near zero at every inference-request boundary,
+ *     which happens repeatedly inside one turn — that capture's single turn contains four restarts
+ *     (5→184, then 4→167, then 3→126, then 1→197). Two readings must therefore NEVER be subtracted
+ *     expecting a non-negative result. It is a progress reading, not a turn total and not a counter to
+ *     difference.
+ *   - THE DELTAS RECEIVED DO NOT SUM TO THE TURN'S TOTAL. The rate bound drops most of claude's lines
+ *     and their increments go with them: 674 tokens of delta arrived as 243 across 8 frames. NO FIELD
+ *     REPORTS THE RESIDUE, deliberately — this is a rate reading, not an accumulator input — so summing
+ *     the deltas undercounts by an amount the wire does not disclose.
+ *
+ * ABSENCE PROVES NOTHING, for two distinct reasons that BOTH apply, and this is a correctness rule
+ * rather than a UX note. Only the stream-json parser produces the event, so a client attached to a
+ * PTY-driven session will NEVER receive one however long claude thinks; and even on the emitting
+ * surface a gap may only mean the 64-token bound has not been crossed yet. A client MUST NOT infer a
+ * stall from either — this frame is proof of life WHEN PRESENT and says nothing when absent. The
+ * daemon's separate stall signal is `stall`, which has its own producer and is untouched by this frame
+ * in both directions.
+ *
+ * SECURITY: `conversation_id` is a daemon-asserted routing key, never an authorization signal and never
+ * resolved against a filesystem. The two integers are claude's own readings, carried verbatim; they are
+ * never used to size an allocation, index a buffer, or bound a loop, and they never reach a log — a
+ * reading of how much claude thought is a side-channel on private work, as unwelcome in a log an
+ * operator may send off-box as the correlating id beside it. See #1312 (this decode); nothing consumes
+ * the decoded arm yet.
+ */
+export interface ThinkingProgressPayload {
+  conversation_id: string
+  estimated_tokens: number
+  estimated_tokens_delta: number
+}
+
+/**
  * Inbound `background_task_started` event (daemon → client). Mirrors the daemon's
  * BackgroundTaskStartedPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:177,
  * docs/protocol-mobile.md § background_task_started), wire order `conversation_id, task_id, tool_call_id,
@@ -1023,10 +1098,10 @@ export interface BackgroundTaskRosterPayload {
  *     the third consumes unconditionally. `tool_progress` is SUPPRESSION, not mapping: consumed, and
  *     mapped to no frame at all.
  *
- * WHAT THIS CLIENT DECODES of the six frames above: four. `background_task_started` / `_updated` /
- * `_roster` and `model_announced` have arms in `parseInboundMessage`. `thinking_progress` and
- * `rate_limited` have none, so they reach its `default`, which logs `inbound-unmodeled` content-free and
- * returns null; separate tickets add those arms.
+ * WHAT THIS CLIENT DECODES of the six frames above: five. `background_task_started` / `_updated` /
+ * `_roster`, `model_announced` and — since #1312 — `thinking_progress` have arms in
+ * `parseInboundMessage`. `rate_limited` alone has none, so it reaches that `default`, which logs
+ * `inbound-unmodeled` content-free and returns null; a separate ticket adds its arm.
  *
  * NOT a claude sub-state, the contrast with its `stall` / `api_retry` / `compacting` neighbours: those
  * report what claude is doing, this reports a gap in the daemon's own mapping. It is conversation-level

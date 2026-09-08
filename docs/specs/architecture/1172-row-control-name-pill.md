@@ -208,3 +208,28 @@ Real-daemon and real-claude tiers are untouched.
 - Whether the row-band placement reads as intrusive in daily use once the title is partly covered. The
   ticket names `transition-delay` as the knob if it flickers; neither is added now, on the same
   evidence-based rule — no delay is drawn and none has been observed to be needed.
+
+## Revisions
+
+**2026-09-08 — the third geometry case is "the highest row a pointer can reach", not "the row flush with
+the scroller's top edge".** The plan's Testing strategy named a flush-with-the-top-edge row as the case an
+above-the-row placement clips. That row has no hoverable control: `.channel-list__actions` is sticky at
+the scroller's top-right with `z-index: 1`, which is exactly where a row's trailing control sits, so the
+cluster covers it. Measured rather than reasoned — two drafts scrolled a row onto the top edge and hovered
+its control, and both came back with the row 700px down the viewport, because `hover()` scrolls its target
+into view and an unhittable control makes Playwright *relocate* the row rather than fail on it. The block
+now parks the row immediately under the cluster's own bottom edge (read at runtime, not assumed) and
+re-reads that position after the hover, so a relocation fails the block instead of quietly weakening it.
+Nothing about the placement or the criterion changed; the design is unaffected.
+
+**2026-09-08 — which assertion detects a wrong placement, corrected against measurement.** The plan
+implied the containment reads were the placement detector. They are not, and the spec header now says so:
+re-pointing the rule at the composer pill's placement (`bottom: calc(100% + var(--space-2))`) and
+rebuilding reddens the first row's **band** assertion by exactly 32px and leaves every containment
+assertion green — the sticky cluster above guarantees 32px of headroom on any row a pointer can reach. So
+containment is the criterion the ticket owes, and the band assertion is what makes it true on the rows no
+test visits. Both are kept and neither stands in for the other.
+
+**2026-09-08 — Open question resolved.** No `transition-delay` and no delay of any kind is added; none is
+drawn, and none has been observed to be needed. The knob stays available to whoever observes a flicker in
+daily use.

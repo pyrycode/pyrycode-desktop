@@ -108,3 +108,22 @@ out of scope and still unfiled.
   reads run. Expected — the seed is opened at launch and so read, and a FAB-minted row has no messages —
   but the dot-class count precondition above turns a wrong expectation into an honest failure instead of
   a vacuous pass.
+
+## Revisions
+
+**2026-09-08, both open questions resolved; the design is unchanged by either.**
+
+- Chromium serialises the computed `box-shadow` as `rgb(157, 203, 252) 0px 0px 0px 1px inset`, `inset`
+  last, which is the shape both specs' constants already assumed. Confirmed by the RED run rather than by
+  reading a spec: the pre-change input-required dot came back as the same string in `rgb(255, 202, 69)`,
+  which is also what proved the assertion reaches the right property.
+- Both rows in the geometry spec's drive do resolve to `idle` — the `toHaveCount(2)` precondition passes,
+  so the three reads that follow it are non-vacuous rather than merely expected to be.
+
+One thing the plan did not anticipate and the implementation added: a **mutation check on the `:hover`
+arm**. The two selectors in the conditional rule are independent, and the at-rest read alone cannot tell
+a working `:hover` arm from a missing one — it passes on the `:has()` arm's fill either way. Deleting the
+`:hover` arm and rebuilding reddens the geometry spec's block 11b and nothing else, so the hover half is
+a real detector. It is also why the two reads there are ordered at-rest-then-hovered rather than the
+reverse: the pair is a before/after on the same dot, so the second read can only pass by observing the
+pointer's own effect.

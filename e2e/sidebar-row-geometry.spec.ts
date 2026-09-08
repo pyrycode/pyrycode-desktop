@@ -72,6 +72,14 @@ const GLYPH_RGB = 'rgb(157, 203, 252)'
 const HIDDEN_OPACITY = '0'
 const SHOWN_OPACITY = '1'
 
+// #1174's conditional fill — an IDLE status dot fills `--color-primary` #9dcbfc while its row is hovered
+// or open, and is the bare ring otherwise. Deliberately its own constant rather than a second use of
+// `GLYPH_RGB` above: the two are the same token by the drawing's choice, not by any shared rule, and
+// folding them together would name the dot's fill after the trailing control. The ring is the same token
+// again and is on the dot's base rule in every state, so it is one string here rather than four.
+const DOT_FILL_RGB = 'rgb(157, 203, 252)'
+const DOT_RING = 'rgb(157, 203, 252) 0px 0px 0px 1px inset'
+
 // Sub-pixel tolerance for a device-pixel-ratio-scaled layout, copied from host-label-sidebar.spec.ts.
 // One physical pixel of slack: enough that a fractional box coordinate cannot flake, far too little to
 // hide the 3px dot drop #1097 ruled out, or #1171's 8px glyph inset landing anywhere but where it is
@@ -342,6 +350,33 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   await restingRow.locator('.channel-list__save-icon').hover()
   const fillsOverGlyph = await computedAll(row, 'background-color')
   expect([...fillsOverGlyph].sort()).toEqual([OPEN_FILL_RGB, HOVER_FILL_RGB].sort())
+
+  // --- 11b. #1174's AC1, its one clause that needs real rows rather than the probe elements
+  // `sidebar-status-dot-fills.spec.ts` reads the four per-status bindings on: an idle dot fills
+  // `--color-primary` only while its row is hovered or open, and is the bare ring the rest of the time.
+  // This drive is where that is reachable — it already has an open row and a resting one on screen and
+  // already hovers the resting one, so the claim costs no launch and no new seed.
+  //
+  // THE COUNT IS THE PRECONDITION, not a decoration. Nothing here runs a turn, raises a prompt or leaves
+  // a message unread, so both rows resolve to `idle`; if one silently resolved to something else it would
+  // wear that status's own unconditional fill and every read below would pass for the wrong reason. ---
+  await expect(page.locator('.conversation-status-dot--idle')).toHaveCount(2)
+
+  // Pointer parked off the rows — block 10's corner, which is the actions cluster and not a row. Exactly
+  // one dot is filled and it is the open row's. Sorted, so this is a set claim over both dots rather than
+  // an ordering one, the same posture as every other paired read in this file.
+  await page.mouse.move(0, 0)
+  const dotFillsAtRest = await computedAll(dot, 'background-color')
+  expect([...dotFillsAtRest].sort()).toEqual([NO_FILL_RGBA, DOT_FILL_RGB].sort())
+  // The ring is unconditional and survives the real cascade, filled or not — the assertion that fails if
+  // the conditional rule ever paints over the base rule's `box-shadow` instead of only its background.
+  expect(await computedAll(dot, 'box-shadow')).toEqual([DOT_RING, DOT_RING])
+
+  // And under the pointer the resting row's dot fills too, so both read the same colour. A rule hung off
+  // the wrong carrier — the button rather than the row wrapper, which is where #1171 moved the row's own
+  // fill — would leave this one transparent while every assertion above stayed green.
+  await resting.hover()
+  expect(await computedAll(dot, 'background-color')).toEqual([DOT_FILL_RGB, DOT_FILL_RGB])
 
   // --- 12. #1171's AC4, first clause: a click on the DOT still opens the conversation. The dot is a
   // sibling of the open button and sits over it, so this holds only because it is out of flow and

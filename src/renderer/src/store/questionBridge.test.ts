@@ -394,12 +394,17 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
           }
         ],
         droppedModels: 2
-      }
+      },
+      // the thinking-token reading is PERMANENTLY no-op here (#1313): a reading of how much claude
+      // thought publishes something unsolicited with nothing outstanding and no answer to give — the
+      // opposite direction from claude asking the operator to choose. Its consumer is the #1314
+      // render slice.
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 44 union arms minus the 3 owned above.
-    expect(others).toHaveLength(41)
+    // 45 union arms minus the 3 owned above.
+    expect(others).toHaveLength(42)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

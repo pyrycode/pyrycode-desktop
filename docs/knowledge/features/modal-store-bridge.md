@@ -256,3 +256,8 @@ notes](../codebase/249.md) for the render design.
   subscriber on the same channel), diverging in one place: the question family rebuilds each row
   (`multi_select` → `multiSelect`) rather than only filtering, since its wire fields aren't already
   camelCase field-for-field the way this bridge's are.
+- [Daemon event channel — the sealed union: per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md)
+  — the `thinkingProgress` arm ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313),
+  decoded at [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) that folds into this
+  bridge's no-op group. **Permanently**, not dormant: nothing daemon-side is waiting on an answer and
+  there is no `modal_id` to resolve a mid-turn reading against, so this store will never claim it.

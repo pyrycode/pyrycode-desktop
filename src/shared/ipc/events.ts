@@ -1410,6 +1410,54 @@ type BaseDaemonEvent =
       conversationId: string
       reason: SystemPromptWriteFailure
     }
+  // The thinking-token arm (#1313) — claude's only mid-turn proof of life on the stream-json surface,
+  // the daemon's translation of its `system/thinking_tokens` line, decoded at #1312 and carried here.
+  //
+  // A READING, NOT A STATE TRANSITION, and that is what separates it from every `apiRetry` /
+  // `compacting` neighbour above: it has no rising and no falling edge at all, so no consumer may look
+  // for one. It carries no `turn_id` and opens and closes no turn, which makes it daemon STATE by the
+  // queueState rule (#720) rather than a turn-stream item — an identity report ABOUT a turn is not an
+  // item IN one, the same test `modelAnnounced` passes above.
+  //
+  // TWO OF THE WIRE'S THREE FIELDS CROSS. `estimated_tokens_delta` does NOT: nothing consumes it (the
+  // render slice #1314 shows the total alone), and the payload's own contract says the deltas received
+  // do not sum to the turn's total, so no consumer may accumulate them into one. A field crosses when
+  // something needs it, not before — and a delta present on the arm is an invitation to sum it.
+  //
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
+  // already drew; a stored `thinking_progress` is still skipped, so there is no page half to join
+  // against and stamping it would advertise a join nothing can perform. `modelAnnounced`, not
+  // `apiRetry`, is the precedent for this arm's shape.
+  //
+  // `estimatedTokens: 0` IS A VALUE, NEVER AN ABSENCE — neither Go field carries `omitempty`, so the
+  // daemon's zero round-trips as legal traffic and nothing may consult truthiness on it. Nor may
+  // anything assume the reading only grows: it RESTARTS NEAR ZERO at every inference-request boundary,
+  // four times inside the daemon's own committed single-turn capture, so a drop is ordinary traffic
+  // and a monotonic filter would eat it.
+  //
+  // NOT DEDUPED, and this arm needs that said more loudly than its neighbours: the wire re-fires as
+  // the count climbs, so a consumer sees exactly one event per daemon frame including a verbatim
+  // repeat, and the transport holds no coalescing, timer or per-conversation memo to make it otherwise.
+  // ABSENCE PROVES NOTHING: the frames are rate-bounded and do not enumerate claude's lines, so no
+  // consumer may infer a stall, a finish, or a thinking-stopped edge from a gap between them.
+  //
+  // SECURITY: neither field is untrusted display text, so the render-as-plain-text warning that
+  // dominates `modelAnnounced` / `backgroundTaskStarted` has no subject here — and the obligations
+  // that replace it are narrower and different in kind. `estimatedTokens` is an UNBOUNDED
+  // daemon-asserted integer: a consumer must never size an allocation, index a buffer, or bound a loop
+  // proportionally to it (`attachment_chunk`'s `total_chunks` is the neighbour that earned the rule —
+  // never allocate from a claim), and it must format it defensively rather than trusting its range. It
+  // is also a SIDE-CHANNEL ON HOW MUCH CLAUDE THOUGHT about private work, which is why it reaches no
+  // log on any path: `emitDaemonEvent` is log-free by construction and the decode-side
+  // `thinking_progress` log line is pinned content-free independently. `conversationId` is a
+  // daemon-asserted ROUTING KEY, never rendered text — never markup, an attribute, a URL, a filename,
+  // a cache key or a lookup path, and never an authorization signal; if a consumer indexes by it, THE
+  // INDEX IS A `Map`. REQUIRED, never optional, for the reason every routing key on this union is: an
+  // optional one invites `?? activeConversation` fallbacks, which is the misattribution to remove.
+  // Ships dormant — all four exhaustive bridges no-op it until #1314, the
+  // compacting-was-a-no-op-until-#496 precedent.
+  | { type: 'thinkingProgress'; estimatedTokens: number; conversationId: string }
 
 /**
  * The DAEMON'S OWN timestamp for the logical event this DaemonEvent was decoded from (#1225) — the

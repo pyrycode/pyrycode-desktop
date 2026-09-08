@@ -590,7 +590,12 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         questionBatchId: 'qb_01HZY',
         outcome: 'unanswered',
         source: 'no_answer'
-      }
+      },
+      // the thinking-token reading ships DORMANT (#1313) rather than permanently no-op: its consumer
+      // is the #1314 render slice, which is the one that decides whether a reading draws here or
+      // through a subscriber of its own. A READING, not a state transition — no rising and no falling
+      // edge, no turn_id, opens and closes no turn.
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -1158,6 +1163,21 @@ describe('subscribeTimeline', () => {
 
     // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
     // state ref), AND no chat row exists.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#1313: a thinkingProgress daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({ type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' })
+
+    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
+    // state ref), AND no chat row exists. The first half is what makes "no store the window reads is
+    // written differently than before this slice" an assertion rather than a claim.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

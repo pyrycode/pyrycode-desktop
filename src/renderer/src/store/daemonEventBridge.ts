@@ -304,6 +304,18 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // there. That is a HIGHER trust tier than the sibling's workspace-authored strings. This case is
       // what keeps them out of it.
       return null
+    case 'thinkingProgress':
+      // No session-store action (#1313): the reading of how much claude thought belongs to the #1314
+      // render slice, not the session store — which holds connection status and messages and has no
+      // thinking state at all. PERMANENTLY a no-op rather than dormant, on the `questionShown`
+      // grounds rather than the `compacting` ones: the arm is a mid-turn READING with no rising and
+      // no falling edge, so there is no status scalar here for it to flip the way #317 flipped
+      // `stalled` and #493 flipped the retry status. Present only because the assertNever guard below
+      // makes a new arm a compile error — and that guard is not a formality: it stringifies the WHOLE
+      // event into an Error message, which would put both the correlating conversation id and a
+      // reading of how much claude thought about private work into a stack trace and a crash
+      // reporter. This case is what keeps them out of it.
+      return null
     default:
       return assertNever(event)
   }

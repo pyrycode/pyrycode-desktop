@@ -175,6 +175,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modelList':
     case 'historyPageReceived':
     case 'historyRequestFailed':
+    case 'thinkingProgress':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store. `conversationCreateRejected` (#1307) is the newest member and
@@ -207,6 +208,12 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // can even CARRY a stored question frame among its entries without being one, which is exactly
       // the confusion to avoid. Their consumers are #1223's timeline reduction and #1224's walk, so the
       // no-op is PERMANENT here: nothing in the question family will ever claim them.
+      //
+      // `thinkingProgress` (#1313) joins the `slashCommandList` / `modelList` reading of this group
+      // rather than the history one: it is UNSOLICITED, arrives with nothing outstanding and offers no
+      // answer to give — the opposite direction from claude asking the operator to choose. It reports
+      // that claude is thinking, which is as close as this union gets to "an ask is coming" without
+      // being one. Its consumer is the #1314 render slice, so the no-op is PERMANENT.
       return null
     case 'systemPromptWriteConfirmed':
     case 'systemPromptWriteRejected':

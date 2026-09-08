@@ -495,10 +495,10 @@ central security property, not an incidental one — patching a sidebar row stra
 `label` would put untrusted daemon text on screen bypassing the `conversations` reply's own decode path,
 so the emit and the trigger exist only to make the *existing* re-list mechanism (`conversationUpdated`'s)
 reachable from a frame `conversation_updated` cannot cover: a bare workspace rename touches no
-conversation, so it never fans out a `conversation_updated` broadcast. See [Daemon event channel — the
-sealed union: per-member history](daemon-event-channel-sealed-union-history.md) for the `workspaceUpdated`
-arm's own entry and the four compile-forced no-op bridge cases (`daemonEventBridge`, `timelineBridge`,
-`modalBridge`, `questionBridge`). Architect (self-review) PASS, two SHOULD FIX (both about the shipped-but
+conversation, so it never fans out a `conversation_updated` broadcast. See [Daemon event channel — the sealed union:
+per-member history (recent members)](daemon-event-channel-sealed-union-history-recent.md) for the
+`workspaceUpdated` arm's own entry and the four compile-forced no-op bridge cases (`daemonEventBridge`,
+`timelineBridge`, `modalBridge`, `questionBridge`). Architect (self-review) PASS, two SHOULD FIX (both about the shipped-but
 unread `path`/`label` fields carrying a trust-tier warning at their declaration for whichever consumer
 reads them first — closed by the doc comments on `WorkspaceUpdatedPayload` and the `events.ts` arm, not
 by code, since nothing here reads either field yet).

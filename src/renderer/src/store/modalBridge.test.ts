@@ -388,7 +388,11 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
           }
         ],
         droppedModels: 2
-      }
+      },
+      // the thinking-token reading is PERMANENTLY no-op here (#1313): nothing daemon-side is waiting
+      // on an answer, so a reading of how much claude thought is not a permission prompt under any
+      // reading. Its consumer is the #1314 render slice.
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
     ]
     for (const event of others) expect(translateModalEvent(event, noConversations)).toBeNull()
   })

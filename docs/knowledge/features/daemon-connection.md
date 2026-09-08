@@ -125,6 +125,23 @@ send mechanics and required-id posture, but with no reply of any kind.
   inner switch; the round-trip test is the guard. No new method on this factory — `model_announced` is
   inbound-only. Ships dormant no longer: [the announced-model store (#588, shipped)](announced-model-store.md)
   is the first consumer, still dormant pending #560's render surface.
+- [#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313) (decoded at
+  [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) — the `thinking-progress` inbound
+  kind + the new `case 'thinking-progress':` consumer emit, placed directly after `model-announced` so
+  the switch mirrors `InboundDaemonMessage`'s own arm order. A fresh **non-nullary** two-field literal
+  `{ type: 'thinkingProgress', estimatedTokens, conversationId }` copied by name from
+  `inbound.thinkingProgress` (never a spread) — `estimated_tokens_delta` is the one decoded field this
+  arm drops, since nothing consumes it and the payload's own contract forbids summing it. `modelAnnounced`,
+  not `apiRetry`, is this arm's shape precedent: no `daemonTs` either, since the decode arm takes no
+  `FrameTimestamp` (a stored `thinking_progress` is still skipped, so there is no served-page half to join
+  against). Deliberately stateless, same as `apiRetry`/`compacting`/`modelAnnounced`: no dedup, no
+  coalescing, no timer, no last-value memo — the wire re-fires as the count climbs and restarts near zero
+  at every inference-request boundary, so a monotonic filter would eat legitimate traffic. Not
+  `assertNever`-guarded in this inner switch; the round-trip test is the guard, including an
+  `Object.keys(...).sort()` assertion that the delta and the snake-cased fields never ride along. No new
+  method on this factory — `thinking_progress` is inbound-only. Ships dormant: all four exhaustive
+  bridges no-op it (three permanently, `timelineBridge` dormantly) until
+  [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) claims it.
 - [#642 codebase notes](../codebase/642.md) — the `tool-use` `case` arm widened by one field: `input: inbound.toolUse.input` added to the existing fresh literal, unconditional (`undefined` when the wire omitted it). Crosses **by reference** to the already-narrowed fresh map `parseToolUsePayload` built — no second copy, since the reserved-key strip already happened at decode. Ships dormant; #643 is the first consumer. No new method on this factory — the sixth `tool_use` field is inbound-only, like the five it joins.
 - [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Noise relay driver](noise-relay-driver.md) — the `relay-link-up`/`relay-link-down{code}` driver events + the two new `onDriverEvent` cases that classify the raw close code into the renderer-facing `relayLinkChanged{status}` `DaemonEvent` (the relay-**socket** leg, distinct from this module's own session-level `connecting`/`connected`/`failed`). Ships dormant; first of three slices toward a two-dot connection-status indicator.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.

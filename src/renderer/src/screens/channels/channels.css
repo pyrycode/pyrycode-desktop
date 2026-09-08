@@ -147,6 +147,73 @@
   outline: 1px solid var(--color-outline);
 }
 
+/* #1304 — THE PLUS'S NAME PILL, the same `.channel-list__control-name` the row's two trailing controls
+   (#1172) and the workspace row's plus (#1181) wear; its block far below draws it, and these two rules are
+   only the trigger and one placement override. Written beside this control rather than joined onto either
+   of those selector lists, which is #1181's convention: each rule names the elements that can carry a
+   pill, so the set stays readable where the control is.
+
+   THE CONTROL'S OWN `:hover`, NEVER THE HEADER'S — the whole of "hovering the header's label alone shows
+   no pill". Unlike the two rules above it there is no glyph reveal here to be a different scope from: this
+   control is drawn at rest (#1303), so the header has no hover rule at all and this is the only one.
+   `:focus-visible` and not `:focus`, matching the outline rule directly above, so the keyboard case cannot
+   half-fire. */
+.channel-list__pair:hover .channel-list__control-name,
+.channel-list__pair:focus-visible .channel-list__control-name {
+  display: block;
+}
+
+/* ⭐ BELOW THE CONTROL, AND THIS IS THE ONE PLACE THE THREE SHIPPED PILLS' PLACEMENT IS NOT REUSED
+   VERBATIM. Those sit in their control's own vertical band (`top: 50%` + `translateY(-50%)`). Here that
+   band is UNDER A STICKY NEIGHBOUR that paints over it, and the numbers are MEASURED in a running window
+   rather than derived — the derivation got them wrong, which is why they are written down:
+
+     - `.channel-list__actions` is the Channels header's immediately preceding sibling in a gapless flex
+       column, but it is also `position: sticky; top: var(--space-1)`, and that offset is resolved against
+       the scrollport's CONTENT box — inside `.channel-list`'s own `--space-1` top padding. So at scroll
+       top the cluster is pushed --space-1 PAST its flow position and its bottom edge lands 4px INSIDE the
+       header, not on the header's top edge as the flow arithmetic predicts;
+     - the plus is a `--space-5` box at `top: 0` of that header and the pill is 24px tall (--space-1 + the
+       16px body-small line + --space-1), so band-centring would start the pill 2px above the plus and put
+       6px of it under a cluster that is sticky at `z-index: 1`. `top: 0` still puts 4px under it;
+     - and there is no horizontal escape: the cluster insets one --space-1 from the content right edge,
+       while the pill grows leftward across its whole width from that same edge;
+     - the overlap is REACHABLE, not theoretical: the cluster's two buttons are transparent at rest but
+       fill on their own `:hover`, and the pill can be up on `:focus-visible` while the pointer sits on
+       the gear.
+
+   `top: 100%` with the transform dropped hangs the pill directly under the plus — the deviation the
+   ticket names, taken because band-centring does collide. Its top edge lands on the plus's bottom, which
+   is the header's 20px line's bottom, so it clears the cluster by the plus's whole height, the glyph it
+   names stays visible beside it rather than being covered, and the pill occupies the header's 12px gap
+   and the 12px of the first host row under it. Only these two declarations are overridden; the ground,
+   the ink, the type, the padding, the radius, `right: 0`, `display: none`, `pointer-events: none` and
+   `nowrap` are all the shared block's.
+
+   CONTAINMENT, which is the criterion the ticket actually owes: `.channel-list` is `overflow-y: auto`, so
+   it clips on BOTH axes and a clipped box still reports its geometry — no box read and no `toBeVisible()`
+   could tell a clipped pill from a drawn one. This pill lies inside its header's box extended 12px down,
+   so containment follows from the header AND the row under it being in view. `right: 0` pins it to the
+   header's right edge, which is the card's content right edge, so it grows LEFTWARD and reaches neither
+   horizontal edge — and an out-of-flow box adds scrollable overflow only rightward or downward, so the
+   sidebar gains no horizontal scroll.
+
+   THE THREE NUMBERS, all read off a running window at scroll top rather than derived, since the
+   derivation was wrong once already: the cluster's bottom edge is at 76, `top: 50%` + `translateY(-50%)`
+   puts the pill's top at 70 and `top: 0` puts it at 72 — 6px and 4px under it — while this rule puts it at
+   92. `e2e/sidebar-section-header-plus-name-pill.spec.ts` carries both readings: its ACTIONS-EDGE line is
+   the criterion itself, a relation between two elements that would also catch a cluster that grew or a
+   sticky offset that changed, and it is the line `top: 0` reddens; band-centring is caught one line
+   earlier, by the assertion pinning this pill's top edge to the plus's bottom.
+
+   Declined: `top: var(--space-1)`, which centres the pill in the header's 32px box and clears the cluster
+   too — but only by an exact tangency, so a cluster that grew by a pixel would silently reopen the
+   overlap, and it covers the glyph while sitting 6px off its centre. */
+.channel-list__pair .channel-list__control-name {
+  top: 100%;
+  transform: none;
+}
+
 /* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
 .channel-list__pair-icon {
   display: block;

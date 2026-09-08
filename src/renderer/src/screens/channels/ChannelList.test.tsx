@@ -333,6 +333,15 @@ const treesOf = (markup: string): { channels: string; chats: string } => {
 // `__workspace` or `__host`, which is what keeps it out of every shipped locator's match set.
 const PAIR_NEW_HOST_MARKER = 'aria-label="Pair new host"'
 
+// #1304 — the name pill that control shows on its own hover or focus, as ONE marker: the class, the
+// position AFTER the closing `</svg>`, the `aria-hidden` and the text together. `create.label`'s treatment
+// on the workspace plus, and the same reason for the leading `</svg>` — a child appended after the glyph
+// leaves the marker above and every opening tag `pairTagsIn` slices byte-identical, which is what lets
+// this ticket add an element without touching a single shipped count. The TEXT is the same client-owned
+// constant the `aria-label` reads, so a drift between the spoken name and the drawn one fails here.
+const PAIR_NEW_HOST_PILL_MARKER =
+  '</svg><span class="channel-list__control-name" aria-hidden="true">Pair new host</span>'
+
 const pairTagsIn = (markup: string): string[] => {
   const tags: string[] = []
   const marker = 'class="channel-list__pair"'
@@ -1667,6 +1676,22 @@ describe('ChannelListView', () => {
       expect(drawn()).toContain(
         '<svg class="channel-list__pair-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">'
       )
+    })
+
+    it('gives each plus its own name pill, after the glyph and out of the a11y tree (#1304 AC1/AC2)', () => {
+      // One pill per header, so two — the same two-match shape as the name above, since both headers
+      // carry the same control. Everything the static tier can see about this pill is in the marker;
+      // the colours, the placement and the hover itself are the fake Playwright tier's, `vitest.config.ts`
+      // being `environment: 'node'` with no layout and no pointer.
+      const markup = drawn()
+      expect(countOf(markup, PAIR_NEW_HOST_PILL_MARKER)).toBe(2)
+      // And the accessible name is untouched by the added child: `aria-label` still overrides child text,
+      // the span is `aria-hidden`, and this count is what says the pill's text minted no second name.
+      expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(2)
+    })
+
+    it('renders no pill in the not-yet-loaded frame either (#1304)', () => {
+      expect(countOf(render(null), PAIR_NEW_HOST_PILL_MARKER)).toBe(0)
     })
 
     it('renders no plus at all in the not-yet-loaded frame', () => {

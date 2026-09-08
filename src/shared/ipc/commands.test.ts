@@ -28,6 +28,7 @@ import type {
   RenameConversationPayload,
   ChangeWorkspacePayload,
   CreateWorkspaceFolderPayload,
+  RenameWorkspacePayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -1081,6 +1082,51 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: { name: 'x' } })).toBe(false)
   })
 
+  it('accepts a well-formed renameWorkspace command — a required path beside a nullable label (#1289)', () => {
+    // THE FIRST HYBRID GUARD IN THIS FILE: `path` takes isChangeWorkspacePayload's present-and-string
+    // arm, `label` takes isCreateConversationPayload's present-but-nullable arm. No existing
+    // rename-shaped guard has a nullable field, so it is assembled rather than cloned.
+    const payload: RenameWorkspacePayload = { path: '/home/user/projects/app', label: 'Ledger' }
+    const command: RendererCommand = { type: 'renameWorkspace', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(isRendererCommand({ type: 'renameWorkspace', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a renameWorkspace with a literal null label — the CLEAR signal, a value not an absence (#1289)', () => {
+    const payload: RenameWorkspacePayload = { path: '/home/user/projects/app', label: null }
+    expect(isRendererCommand({ type: 'renameWorkspace', payload })).toBe(true)
+  })
+
+  it('accepts a renameWorkspace with empty-string fields — the guard checks type, not emptiness (#1289)', () => {
+    // An empty `label` is a valid wire string that the daemon rejects with its trim guard, and an
+    // empty `path` matches no stored cwd. Both are policed server-side (pyrycode#2209); this guard
+    // does not re-implement the 128-character bound either. Pin that it does not over-reject.
+    const payload: RenameWorkspacePayload = { path: '', label: '' }
+    expect(isRendererCommand({ type: 'renameWorkspace', payload })).toBe(true)
+  })
+
+  it('rejects a renameWorkspace with a missing/null payload (#1289)', () => {
+    expect(isRendererCommand({ type: 'renameWorkspace' })).toBe(false)
+    expect(isRendererCommand({ type: 'renameWorkspace', payload: null })).toBe(false)
+  })
+
+  it('rejects a renameWorkspace whose fields are wrong-typed, absent, or a null path (#1289)', () => {
+    const t = 'renameWorkspace'
+    // `path` is the REQUIRED half: a non-string and a literal null are both refused.
+    expect(isRendererCommand({ type: t, payload: { path: 3, label: 'L' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { path: null, label: 'L' } })).toBe(false)
+    // `label` is the NULLABLE half, so only a wrong TYPE is refused — null passes above.
+    expect(isRendererCommand({ type: t, payload: { path: '/p', label: 3 } })).toBe(false)
+    // A missing key is rejected on EITHER field. Presence is checked with `in` rather than by
+    // truthiness because structured clone preserves an explicitly-undefined property across the
+    // bridge — a `label: undefined` must not read as the null that clears the label.
+    expect(isRendererCommand({ type: t, payload: { path: '/p' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { label: 'L' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { path: '/p', label: undefined } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { path: undefined, label: 'L' } })).toBe(false)
+  })
+
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {
     // The guard is a structural minimum on optional-ABSENT fields: session_id present-and-string, each
     // optional accepted when absent. A missing/undefined optional is fine ("leave unchanged"). The
@@ -1420,7 +1466,7 @@ describe('isRendererCommand', () => {
   })
 })
 
-// The optional server id (#1120). FIVE members are SERVER-SCOPED: they are about a whole server and
+// The optional server id (#1120). SIX members are SERVER-SCOPED: they are about a whole server and
 // carry no id of any kind to route by, so the window names the server it means. The field is a
 // top-level sibling of `payload`, never a field inside it — `setSessionSettings`' `changeId` shape —
 // so the envelope builders, which consume `payload` alone, cannot put it on the wire.
@@ -1436,7 +1482,10 @@ describe('the server-scoped commands name their server (#1120)', () => {
     ['requestRecentWorkspaces', {}],
     ['requestDebugBundle', {}],
     ['createConversation', { payload: { is_promoted: null, name: null, cwd: null } }],
-    ['createWorkspaceFolder', { payload: { parent: '/home/op', name: 'notes' } }]
+    ['createWorkspaceFolder', { payload: { parent: '/home/op', name: 'notes' } }],
+    // #1289 joins the set for the reason the others did: a workspace label is not scoped to a
+    // conversation, so the payload carries no id to route by and the window names the host.
+    ['renameWorkspace', { payload: { path: '/home/op/notes', label: 'Ledger' } }]
   ]
 
   it.each(arms)('accepts %s with an absent, an explicitly-undefined, and a string serverId', (type, rest) => {
@@ -1470,13 +1519,14 @@ describe('the server-scoped commands name their server (#1120)', () => {
     ).toBe(true)
   })
 
-  it('types the optional field on each of the five members', () => {
+  it('types the optional field on each of the six members', () => {
     const commands: RendererCommand[] = [
       { type: 'requestConversations', serverId: 'pyrybox' },
       { type: 'requestRecentWorkspaces', serverId: 'pyrybox' },
       { type: 'requestDebugBundle', serverId: 'pyrybox' },
       { type: 'createConversation', payload: { is_promoted: null, name: null, cwd: null }, serverId: 'pyrybox' },
-      { type: 'createWorkspaceFolder', payload: { parent: '/home/op', name: 'notes' }, serverId: 'pyrybox' }
+      { type: 'createWorkspaceFolder', payload: { parent: '/home/op', name: 'notes' }, serverId: 'pyrybox' },
+      { type: 'renameWorkspace', payload: { path: '/home/op/notes', label: 'Ledger' }, serverId: 'pyrybox' }
     ]
     for (const command of commands) expect(isRendererCommand(command)).toBe(true)
     // And each still type-checks without it, which is what keeps the six renderer senders untouched.

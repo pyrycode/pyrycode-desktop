@@ -8,7 +8,13 @@ had no id of any kind to route by: `requestConversations`, `requestRecentWorkspa
 about a *whole server*, so with two servers paired each reached whichever host was paired most
 recently. **`interrupt` left this set in [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092)**
 once the daemon could carry a conversation id on the frame (pyrycode#2103) — see § The four plain call
-sites, below, for the departure, and the rest of this section for the five that remain.
+sites, below, for the departure. **[#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289)
+then added `renameWorkspace`** — a workspace label belongs to the host, not to any one chat, so it
+carries no id to route by either and joined this set for the same reason the other five did — bringing
+the count back to six, though the membership is not the original six: `interrupt` is out,
+`renameWorkspace` is in. See [Conversation workspace change §
+Workspace rename](conversation-workspace-change.md#workspace-rename-label-change-1289) for that verb's
+own contract; the rest of this section covers the five that predate it.
 `createServerRouter` (`src/main/serverRouter.ts`) closes this, and is the one router of the
 family whose input is untrusted: `conversationRouter.ts` and `correlationRouter.ts` both learn a server
 id off a *stamped daemon event* and can trust what they hold, but nothing a daemon ever reports names
@@ -67,7 +73,11 @@ at ship time and shared this shape**, but
 [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092) removed `serverId` from it entirely and
 gave it a **required** payload instead (`InterruptCommandPayload{conversation_id}`) — the field this
 section describes now covers five members, not six; see [Command channel](command-channel.md) for
-`interrupt`'s current shape.
+`interrupt`'s current shape. [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289) then
+brought the count back to six by adding `renameWorkspace{path, label}` — unlike the four bare members
+above, it is **payload-carrying**, so (like `createConversation`/`createWorkspaceFolder` before it) it
+does need a payload type and does need a wire-type import; the field itself is the same optional
+top-level sibling shape.
 
 It is **optional** on purpose, and that is what keeps this slice main-only: a required field would be a
 compile-forced edit in six renderer senders and their fixtures, none of which has a per-server surface to
@@ -123,7 +133,11 @@ since `flag: 'wx'` already makes the `… (n).tar.gz` advance atomic.
 ## The four plain call sites, and the one that needs the key too
 
 `requestConversations`, `requestRecentWorkspaces`, `createConversation` and `createWorkspaceFolder` stay
-one-liners in #1118's shape: `servers.route(command.serverId)?.<method>(...)`. The debug bundle resolves
+one-liners in #1118's shape: `servers.route(command.serverId)?.<method>(...)`.
+[`renameWorkspace`](https://github.com/pyrycode/pyrycode-desktop/issues/1289) joined this set as a
+fifth plain call site — `servers.route(command.serverId)?.renameWorkspace(command.payload)` — the same
+shape as `createWorkspaceFolder` beside it, and the one place its design departs from its
+conversation-scoped neighbour `changeWorkspace`. The debug bundle resolves
 once with `servers.resolve(...)` instead of `route`, because it needs the routing key as well as the
 connection — the key selects that server's held orchestrator, the connection arms that one ask — and
 returns early on `null` before anything is selected or armed, so a refused ask never touches the

@@ -801,6 +801,23 @@ app.whenReady().then(() => {
         // workspace from the re-list). Inert no-op when not connected (#379).
         router.route(command.payload.conversation_id)?.changeWorkspace(command.payload)
         return
+      case 'renameWorkspace':
+        // ROUTED BY SERVER (#1289), mirroring createWorkspaceFolder above and NOT changeWorkspace
+        // beside it — despite the adjacent name. A workspace label belongs to a workspace, which is a
+        // property of the host, so the payload carries no conversation id to route by and the window
+        // names the server. Only `payload` is passed on, never `command`, so the routing key has no
+        // expression that could carry it onto the wire.
+        //
+        // Direct to the connection method, no orchestrator — a fire-and-forget request has no
+        // consumer/reassembler. Sends rename_workspace; the daemon confirms by replying with a
+        // workspace_updated record correlated to this requester, decoded by #1288's existing path and
+        // reflected by the re-list it triggers, not correlated here. Inert no-op when not connected.
+        //
+        // THIS LINE IS COVERED BY EXACTLY ONE GATE: `e2e/rename-workspace-command.spec.ts`. This file
+        // has no unit test, and neutering this call leaves `npm run build` and the whole unit tier green
+        // (measured #1289) — the fake-tier drive is the only thing that reddens.
+        servers.route(command.serverId)?.renameWorkspace(command.payload)
+        return
       case 'setSystemPrompt':
         // ROUTED BY CONVERSATION (#1249), mirroring changeWorkspace above — a system prompt belongs to
         // one conversation, so the frame goes to the server that hosts it or to no wire at all. Not

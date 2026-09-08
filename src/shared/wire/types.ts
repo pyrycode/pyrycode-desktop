@@ -262,6 +262,13 @@ export type EnvelopeType =
   | 'set_system_prompt'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
+  // The client's ASK that a workspace be renamed (#1289) — the outbound half of the contract whose
+  // inbound half is `workspace_updated` below. Carries RenameWorkspacePayload, a DISTINCT type from
+  // that reply's despite the identical field set (the verb owns its wire surface). Routed by SERVER
+  // rather than by conversation: a workspace label is not scoped to a chat. The daemon answers it with
+  // one `workspace_updated` correlated to the requester; this client neither awaits nor correlates
+  // that reply. SSOT pyrycode#2209.
+  | 'rename_workspace'
   // The daemon's report that a WORKSPACE's label changed (#1288) — correlated by `in_reply_to` to the
   // client that asked for the rename, and pushed UNSOLICITED to every other connected interactive one, so
   // a rename performed anywhere reaches every open client. Distinct from `conversation_updated` beneath
@@ -2642,6 +2649,36 @@ export interface WorkspaceFolderCreatedPayload {
  * Do NOT drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile change. See #1288.
  */
 export interface WorkspaceUpdatedPayload {
+  path: string
+  label: string | null
+}
+
+/**
+ * Outbound `rename_workspace` request body (client → daemon, #1289). Mirrors the daemon's
+ * RenameWorkspacePayload{Path string; Label *string} field-for-field (pyrycode#2209), wire order
+ * `path, label`.
+ *
+ * ITS OWN TYPE, NOT AN ALIAS OF `WorkspaceUpdatedPayload` above, whose field set is identical. That is
+ * the standing rule in this neighbourhood — the verb owns its wire surface — and it is load-bearing
+ * rather than stylistic here: an alias would couple an outbound REQUEST to an inbound RECORD that is
+ * free to drift, and the two are read by opposite halves of the client (this one is only ever written,
+ * that one only ever decoded).
+ *
+ * `path` is the workspace to rename, and the daemon requires it to equal a stored conversation's `cwd`
+ * BYTE FOR BYTE — an exact-equality lookup, never a path join — so a `../`-laden value is answered
+ * `workspace.not_found` rather than traversing anything. `label` is the new name, `string | null` with
+ * NO `omitempty`: a literal `null` is the VALUE "clear this workspace's label" and an ABSENT key is a
+ * contract violation the daemon rejects as malformed, so the sender must name the key unconditionally.
+ *
+ * BOTH ARE RENDERER-SUPPLIED STRINGS SERIALIZED TO WIRE BYTES ONLY. This client never resolves `path`
+ * into a local filesystem path, never keys a lookup on either field, and never logs either value. The
+ * daemon polices the whole contract server-side — exact-`cwd` match, a non-empty-after-trim label of at
+ * most 128 characters — and this client adds NO path or length check of its own: re-implementing a
+ * daemon rule here is how the two drift (the `CreateWorkspaceFolderPayload` #887 posture verbatim).
+ *
+ * Do NOT drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile change. See #1289.
+ */
+export interface RenameWorkspacePayload {
   path: string
   label: string | null
 }

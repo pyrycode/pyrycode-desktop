@@ -4,6 +4,11 @@ The **transport data path** that lets the desktop client ask the pyry daemon to 
 conversation's recorded workspace (`cwd`) to a different folder. Its caller is the [Workspace
 Picker sheet](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) (#157's remaining split-child).
 
+This document also covers the sibling outbound verb, [`renameWorkspace` (#1289)](#workspace-rename-label-change-1289)
+below, which renames the WORKSPACE itself rather than moving a conversation between workspaces —
+read that section's opening note before assuming the two are interchangeable; `src/main/index.ts`
+routes them differently for exactly that reason.
+
 Introduced in [#379](../codebase/379.md), split from #157 (the transport half; the Workspace Picker
 UI was the other half, then not yet built). Shipped dormant — fully wired and tested, with no caller
 at ship time; [#383](../codebase/383.md) later wired the real caller. The closest structural and guard
@@ -78,6 +83,103 @@ Workspace Picker sheet — choosing a recent-workspace row (#383)
     writers, so the chip's snapshotted cwd stays stale post-change — see #456's realizability note)
 ```
 
+## Workspace rename (label change, #1289)
+
+The outbound half of the desktop's side of the daemon's workspace-**rename** contract
+(pyrycode/pyrycode#2209) — a sibling verb to the workspace-*move* above, easily confused with it
+because both files sit beside each other and both payloads are two-required-ish strings, but they
+change different things. `changeWorkspace` above moves ONE CONVERSATION's `cwd` to point at a
+different folder; `renameWorkspace` changes the LABEL a whole workspace (every conversation sharing
+a `cwd`) displays, and never touches any conversation's `cwd`. `src/main/index.ts` routes them on
+opposite axes: `changeWorkspace` by conversation (`router.route(payload.conversation_id)`),
+`renameWorkspace` by server (`servers.route(command.serverId)`), because a workspace label belongs
+to the host, not to any one chat.
+
+Introduced in [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), split from #1182.
+**Nothing in the window sends it yet** — the Edit-workspace dialog is
+[#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180), which is blocked on this ticket.
+The inbound decode and the sidebar's read of the label are the sibling
+[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288), already shipped, so the reply
+this verb draws is decoded and its effect visible on the sidebar the moment this landed.
+
+### The wire contract
+
+```ts
+// request (client → daemon) — a REQUIRED path beside a NULLABLE label, wire order path, label
+export interface RenameWorkspacePayload {
+  path: string
+  label: string | null
+}
+```
+
+`path` must equal a stored conversation's `cwd` byte for byte — an exact-equality lookup, never a
+path join, so a `../`-laden value draws `workspace.not_found` rather than traversing anything.
+`label` is `string | null` with **no `omitempty`**: a literal `null` is the daemon's *clear this
+label* value, and an absent key is a malformed frame, so the sender must name the key
+unconditionally. The daemon requires a non-`null` label to be non-empty after trimming and at most
+128 characters, and rejects with the static errors `workspace.not_found` / `protocol.malformed` —
+**all of that is policed server-side**; this client checks type only, never emptiness or length,
+the `CreateWorkspaceFolderPayload` posture verbatim. Both fields are renderer-supplied strings
+serialized to wire bytes only — never resolved into a local path, never a `Map` key or a filename,
+never logged.
+
+**Its own type, not an alias of `WorkspaceUpdatedPayload`** (#1288's inbound record), despite the
+identical field set — the standing rule in this neighbourhood is that the verb owns its wire
+surface, and an alias would couple an outbound request to an inbound record free to drift.
+
+**Reply is `workspace_updated`, correlated to the requester** (`in_reply_to` echoing this request's
+envelope id) rather than the unsolicited broadcast #1288 also produces from that same frame shape.
+This client neither awaits nor correlates it — #1288's inbound path decodes it unconditionally and
+the re-list it triggers is what actually lands the new label, the `renameConversation` posture
+toward `conversation_updated`.
+
+### The six pieces
+
+One file over `conversation-workspace-change.md`'s five-piece table, deliberately — see
+`docs/specs/architecture/1289-rename-workspace-command.md` § Size for why the split floor wins over
+the ceiling here.
+
+| Piece | File | Role |
+|---|---|---|
+| `RenameWorkspacePayload` + `rename_workspace` `EnvelopeType` member | `src/shared/wire/types.ts` | ported wire type, field-for-field with the daemon |
+| `renameWorkspace` command / `isRenameWorkspacePayload` guard | `src/shared/ipc/commands.ts` | untrusted renderer→main boundary |
+| `buildRenameWorkspace` | `src/main/transport/renameWorkspaceEnvelope.ts` | pure payload-carrying outbound envelope builder |
+| `renameWorkspace(payload)` | `src/main/daemonConnection.ts` | connection method — the `send` twin, fresh-literal net |
+| `renameWorkspace` delegate | `src/main/connectionRegistry.ts` | compile-forced `ActiveConnection`/`viewOf` entry |
+| `case 'renameWorkspace'` | `src/main/index.ts` | command dispatch, routed BY SERVER — the one place this verb differs from every other piece's `changeWorkspace` twin |
+
+### Guard shape — the file's first hybrid
+
+`isRenameWorkspacePayload` is `isChangeWorkspacePayload`'s present-and-string arm on `path`, joined
+with `isCreateConversationPayload`'s present-but-nullable arm on `label` — the first guard in
+`commands.ts` assembled from two different neighbours rather than cloned from one, because no
+rename-shaped guard there previously had a nullable field beside a required one. The `'label' in
+value` presence check is load-bearing, not decoration: structured clone preserves an
+explicitly-`undefined` own property across the IPC bridge, so a truthiness check would let
+`label: undefined` ride through as if it were the daemon's `null` clear-signal. Structural minimum
+throughout — a smuggled extra field is accepted by the guard and bounded instead by the connection
+method's fresh literal, which names `label` **unconditionally** so a literal `null` survives onto
+the wire rather than being dropped to an absent key.
+
+`renameWorkspace` is one of six `RendererCommand` members carrying an optional top-level `serverId`
+(#1120) — see [Server-scoped command routing](daemon-connection-server-scoped-routing.md) for why a
+workspace-scoped command carries no id to route by.
+
+### The e2e stateful fake
+
+`e2e/fixtures/conversationStateFake.ts`'s `rename_workspace` case reuses the same closure-scoped
+mutation the pre-existing `renameWorkspace(cwd, label)` mid-test seam calls (#1288) — one
+implementation of what moves, so the correlated request-driven path and the unsolicited push cannot
+drift apart — and adds the one thing the seam has no id to supply: `workspace_updated`'s
+`in_reply_to`, echoing the request's envelope id. `workspaceUpdatedFrame` gained an optional third
+`inReplyTo?` argument for this; `JSON.stringify` omits it when absent, so the pre-existing
+unsolicited-broadcast drive (`workspace-updated-relist.spec.ts`) produces byte-identical frames and
+needed no change. Driven end to end by
+[`e2e/rename-workspace-command.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1289),
+which dispatches the command through the preload bridge (`window.pyry.sendCommand`) with no UI
+affordance — the only gate covering `src/main/index.ts`'s `case 'renameWorkspace':` line, which has
+no unit test of its own.
+
 ## Related
 
 - [Conversation rename (transport)](conversation-rename.md) / [#359](../codebase/359.md) — the
@@ -92,3 +194,10 @@ Workspace Picker sheet — choosing a recent-workspace row (#383)
 - [#157 codebase notes](../codebase/157.md) — parent split ticket (this transport slice / the
   Workspace Picker UI, #383).
 - [#379 codebase notes](../codebase/379.md) — implementation summary.
+- [Channel list § Workspace grouping](channel-list.md#workspace-grouping) — the sidebar's read of
+  the workspace label this rename verb changes, and the daemon-side blank-label refusal this
+  ticket's guard deliberately does not re-implement.
+- [Server-scoped command routing](daemon-connection-server-scoped-routing.md) — `renameWorkspace`
+  joined the optional-`serverId` set as its sixth member in #1289.
+- Spec: `docs/specs/architecture/1289-rename-workspace-command.md` — the full design, size-overage
+  rationale, and security review (PASS) for § Workspace rename above.

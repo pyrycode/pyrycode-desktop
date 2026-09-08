@@ -28,6 +28,7 @@ import type {
   ChangeWorkspacePayload,
   SetSystemPromptPayload,
   CreateWorkspaceFolderPayload,
+  RenameWorkspacePayload,
   SetSessionSettingsPayload,
   RequestSessionSettingsPayload,
   RequestModelListPayload,
@@ -170,7 +171,14 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * whose `payload` reuses the wire CreateWorkspaceFolderPayload (two REQUIRED strings — `parent` + `name`, no
  * secret — asking the daemon to create a new workspace folder; both are renderer-supplied text the daemon
  * polices SERVER-side ($HOME confinement + a single-clean-element name guard), never a local path here; the
- * daemon replies with one `workspace_folder_created { path }` → `workspaceFolderCreated` event); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * daemon replies with one `workspace_folder_created { path }` → `workspaceFolderCreated` event);
+ * `renameWorkspace` (#1289), whose `payload` reuses the wire RenameWorkspacePayload (a REQUIRED `path`
+ * beside a NULLABLE `label` — no secret — asking the daemon to rename a WORKSPACE, with a literal
+ * `null` label meaning "clear it"; both are renderer-supplied text the daemon polices SERVER-side
+ * (exact-`cwd` match, non-empty after trim, ≤128 characters), never a local path here; the daemon
+ * replies with one `workspace_updated` correlated to the requester, which this client neither awaits
+ * nor correlates — #1288's inbound path re-lists and the label arrives on that reply);
+ * and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -247,8 +255,10 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
- * FIVE MEMBERS CARRY AN OPTIONAL `serverId` (#1120): `requestConversations`, `requestRecentWorkspaces`,
- * `createConversation`, `createWorkspaceFolder` and `requestDebugBundle`. These are the SERVER-SCOPED
+ * SIX MEMBERS CARRY AN OPTIONAL `serverId` (#1120): `requestConversations`, `requestRecentWorkspaces`,
+ * `createConversation`, `createWorkspaceFolder`, `requestDebugBundle` and `renameWorkspace` (#1289 —
+ * a workspace label belongs to a workspace, not to any one chat, so its payload carries no id to route
+ * by and joins the set for exactly the reason the others did). These are the SERVER-SCOPED
  * commands — each is about a whole server and carries no id of any kind to route by, so
  * with more than one server paired they reached whichever host was paired most recently. The field is a
  * top-level string sibling of `payload`, NEVER a field inside it, exactly as `changeId` is: the envelope
@@ -299,6 +309,7 @@ export type RendererCommand =
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
   | { type: 'setSystemPrompt'; payload: SetSystemPromptPayload }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
+  | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
@@ -489,6 +500,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
       )
+    case 'renameWorkspace':
+      // The createWorkspaceFolder arm's shape (#1289): a payload guard paired with the optional
+      // server id, since a workspace label is not scoped to a conversation and carries no id to
+      // route by.
+      return 'payload' in value && isRenameWorkspacePayload(value.payload) && hasValidServerId(value)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -799,6 +815,35 @@ function isCreateWorkspaceFolderPayload(value: unknown): value is CreateWorkspac
     typeof value.parent === 'string' &&
     'name' in value &&
     typeof value.name === 'string'
+  )
+}
+
+/** The untrusted renderer→main boundary guard for the renameWorkspace payload (#1289) — the reason the
+ *  command half is security-sensitive. THE FIRST HYBRID IN THIS FILE rather than a clone of one
+ *  neighbour, because no rename-shaped guard here has a nullable field beside a required one:
+ *
+ *    - `path` takes isChangeWorkspacePayload's present-and-string arm — a missing key, an
+ *      `undefined`, a literal `null` and a non-string are all rejected.
+ *    - `label` takes isCreateConversationPayload's present-but-NULLABLE arm — a literal `null` is
+ *      accepted (it is the daemon's CLEAR signal, a value rather than an absence) while a missing key
+ *      and a wrong type are rejected. The `in` check makes presence explicit, and it is not
+ *      decoration: structured clone PRESERVES an explicitly-`undefined` own property across the IPC
+ *      bridge, so a truthiness test would let `label: undefined` through as if it were the null.
+ *
+ *  Checks TYPE, not emptiness or length — an empty-string `label` passes, as an empty `cwd` does for
+ *  changeWorkspace, and the 128-character bound is NOT re-implemented here. The daemon polices the
+ *  whole contract (exact-`cwd` match, non-empty after trim, ≤128) and a client-side copy of that rule
+ *  is how the two drift. `path` is filesystem-shaped but is never resolved into a local path here
+ *  (only serialized onto the wire). Structural minimum — a smuggled extra field is not rejected here;
+ *  the main-side sender's fresh-literal construction bounds the wire to exactly these two fields.
+ *  Pure; never throws. */
+function isRenameWorkspacePayload(value: unknown): value is RenameWorkspacePayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'path' in value &&
+    typeof value.path === 'string' &&
+    'label' in value &&
+    (typeof value.label === 'string' || value.label === null)
   )
 }
 

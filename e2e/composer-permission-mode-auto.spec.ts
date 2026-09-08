@@ -89,19 +89,37 @@ function row(
   }
 }
 
-// Mutually non-substring, and neither display name collides with a permission-mode label — the trigger
-// locators below are `exact`, but the model trigger draws its row's display_name into the same row.
+// Mutually non-substring, and nothing here collides with a permission-mode label — the trigger locators
+// below are `exact`, but the model trigger draws into the same row.
+//
+// THE SETTLE SIGNAL RIDES `resolved_model` SINCE #1095, not `display_name`. That control now shows a FAMILY
+// derived from the matched row's `resolved_model` (falling back to its `value`), so `row()`'s default
+// `${value}-resolved` would derive the same `Refuser` the pre-list label already shows, and the two
+// `modelLabel` reads below would both be vacuous — the second one worst of all, since it is the only
+// barrier proving the REPLACEMENT frame landed before the panel is reopened. Each row therefore carries a
+// `resolved_model` naming a family of its own, which restores an observable change at every tick.
 const REFUSING = row({
   value: 'refuser',
   display_name: 'Refusing pick',
+  resolved_model: 'refusing-1',
   supports_auto_mode: false
 })
 const ACCEPTING = row({ value: 'accepter', display_name: 'Accepting pick' })
 
-// The replacement frame's version of the same row, now accepting. Its display_name changes too, and that
-// is deliberate: the MODEL trigger renders it, so it gives this drive an observable settle signal for an
-// unsolicited frame whose only other effect is inside a panel that is closed at the time.
-const RELENTED = row({ value: REFUSING.value, display_name: 'Relenting pick' })
+// The replacement frame's version of the same row, now accepting. Its `resolved_model` changes too, and
+// that is deliberate: the MODEL trigger derives its label from it, so it gives this drive an observable
+// settle signal for an unsolicited frame whose only other effect is inside a panel that is closed at the
+// time. `Relenting` must differ from both `Refusing` and the pre-list `Refuser`, or the barrier is gone.
+const RELENTED = row({
+  value: REFUSING.value,
+  display_name: 'Relenting pick',
+  resolved_model: 'relenting-1'
+})
+
+// The families the two frames put on the model trigger — stated by hand rather than by re-implementing the
+// production derivation in the test.
+const REFUSING_FAMILY = 'Refusing'
+const RELENTED_FAMILY = 'Relenting'
 
 // The baseline the read request is answered with. Its model is the REFUSING row's published value
 // verbatim, so exact equality selects that row.
@@ -207,10 +225,11 @@ test('composer footer: the permission-mode menu hides auto on a model that refus
 
   // --- The list arrives unsolicited. Exact equality on `value` resolves the session's model to the
   // REFUSING row, whose `supports_auto_mode` is false. The second row accepts, so the flag is read per ROW
-  // rather than per list. The model trigger's label is the settle signal: it renders the matched row's
-  // display_name, so once it reads REFUSING's name the store tick has been committed. ---
+  // rather than per list. The model trigger's label is the settle signal: it renders the family of the
+  // matched row's `resolved_model` (#1095), so once it reads REFUSING's the store tick has been
+  // committed — and before the list it read `Refuser`, from the session model, so this is a real move. ---
   daemon.pushFrame(modelListFrame([REFUSING, ACCEPTING]))
-  await expect(modelLabel).toHaveText(REFUSING.display_name, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(modelLabel).toHaveText(REFUSING_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
   // The permission trigger has NOT moved: hiding an entry never changes what the trigger says.
   await expect(label).toHaveText(displayed(BASELINE_MODE))
 
@@ -234,7 +253,7 @@ test('composer footer: the permission-mode menu hides auto on a model that refus
   // now accepts `auto` and the entry comes back. Without this step, an implementation that hid the entry
   // permanently on the first refusing frame would pass everything above. ---
   daemon.pushFrame(modelListFrame([RELENTED, ACCEPTING]))
-  await expect(modelLabel).toHaveText(RELENTED.display_name, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(modelLabel).toHaveText(RELENTED_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   await trigger.click()
   await expect(panel).toBeVisible()

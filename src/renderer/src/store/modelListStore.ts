@@ -59,8 +59,13 @@
 // across 51 workspace-authored entries: no control byte is measured in these short labels, but the
 // daemon does not sanitize, so one is PERMITTED rather than excluded. Do not transcribe the sibling's
 // measurement here — it would be a false claim about this frame. `value` in particular IS NOT PARSEABLE
-// (the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`), so nothing
-// may split it to derive a family or present it as a version. This slice has no DOM sink, so the
+// FOR MATCHING, INDEXING OR KEYING (the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`,
+// `sonnet`, `haiku`): no join may split it, no index may be built from a piece of it, and it may never be
+// presented as a version. #1095 re-scoped this from the absolute it used to state — deriving a DISPLAY
+// LABEL from it is none of those three, and the footer's model control now does exactly that, taking a
+// leading run of ASCII letters as the family. That derivation is a VIEW-SIDE transform in
+// ComposerModelMenu.tsx and never comes back here: no derived label is fed into a lookup, and this store
+// still holds every string verbatim. This slice has no DOM sink, so the
 // inert-escaped-length-bounded render discipline is inherited and discharged by #975 and #976, which
 // also owe a React `key` scheme that is not `display_name`. Nothing here is persisted, and nothing may
 // be: web storage would outlive the pairing that scoped the list, so a persisted copy would survive

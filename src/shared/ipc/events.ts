@@ -1172,9 +1172,13 @@ type BaseDaemonEvent =
   // raw-markup sink (no innerHTML / dangerouslySetInnerHTML), an attribute, a URL, a filename, a cache
   // key, a lookup path, or a log. Unlike its sibling's, the never-a-log clause here rests on the CONTRACT
   // rather than on a measurement: no control byte is measured in these short labels, but the daemon does
-  // not sanitize, so one is PERMITTED rather than excluded. `value` in particular IS NOT PARSEABLE — the
-  // measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku` — so nothing may
-  // split it to derive a family or present it as a version. If a consumer indexes rows by `display_name`,
+  // not sanitize, so one is PERMITTED rather than excluded. `value` in particular IS NOT PARSEABLE FOR
+  // MATCHING, INDEXING OR KEYING — the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`,
+  // `sonnet`, `haiku` — so no join may split it, no index may be built from a piece of it, and it may
+  // never be presented as a version. #1095 re-scoped this from the absolute it used to state: deriving a
+  // DISPLAY LABEL is none of those three, and the footer's model control derives a family from a leading
+  // run of ASCII letters. That is a view-side transform downstream of every lookup on this arm, and no
+  // derived label is ever fed back into one. If a consumer indexes rows by `display_name`,
   // THE INDEX IS A `Map`: `index[row.display_name] = row` with a `__proto__` label writes through to
   // Object.prototype. No token, key, or raw frame can ride the arm (one id, a bounded list of six-field
   // rows, and a count is the whole payload).

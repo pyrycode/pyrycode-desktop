@@ -23,6 +23,17 @@ import { ComposerOptionsPanel } from './ComposerOptionsPanel'
 // assertion below is a DERIVATION over these rows — their display names, in their order, by count — never
 // `expect(markup).not.toContain('<some model name>')`, which would type the banned string into the file
 // the criterion's own grep reads.
+//
+// #1095 MAKES THAT DISCIPLINE MORE LOAD-BEARING, NOT LESS, and the reason is worth stating because the
+// obvious reading is the opposite one. This file now derives a FAMILY from daemon text, so the bug the
+// invented identities guard against has inverted: it is no longer "a label derived from a family token"
+// but "a label derived only for families the client has heard of". An allow-list bug is caught by an
+// INVENTED family and hidden by a real one. So the shapes #1095's AC1 enumerates are asserted below with
+// invented tokens carrying each shape (`claude-alpha-5`, `claude-alpha-5[1m]`, `claude-alpha-4-5-20251001`,
+// `alpha[1m]`, `alpha`) rather than with the real identifiers the criterion spells them in.
+//
+// `default` is the ONE real literal in this file, and it is not a family name: it is the daemon's own word
+// for its inherited default, already seeded here by #1168's block at the bottom.
 
 function row(over: Partial<WireModelOption> & Pick<WireModelOption, 'value' | 'display_name'>): WireModelOption {
   return {
@@ -39,6 +50,16 @@ const ROWS: readonly WireModelOption[] = [
   row({ value: 'beta[1m]', display_name: 'Beta tier' }),
   row({ value: 'gamma', display_name: 'Gamma tier' })
 ]
+
+// #1095 — the families the rows above derive to, STATED BY HAND rather than by calling the production
+// rule back on itself: a test that re-implements the derivation proves only that it matches itself. Every
+// options assertion below indexes this in step with ROWS, so a fourth row has to name its own family here.
+//
+// The trigger's families for these three rows are the SAME three, because `row()` builds each
+// `resolved_model` as the value plus a suffix and a suffix cannot change a leading run of letters. That is
+// why the source-chain ORDER needs rows of its own further down — these three cannot tell the two
+// sources apart.
+const ROW_FAMILIES = ['Alpha', 'Beta', 'Gamma'] as const
 
 const LIST: ModelListEntry = { models: ROWS, droppedModels: 0 }
 const EMPTY: ModelListEntry = { models: [], droppedModels: 0 }
@@ -89,44 +110,63 @@ function viewLayers(models: ModelListEntry | null, over: ComposerModelLayers): s
 }
 
 describe('composerModelMenuModel', () => {
-  // AC1's whole match rule, as data: exact equality on `value`, and the display name of the row it hit.
-  it('labels the trigger with the matched row display name and marks that row (AC1, AC2)', () => {
+  // AC1's whole match rule, as data: exact equality on `value`, and — since #1095 — the FAMILY derived
+  // from the row it hit rather than that row's display name. The MATCH itself is untouched: `currentId`
+  // is still the raw `value`, and the lookup still runs on the raw string.
+  it('labels the trigger with the matched row family and marks that row (AC1, AC2)', () => {
     expect(composerModelMenuModel(LIST, stored('beta[1m]'))).toStrictEqual({
-      label: 'Beta tier',
+      label: 'Beta',
       currentId: 'beta[1m]',
-      options: ROWS.map((r) => ({ id: r.value, label: r.display_name }))
+      options: ROWS.map((r, i) => ({ id: r.value, label: ROW_FAMILIES[i] }))
     })
   })
 
   // The entries are EXACTLY the published rows, one per entry, in the daemon's order — asserted as a
   // derivation over the seeded array, so a fourth row inherits the guard and no model name is typed here.
-  it('offers exactly the published rows, in order, id = value and label = display name (AC2)', () => {
+  // Since #1095 the label is the family of the row's OWN `value`; `id` is untouched and still the raw
+  // `value`, which is what keeps the write byte-identical.
+  it('offers exactly the published rows, in order, id = value and label = its family (AC2, AC3)', () => {
     const menu = composerModelMenuModel(LIST, stored('alpha'))
-    expect(menu?.options.map((o) => o.label)).toStrictEqual(ROWS.map((r) => r.display_name))
+    expect(menu?.options.map((o) => o.label)).toStrictEqual([...ROW_FAMILIES])
     expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((r) => r.value))
     expect(menu?.options).toHaveLength(ROWS.length)
   })
 
-  // A MISS IS ORDINARY: the verbatim fallback, RunningModelSection's posture. Four near-misses, because
-  // "exact equality with no substring, prefix or case-folding match" is four claims rather than one, and a
-  // sloppy `includes`/`toLowerCase`/`trim` would pass a single-case test.
+  // A MISS IS ORDINARY. Four near-misses, because "exact equality with no substring, prefix, case-folding
+  // or trimming match" is four claims rather than one, and a sloppy `includes`/`toLowerCase`/`trim` would
+  // pass a single-case test.
+  //
+  // #1095 SPLIT WHAT THIS CASE ASSERTS IN TWO, and only one half moved. The MATCHING claim is
+  // `currentId === null` and it is untouched — the join still runs on the raw string, and no case fold or
+  // trim was added anywhere near it. The LABEL is now derived from the shown string, and it reads that
+  // string back unchanged only in the two arms where the derivation is the identity or yields nothing:
+  // `ALPHA` keeps its own tail (the rule upper-cases the first letter and holds the rest as claude sent
+  // them, so there is no DOWN-fold), and ` alpha ` has no leading ASCII letter at all so it takes the
+  // verbatim fallback.
   it.each([
-    ['a case fold', 'ALPHA'],
-    ['a prefix', 'alph'],
-    ['a superstring', 'alpha-resolved'],
-    ['surrounding whitespace', ' alpha ']
-  ])('falls back to the model value verbatim on %s (AC1)', (_why, model) => {
+    ['a case fold', 'ALPHA', 'ALPHA'],
+    ['a prefix', 'alph', 'Alph'],
+    ['a superstring', 'alpha-resolved', 'Alpha'],
+    ['surrounding whitespace', ' alpha ', ' alpha ']
+  ])('matches no row on %s, labelling from the shown string (AC1)', (_why, model, label) => {
     const menu = composerModelMenuModel(LIST, stored(model))
-    expect(menu?.label).toBe(model)
+    expect(menu?.label).toBe(label)
     expect(menu?.currentId).toBeNull()
   })
 
   // A matched row whose display name is empty is a HIT, not a miss: the daemon published that name and
   // `row ? row.display_name : model` is the RunningModelSection expression that keeps it one. The `??`
   // form would silently print the value instead.
+  //
+  // #1095 left that expression in place UNDER the derivation as AC4's fallback, so reaching it now takes a
+  // row from which no family derives at all — neither field may have a leading ASCII letter. `<unmeasured>`
+  // is the literal the captured fixture actually carries on four of its five rows.
   it('keeps an empty published display name rather than falling back to the value', () => {
-    const list: ModelListEntry = { models: [row({ value: 'alpha', display_name: '' })], droppedModels: 0 }
-    expect(composerModelMenuModel(list, stored('alpha'))?.label).toBe('')
+    const list: ModelListEntry = {
+      models: [row({ value: '5', display_name: '', resolved_model: '<unmeasured>' })],
+      droppedModels: 0
+    }
+    expect(composerModelMenuModel(list, stored('5'))?.label).toBe('')
   })
 
   // AC4's two inputs, kept apart by the store and NOT collapsed here: both yield no options, and the
@@ -137,7 +177,7 @@ describe('composerModelMenuModel', () => {
     ['the daemon published an empty list', EMPTY]
   ])('offers nothing but still labels the trigger when %s (AC4)', (_why, models) => {
     expect(composerModelMenuModel(models as ModelListEntry | null, stored('alpha'))).toStrictEqual({
-      label: 'alpha',
+      label: 'Alpha',
       currentId: null,
       options: []
     })
@@ -160,8 +200,27 @@ describe('composerModelMenuModel', () => {
       droppedModels: 0
     }
     const menu = composerModelMenuModel(list, stored('alpha'))
-    expect(menu?.options.map((o) => o.label)).toStrictEqual(['First', 'Second'])
+    expect(menu?.options.map((o) => o.label)).toStrictEqual(['Alpha', 'Alpha'])
     expect(menu?.currentId).toBe('alpha')
+  })
+
+  // #1095 AC3's own collision case, and it is NOT the one above: two rows with DIFFERENT values that
+  // derive to the same family. Both are shown — the derivation is a display rule and may not dedupe, drop
+  // or disambiguate — and each still submits its OWN value, which is the half a "tidy the duplicates"
+  // change would silently break. The ids are what the panel hands back to `onSelect`.
+  it('shows two rows deriving to one family, each still submitting its own value (AC3)', () => {
+    const list: ModelListEntry = {
+      models: [
+        row({ value: 'alpha', display_name: 'Plain' }),
+        row({ value: 'alpha[1m]', display_name: 'Wide' })
+      ],
+      droppedModels: 0
+    }
+    const menu = composerModelMenuModel(list, stored('alpha'))
+    expect(menu?.options).toStrictEqual([
+      { id: 'alpha', label: 'Alpha' },
+      { id: 'alpha[1m]', label: 'Alpha' }
+    ])
   })
 
   // #1053 AC1 — the state this ticket exists for: a session on the daemon's inherited default carries no
@@ -170,18 +229,19 @@ describe('composerModelMenuModel', () => {
   // display name. Nothing is marked: the session's model is still unset, which is AC5's half of this case.
   it('labels the trigger with the announced model when nothing was chosen (AC1)', () => {
     expect(composerModelMenuModel(LIST, layers({ announced: 'gamma' }))).toStrictEqual({
-      label: 'Gamma tier',
+      label: 'Gamma',
       currentId: null,
-      options: ROWS.map((r) => ({ id: r.value, label: r.display_name }))
+      options: ROWS.map((r, i) => ({ id: r.value, label: ROW_FAMILIES[i] }))
     })
   })
 
   // A MISS IS ORDINARY here too, and it is the COMMON case: claude echoes an identifier at least as
   // specific as the one it was given, so an announced identifier need not appear in any published row.
-  // RunningModelSection's posture, reused rather than re-decided.
-  it('renders an announced model that matches no published row verbatim (AC1)', () => {
+  // #1095 is the reason that stopped mattering to the operator — a miss no longer puts a dated identifier
+  // on the row, it derives the same family a hit would.
+  it('derives the family of an announced model that matches no published row (AC1)', () => {
     const menu = composerModelMenuModel(LIST, layers({ announced: 'alpha-resolved' }))
-    expect(menu?.label).toBe('alpha-resolved')
+    expect(menu?.label).toBe('Alpha')
     expect(menu?.currentId).toBeNull()
   })
 
@@ -190,7 +250,7 @@ describe('composerModelMenuModel', () => {
   // stored choice (what the daemon is set to). Two different questions, two different lookups.
   it('shows the announcement over a disagreeing stored choice, still marking the stored one (AC2, AC5)', () => {
     const menu = composerModelMenuModel(LIST, layers({ announced: 'gamma', stored: 'alpha' }))
-    expect(menu?.label).toBe('Gamma tier')
+    expect(menu?.label).toBe('Gamma')
     expect(menu?.currentId).toBe('alpha')
   })
 
@@ -200,9 +260,9 @@ describe('composerModelMenuModel', () => {
   // branch: the layering IS the rollback.
   it('lets a pick outrank the announcement and returns to it when the pick is dropped (AC3)', () => {
     const picked = layers({ picked: 'beta[1m]', announced: 'gamma', stored: 'alpha' })
-    expect(composerModelMenuModel(LIST, picked)?.label).toBe('Beta tier')
+    expect(composerModelMenuModel(LIST, picked)?.label).toBe('Beta')
     expect(composerModelMenuModel(LIST, picked)?.currentId).toBe('beta[1m]')
-    expect(composerModelMenuModel(LIST, { ...picked, picked: '' })?.label).toBe('Gamma tier')
+    expect(composerModelMenuModel(LIST, { ...picked, picked: '' })?.label).toBe('Gamma')
   })
 
   // AC4 — nothing at any layer. An announcement whose model is the EMPTY STRING is a real, degenerate
@@ -221,6 +281,128 @@ describe('composerModelMenuModel', () => {
   })
 })
 
+// #1095 — the family rule and the two source chains it feeds. Driven through `composerModelMenuModel`
+// rather than through an export of its own: the derivation has no caller outside this file, and the two
+// chains are the only thing worth pinning about it.
+describe('composerModelMenuModel — the family rule (#1095)', () => {
+  // AC1's shapes, each carried by an INVENTED family so the file's own no-allow-list guard stays live —
+  // see the header. Read as a table: strip one leading `claude-`, take the leading run of ASCII letters,
+  // upper-case the first and hold the rest as claude sent them. The trailing junk each shape carries —
+  // a version, a date, a bracketed context marker, or all three — is what the operator stops seeing.
+  //
+  // No list is published on this arm, so every input is a MISS and the shown string is the only source.
+  it.each([
+    ['a prefixed version', 'claude-alpha-5', 'Alpha'],
+    ['a prefixed version with a context marker', 'claude-alpha-5[1m]', 'Alpha'],
+    ['a prefixed dated identifier', 'claude-alpha-4-5-20251001', 'Alpha'],
+    ['a prefixed multi-part version', 'claude-alpha-5-1', 'Alpha'],
+    ['a bare alias with a context marker', 'alpha[1m]', 'Alpha'],
+    ['a bare alias', 'alpha', 'Alpha'],
+    ["the daemon's own inherited-default word", 'default', 'Default'],
+    ['a family this client has never heard of', 'claude-newname-6', 'Newname']
+  ])('derives the family from %s', (_shape, announced, family) => {
+    expect(composerModelMenuModel(null, layers({ announced }))?.label).toBe(family)
+  })
+
+  // ONLY ONE leading `claude-` is stripped. A second one is ordinary text and becomes the family, which is
+  // the rule answering honestly rather than looping — pinned so a `replaceAll`/`while` rewrite has to
+  // argue with a test.
+  it('strips exactly one leading claude- prefix', () => {
+    expect(composerModelMenuModel(null, layers({ announced: 'claude-claude-alpha-5' }))?.label).toBe(
+      'Claude'
+    )
+  })
+
+  // AC1's "no other case fold": the first letter is upper-cased and the REST is held as claude sent it, so
+  // an already-upper tail survives and a mid-string capital is not touched. A `toLowerCase()` anywhere on
+  // this path fails both arms.
+  it.each([
+    ['an upper-case tail', 'aLPHA', 'ALPHA'],
+    ['an already-capitalised head', 'Alpha', 'Alpha']
+  ])('upper-cases only the first letter, holding the rest verbatim (%s)', (_why, announced, family) => {
+    expect(composerModelMenuModel(null, layers({ announced }))?.label).toBe(family)
+  })
+
+  // AC4's arm on the trigger's MISS side: no leading ASCII letters anywhere means today's behaviour, the
+  // shown string verbatim. Unicode is deliberately out — a non-ASCII head takes this same fallback, which
+  // is why `ø` sits beside a digit and a bracket here rather than deriving anything.
+  it.each([
+    ['a digit head', '5-alpha'],
+    ['a bracket head', '<unmeasured>'],
+    ['a non-ASCII head', 'ømega-5'],
+    ['nothing after the prefix', 'claude-'],
+    ['a lone separator', '-']
+  ])('falls back to the shown string verbatim on %s (AC4)', (_why, announced) => {
+    expect(composerModelMenuModel(null, layers({ announced }))?.label).toBe(announced)
+  })
+
+  // AC2's SOURCE CHAIN, and the case the base fixture cannot express: a hit whose two fields name
+  // DIFFERENT families. `resolved_model` wins, because the trigger's job is to name what RUNS. Its row
+  // still wears its own `value`'s family, which is AC3 read off the same fixture — one row, two answers,
+  // and an implementation reading one field for both fails here whichever field it picks.
+  it('prefers the matched row resolved_model over its value on the trigger (AC2, AC3)', () => {
+    const list: ModelListEntry = {
+      models: [row({ value: 'default', display_name: 'Inherited', resolved_model: 'claude-delta-5' })],
+      droppedModels: 0
+    }
+    const menu = composerModelMenuModel(list, stored('default'))
+    expect(menu?.label).toBe('Delta')
+    expect(menu?.options).toStrictEqual([{ id: 'default', label: 'Default' }])
+  })
+
+  // The chain's SECOND step, and it is an ordinary source rather than a guard against an unseen case:
+  // `resolved_model` is not reliably populated, and the captured fixture the WireModelOption docblock
+  // cites carries this exact literal on four of its five rows. It yields no family, so the trigger falls
+  // through to the row's own `value` — NOT to its display name, which is one step further down.
+  it('falls through to the matched row value when resolved_model yields no family (AC2)', () => {
+    const list: ModelListEntry = {
+      models: [row({ value: 'alpha[1m]', display_name: 'Alpha tier', resolved_model: '<unmeasured>' })],
+      droppedModels: 0
+    }
+    expect(composerModelMenuModel(list, stored('alpha[1m]'))?.label).toBe('Alpha')
+  })
+
+  // AC4's arm on the trigger's HIT side, and on a ROW — the two places the fallback is a `display_name`
+  // rather than the shown string. Both fields of this row yield nothing, so both readings land on the
+  // published prose, which is exactly what they render today.
+  it('falls back to the published display name when a matched row yields no family (AC4)', () => {
+    const list: ModelListEntry = {
+      models: [row({ value: '5[1m]', display_name: 'Numbered tier', resolved_model: '<unmeasured>' })],
+      droppedModels: 0
+    }
+    const menu = composerModelMenuModel(list, stored('5[1m]'))
+    expect(menu?.label).toBe('Numbered tier')
+    expect(menu?.options).toStrictEqual([{ id: '5[1m]', label: 'Numbered tier' }])
+  })
+
+  // A ROW NEVER READS ITS `resolved_model`, which is the half AC3 states as a prohibition rather than a
+  // rule. Seeded so the two fields disagree AND the row's own family is the one that would be lost: a row
+  // deriving from `resolved_model` would read `Delta` here and the panel would show two rows wearing one
+  // label while submitting different values.
+  it('never derives a row label from its resolved_model (AC3)', () => {
+    const list: ModelListEntry = {
+      models: [
+        row({ value: 'default', display_name: 'Inherited', resolved_model: 'claude-delta-5' }),
+        row({ value: 'delta', display_name: 'Delta tier' })
+      ],
+      droppedModels: 0
+    }
+    expect(composerModelMenuModel(list, stored('delta'))?.options.map((o) => o.label)).toStrictEqual([
+      'Default',
+      'Delta'
+    ])
+  })
+
+  // The MARKING and the WRITE are untouched by all of the above, asserted together because they are the
+  // two things a display change must not reach. `currentId` is the raw published `value`, not a family,
+  // and it still comes from the SESSION's model rather than from the announcement (#1053 AC5).
+  it('leaves the marking and every option id raw, never a derived family (AC5)', () => {
+    const menu = composerModelMenuModel(LIST, layers({ announced: 'gamma', stored: 'beta[1m]' }))
+    expect(menu?.currentId).toBe('beta[1m]')
+    expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((r) => r.value))
+  })
+})
+
 describe('ComposerModelMenuView', () => {
   it('renders the footer trigger inside a composer-options anchor, closed (AC1)', () => {
     const markup = view(LIST, 'alpha')
@@ -235,20 +417,29 @@ describe('ComposerModelMenuView', () => {
   // AC1's label, through the markup — and AC1's SECOND SENTENCE: the label sits in its own element, which
   // is what carries the max-width and the ellipsis that stop a long published name pushing the context
   // reading out of a row with a hard 20px height. A bare text child could not be bounded.
-  it('draws the matched display name in its own bounded element (AC1)', () => {
+  it('draws the matched row family in its own bounded element (AC1)', () => {
     const markup = view(LIST, 'gamma')
-    expect(markup).toContain('<span class="composer__model-label">Gamma tier</span>')
+    expect(markup).toContain('<span class="composer__model-label">Gamma</span>')
   })
 
   // #1053 — the announced label reaches the SAME bounded element, which is the whole reason a long dated
-  // identifier clips rather than pushing the context reading out of a row with a hard 20px height. This
-  // is the second render surface for claude-authored text, and it is one escaped JSX text position: the
-  // announced string appears in no attribute anywhere in the markup.
-  it('draws an announced model in the same bounded element and in no attribute (AC1)', () => {
-    const announced = 'claude-haiku-4-5-20251001'
+  // identifier clips rather than pushing the context reading out of a row with a hard 20px height. That
+  // element and its cap are unchanged by #1095; what changed is that a dated identifier no longer reaches
+  // it at all, so the bound now protects only the verbatim fallback.
+  //
+  // THE ATTRIBUTE ABSENCE IS THE SECURITY HALF and #1095 widened it: the announced string must appear in
+  // no attribute, AND neither may the DERIVED label — a new string reaching a text position for the first
+  // time, which is exactly the kind of value a careless `title`/`aria-label` addition would leak into an
+  // attribute sink. Both are asserted over every attribute in the markup.
+  it('draws an announced family in the same bounded element, with neither string in an attribute (AC1)', () => {
+    const announced = 'claude-alpha-4-5-20251001'
     const markup = viewLayers(LIST, layers({ announced }))
-    expect(markup).toContain(`<span class="composer__model-label">${announced}</span>`)
-    for (const attr of markup.match(/[a-z-]+="[^"]*"/g) ?? []) expect(attr).not.toContain(announced)
+    expect(markup).toContain('<span class="composer__model-label">Alpha</span>')
+    expect(markup).not.toContain(announced)
+    for (const attr of markup.match(/[a-z-]+="[^"]*"/g) ?? []) {
+      expect(attr).not.toContain(announced)
+      expect(attr).not.toContain('Alpha')
+    }
   })
 
   // The trigger's accessible name is computed from its contents (no aria-label — see the view), so the
@@ -259,22 +450,27 @@ describe('ComposerModelMenuView', () => {
     expect(inner).toContain('composer__model-icon')
     expect(inner).toContain('aria-hidden="true"')
     expect(inner.replace(/<svg[\s\S]*?<\/svg>/g, '').trim()).toBe(
-      '<span class="composer__model-label">Alpha tier</span>'
+      '<span class="composer__model-label">Alpha</span>'
     )
   })
 
   // THE PANEL'S NAME IS CLIENT-OWNED and is NOT the trigger's visible text, unlike ComposerActionsMenu's:
   // this label is claude-authored, and aria-label is an attribute — a sink CLAUDE.md's daemon-text ruling
   // forbids outright. Asserted as an absence of the daemon string from every attribute position.
+  //
+  // #1095 EXTENDS IT TO THE DERIVED LABELS. Each family is a string this client MINTED from daemon text
+  // rather than one the daemon sent, so it is not covered by sweeping the seeded rows — and it is the
+  // string most likely to look client-owned enough to be dropped into an attribute by a later change.
   it('names the menu with a client-owned constant and puts no daemon text in an attribute', () => {
     const markup = view(LIST, 'alpha')
     expect(COMPOSER_MODEL_MENU_LABEL).toBe('Model')
-    expect(markup).not.toContain('aria-label="Alpha tier"')
+    expect(markup).not.toContain('aria-label="Alpha"')
     for (const attr of markup.match(/[a-z-]+="[^"]*"/g) ?? []) {
       for (const seeded of ROWS) {
         expect(attr).not.toContain(seeded.display_name)
         expect(attr).not.toContain(seeded.value)
       }
+      for (const family of ROW_FAMILIES) expect(attr).not.toContain(family)
     }
   })
 
@@ -287,7 +483,7 @@ describe('ComposerModelMenuView', () => {
   ])('renders an inert label, announcing no popup, when %s (AC4)', (_why, models) => {
     const markup = view(models as ModelListEntry | null, 'alpha')
     expect(markup).toBe(
-      '<span class="composer__footer-button"><span class="composer__model-label">alpha</span></span>'
+      '<span class="composer__footer-button"><span class="composer__model-label">Alpha</span></span>'
     )
     expect(markup).not.toContain('aria-haspopup')
     expect(markup).not.toContain('composer-options-anchor')
@@ -313,10 +509,13 @@ describe('ComposerModelMenuView', () => {
       />
     )
     expect(rowCount(markup)).toBe(ROWS.length)
-    for (const seeded of ROWS) expect(markup).toContain(`>${seeded.display_name}<`)
+    for (const family of ROW_FAMILIES) expect(markup).toContain(`>${family}<`)
+    // The published prose is GONE from the panel — the half a derivation that only touched the trigger
+    // would leave standing.
+    for (const seeded of ROWS) expect(markup).not.toContain(seeded.display_name)
     // Exactly one row is the current one, and it is the matched one.
     expect(countOf(markup, 'aria-current')).toBe(1)
-    expect(markup).toContain('aria-current="true">Beta tier<')
+    expect(markup).toContain('aria-current="true">Beta<')
   })
 })
 
@@ -334,12 +533,15 @@ describe('composerModelMenuModel — an inherited-default session (#1168)', () =
   it('marks nothing when picked and stored are both empty, whatever the announcement shows', () => {
     const menu = composerModelMenuModel(list, layers({ announced: 'gamma' }))
     expect(menu?.currentId).toBeNull()
-    expect(menu?.label).toBe('Gamma tier')
+    expect(menu?.label).toBe('Gamma')
   })
 
-  it('labels an unmatched announcement verbatim rather than resolving the inherited-default row', () => {
+  // #1095 moved this label from the identifier verbatim to its family; the CLAIM is unchanged and is about
+  // the join, not the text — an unmatched announcement must not resolve the inherited-default row, so the
+  // family derives from the announcement itself and nothing is marked.
+  it('derives an unmatched announcement from itself rather than resolving the inherited-default row', () => {
     const menu = composerModelMenuModel(list, layers({ announced: 'unpublished-identifier' }))
-    expect(menu?.label).toBe('unpublished-identifier')
+    expect(menu?.label).toBe('Unpublished')
     expect(menu?.currentId).toBeNull()
   })
 })

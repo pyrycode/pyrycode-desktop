@@ -78,13 +78,31 @@ and drawing it over an element that opens nothing is the visual half of the clai
 that draws it (`composer__footer-button`) carries no `cursor: pointer`, so the inert arm doesn't lie about
 being clickable either — see § CSS extraction.
 
-**The label:** `row ? row.display_name : shown`, where `shown` is the first non-empty layer
-(picked → announced → stored), mirroring `RunningModelSection`'s expression exactly rather than
-`row?.display_name ?? shown`, which would treat a matched row's empty `display_name` as a miss. The match
-is `publishedRowFor(models, shown)` — the one exported home for the rule, exported since #988 for its
-third caller (`RunConfigSections.tsx`) and reused by #1053 for a fourth. A miss is ordinary, not an error:
-the value renders verbatim — since #1053, this is also the *common* case for an announcement, which claude
-reports at least as specific an identifier as it was given.
+**The label, since #1095, is a family, not the published prose.** `row ? row.display_name : shown` — the
+expression above, mirroring `RunningModelSection`'s exactly rather than `row?.display_name ?? shown` (which
+would treat a matched row's empty `display_name` as a miss) — is now only the **fallback** (`verbatim`
+below), reached when nothing derives a family. The match is still `publishedRowFor(models, shown)` — the
+one exported home for the rule, exported since #988 for its third caller (`RunConfigSections.tsx`) and
+reused by #1053 for a fourth. A miss is ordinary, not an error: since #1053, it is also the *common* case
+for an announcement, which claude reports at least as specific an identifier as it was given.
+
+Juhana ruled on 2026-09-05 that this control shows the family and nothing else — no version, no date, no
+context size, since those are always the newest and so carry no information here. `modelFamily(identifier)`
+(module-private, beside `firstShown`) is the whole rule: strip one leading `claude-` if present, take the
+leading run of ASCII letters, upper-case its first letter, hold the rest as claude sent them; `''` when
+nothing matches. `''` is the same "nothing here" `firstShown` already consumes, so the source chain composes
+with it rather than adding a second nullability idiom. There is no allow-list — a family this client has
+never heard of (`claude-newname-6`) derives through the same rule as a known one, which is what keeps #988's
+AC2 ("no client copy naming a model concept") intact; the one client-owned literal on this path is the
+`claude-` prefix itself, a vendor-prefix strip rather than a vocabulary.
+
+The trigger's source chain, on a hit: `firstShown(modelFamily(row.resolved_model), modelFamily(row.value))`,
+falling back to `verbatim = row ? row.display_name : shown` when both derive `''`. On a miss:
+`modelFamily(shown)`, falling back to `shown` itself. `resolved_model` leads because the trigger's job is to
+name what **runs**, and it is the field naming the concrete identifier behind an alias like `default`; the
+`value` step is an ordinary second source rather than a guard against an unseen case — the captured fixture
+`WireModelOption`'s docblock cites carries the literal `<unmeasured>` on four of its five rows, whose head is
+`<` and so yields `''`.
 
 **The marking (`currentId`) is a second, separate lookup (#1053):** `publishedRowFor(models, session)`
 where `session` is the first non-empty of picked and stored — **never** the announcement. The label and
@@ -97,12 +115,19 @@ for this lookup too, including its edge case: a daemon publishing a row whose `v
 that row marked current on an inherited-default session with no pick — the lookup answering honestly,
 not a case this code guards against.
 
-**The options:** `entry.models.map((row) => ({ id: row.value, label: row.display_name }))`, exactly the
-published rows, in the daemon's order — nothing deduped, dropped, reordered or synthesized, per AC2. `id`
-is the row's `value`, so `onSelect(id)` submits it with no lookup. Two rows may legitimately share a
-`value` (claude's prerogative, per the store's own header); both are carried and both wear
-`aria-current`, accepted rather than fixed, since AC2's "exactly the published rows" outranks a tidier
-list.
+**The options:** `entry.models.map((row) => ({ id: row.value, label: ... }))`, exactly the published rows,
+in the daemon's order — nothing deduped, dropped, reordered or synthesized, per AC2. `id` is the row's
+`value`, so `onSelect(id)` submits it with no lookup. Two rows may legitimately share a `value` (claude's
+prerogative, per the store's own header); both are carried and both wear `aria-current`, accepted rather
+than fixed, since AC2's "exactly the published rows" outranks a tidier list.
+
+**Since #1095, each row's `label` is `modelFamily(published.value)`, falling back to `published.display_name`
+when that derives `''`.** A row reads its own `value` and **never** `resolved_model` — the opposite of the
+trigger, deliberately: a row's job is to name a *choice*, and `default` is its own choice. Derived from
+`resolved_model` it would wear the label of the row it resolves to (`claude-sonnet-5` → `Sonnet`), and the
+panel would show two identical rows submitting different values; from `value` it reads `Default`, the
+daemon's own word capitalised. Two rows that derive to the same family are both shown, per AC2, and each
+still submits its own `value` — the derivation changes nothing about which rows exist or what they send.
 
 This is the panel's first consumer to pass a non-null `currentId` (`ComposerActionsMenu` passes `null`:
 "a list of actions, not a choice"). A miss marks nothing, through the panel's existing no-special-case
@@ -230,6 +255,20 @@ name stays its visible (auto-escaped) text. No `title` tooltip either, for the s
 label cap (§ CSS below) still clips a long announced identifier with no fallback surface; the
 run-configuration sheet stays the full reading.
 
+**Since #1095, both text positions usually carry a derived family instead of the published prose or the raw
+identifier — strictly less exposure, not more.** `modelFamily` is a view-side transform on a held-verbatim
+value, the same tier as `.composer__model-label`'s CSS ellipsis one element up: it does not sanitize and
+does not claim to, the store still holds every string verbatim, and React still escapes the one text
+position each label reaches. A family is a `[A-Za-z]+` prefix with one character upper-cased, so a control
+byte or a terminal escape can reach the DOM only through the unchanged verbatim fallback — the same path
+that carried it before this ticket. Nothing feeds a derived label back into a lookup: `publishedRowFor` is
+still called with the raw string, `currentId` is still a raw published `value`, and `onSelect` still
+dispatches a value a row carries; the only branch on a derived label is `=== ''`, on the client's own
+answer. The standing "`value` is not parseable" prohibition in `modelListStore.ts`, `shared/ipc/events.ts`
+and `shared/wire/types.ts` is re-scoped rather than deleted by this ticket: it stays absolute about
+matching, indexing and keying — deriving a display label is none of those three, and a consumer deriving a
+family for any other purpose is still doing the forbidden thing.
+
 This menu deliberately surfaces neither of `ModelListEntry`'s two truncation reports
 (`truncated_fields`, `droppedModels`), nor `announcedModelStore`'s own `truncated` cut report — the
 run-configuration sheet remains the surface that reports a cut; withholding a report here is a
@@ -301,7 +340,38 @@ label off the announcement; and a picked third row still moves the label at once
 announcement (not to the stored choice) on a withheld-reply, correlated-`error`-frame rejection — the same
 optimistic-overlay idiom above, proving where a reverted pick lands when an announcement is present.
 
+**#1095 turned the published-prose label into a derived family**, and with it, both e2e specs' miss→hit
+step (published rows arrive; the label moves off the launch-state string) went vacuous: every alias in
+`MODEL_ROWS` matched its own family by construction, so both sides of the transition rendered the same
+family and the assertion passed whether or not the row lookup ran. The only re-anchor is a row whose
+`value` and `resolved_model` name *different* families — `default`, resolving to `claude-sonnet-5`, is the
+**only** published value with that property, since every other alias derives its own family from itself.
+Both `composer-model-menu.spec.ts` and `composer-model-announced.spec.ts` replaced one row with
+`default` / `claude-sonnet-5`, so the label reads `Default` before the list and `Sonnet` after — an
+observable move only a real row lookup produces. This was not a convenient choice; it was the only one
+available, which is worth stating in a spec so a later edit doesn't swap the anchor row for a tidier one
+that quietly loses the property.
+
+**A label narrowing can disarm a spec that used the label as a settle signal, with no test list to catch
+it.** `e2e/composer-permission-mode-auto.spec.ts` waits on `.composer__model-label` twice to prove a
+`model_list` frame landed, and it wasn't on this ticket's own "tests that change" list — it surfaced only
+from grepping the label's class across all of `e2e/`. Once its two rows' `display_name`s collapsed to one
+family, both waits passed before the frame arrived and the drive's last step lost its only barrier, with no
+assertion going red. Fixed by giving those two rows `resolved_model` values that derive to distinct
+families (`Refusing` / `Relenting`), restoring an observable change at each tick. The general lesson: grep
+the *rendered element* of anything whose text is being narrowed, not just the specs that exercise the
+component directly.
+
+**`ComposerModelMenu.test.tsx`'s invented-fixture-identities discipline (see #988 below) inverted rather
+than expired under this ticket.** The file uses invented tokens (never a real model name) so a bug that
+derives a label from a hardcoded family vocabulary can't hide behind a coincidentally-correct real one.
+\#1095 *adds* a derivation, which reads like the moment that discipline stops mattering — but the bug it
+guards against is exactly an allow-list of known families, which an invented family (`claude-alpha-5`)
+still catches and a real one would hide. Same discipline, opposite-seeming ticket, unchanged reason.
+
 See [PR #1018](https://github.com/pyrycode/pyrycode-desktop/pull/1018) and
 `docs/specs/architecture/988-composer-model-menu.md` for #988's full plan, its security review, and its
 `## Revisions` entry recording the `composerModelMenuModel` extraction and the 120px measurement. See
-`docs/specs/architecture/1053-footer-model-announced-layer.md` for #1053's plan and security review.
+`docs/specs/architecture/1053-footer-model-announced-layer.md` for #1053's plan and security review, and
+`docs/specs/architecture/1095-model-family-only-in-the-footer.md` for #1095's plan, security review and
+`## Revisions` entry.

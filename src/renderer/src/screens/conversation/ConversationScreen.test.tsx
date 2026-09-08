@@ -4401,9 +4401,12 @@ describe('ConversationScreen — store binding', () => {
       // The design's item order: Actions, then the model control, then the reading.
       expect(modelAt).toBeGreaterThan(triggerAt)
       expect(markup.indexOf('composer__context')).toBeGreaterThan(modelAt)
-      // The verbatim fallback, through the mounted container: nothing is published, so the label is the
-      // session's own model value.
-      expect(markup).toContain('>seeded-session-model<')
+      // The mount proof's own half, through the mounted container: nothing is published, so the label is
+      // derived from the session's own model value — `seeded-session-model` reads as `Seeded` since
+      // #1095. Still a mount proof, and a slightly stronger one: only a container that read the snapshot
+      // AND ran the derivation can produce this string.
+      expect(markup).toContain('>Seeded<')
+      expect(markup).not.toContain('>seeded-session-model<')
       // AC4's inert arm: THIS control announces no popup and opens no anchor. The count is 2 rather than
       // 1 since #682 — the seeded snapshot names a permission mode, and that control's entries are a
       // client-owned constant, so it is operable here where the model control is not. Both counts moved

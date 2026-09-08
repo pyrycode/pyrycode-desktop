@@ -1740,10 +1740,16 @@ export interface QuestionRefusedPayload {
  * below, in this file's test suite, and in two package overviews. Leaving it unclaimed keeps every one
  * of those references pointing where it always did.
  *
- * `value` IS THE ARGUMENT YOU PASS (`claude --model <value>`). It is NOT a dated identifier and NOT
- * PARSEABLE: the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet` and
- * `haiku` — a literal, a bare alias, or a bracketed variant. Splitting it on `-` to derive a family
- * does not work and no consumer may try; nor may it be presented as a version.
+ * `value` IS THE ARGUMENT YOU PASS (`claude --model <value>`). It is NOT a dated identifier, and it is
+ * NOT PARSEABLE FOR MATCHING, INDEXING OR KEYING: the measured entries are `default`, `opus[1m]`,
+ * `claude-fable-5[1m]`, `sonnet` and `haiku` — a literal, a bare alias, or a bracketed variant — so no
+ * join may split it, no index may be built from a piece of it, and it may never be presented as a
+ * version. #1095 re-scoped that from the absolute it used to state. Deriving a DISPLAY LABEL is none of
+ * the three: the input footer's model control shows a FAMILY, taking the leading run of ASCII letters
+ * after one optional `claude-` (so `default` reads `Default` and `claude-fable-5[1m]` reads `Fable`).
+ * That is a view-side transform on a held-verbatim value, it is downstream of every lookup, and no
+ * derived label is ever fed back into one — the join here is still exact equality on the whole string.
+ * A consumer deriving a family for any purpose OTHER than display is still doing the forbidden thing.
  *
  * `resolved_model` is what `value` resolves to RIGHT NOW: the concrete identifier, published BEFORE
  * the first turn, which is what lets a client show what an alias currently means instead of inferring

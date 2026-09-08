@@ -23,11 +23,11 @@ import type {
 // with the production encoder, a seeded session_settings baseline, a capturing set_session_settings fake)
 // and composer-actions.spec.ts's footer-menu drive.
 //
-// THE TRIGGER IS LOCATED BY A DAEMON-AUTHORED NAME, which is the one thing this spec cannot borrow from
-// its sibling. composer-actions.spec.ts locates by COMPOSER_ACTIONS_LABEL, a client-owned constant; this
-// trigger's visible text IS the published display name, so the locator is the name this spec itself
-// seeded. That is not a weaker proof — it is a stronger one: a trigger showing anything else is not
-// findable at all.
+// THE TRIGGER IS LOCATED BY A NAME DERIVED FROM DAEMON TEXT, which is the one thing this spec cannot
+// borrow from its sibling. composer-actions.spec.ts locates by COMPOSER_ACTIONS_LABEL, a client-owned
+// constant; this trigger's visible text is a FAMILY derived from the strings this spec itself seeded
+// (#1095 — before it, the published display name). That is not a weaker proof, it is a stronger one: a
+// trigger showing anything else is not findable at all.
 //
 // ONE test() block, ONE launch, ONE continuous drive (paired-shell-navigation.spec.ts's shape): each
 // launch pays a full handshake, the ordering is load-bearing (the list must arrive AFTER the app has
@@ -52,22 +52,36 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // set_session_settings payload. A non-secret routing id — and the thing that un-inerts the write.
 const SESSION_ID = 'session-988'
 
-// The published rows. Display names are the trigger's and the rows' locators, so they are chosen
-// MUTUALLY NON-SUBSTRING; the values cover the measured shapes, including a bracketed variant that is
-// emphatically not parseable — nothing in this feature may derive a family from one.
+// The published rows. The values cover the measured shapes, including a bracketed variant that is NOT
+// PARSEABLE FOR MATCHING, INDEXING OR KEYING — the join below is still exact equality on the whole string,
+// and nothing in this feature splits a value to look anything up. #1095 re-scoped that from the absolute
+// this note used to state: the trigger and the rows now DISPLAY a family derived from these strings, which
+// is why the locators below read families rather than display names.
+//
+// SINCE #1095 THE DERIVED FAMILIES ARE THE LOCATORS, so it is THEY that must be mutually non-substring:
+// `Default`, `Opus` and `Haiku` for the rows, plus `Sonnet` for the trigger once the list resolves the
+// baseline. The display names survive as the rows' published prose and as the fallback these values never
+// reach, but nothing locates by them any more.
+//
+// THE FIRST ROW IS `default`, AND IT IS WHAT MAKES THIS DRIVE'S MISS→HIT STEP FALSIFIABLE AT ALL. The
+// trigger derives from a matched row's `resolved_model` and from the shown string on a miss, so any row
+// whose two fields name the same family renders identically either side of the list's arrival and the step
+// proves nothing. `default` is the ONLY published value where they differ — every other alias matches its
+// own family by construction — and pyrycode#2124's captured `initialize` reply publishes it as an ordinary
+// row resolving to `claude-sonnet-5`, which is exactly the shape seeded here.
 const MODEL_ROWS: WireModelOption[] = [
   {
-    value: 'opus[1m]',
-    display_name: 'Wide context',
-    resolved_model: 'claude-opus-5',
+    value: 'default',
+    display_name: 'Inherited default',
+    resolved_model: 'claude-sonnet-5',
     effort_levels: ['low', 'high'],
     supports_auto_mode: true,
     truncated_fields: null
   },
   {
-    value: 'sonnet',
-    display_name: 'Balanced pick',
-    resolved_model: 'claude-sonnet-5',
+    value: 'opus[1m]',
+    display_name: 'Wide context',
+    resolved_model: 'claude-opus-5',
     effort_levels: ['low', 'high'],
     supports_auto_mode: true,
     truncated_fields: null
@@ -82,13 +96,19 @@ const MODEL_ROWS: WireModelOption[] = [
   }
 ]
 
+// The families the rows above derive to, stated by hand rather than by re-implementing the production rule
+// in the test: a row shows the family of its OWN `value`, and the trigger shows the family of the matched
+// row's `resolved_model`. They differ for exactly one row, which is the whole point of seeding it.
+const ROW_FAMILIES = ['Default', 'Opus', 'Haiku']
+const BASELINE_TRIGGER_FAMILY = 'Sonnet'
+
 const BASELINE_MODEL = MODEL_ROWS[0]
 const HAPPY_MODEL = MODEL_ROWS[1]
 const REJECTED_MODEL = MODEL_ROWS[2]
 
 // The baseline the read request is answered with. Its model is the first row's PUBLISHED value verbatim,
 // so exact equality selects that row — and, before the list arrives, that same string is what the trigger
-// must show verbatim.
+// derives its family from.
 const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   session_id: SESSION_ID,
   model: BASELINE_MODEL.value,
@@ -221,10 +241,10 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   daemon.pushFrame(turnStateFrame('idle'))
 
   // --- AC4, and it must be asserted BEFORE the push or not at all. No list has arrived, so the control
-  // shows the session's model — the raw published value, which is also AC1's verbatim fallback — and is
+  // shows the family of the session's model derived from the shown string alone (#1095's miss arm) and is
   // INERT: no popup announced, and the footer still holds exactly one anchor (the Actions menu's). An
   // operable trigger over an empty panel would fail all three. ---
-  await expect(label).toHaveText(BASELINE_MODEL.value, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText(ROW_FAMILIES[0], { timeout: ROUNDTRIP_TIMEOUT_MS })
   // TWO rather than one since #682: the Actions menu's, plus the permission-mode control's. That one is
   // operable the moment a snapshot names a mode — its entries are a client-owned constant, so it has no
   // list to be waiting for — and this baseline names one. The claim being made here is still THIS
@@ -232,28 +252,39 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   await expect(page.locator('.composer__footer [aria-haspopup="menu"]')).toHaveCount(2)
   await expect(page.locator('.composer__footer .composer-options-anchor')).toHaveCount(2)
 
-  // --- The list arrives unsolicited (AC1). Exact equality on `value` resolves the session's model to the
-  // first published row, so the label becomes that row's DISPLAY NAME — the only string that could
-  // replace the value here. ---
+  // --- The list arrives unsolicited (AC1), and this is the step #1095 had to re-anchor. Exact equality on
+  // `value` resolves the session's model to the first published row, and the trigger then reads that row's
+  // `resolved_model` instead of the shown string — so the label moves from `Default` to `Sonnet`. That
+  // move is the ONLY observable difference a row lookup still makes to this trigger, which is why the
+  // seeded first row must be one whose two fields name different families. ---
   daemon.pushFrame(modelListFrame())
-  await expect(label).toHaveText(BASELINE_MODEL.display_name, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText(BASELINE_TRIGGER_FAMILY, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // --- Open (AC2). The trigger is now a real button whose accessible name is that display name; the
-  // chevron is aria-hidden, so the name is exactly the label. ---
-  await trigger(BASELINE_MODEL.display_name).click()
+  // --- Open (AC2). The trigger is now a real button whose accessible name is that family; the chevron is
+  // aria-hidden, so the name is exactly the label. `exact` still matters, and the trigger's family is
+  // deliberately one no ROW wears — the two would otherwise be separated only by role. ---
+  await trigger(BASELINE_TRIGGER_FAMILY).click()
   await expect(panel).toBeVisible()
   // Exactly the published rows, one per entry, in the daemon's published order — toHaveText is exact and
-  // ordered, so a dropped, invented, reordered or deduped row fails here.
-  await expect(panel.getByRole('menuitem')).toHaveText(MODEL_ROWS.map((row) => row.display_name))
+  // ordered, so a dropped, invented, reordered or deduped row fails here. Each row wears the family of its
+  // OWN `value` (#1095), which is why the first reads `Default` rather than the `Sonnet` its
+  // `resolved_model` would give: a row names a choice, and `default` is its own choice.
+  await expect(panel.getByRole('menuitem')).toHaveText(ROW_FAMILIES)
+  // The published prose is gone from the panel entirely — the half a derivation that only reached the
+  // trigger would leave standing.
+  for (const row of MODEL_ROWS) {
+    await expect(panel.getByText(row.display_name, { exact: true })).toHaveCount(0)
+  }
   // AC2's marking: the row AC1 matched is the current one, and it is the only one.
-  await expect(panel.locator('[aria-current="true"]')).toHaveText(BASELINE_MODEL.display_name)
+  await expect(panel.locator('[aria-current="true"]')).toHaveText(ROW_FAMILIES[0])
 
   // --- Pick (AC3). The label moves to the picked row AT ONCE — the optimistic overlay, asserted before
   // the confirm has any chance to matter — and exactly one set_session_settings goes out carrying only
-  // the model field, with the row's `value` verbatim rather than its display name. ---
-  await panel.getByRole('menuitem', { name: HAPPY_MODEL.display_name, exact: true }).click()
+  // the model field, with the row's `value` VERBATIM. That payload assertion is the one place #1095 must
+  // not reach: the write still sends the raw published value, never the family the row displays. ---
+  await panel.getByRole('menuitem', { name: ROW_FAMILIES[1], exact: true }).click()
   await expect(panel).toBeHidden()
-  await expect(label).toHaveText(HAPPY_MODEL.display_name)
+  await expect(label).toHaveText(ROW_FAMILIES[1])
   await expect
     .poll(() => settingsFramesMatching(captured, { session_id: SESSION_ID, model: HAPPY_MODEL.value }), {
       timeout: ROUNDTRIP_TIMEOUT_MS
@@ -263,9 +294,9 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // --- Reject (AC3's second half), and the one drive that separates the OPTIMISTIC label from a
   // confirmed one: the fake withholds this reply, so the trigger sits on a value the daemon has not
   // agreed to. ---
-  await trigger(HAPPY_MODEL.display_name).click()
-  await panel.getByRole('menuitem', { name: REJECTED_MODEL.display_name, exact: true }).click()
-  await expect(label).toHaveText(REJECTED_MODEL.display_name)
+  await trigger(ROW_FAMILIES[1]).click()
+  await panel.getByRole('menuitem', { name: ROW_FAMILIES[2], exact: true }).click()
+  await expect(label).toHaveText(ROW_FAMILIES[2])
 
   // The correlated rejection, addressed by the envelope id the app itself minted — read back off the
   // capture, which is the only place the test can learn it.
@@ -281,6 +312,6 @@ test('composer footer: the model menu labels, offers, submits and reverts (AC1-A
   // pick above, not to the baseline. The footer says nothing further about it: the row has a hard 20px
   // height with no slot for an error line, and the run-configuration sheet is where the rejection is
   // named.
-  await expect(label).toHaveText(HAPPY_MODEL.display_name, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(label).toHaveText(ROW_FAMILIES[1], { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.composer__footer [role="alert"]')).toHaveCount(0)
 })

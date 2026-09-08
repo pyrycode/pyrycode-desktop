@@ -143,7 +143,13 @@ test('a row control names itself in a pill on hover and on focus, inside the scr
 
   const list = page.locator('.channel-list')
   const rows = page.locator('.channel-list__row')
-  const pills = page.locator('.channel-list__control-name')
+  // ⭐ SCOPED TO `.channel-list__row` SINCE #1181, which gave the WORKSPACE row's plus the same pill
+  // class. That control lives in `.channel-list__workspace-head`, not in a row, so this scope restores
+  // every count and every `first()` / `last()` below to exactly the element it was written for — and
+  // without it the breakage is worse than arithmetic: the workspace head precedes its group's rows in
+  // document order, so `pills.first()` would silently stop being the first row's Rename pill. Nothing
+  // else in this file moved; the workspace pills are `e2e/sidebar-workspace-plus-name-pill.spec.ts`'s.
+  const pills = page.locator('.channel-list__row .channel-list__control-name')
   const renames = page.locator('.channel-list__rename')
   const save = page.locator('.channel-list__save')
   const sidebar = page.locator('.paired-shell__sidebar')

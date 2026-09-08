@@ -1165,6 +1165,70 @@ describe('ChannelListView', () => {
     })
   })
 
+  describe('the workspace plus’s name pill (#1181)', () => {
+    // #1179's fixture verbatim — one row per tree, both in the SAME workspace — so each tree draws a
+    // group and therefore a plus, and the two are told apart by their name alone.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    // Only the MARKUP is assertable here: the reveal, the drawing and the box all need a layout engine
+    // and live in e2e/sidebar-workspace-plus-name-pill.spec.ts.
+    //
+    // Asserted as the closing-tag ADJACENCY rather than as two independent substrings, which is #1172's
+    // reason applied one level up the tree: the glyph's opening run is pinned whole by #1178's describe,
+    // so a pill that drifted in FRONT of the <svg> reddens there — but only this assertion says WHERE the
+    // pill is, and only it fails if the pill moves out of the button altogether (a sibling of the control
+    // would still contain both substrings).
+    //
+    // The `aria-hidden` rides in the same run on purpose. A button's `aria-label` already overrides its
+    // child text for the accessible name, so the attribute is belt-and-braces — which is exactly why it
+    // needs pinning: nothing else in either tier would redden if it were dropped.
+    it('names each tree’s plus in an aria-hidden pill inside the button (AC1/AC2)', () => {
+      const { channels, chats } = treesOf(bothTrees())
+      expect(channels).toContain(
+        '</svg><span class="channel-list__control-name" aria-hidden="true">Create channel</span>'
+      )
+      expect(chats).toContain(
+        '</svg><span class="channel-list__control-name" aria-hidden="true">Create chat</span>'
+      )
+    })
+
+    // The pill text and the `aria-label` come off ONE constant per tree (`create.label`), so this is the
+    // drift guard: the tree that carries the accessible name carries the pill text, and the two read the
+    // same words. Counted rather than merely contained — a pill drawn on the wrong tree's plus, or a
+    // second one on a group that draws a single control, shows here.
+    it('keeps each plus’s pill text and accessible name in step (AC1)', () => {
+      const { channels, chats } = treesOf(bothTrees())
+      expect(countOf(channels, CREATE_CHANNEL_MARKER)).toBe(1)
+      expect(countOf(channels, '>Create channel</span>')).toBe(1)
+      expect(countOf(channels, '>Create chat</span>')).toBe(0)
+      expect(countOf(chats, CREATE_CHAT_MARKER)).toBe(1)
+      expect(countOf(chats, '>Create chat</span>')).toBe(1)
+      expect(countOf(chats, '>Create channel</span>')).toBe(0)
+    })
+
+    // AC2's other half, and the reason it can be asserted rather than argued: `createTagsIn` slices the
+    // control's OPENING TAG only, so a text-node child leaves every #1178/#1179 marker byte-identical.
+    // Stated here as an equality on both tags so a child that landed in the tag — an attribute rather
+    // than an element — would fail, which is the one shape the adjacency test above cannot see.
+    it('leaves #1178/#1179’s plus and workspace markers byte-identical (AC2)', () => {
+      const markup = bothTrees()
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, WORKSPACE_HEAD_MARKER)).toBe(2)
+      const tags = createTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      expect(tags[0]).toBe(
+        `<button type="button" class="channel-list__workspace-create" ${CREATE_CHANNEL_MARKER}>`
+      )
+      expect(tags[1]).toBe(
+        `<button type="button" class="channel-list__workspace-create" ${CREATE_CHAT_MARKER}>`
+      )
+    })
+  })
+
   describe('the connection dots ending each host row (#718)', () => {
     // The #710 shape verbatim — one row per tree — so the dot counts below are exactly twice the host-row
     // counts that describe pins.

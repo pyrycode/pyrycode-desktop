@@ -395,6 +395,44 @@
   opacity: 1;
 }
 
+/* #1181 — THE PLUS'S NAME PILL, the same `.channel-list__control-name` the row's trailing controls wear
+   (its block far below draws it; this is only the trigger). Placed here rather than beside that block
+   because a reader asking what this plus does is already reading these thirty lines.
+
+   ⭐ THE CONTROL'S OWN `:hover`, NEVER THE HEAD ROW'S — which is the whole of "hovering the row's label
+   shows nothing". Deliberately a DIFFERENT scope from the glyph's reveal three lines up: that one fires
+   from the row so the glyph is already there when the pointer arrives at a 20px box it could not
+   otherwise see, and this one fires from the control so the name answers only the thing being pointed at.
+   The two scopes are the design, not an inconsistency. `:focus-visible` and not `:focus`, matching the
+   control's own opacity rule above, so the keyboard case cannot half-fire.
+
+   THE GEOMETRY IS ENTIRELY THE CONTROL BLOCK'S AND ADDS NO NUMBER. The pill is `right: 0; top: 50%;
+   translateY(-50%)` in its containing block, which here is the plus itself (`position: absolute`, so it
+   is one). The plus is a 20px box at `--space-1` down a 28px head row, so its centre is the ROW's centre;
+   the pill is 24px tall (--space-1 + the 16px body-small line + --space-1), so it spans 2…26 of that 28
+   and sits INSIDE THE ROW'S OWN BAND. Containment inside `.channel-list` — which is `overflow-y: auto`
+   and so clips on both axes — then follows from the row being in view, at any scroll position, rather
+   than from the rows a test happens to reach. `right: 0` pins it to the plus's right edge, which is the
+   head row's, which is the scroller's content right edge, so it grows LEFTWARD and adds no horizontal
+   overflow (an out-of-flow box contributes it only rightward or downward).
+
+   ⭐ WHICH ASSERTION DETECTS A WRONG PLACEMENT — MEASURED, NOT ASSUMED, the same way #1172 measured it
+   for the row's pills. Re-pointing this pill at the composer's placement (`bottom: calc(100% + --space-2)`,
+   above the row) moves it 30px off the head row's centre and reddens
+   `e2e/sidebar-workspace-plus-name-pill.spec.ts`'s BAND assertion. Every containment read in that file
+   stays GREEN under the same mutation — checked by disabling the band assertion and re-running — because
+   at scroll top a section header and a host row sit above this row. So containment is the criterion the
+   ticket owes and the band is what makes it true; neither stands in for the other.
+
+   THE COST, STATED: while the plus is hovered its pill covers the trailing ~90px of that row's label.
+   Accepted, as #1172 accepted the same on the row's controls — it is up only while the pointer sits on a
+   20px control, and `pointer-events: none` on the pill is what lets a click aimed at the row, or
+   Playwright's hit test on the two shipped drives that click this plus, read straight through it. */
+.channel-list__workspace-create:hover .channel-list__control-name,
+.channel-list__workspace-create:focus-visible .channel-list__control-name {
+  display: block;
+}
+
 /* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
 .channel-list__workspace-create-icon {
   display: block;
@@ -830,7 +868,11 @@
    `:focus-visible` and not `:focus`, matching the control's own opacity rule directly above it: the same
    pseudo-class turns the control opaque and its pill `block`, so the keyboard case cannot half-fire. Four
    selectors rather than a descendant-of-any-button form — `.channel-list__row-open` is a button too, and
-   naming the two controls says which elements can carry a pill. */
+   naming the two controls says which elements can carry a pill.
+
+   #1181 gave the WORKSPACE row's plus the same pill and its own trigger pair, written beside that
+   control rather than joined onto this list — same reason: each rule names the elements that can carry
+   one, so the set stays readable where the control is. This rule is still the row's two and only. */
 .channel-list__save:hover .channel-list__control-name,
 .channel-list__save:focus-visible .channel-list__control-name,
 .channel-list__rename:hover .channel-list__control-name,

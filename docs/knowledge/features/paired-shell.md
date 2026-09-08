@@ -73,7 +73,7 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
   conversation payload, and in the single-active-conversation model "open" already means "show the
   existing active conversation's thread."
 - That same `conversationCreated` payload — previously discarded after triggering the nav — is now
-  also snapshotted into the [active-conversation store](conversation-shell-workspace-and-run-config.md#workspace-chip-278) so
+  also snapshotted into the [active-conversation store](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) so
   the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
   arm, or subscription — one existing callback now does two things instead of one.
 - [#652](../codebase/652.md) added a **fourth** trigger for `back` specifically, not `open`: deleting
@@ -200,7 +200,7 @@ src/renderer/src/
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the fifth route, `archive`, and its entry button sharing the Channel List's actions cluster
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
-- [Workspace chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
+- [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — its `reset` action is one of the fourteen clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140) and [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged

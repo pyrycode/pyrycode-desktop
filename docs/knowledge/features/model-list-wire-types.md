@@ -294,11 +294,11 @@ store](model-list-store.md). [#975](https://github.com/pyrycode/pyrycode-desktop
 first render consumer: it deleted `MODEL_CATALOG`/`matchedFamily` from `RunConfigSections.tsx` and
 built the Model section's rows straight off the held entry — see [Conversation shell — workspace and
 run configuration § Run configuration Model section, daemon-published
-rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
+rows](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975).
 [#976](https://github.com/pyrycode/pyrycode-desktop/issues/976) is the second: it deleted
 `EFFORT_LEVELS` and built the Effort section's segments off the same held entry, joined by the same
 `value`-equality helper (renamed `publishedRowFor`) — see [§ Run configuration Effort section,
-daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
+daemon-published levels](conversation-shell-run-configuration.md#run-configuration-effort-section-daemon-published-levels-976).
 The input footer's [model and effort menus](composer-model-menu.md) (#683) and the
 [permission-mode menu](composer-permission-mode-menu.md) (#682, its `auto`-hiding join at #1022)
 followed the same pattern.

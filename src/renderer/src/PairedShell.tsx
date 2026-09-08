@@ -10,6 +10,7 @@ import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useConversationDeletedExit } from './store/conversationDeletedBridge'
 import { useArchivedActiveConversationExit } from './store/conversationArchivedBridge'
+import { useActiveConversationReseed } from './store/activeConversationReseedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
 import {
@@ -430,6 +431,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
         conversationId
       )
   )
+  // #1184: the open chat's snapshot follows the daemon's list. The bridge above DERIVES an exit from the
+  // same reply; this one derives a re-seed, and the two are deliberately independent subscriptions with
+  // no ordering contract — neither reads the other's store, both read the event's own rows. NO new deps
+  // object and no navigation: the two members are `activateDeps`' own, so a re-seed writes through the
+  // exact setter the activation path uses, and the snapshot cannot end up sourced from two ideas of what
+  // "the open chat" is. Both are module-scope arrows, which is what lets the hook take them as
+  // subscribe-once pass-throughs rather than effect dependencies.
+  useActiveConversationReseed(activateDeps.getActiveConversation, activateDeps.setActiveConversation)
   // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
   // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no
   // payload; in the single-active model "open" means "show the existing active conversation", so this

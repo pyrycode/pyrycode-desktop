@@ -231,6 +231,119 @@ delete case is. Unobserved, every move is a clear, and this was explicitly left 
 `back` is its own ticket covering both halves. See [#653 codebase notes](../codebase/653.md) for the full
 design rationale, the security review, and code review.
 
+## The list reseed (`activeConversationReseedBridge.ts`, #1184)
+
+Before this, `activeConversationStore`'s snapshot was written once — at activation — and never again.
+A list refresh replaced the sidebar's rows (`setConversations`, driven from `subscribeConversations` on
+every `conversation_updated`), but the open chat's own snapshot kept the name, `cwd` and
+`workspace_label` it had when it was opened. Four surfaces read that snapshot: the [Channel Info
+sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)'s title and About rows,
+its rename prefill, and the [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278)/[Workspace
+Picker sheet](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383). A sidebar
+rename updated the row while every one of those kept the old name — and
+[pyrycode#2159](https://github.com/pyrycode/pyrycode/issues/2159) makes this the common case
+rather than an edge: the daemon auto-names an unnamed chat from its first message and pushes a
+`conversation_updated`, so every new chat would say `Untitled` to its own sheet for the rest of the
+session.
+
+`activeConversationReseedBridge.ts` is the fix, and it copies `conversationArchivedBridge` wholesale —
+same `translate* → subscribe* → use*` shape, same choice to own **no wire arm** and derive the signal
+from `conversationsReceived` instead:
+
+```ts
+export function reseededActiveConversation(
+  conversations: readonly ConversationSummary[] | null,
+  active: ConversationCreatedPayload | null
+): ConversationCreatedPayload | null {
+  if (conversations === null || active === null) return null
+  const matches = conversations.filter((conversation) => conversation.id === active.id)
+  if (matches.length !== 1) return null
+  const row = matches[0]
+  if (/* all five mutable fields === active's */) return null
+  return { id: row.id, is_promoted: row.is_promoted, cwd: row.cwd, name: row.name,
+           last_used_at: row.last_used_at, workspace_label: row.workspace_label }
+}
+```
+
+- **A level over an equality diff, not a presence check** — the point where this predicate departs from
+  `archivedActiveConversationId`'s shape (a level over a *flag*). "The daemon's list describes the open
+  chat differently from the snapshot" covers a sidebar rename, a Save as channel, a change-workspace and
+  the auto-name with one rule and no trigger list, evaluated fresh on every `conversationsReceived` with
+  no notion of who caused the difference.
+- **Ambiguity is refused, never resolved** — `filter` and a length check, the
+  [`serverIdForOpenConversation`](unpair-channel.md#the-two-renderer-callers) discipline, never `find`. Two rows carrying the
+  open chat's id write nothing rather than picking whichever came first.
+- **`id` is the match key and is invariant by construction** — it is excluded from the equality
+  comparison (it is equal by construction, not compared) and the mapper can only ever run on a row
+  already carrying the open chat's id. That is what keeps the reconcile non-destructive: the sheet sends
+  `id` back with Archive and Delete, and no re-seed can retarget those actions.
+- **A closed six-field reconstruction, never the row passed through.** `ConversationSummary` is a
+  structural superset of `ConversationCreatedPayload` — a sidebar `onOpen` hands the clicked row straight
+  to the store (see [Workspace chip § `activeConversationStore.ts`](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278)
+  for that store's writer history) — but a fresh six-field literal here cannot carry an unknown key from
+  a daemon row into the snapshot the four surfaces read. `is_archived` and `last_message_ts` are dropped;
+  a reply moving only those is an unchanged refresh by the rule above.
+- **The equality guard is the re-render guard.** `setActiveConversation` replaces the whole value, so an
+  unconditional write on every routine list refresh would hand every `activeConversation` subscriber a
+  new object identity. Comparing all five mutable fields with `===` (all primitives) before writing means
+  a routine refresh that changes nothing costs nothing.
+- **`conversationUpdated` is deliberately not consumed**, even though its payload carries every field the
+  snapshot holds and reading it would be one line shorter. That frame is the daemon's *announcement*; the
+  `conversations` reply is its *authoritative answer*, decoded through the same main-side path every
+  other reader of this snapshot trusts. Reading the announcement instead would put unvalidated daemon
+  text into the snapshot, bypassing that path.
+- **It is not `activateConversation`.** No timeline reset, no session-id clear, no run-config clear, no
+  navigation — the id has not changed, so none of that is owed, and calling it here would blank the
+  thread the operator is reading.
+
+Wired in `PairedShell` beside the archive-exit bridge, through `activateDeps`'s own getter/setter — no
+new deps object:
+
+```ts
+useActiveConversationReseed(activateDeps.getActiveConversation, activateDeps.setActiveConversation)
+```
+
+**Two independent subscriptions on the same arm, deliberately.** This bridge and
+`conversationArchivedBridge` both read `conversationsReceived` through the same
+`translateConversationsEvent`, but neither reads the other's output or `conversationListStore` — each
+reads the reply's own rows. That is what makes AC3 ("a reply from another paired server leaves the
+snapshot alone") hold structurally: the app-wide union across servers is never consulted, only the one
+reply currently being handled.
+
+**Security residual, accepted rather than fixed: a cross-server id collision.** Two paired servers can
+both claim one conversation id
+([`selectExclusiveConversationIdsFor`](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+is the precedent for that threat). Server B's list reply carrying server A's open chat's id would re-seed A's snapshot with
+B's name, `cwd` and `workspace_label` — this bridge refuses ambiguity only *within* one reply, not across
+two. The obvious tightening — joining the reply's origin against the id's attributed server before
+re-seeding — was considered and rejected: a FAB-minted chat is active before any row for it exists in
+`conversationListStore`'s union, so that join would answer "unattributed" and refuse the re-seed for
+exactly the first-message auto-name case this bridge exists to fix, and whether it answered at all would
+depend on which of two independently-ordered subscriptions ran first. The accepted worst case is display
+text belonging to another paired machine, self-healing on that machine's next list reply, with no
+destructive effect — `id` stays invariant, so no action is retargeted.
+
+**That residual's sink enumeration reaches one command payload, not only screen text — found in code
+review.** `conversation.cwd` is not only rendered: [`CreateFolderDialog` sends it verbatim as the
+`parent` argument of an outbound `create_workspace_folder`
+command](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383). The decision this
+residual rests on is unchanged (the daemon polices `cwd` server-side, the value is shown to the operator
+before they act, and `id` cannot be retargeted) — what code review corrected was the claim that the
+residual was screen-text-only.
+
+**Known coverage gap, flagged in code review rather than fixed.** The decision function
+(`reseededActiveConversation`) and its subscription seam are covered by a full unit table, one case per
+field plus the ambiguity and null arms. The `PairedShell` mount itself has no automated proof — the same
+category of blind spot a deleted bridge mount left invisible to every gate but e2e once before:
+`environment: 'node'` cannot run the effect, so an accidental deletion of the
+`useActiveConversationReseed` call would pass `npm test` and `npm run build` and only surface, if at all,
+in a manual drive. `e2e/conversation-create-rename.spec.ts` already renames through the Channel Info
+sheet and already applies the rename to its fake daemon's held state; asserting the sheet's own title
+after that round trip — not just the re-listed row — would close the gap cheaply, but was left for a
+follow-up rather than added here. Whoever picks it up should also correct
+`e2e/conversation-create-rename.spec.ts`'s own comment, which still reads "activeConversationStore is not
+rewritten by `conversation_updated`" — true before this bridge, false since.
+
 ## The last-read stamp (`conversationLastReadBridge.ts`, #777)
 
 [Conversation last-read store](conversation-last-read-store.md) (#775) shipped with a write path and no

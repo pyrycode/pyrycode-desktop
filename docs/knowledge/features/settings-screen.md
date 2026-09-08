@@ -208,7 +208,7 @@ link points at the right file.
   notes](../codebase/408.md) — the client-owned preference [#409](../codebase/409.md)'s Notifications
   row reads and writes; this screen is that store's write consumer (the read consumer, #392, is
   separate — the delivery-side [Push notifications](push-notifications.md) trigger, still open).
-- [Conversation shell](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
+- [Conversation shell](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
   — `WorkspacePickerSheetView`, the pure picker view [#404](../codebase/404.md) reuses (not its
   conversation-coupled container).
 - [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) —

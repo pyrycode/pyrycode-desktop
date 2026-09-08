@@ -143,7 +143,7 @@ delivered the decoded `created: ConversationCreatedPayload` argument, and the ca
 it (`() => dispatch(...)`). It now also records `created` before dispatching the same `open` transition.
 No new subscription: this is the one existing `conversation_created` listener PairedShell already
 mounted, doing one more thing on the event it already receives. See [Workspace
-chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) for the store and the render it feeds.
+chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) for the store and the render it feeds.
 
 **[#530](../codebase/530.md) replaced the direct `setActiveConversation(created)` call** — and the
 matching one in `onOpen` above — with `activateConversation(activateDeps, …)`. Both nav sites used to

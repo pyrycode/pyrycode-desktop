@@ -2,7 +2,7 @@
 
 The renderer's held copy of the active session's **Model / Effort / YOLO** settings — a dedicated,
 unidirectional Zustand store fed by an app-lifetime subscription and refreshed on two daemon-event
-edges, so the [Run configuration sheet](conversation-shell-workspace-and-run-config.md#run-configuration-sheet-177) can
+edges, so the [Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-sheet-177) can
 display how the session is running. The store is now live app-wide (#810, see § Live outside the
 sheet below) rather than fed only by the sheet's own open transition.
 
@@ -424,11 +424,11 @@ actually announced instead.
 
 At #560 ship time, resolution was an exact-match lookup against `MODEL_CATALOG`, four hardcoded
 family tokens. **#975 deleted the catalog** (see [Conversation shell — workspace and run
-configuration § Run configuration Model section](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975))
+configuration § Run configuration Model section](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975))
 and moved the lookup onto the daemon-published rows: `publishedRowFor` (`RunConfigSections.tsx`,
 renamed from `runningPublishedRow` by #976, which gave it a second caller — see [Conversation shell —
 workspace and run configuration § Run configuration Effort section, daemon-published
-levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976))
+levels](conversation-shell-run-configuration.md#run-configuration-effort-section-daemon-published-levels-976))
 finds the row whose `value` is `===` the announced identifier — `value`, deliberately not
 `resolved_model`, because a row's `resolved_model` is routinely a superstring of its own `value`
 (`'haiku'` → `'claude-haiku-4-5-20251001'`), which would give the ticket's exactness guard an
@@ -578,7 +578,7 @@ construction through `activateConversation` — a member there would guard state
   `number | null` function both the sheet's gauge and the new reading call, closing a `NaN`/`Infinity`
   gap the old clamp had on an overflowing daemon value (`Number.isFinite(windowTokens)` added to the
   guard). See [conversation shell § Run configuration Context window
-  section](conversation-shell-workspace-and-run-config.md#run-configuration-context-window-section-192) for the extraction and
+  section](conversation-shell-run-configuration.md#run-configuration-context-window-section-192) for the extraction and
   [§ Composer footer row](conversation-shell-composer-message-box.md#composer-footer-row-811) for the new consumer.
 - **[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)** — root-cause slice 1 of
   [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941): threaded a `conversation_id` onto

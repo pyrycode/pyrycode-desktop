@@ -4650,6 +4650,148 @@
   font-weight: var(--text-body-small-weight);
 }
 
+/* #1078 — the System prompt section's classes. The section itself is NOT drawn (Figma 102-595 draws the
+   sheet it joins, not this), so it borrows rather than invents: the sheet's own .status-sheet__section-header
+   and the .channel-info__row horizontal rhythm (px 16), the .channel-info__empty token set for its prose
+   lines, the Rename dialog's outlined field (channels.css .rename-conversation__field, Figma 19:16) for the
+   editor, and the .channel-info__action tonal pill for the two controls. All token-based — no colour, size
+   or spacing literal. */
+
+/* The not-loaded line and the standing hint — muted body-medium at the row padding (the
+   .channel-info__empty token set verbatim). */
+.system-prompt__empty,
+.system-prompt__hint {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The outlined editor frame — .rename-conversation__field, inset to the sheet's own px 16 rather than
+   sitting flush, so it lines up with the About rows above it. */
+.system-prompt__field {
+  display: flex;
+  flex-direction: column;
+  margin: 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+}
+
+/* The field label — .rename-conversation__label's token set. It supplies the textarea's accessible name
+   via the wrapping <label>, so no id/htmlFor pair is needed. */
+.system-prompt__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The editor — .rename-conversation__input reset (borderless, so the frame's border is the only chrome)
+   at body-medium, plus the two things a multi-line field needs: vertical-only resize, so a drag cannot
+   push the textarea past the sheet's width, and a wrap that breaks a long unbroken prompt instead of
+   scrolling it sideways. */
+.system-prompt__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  resize: vertical;
+  overflow-wrap: break-word;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The live byte count — mono body-small (it is a number the operator watches change, the
+   .channel-info__row-value--mono treatment) right-aligned under the field. --over tints it with the
+   error token; no size or weight change, so the count does not reflow as it trips. */
+.system-prompt__count {
+  margin: 0;
+  padding: var(--space-1) var(--space-4) 0;
+  text-align: right;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+.system-prompt__count--over {
+  color: var(--color-error);
+}
+
+/* The over-limit line and the write outcome — error-tinted body-medium at the actions-column padding
+   (the .channel-info__confirm-text token set). The write line takes the same tint because three of its
+   four states are refusals; the confirmed one reads as a statement either way. */
+.system-prompt__over,
+.system-prompt__write {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-error);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The `differs` notice — the same prose slot, on-surface rather than error-tinted: a running session
+   started with a different prompt is a fact to report, not a failure. */
+.system-prompt__session {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The two controls — a ROW (not the Actions column), since Save and Clear are a pair rather than a
+   stack, at the .channel-info__actions padding. */
+.system-prompt__actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) 0;
+}
+
+/* Both controls are .channel-info__action tonal pills, flexed to equal halves of the row. :disabled
+   mutes the label and drops the pointer affordance — the .composer__send:disabled convention, which is
+   explicitly "muted content, no opacity literal". */
+.system-prompt__save,
+.system-prompt__clear {
+  display: flex;
+  flex: 1 0 0;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  cursor: pointer;
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.system-prompt__save:disabled,
+.system-prompt__clear:disabled {
+  cursor: not-allowed;
+  color: var(--color-on-surface-variant);
+}
+
 /* #383 — the Workspace Picker sheet's content classes (Figma node 20-2). The sheet reuses the
    .status-sheet__* chrome + .status-sheet__section-header verbatim (the Channel Info sheet clone); only
    the recent-workspace rows, the "default" pill, the loaded-empty line, and the create-folder entry are

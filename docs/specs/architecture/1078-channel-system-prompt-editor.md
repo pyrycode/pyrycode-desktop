@@ -198,6 +198,26 @@ asserted in vitest — the split the ticket's technical notes prescribe.
 2. Does the confirmed line need to re-state the session story when `sessionPromptStatus` is stale after
    a save? Leaning yes, in a form true under all three statuses, since nothing re-asks after a write.
 
+## Revisions
+
+**2026-09-08 — the two Open Questions, resolved in Phase B.** Neither changed the design.
+
+1. **Clear stays visible when the conversation holds no prompt.** A clear on an already-clear
+   conversation is a well-defined no-op write, and hiding it would need a fourth arm on the model for no
+   behavioural gain. It is withheld only while a write is in flight, alongside Save.
+2. **The confirmed line does re-state the session story**, in a form true under all three statuses:
+   `WRITE_CONFIRMED` reads "Saved. A running session keeps the prompt it started with until New
+   session." Nothing re-asks after a write, so `sessionPromptStatus` is stale the moment a save lands —
+   a line conditioned on it would be the one thing here that could tell the operator something false.
+
+**2026-09-08 — size, measured against the § A1 estimate.** The plan sized the ticket at roughly 800
+lines of total written work; the actual is ~1157 (292 + 244 + 183 new, 180 modified, 258 plan). The
+overshoot is not scope drift — the design shipped is the design planned, in two production files. It is
+comment density: this repo's convention runs the docblock at roughly twice the code it explains, and the
+mandatory `security-sensitive` review section is 60 lines of the plan on its own. Budget was never the
+constraint (the run finished well inside both caps). Recorded here so the next sizing pass on a
+`security-sensitive` renderer ticket has a real multiplier rather than a line-count intuition.
+
 ## Security review
 
 **Verdict:** PASS

@@ -3860,6 +3860,26 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     expect(markup).not.toContain('Channel ID')
   })
 
+  it('places the #1078 System prompt slot between the About detail and the Actions header', () => {
+    // Position, not content — the section owns its own header and is unit-tested in
+    // SystemPromptSection.test.tsx. The ticket puts it beside the About rows and ABOVE the actions, and
+    // nothing else would catch a slot that drifted below them.
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload()}
+        onClose={noop}
+        systemPromptSection={<p>the slot</p>}
+      />
+    )
+    expect(markup.indexOf('Last activity')).toBeLessThan(markup.indexOf('the slot'))
+    expect(markup.indexOf('the slot')).toBeLessThan(markup.indexOf('Actions'))
+  })
+
+  it('omits the #1078 System prompt slot entirely when the container supplies none', () => {
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
+    expect(markup).not.toContain('System prompt')
+  })
+
   it('renders the Actions section header over an empty slot — no action buttons this ticket (AC5)', () => {
     const markup = renderToStaticMarkup(
       <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />

@@ -26,6 +26,7 @@ import type {
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
   ThinkingProgressPayload,
+  RateLimitedPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -266,6 +267,78 @@ describe('thinking-progress wire vocabulary (#1312)', () => {
       estimated_tokens_delta: 4
     }
     expect(afterRestart.estimated_tokens).toBeLessThan(first.estimated_tokens)
+  })
+})
+
+describe('rate-limited wire vocabulary (#1318)', () => {
+  it('admits the rate_limited inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const limited: EnvelopeType = 'rate_limited'
+    expect(limited).toBe('rate_limited')
+  })
+
+  it('shapes RateLimitedPayload as its five fields — no turn_id, and no utilization', () => {
+    // `utilization` is NOT on the wire. Declaring a sixth field would drift the wire types ahead of
+    // the daemon, which CLAUDE.md forbids.
+    const payload: RateLimitedPayload = {
+      conversation_id: 'c1',
+      status: 'allowed_warning',
+      limit_type: 'seven_day',
+      resets_at: 1_756_000_000,
+      truncated_fields: null
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      status: 'allowed_warning',
+      limit_type: 'seven_day',
+      resets_at: 1_756_000_000,
+      truncated_fields: null
+    })
+    // Conversation-scoped: a usage-limit window is orthogonal to whichever turn observed it, so
+    // attributing it to one would be a claim the daemon cannot honestly make.
+    expect(payload).not.toHaveProperty('turn_id')
+  })
+
+  it('admits truncated_fields null AND [] as different facts — "nothing was cut" is not "empty"', () => {
+    // The Go type has no MarshalJSON, so nil reaches the wire as a literal `null`. That is
+    // BackgroundTask.truncated_fields's nullability, and NOT BackgroundTaskRosterPayload.tasks's
+    // nil→[] normalisation, which means the opposite. Both spellings are expressible here.
+    const nothingCut: RateLimitedPayload = {
+      conversation_id: 'c1',
+      status: 'allowed_warning',
+      limit_type: 'seven_day',
+      resets_at: 1_756_000_000,
+      truncated_fields: null
+    }
+    const cut: RateLimitedPayload = { ...nothingCut, truncated_fields: ['status', 'limit_type'] }
+    expect(nothingCut.truncated_fields).toBeNull()
+    expect(cut.truncated_fields).toEqual(['status', 'limit_type'])
+  })
+
+  it('admits an EMPTY status and a resets_at of 0 — a cut-to-nothing value and a not-reported one', () => {
+    // Neither field carries `omitempty`, so both are real traffic rather than absences: the producer
+    // can cut `status` to nothing, and `0` means claude did not report a reset instant — NOT the epoch.
+    const unreported: RateLimitedPayload = {
+      conversation_id: 'c1',
+      status: '',
+      limit_type: '',
+      resets_at: 0,
+      truncated_fields: ['status', 'limit_type']
+    }
+    expect([unreported.status, unreported.resets_at]).toEqual(['', 0])
+  })
+
+  it("admits a resets_at in the PAST — claude's number, unvalidated in both directions", () => {
+    // A consumer must not assume the instant lies in the future, or in a sane range at all.
+    // Formatting it as a date without a range check is the daemon's named realistic client bug.
+    const stale: RateLimitedPayload = {
+      conversation_id: 'c1',
+      status: 'allowed_warning',
+      limit_type: 'five_hour',
+      resets_at: -1,
+      truncated_fields: null
+    }
+    expect(stale.resets_at).toBeLessThan(0)
   })
 })
 

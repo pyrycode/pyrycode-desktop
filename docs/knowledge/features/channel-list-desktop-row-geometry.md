@@ -1,4 +1,4 @@
-# Channel List — the row's desktop geometry (`channels.css`/`ChannelList.tsx`, converged by #1097, marked by #1098, redrawn by #1171)
+# Channel List — the row's desktop geometry (`channels.css`/`ChannelList.tsx`, converged by #1097, marked by #1098, redrawn by #1171, workspace row nested by #1178)
 
 Split out of [Channel List home screen](channel-list.md) § How it works, where the package overview
 had grown past the size cap. Read the parent doc first for the screen's overall shape; this page picks
@@ -283,8 +283,10 @@ Sidebar 132:3902 and fixed directly, five declarations in one stylesheet:
   Its colour stays `--color-outline-variant`; the node draws `--color-inverse-primary`, a colour change
   this fix did not take.
 
-The workspace row is untouched: its 24px left padding already matched (106:3098 pl-[24px]), and its
-icon→label gap keeps the documented 2px deviation.
+The workspace row's own inset held through this fix (106:3098 pl-[24px] already matched, and its
+icon→label gap kept the documented 2px deviation) — both retired by
+[#1178](#the-workspace-rows-own-nest-and-its-create-chat-plus-1178), which nests the row 20px in behind
+a new wrapper and closes the 2px gap deviation outright.
 
 **Testing.** `e2e/sidebar-tree-geometry.spec.ts`, a new file beside `sidebar-row-geometry.spec.ts`
 (which owns the row's own box and scopes itself to it), seeds one promoted row, mints an unpromoted one
@@ -362,6 +364,110 @@ measured case above, hovering the row's title alone showing no pill (the scoping
 `:hover`, never the row's), leaving, and the keyboard path (`Tab` onto the open row, never
 `locator.focus()`, matching § The redrawn frame's own `:focus-visible` reasoning).
 
+## The workspace row's own nest and its create-chat plus (#1178)
+
+The redrawn `Workspace` component (Figma 399:1059, placed as 405:7456 inside a `pl-[20px]` wrapper
+405:7469) puts the workspace row's own geometry through the same two moves the channel row above already
+had: a deeper card-edge nest, and a hover-revealed trailing control. Where #1171 landed those on
+`.channel-list__row`, #1178 lands them on `.channel-list__workspace` — and the two rows' labels now share
+one left edge (50px from the card's content edge) for the first time, closing the 2px gap the tie-break
+in § The tree's inset above had left standing since before #1171.
+
+**A wrapper element is now necessary, not just a convenience.** `WorkspaceRow` returns
+`<div class="channel-list__workspace-head">` holding the disclosure `<button class="channel-list__workspace">`
+and a new plus `<button class="channel-list__workspace-create">` as **siblings**, never nested — an
+interactive control cannot sit inside a `<button>` (#274), which is also the entire mechanism behind
+"clicking the plus never toggles the fold": the click simply never reaches the disclosure's handler. The
+wrapper is also the plus's positioned ancestor: `.channel-list` is `position: relative` for a stacking
+reason (see the note on `::before` painting order above), so an absolutely positioned plus with no nearer
+containing block would pin itself to the scroll column instead of to this row. The wrapper wraps the head
+row only — a group's channel rows stay flat siblings of `.channel-list`, preserving the ancestry the
+existing e2e specs click through. Its class, `channel-list__workspace-head`, was chosen to share no token
+with any strict-mode locator (`.channel-list__workspace`, `.channel-list__row`, `.channel-list__row-open`,
+`.channel-list__section-header`, `.channel-list__host`) and to not appear as a substring of
+`class="channel-list__workspace"` in the unit tier's markup assertions — both hold by construction (class
+selectors match whole tokens; the marker string carries its closing quote).
+
+**Geometry**, all measured from the card's content edge: the wrapper takes `margin-left: var(--space-5)`
+(20px), the same "margin on the row because there is no group wrapper" idiom `.channel-list__row` already
+uses. `.channel-list__workspace`'s padding moved from `--space-1 --space-4 --space-1 --space-6` to
+`--space-1 --space-8 --space-1 --space-2` and its gap from `--space-3` (a tie-break, no token being
+exactly 10) to `calc(var(--space-2) + 2px)`, written as a sum for the same reason
+`.channel-list__row-open`'s 22px left padding is: the arithmetic is the point, not the pixel count. That
+lands the 12px folder glyph at 28 and the label at 50 — exactly `.channel-list__row-open`'s title
+position, so **the workspace label and the channel titles now share one left edge**. `flex: 1 1 auto` on
+the button spans it to the wrapper's far edge (the content edge), and `min-width: 0` beside it is
+load-bearing rather than copied: this button is now a flex item of a **row**-direction wrapper, where the
+automatic minimum size resolves against the main (horizontal) axis and is opaque to the label's own
+`min-width: 0` / `overflow: hidden` ellipsis chain — unlike `.channel-list__row`, still a column child,
+which needs no such declaration on itself. Without it an unbounded daemon `cwd` label would widen the row
+past the 400px sidebar. The `:hover` fill (`--color-surface-container`, the file's own stand-in from when
+the design pinned no hover state at all) is deleted outright: the redrawn Hover variant differs from Idle
+by its controls alone, drawing no fill; `:focus-visible` stays, per the file's convention of treating it
+as an outline rather than a statement about the drawn hover state.
+
+**The plus** (`.channel-list__workspace-create`, Figma "Icon Edgeless" 399:1065) is a 20×20
+(`--space-5`) absolutely positioned box at `right: 0; top: var(--space-1)`, centring a 16px glyph so it
+reproduces the drawing's rectangle (right 2, top 6 in the 28px row) with no pixel literal — the same
+box-minus-glyph-halved arithmetic `.channel-list__save`/`.channel-list__rename` already use one level up.
+Filled `--color-primary`, no background, no hover circle. Reveal is `opacity` and never `display: none` /
+`visibility: hidden` — #1171's ruling, restated here because the mechanism is what keeps the control
+keyboard-reachable and present in the accessibility tree at rest, which is the acceptance criterion this
+ticket names explicitly. The rule positions itself against the wrapper's own trailing edge rather than
+against "being the only control", so #1180's 14×14 pen can land at `right: 28px` beside it without this
+rule moving.
+
+**Wiring rides one shared helper, not a per-tree map.** Since #1070's server loop, both the Channels and
+Chats trees render through one `renderServerTrees`, so the per-tree difference — only the Chats tree
+offers a create — has to travel as a parameter rather than a code-path split: `renderServerTrees` takes
+an optional `onCreateChat(cwd)`, its inner `workspaceGroups` closes over each group's own key and hands
+`CollapsibleWorkspaceGroup` a nullary `onCreateChat?: () => void`, which reaches `WorkspaceRow` as
+`onCreate` — the same optional-callback shape `Row` already uses for `onSaveAsChannel`. `renderBody`
+supplies the callback to the `discussions` call only; the `channels` call passes nothing until #1179's
+own Create channel dialog exists. The container's callback is
+`(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)` — the FAB's own constructor
+([conversation-create.md](conversation-create.md)), and this is that helper's **second caller**, its
+first with a `cwd` that is not the client's own saved default.
+
+**The unknown-workspace group is withheld by its key, never by its label.** `groupByWorkspace`'s fallback
+bucket keys on `UNKNOWN_WORKSPACE_KEY` (`''`, exported by this ticket for its first outside consumer),
+which names no directory and is **not** the same signal as the `cwd: null` "take the daemon default" the
+create payload keeps distinct on the wire; sending `''` as a `cwd` would ask the daemon to create in its
+own process directory. `renderServerTrees` compares the group's *key* against the sentinel and withholds
+the callback there — never against `UNKNOWN_WORKSPACE_LABEL` — so a real directory a user happens to name
+"Unknown workspace" is an ordinary group and keeps its plus.
+
+**Security review note, carried forward because it is the first time this value crosses this
+boundary:** `group.key` is `row.cwd`, daemon-asserted text that until now the sidebar only ever used as
+an escaped React child, a `Map` key or a React key. This ticket hands it to `requestNewConversation` as
+an *outgoing* command field for the first time. It travels verbatim — no normalisation, no trim, no
+`path` module — because `isCreateConversationPayload` re-validates at the renderer→main boundary and
+`daemonConnection.createConversation` rebuilds a fresh three-field literal before the send, and because
+the reachable set of values is a strict subset of paths the daemon itself asserted (the client mints no
+key but the withheld `''` sentinel). An oversized `cwd` fails closed the same way an oversized name
+already does — `buildCreateConversation` throws on the plaintext cap and the send is dropped, never
+partially written.
+
+**The control's name**, `CREATE_CHAT_CONTROL_LABEL = 'Create chat'`, is a client-owned module constant
+read by the plus's `aria-label`, in the `RENAME_CONTROL_LABEL` / `SAVE_AS_CHANNEL_CONTROL_LABEL` idiom
+two rows up; #1181's tooltip pill becomes its second reader. The daemon-supplied workspace label never
+reaches an attribute of the control, on the same four-sink rule (`title`, `id`, a URL, a CSS custom
+property) `WorkspaceRow`'s own comment already declines for the disclosure above it.
+
+**Testing.** `ChannelList.test.tsx` counts `aria-label="Create chat"` once per Chats group and zero times
+in the Channels slice, checks the plus's `<svg>` for `width="16" height="16"`, and reconfirms
+`WORKSPACE_ROW_MARKER`/`WORKSPACE_LABEL_OPEN` still match byte for byte at one per group now that the
+wrapper sits above the disclosure button. `e2e/sidebar-tree-geometry.spec.ts` retargets
+`WORKSPACE_ICON_X` to `CARD_INSET_PX + 28` and adds `WORKSPACE_LABEL_X`, asserted equal to `TITLE_X`. The
+new `e2e/sidebar-workspace-create.spec.ts` seeds its clicked group's `cwd` at a path **other than** the
+fake harness's `DEFAULT_CREATED_CWD` (`conversationStateFake` mints a created row at
+`payload.cwd ?? DEFAULT_CREATED_CWD`, which happens to equal the default seed's own workspace) —
+otherwise a plus that silently sent `null` would still land its row in the same group and the drive would
+pass with the bug present. It reads the plus's box and opacity at rest/hover/focus (the last via a real
+Tab traversal, not `locator.focus()` — the same `:focus-visible` modality trap #1171 already documents
+above), then clicks it and reads the row count and the group's own row count going up before reading
+`aria-expanded` unchanged.
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent doc.
@@ -370,7 +476,11 @@ measured case above, hovering the row's title alone showing no pill (the scoping
 - [#1171 spec](../../specs/architecture/1171-sidebar-row-inset-and-hover-control.md) — the redrawn 8px
   inset and the hover-revealed trailing control.
 - [#1172 spec](../../specs/architecture/1172-row-control-name-pill.md) — the control's own name pill.
+- [#1178 spec](../../specs/architecture/1178-workspace-row-nest-and-create-chat-plus.md) — the workspace
+  row's own 20px nest and its create-chat plus.
 - [Composer attach — the name pill](composer-attach-name-pill.md) — the treatment this restates, #1265,
   shipped first.
 - [Save-as-channel dialog](save-as-channel-dialog.md), [Rename conversation dialog](rename-conversation-dialog.md)
   — the two dialogs the trailing controls open; their own CSS summaries were corrected for #1171's redraw.
+- [Conversation create](conversation-create.md) — `requestNewConversation`'s constructor and the
+  `conversationCreated` event-driven nav the plus's click resolves through; the FAB's own consumer doc.

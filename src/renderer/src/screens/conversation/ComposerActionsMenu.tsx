@@ -168,7 +168,14 @@ export function ComposerActionsMenuView({
       ariaLabel={COMPOSER_ACTIONS_LABEL}
       triggerContent={
         <>
-          {COMPOSER_ACTIONS_LABEL}
+          {/* #1107 — the word is in a <span> so it can ELLIPSIZE. Under the row's shrink policy every
+              footer control gives width when the row is narrow, and a bare text node is an anonymous flex
+              item: it cannot be selected, so it cannot carry a truncation chain, so it refuses to shrink
+              and pushes the chevron out of the button's clip instead — measured at the 800px minimum, this
+              trigger was the only one of the four to lose its glyph. The element takes no max-width, unlike
+              its three siblings: their labels are daemon-authored and need a bound, this one is a
+              client-owned constant with nothing to bound. */}
+          <span className="composer__actions-label">{COMPOSER_ACTIONS_LABEL}</span>
           {/* aria-hidden is load-bearing: the container puts no aria-label on the trigger (WCAG 2.5.3
               label-in-name), so the button's accessible name is computed from its contents, and an
               exposed <svg> could perturb the exact `Actions` string the e2e locator matches. */}

@@ -281,3 +281,54 @@ affordance, which is the defect this ticket exists to remove.
 - **Concurrency** — no async work, no listener, no timer, no shared state. The spec's waits are
   Playwright's auto-retrying assertions with bounded timeouts, and the drive is READ-ONLY: it opens no
   menu and sends no `set_session_settings`, so it exercises no write path.
+
+## Revisions
+
+### 2026-09-08 — measured at HEAD, and one thing the plan said it would not do
+
+**Open questions 1 and 2, resolved.** A percentage `column-gap` does resolve against the row's own content
+box in this Electron's Chromium; the detector's launch-width rhythm assertion measures the design's 20px
+and passes, so the `cqi` fallback is not needed. `<P>` is **3.5%** — the smallest tenth of a percent that
+still reaches the `var(--space-5)` ceiling at the app's own default 1100px window, whose footer content box
+is 584px (20 / 584 = 3.43%). The ceiling therefore holds from a 1088px window upward, and the row is
+unchanged at every width from the shipped default up.
+
+**Open question 3, resolved by measurement rather than by arithmetic.** At 800×600 with the detector's
+worst-case seeds, `.composer__footer` measures `clientWidth` 316 and `scrollWidth` 316 — the row fits
+exactly — and its six items measure: Actions 15.2, permission 34.9 (label 22.9), model 35.1 (label 23.1),
+effort 20.2 (label 8.2), reading 117.9 (whole, as § Design 3 requires), attach 11.0, with five ~9.9px gaps.
+
+**The gap rule is NOT required for AC1, and it stays anyway.** Mutation-tested: with `column-gap` reverted
+to a flat `var(--space-5)` and the two `min-width: 0` declarations kept, the detector still passes — the
+truncation chain alone is enough to make the row fit. What the flat gap costs is the row's legibility, and
+that is measurable too: at the same width it draws Actions 7.9, permission 34.9 → 18.3 (label 6.3), model
+→ 18.3 (label 6.3) and effort → 10.5 with a label of **exactly 0px**. So the proportional gap is what
+turns "every label is an ellipsis" into "every label keeps two or three characters", and 35% of a 284px
+content box spent on whitespace is the row's largest single anomaly whether or not an assertion can see it.
+Kept, with the measurement recorded here rather than an assertion invented to protect it: the honest
+detector for a legibility difference is the numbers above.
+
+**A markup change the plan said it would not make: `.composer__actions-label`.** The measurement above
+found the Actions trigger at 15.2px for content that wants 56px — its word HARD-CLIPPED with the chevron
+clipped off the end entirely, while its three siblings ellipsized and kept theirs. The cause is that this
+trigger's label is a bare text node, so it is an anonymous flex item: no selector can reach it, it cannot
+carry a truncation chain, it refuses to shrink below its min-content, and `.composer__footer-button`'s
+`overflow: hidden` takes the glyph instead. This is a regression **this ticket introduces** (nothing in the
+row could shrink before it), not a pre-existing defect to file elsewhere, so it is fixed here:
+`ComposerActionsMenu` wraps `COMPOSER_ACTIONS_LABEL` in a `<span className="composer__actions-label">` and
+`conversation.css` gives that class the same `min-width: 0` + `overflow: hidden` + `text-overflow: ellipsis`
+chain its three siblings carry — and **no `max-width`**, which is the one line where it differs from them:
+they bound daemon-authored text, this bounds a client-owned constant, and a number here would be the
+"number in a single control's rule" the whole policy exists instead of. `ComposerActionsMenu.test.tsx`'s
+exact-equality assertion on the trigger's announced content moves to the wrapped form and stays an exact
+equality. The detector gains the row-wide statement of the invariant: every trigger's own
+`scrollWidth <= clientWidth` at 800, so compressing a control never costs it a part of itself.
+
+**Re-audited against § Security review, no verdict change.** The added element renders
+`COMPOSER_ACTIONS_LABEL`, a client-owned constant, into the same text position it already occupied — no new
+sink, no daemon-authored string, and no new bound to defend. The added rule is the third monotonically
+reducing declaration in the policy (finding 1): it can only take width away from a label, never grant it.
+Finding 2's residual is unchanged, and finding 3's split still holds — the clip stays on
+`.composer__footer-button` and never reaches `.composer-options-anchor`;
+`e2e/composer-options-clamp.spec.ts` and `e2e/composer-actions.spec.ts` both re-run green, which covers the
+open panel's placement and the accessible name the Actions e2e locator matches.

@@ -112,8 +112,14 @@ describe('ComposerActionsMenuView', () => {
     const inner = triggerInner(viewMarkup())
     expect(inner).toContain('composer__actions-icon')
     expect(inner).toContain('aria-hidden="true"')
-    // Strip the glyph and nothing but the label is left to be announced.
-    expect(inner.replace(/<svg[\s\S]*?<\/svg>/g, '').trim()).toBe(COMPOSER_ACTIONS_LABEL)
+    // Strip the glyph and nothing but the label is left to be announced. Since #1107 the word is wrapped
+    // in a <span> so it can ellipsize under the footer row's shrink policy, so the survivor is that
+    // element rather than the bare string — still an EXACT equality, so a second announced child would
+    // redden this the way it always did, and a <span> contributes nothing of its own to the accessible
+    // name the e2e locator matches.
+    expect(inner.replace(/<svg[\s\S]*?<\/svg>/g, '').trim()).toBe(
+      `<span class="composer__actions-label">${COMPOSER_ACTIONS_LABEL}</span>`
+    )
   })
 
   // The entries reach the SHARED panel with no current row — a list of actions, not a choice. The

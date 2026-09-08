@@ -81,7 +81,8 @@ Composer
   the column's *first* child instead of its last: `.composer` is a flex column with a `--space-1` gap, so an
   element that mounted empty would move the message box down forever. Otherwise a `.composer__attachments`
   `<div>` holding one `.composer__attachment-slot` per attachment, each wrapping `AttachmentFileIcon` (or,
-  for an image name, `ComposerAttachmentImage`) plus a remove control as its sibling. **Keyed by
+  for an image name, `ComposerAttachmentImage`) plus a remove control as its sibling and (#1265) a name
+  pill shown on `:hover`/`:focus-within` of the slot. **Keyed by
   `${attachmentId}#${occurrence}`, not by array index** — #1262 shipped an index key on the recorded ground
   that the list only appends and is cleared wholesale, and #1264 falsified that ground by making the list
   removable from the middle; see [Composer attach — pending attachments and the strip §
@@ -421,8 +422,10 @@ renderer memory on a timeline item) and the strip's is the new DOM sink the deri
   (#1039, #1262, #1263, #1264) — landed; split to its own page 2026-09-08. The pending set an upload
   completing accumulates, the row of file tiles above the message box that draws it (replacing the
   completion sentence), the picture an image-named tile draws instead of the file icon, and the remove
-  control each tile carries to take a file back out before send. #1265 (the name-on-hover tooltip) is the
-  last slice of this family and is still open.
+  control each tile carries to take a file back out before send.
+- [Composer attach — the name pill](composer-attach-name-pill.md) (#1265) — landed; split to its own page
+  2026-09-08, the same day it shipped. The Pill each tile shows on hover or keyboard focus naming its
+  file, the last slice of this family.
 - See [PR #1026](https://github.com/pyrycode/pyrycode-desktop/pull/1026),
   `docs/specs/architecture/863-composer-attach-button.md`, [PR #1027](https://github.com/pyrycode/pyrycode-desktop/pull/1027),
   `docs/specs/architecture/864-attachment-upload-progress.md`, [PR #1031](https://github.com/pyrycode/pyrycode-desktop/pull/1031),

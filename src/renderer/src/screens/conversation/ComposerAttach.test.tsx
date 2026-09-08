@@ -736,23 +736,41 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
     expect(slots(markup)[2].startsWith('<span class="composer__attachment"></span>')).toBe(true)
   })
 
+  // ⭐ EVERY ATTRIBUTE THE STRIP RENDERS, AS ONE LIST. #1265 puts the file name in the DOM on purpose, so
+  // the criterion can no longer be spelled as "the name appears nowhere" — it is "the name appears only as
+  // escaped CHILDREN", and its other half is this enumeration.
+  //
+  // THE REGEX IS SOUND BECAUSE REACT ESCAPES TEXT, and that is worth stating rather than assuming: a text
+  // child's `"`, `<` and `>` each come back as an entity (`&quot;`, `&lt;`, `&gt;`), so no rendered text can
+  // present a bare quote for this to mistake for an attribute boundary. A name interpolated into an
+  // attribute therefore cannot hide from this list, which a `not.toContain('title=')` on attribute NAMES
+  // could never see.
+  const attributes = (markup: string): string[] => markup.match(/[a-zA-Z-]+="[^"]*"/g) ?? []
+
   // ⭐ AC5, AND THE ELEMENT THE SHIPPED e2e NEGATIVES ARE RE-AIMED AT. Against an outcome line that no
   // longer mounts for a completion those two assertions pass vacuously and guard nothing; here they guard
-  // a mounted element. Nothing but the derived label goes through: not the name, not the host's storage
-  // handle, not a path — and the label reaches the DOM as escaped React children, never an attribute.
-  it('puts nothing of the record in the DOM but the derived extension label', () => {
+  // a mounted element. The host's storage handle still reaches nothing at all, and the NAME — which #1265
+  // draws in a pill — reaches escaped React children and no attribute anywhere.
+  it('puts nothing of the record in the DOM but the derived label and the escaped name', () => {
     const attachmentId = 'b3f1c0de-0000-4000-8000-000000000000'
     const filename = '../../etc/passwd"><img src=x onerror=alert(1)>.pdf'
     const markup = renderToStaticMarkup(
       <ComposerAttachmentStrip attachments={[{ attachmentId, filename }]} onRemove={noop} />
     )
     expect(markup).not.toContain(attachmentId)
-    expect(markup).not.toContain(filename)
-    expect(markup).not.toContain('passwd')
-    expect(markup).not.toContain('onerror')
     expect(markup).toContain('>PDF</span>')
-    // No title and no alt: the name reaches no attribute at all, which is the sink the drawing's
-    // aria-hidden children exist to keep closed.
+    // ⭐ #1265 AC2 — THE NAME IS CHILDREN AND THE PAYLOAD IS INERT. The `<img>` arrives entity-escaped, so
+    // no element is created and the break-out sequence `">` never appears as markup. The raw name is
+    // therefore ABSENT from the markup even though every character of it is rendered, which is the
+    // property that makes rendering it safe rather than a `not.toContain` that would forbid the feature.
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('passwd">')
+    expect(markup).not.toContain(filename)
+    // ...and no attribute of any element in the strip carries any fragment of it.
+    expect(attributes(markup).filter((value) => /passwd|onerror|etc/.test(value))).toEqual([])
+    // No title and no alt: the two attribute sinks a tooltip is usually built from, and the ones #696's
+    // security review rejected as a MUST FIX for exactly this string.
     expect(markup).not.toContain('title=')
     expect(markup).not.toContain('alt=')
     // ⭐ #1264 AC4, AND THE ONE ASSERTION THIS TICKET RE-AIMED. This line read `not.toContain('aria-label')`
@@ -796,6 +814,12 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
 
   // The name is a CLIENT-OWNED CONSTANT and says what the control does, not which file it drops. The
   // filename is untrusted display text; naming the button after it would put that string in an attribute.
+  //
+  // #1265 RE-AIMED THE NEGATIVE FROM THE MARKUP TO THE ATTRIBUTES. This read `not.toContain('quarterly')`
+  // while the strip rendered no name at all; the pill renders one BY DESIGN, so the claim is restated as
+  // what it always meant — the ACCESSIBLE NAME is the constant and the file name is in no attribute — which
+  // is stronger than the whole-markup negative it replaces, since that one could not have distinguished a
+  // name in an attribute from a name in a text node.
   it('names the control with a constant that carries no file name', () => {
     expect(REMOVE_ATTACHMENT_LABEL).toBe('Remove attachment')
     const markup = renderToStaticMarkup(
@@ -805,8 +829,74 @@ describe('ComposerAttachmentStrip — the pending attachments, drawn (#1262 AC1,
       />
     )
     expect(markup).toContain(`aria-label="${REMOVE_ATTACHMENT_LABEL}"`)
-    expect(markup).not.toContain('quarterly')
-    expect(markup).not.toContain('secrets')
+    expect(attributes(markup).filter((value) => /quarterly|secrets/.test(value))).toEqual([])
+  })
+
+  // ⭐ #1265 AC3's STRUCTURAL HALF, AND THE ONLY TIER THAT CAN ANSWER IT. `.composer__attachment` declares
+  // `overflow: hidden` for #1263's `cover` picture, so a pill rendered inside that frame is laid out exactly
+  // where a boundingBox() reports and PAINTED nowhere — a geometry assertion in Playwright cannot tell the
+  // two apart, because layout boxes are reported whether or not an ancestor clipped the pixels away. Where
+  // the element sits in the tree is a markup fact, so it is provable here and nowhere else.
+  //
+  // LAST IN THE SLOT, and that is load-bearing against the two shipped adjacency guards above rather than a
+  // preference: the frame still opens each slot and the control still follows the frame's own `</span>`.
+  it('hangs one name pill per tile, last in the slot and outside the frame that clips', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[tile('a.pdf'), tile('b.png'), tile('c.zip')]}
+        onRemove={noop}
+      />
+    )
+    expect(slots(markup)).toHaveLength(3)
+    expect(tileCount(markup)).toBe(3)
+    expect(markup.match(/class="composer__attachment-name"/g)?.length ?? 0).toBe(3)
+    // Every pill opens after a CONTROL closed — so it is the slot's last child and the frame's sibling,
+    // never a descendant of the frame.
+    expect(
+      markup.match(/<\/button><span class="composer__attachment-name">/g)?.length ?? 0
+    ).toBe(3)
+    // ...and each slot closes immediately after its pill, which is the "last child" half. Not anchored at
+    // the fragment's end: `slots` splits on the slot's OPENING tag, so the final fragment also carries the
+    // strip's own `</div>`. The adjacency below is the claim itself and holds for every slot.
+    for (const slot of slots(markup)) {
+      expect(slot.startsWith('<span class="composer__attachment"')).toBe(true)
+      expect(slot).toMatch(/<span class="composer__attachment-name">[^<]*<\/span><\/span>/)
+    }
+  })
+
+  // AC1's content half: the pill states THAT tile's name, whole and in the set's own order. Rendered as
+  // children of a plain <span> — no title, no alt, no aria-label, and no hex literal from the design's
+  // transposed export (the property assertion #863 established one component over).
+  it('states each tile’s own file name in its pill, as escaped children', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip
+        attachments={[tile('quarterly-report.pdf'), tile('holiday-snap.png')]}
+        onRemove={noop}
+      />
+    )
+    expect(slots(markup)[0]).toContain(
+      '<span class="composer__attachment-name">quarterly-report.pdf</span>'
+    )
+    expect(slots(markup)[1]).toContain(
+      '<span class="composer__attachment-name">holiday-snap.png</span>'
+    )
+    expect(markup).not.toMatch(/#[0-9a-fA-F]{6}/)
+    // The strip's only accessible names are still the two controls' constant — the pill adds none, so it
+    // cannot be read out twice or read out as a label for something it does not label.
+    expect(markup.match(/aria-label="[^"]*"/g)).toEqual([
+      `aria-label="${REMOVE_ATTACHMENT_LABEL}"`,
+      `aria-label="${REMOVE_ATTACHMENT_LABEL}"`
+    ])
+  })
+
+  // A name with no extension at all still gets its pill: the derived label is empty for `README`, which is
+  // precisely the tile the pill is the only identification for.
+  it('draws a pill for a name the extension label cannot speak for', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerAttachmentStrip attachments={[tile('README')]} onRemove={noop} />
+    )
+    expect(markup).toContain('<span class="composer__attachment-ext" aria-hidden="true"></span>')
+    expect(markup).toContain('<span class="composer__attachment-name">README</span>')
   })
 
   // A name with no usable extension draws an empty label rather than a fallback word — the derivation's

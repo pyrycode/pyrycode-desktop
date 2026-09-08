@@ -253,18 +253,32 @@ test('a pending image attachment draws its own picture, clipped to the tile (#12
   expect(attributes.ariaLabel).toBeNull()
   expect(attributes.scheme).toBe('blob')
 
-  // No file name, no host-side storage handle, and no path anywhere in the strip. The extension labels the file
-  // tiles draw are derived, at most four characters, and are the only thing of a record that may be shown.
-  for (const leaked of [
+  // No host-side storage handle anywhere in the strip — not as text, and not in any attribute. The id is a
+  // handle the window cannot use and that #1262 keeps out of the DOM outright.
+  for (const leaked of [ID_PICTURE, ID_LIAR, ID_NEVER_ANSWERED, ID_DOCUMENT]) {
+    await expect(strip).not.toContainText(leaked)
+  }
+
+  // ⭐ #1265 RE-AIMED THE FOUR NAMES OUT OF THAT LOOP. Each tile now hangs a PILL carrying its own file's
+  // name, drawn on hover and on focus, so "no name appears in the strip" is false by design — while the
+  // rule it stood for is unchanged. CLAUDE.md's 2026-08-20 ruling is that daemon text may be rendered,
+  // escaped and bounded, and may never reach an attribute, a URL, a filename or a log; the picture's own
+  // alt/title/aria-label reads above are three instances of that, and this is the exhaustive form of the
+  // same claim across every element the strip renders.
+  const stripAttributes = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.composer__attachments, .composer__attachments *')).flatMap(
+      (element) => Array.from(element.attributes).map((attribute) => attribute.value)
+    )
+  )
+  for (const name of [
     'still-uploading.png',
     'quarterly-notes.pdf',
     'panorama.png',
-    'pretend-picture.png',
-    ID_PICTURE,
-    ID_LIAR,
-    ID_NEVER_ANSWERED,
-    ID_DOCUMENT
+    'pretend-picture.png'
   ]) {
-    await expect(strip).not.toContainText(leaked)
+    expect(stripAttributes.filter((value) => value.includes(name))).toEqual([])
+  }
+  for (const id of [ID_PICTURE, ID_LIAR, ID_NEVER_ANSWERED, ID_DOCUMENT]) {
+    expect(stripAttributes.filter((value) => value.includes(id))).toEqual([])
   }
 })

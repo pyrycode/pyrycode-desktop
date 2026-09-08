@@ -151,10 +151,21 @@ test('a tile’s remove control takes that file back before send, and sends noth
     () => document.querySelector('.composer__attachments')?.outerHTML ?? ''
   )
   expect(stripMarkup).toContain(`aria-label="${REMOVE_ATTACHMENT_LABEL}"`)
-  expect(stripMarkup).not.toContain('e2e-report')
-  expect(stripMarkup).not.toContain('e2e-bundle')
   expect(stripMarkup).not.toContain(FIRST.uploadId)
   expect(stripMarkup).not.toContain(SECOND.uploadId)
+  // ⭐ #1265 RE-AIMED THE TWO NAME NEGATIVES FROM THE MARKUP TO THE ATTRIBUTES. They read
+  // `not.toContain('e2e-report')` while the strip rendered no name anywhere, which asserted "the name
+  // reaches no attribute" BY asserting it reached nothing at all. #1265 draws each name in a pill, as
+  // escaped children, so the premise is false by design and the claim is restated as what it always
+  // meant — an enumeration of every attribute of every element in the strip, none of which may carry any
+  // fragment of a name. Strictly stronger than the substring negative it replaces: that one could not
+  // have told a name in an attribute from a name in a text node.
+  const stripAttributes = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.composer__attachments, .composer__attachments *')).flatMap(
+      (element) => Array.from(element.attributes).map((attribute) => attribute.value)
+    )
+  )
+  expect(stripAttributes.filter((value) => /e2e-report|e2e-bundle/.test(value))).toEqual([])
   const namesInStrip = await page.evaluate(() =>
     Array.from(document.querySelectorAll('.composer__attachments [aria-label]')).map((element) =>
       element.getAttribute('aria-label')

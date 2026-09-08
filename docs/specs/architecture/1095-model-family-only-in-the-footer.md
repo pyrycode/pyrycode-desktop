@@ -173,6 +173,31 @@ Not touched, and must stay green unmoved: `run-config-settings.spec.ts`, `RunCon
    (`sonnet`) for the same reason. If the reasoning does not hold up, record it under `## Revisions`.
 2. Whether `>Seeded<` remains unambiguous in `ConversationScreen.test.tsx`'s markup. Confirm in Phase B.
 
+## Revisions
+
+**2026-09-08 — both Open Questions resolved, neither changed the design.**
+
+1. The `default` announcement holds. The frame, its shape and its unsolicited arrival are all the daemon's;
+   only the value is the test's, which is the same liberty the spec already took by announcing the alias
+   `sonnet` rather than a dated identifier. The reasoning is recorded in the spec's own `MODEL_ROWS` note,
+   alongside the fact that `default` is the ONLY published value whose `value` and `resolved_model` name
+   different families — so it is not a convenient choice, it is the only possible anchor.
+2. `>Seeded<` is unambiguous in `ConversationScreen.test.tsx`'s markup; the seeded effort renders verbatim
+   as `seeded-session-effort` and collides with nothing. The assertion is paired with a negative on the old
+   string so the derivation is pinned from both sides.
+
+**One file was added to the plan's scope during Phase B, and it is a test file.**
+`e2e/composer-permission-mode-auto.spec.ts` was already named in the plan's Files read and Testing strategy
+(found by grepping `.composer__model-label` across `e2e/`, not from the ticket's list). No production
+behaviour is involved: that drive used the model trigger as its settle signal for a `model_list` tick, and
+under the new rule `refuser` / `refuser-resolved` derive to one family while `RELENTED` shares `REFUSING`'s
+`value`, so both reads went vacuous. The two rows now carry `resolved_model` values naming families of
+their own.
+
+**Mutation-checked rather than assumed.** Dropping the `resolved_model` step from the trigger's source
+chain reddens all three e2e specs, which is the evidence that each re-anchored miss→hit step is a real
+detector rather than an assertion that passes either way.
+
 ## Security review
 
 **Verdict:** PASS

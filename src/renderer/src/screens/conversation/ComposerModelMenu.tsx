@@ -74,6 +74,58 @@ function firstShown(...values: readonly string[]): string {
   return values.find((value) => value !== '') ?? ''
 }
 
+/** #1095 — the vendor prefix the family rule strips, and the ONE client-owned literal on this path.
+ *
+ *  It is a PREFIX STRIP, not a vocabulary, which is what keeps #988's AC2 ("no client copy naming a model
+ *  concept") intact: there is no allow-list of family names here and there must not be one, so a family
+ *  this client has never heard of derives through the same rule as a known one. Exact case, because no
+ *  case fold exists anywhere on this path. */
+const CLAUDE_IDENTIFIER_PREFIX = 'claude-'
+
+/**
+ * #1095 — the FAMILY of a model identifier, or '' when it names none.
+ *
+ * Juhana ruled on 2026-09-05 that the input footer shows the family and nothing else: no version, no date,
+ * no context size. The version and the context window are always the newest, so on this surface they carry
+ * no information — and the common case before this was a raw dated identifier, because claude announces an
+ * identifier at least as specific as the one it was given. The FULL identifier stays in the
+ * run-configuration sheet's Running model section, which this rule does not reach.
+ *
+ * THE WHOLE RULE: strip ONE leading `claude-` if present, take the leading run of ASCII letters,
+ * upper-case its first letter and hold the rest as claude sent them. Exactly one `claude-` comes off — a
+ * second is ordinary text and becomes the family, the rule answering honestly rather than looping.
+ *
+ * '' MEANS "NO FAMILY HERE", the same "nothing at this layer" firstShown already consumes, which is why
+ * the source chain below composes with that helper instead of introducing a second nullability idiom. Its
+ * callers turn '' into today's label, so an identifier this rule cannot read renders exactly as it renders
+ * now.
+ *
+ * IT IS A VIEW-SIDE TRANSFORM ON A HELD-VERBATIM VALUE — the same tier as .composer__model-label's CSS
+ * ellipsis one element up. It does not sanitize and does not claim to: the store still holds every string
+ * verbatim, and the escaping is still React's at the one text position each label reaches. NOTHING FEEDS A
+ * DERIVED LABEL BACK INTO A LOOKUP: publishedRowFor is still called with the raw string, `currentId` is
+ * still a raw published `value`, and `onSelect` still dispatches a value a row carries. The only branch on
+ * a derived label is `=== ''`, on this client's own answer.
+ *
+ * The regex is anchored, one character class, one greedy quantifier, no alternation and no nesting — so it
+ * is linear on untrusted text with no backtracking, and the input is already bounded upstream. toUpperCase
+ * rather than toLocaleUpperCase, on a character this same expression just proved to be [A-Za-z]: the fold
+ * is locale-invariant by construction, so the Turkish-ı hazard cannot arise. It is display-only, and it
+ * reaches no comparison — the MATCHING is still publishedRowFor's single `===` on raw strings, where "no
+ * case fold, trim or split on this path" continues to hold in full.
+ *
+ * Unicode heads are deliberately out: a non-ASCII head yields '' and takes the verbatim fallback, which is
+ * today's behaviour rather than a new refusal.
+ */
+function modelFamily(identifier: string): string {
+  const bare = identifier.startsWith(CLAUDE_IDENTIFIER_PREFIX)
+    ? identifier.slice(CLAUDE_IDENTIFIER_PREFIX.length)
+    : identifier
+  const head = /^[A-Za-z]+/.exec(bare)?.[0] ?? ''
+  // charAt rather than [0] so the empty case needs no non-null assertion — '' returns '' from both halves.
+  return head.charAt(0).toUpperCase() + head.slice(1)
+}
+
 /** What the trigger shows and what the menu offers.
  *
  *  `options` EMPTY is AC4's inert arm and is a different thing from a menu with rows: it never reaches
@@ -113,19 +165,26 @@ export interface ComposerModelMenuModel {
  * state this ticket exists for, so they are two lookups rather than one.
  *
  * BOTH resolve by exact equality on `value` through publishedRowFor — the one home of the rule, which
- * #988 exported and which RunningModelSection joins the announced identifier by. `row ? row.display_name
- * : shown` rather than `row?.display_name ?? shown`, so a matched row publishing an EMPTY display name
- * stays a hit — the `??` form would print the value instead and quietly re-decide what a match means.
+ * #988 exported and which RunningModelSection joins the announced identifier by. A MISS IS ORDINARY, not
+ * an error, and it is the COMMON case for an announcement, which claude reports at least as specific as
+ * what it was given. NO SUBSTRING, PREFIX, CASE FOLD OR TRIM IS APPLIED ANYWHERE ON THIS PATH, here or in
+ * publishedRowFor — #1095's derivation is downstream of every lookup and feeds none of them.
  *
- * A MISS IS ORDINARY, not an error: the value renders verbatim, RunningModelSection's posture. It is also
- * the COMMON case for an announcement, which claude reports at least as specific as what it was given. No
- * substring, prefix, case fold or trim is applied anywhere on this path, here or in publishedRowFor.
+ * SINCE #1095 NEITHER LABEL IS THE PUBLISHED PROSE. The trigger and each row show a FAMILY (modelFamily
+ * above): the trigger walks the matched row's `resolved_model` then its `value`, or the shown string on a
+ * miss; a row reads its own `value` and never its `resolved_model`. Both fall back to what they rendered
+ * before — `row ? row.display_name : shown` for the trigger, `display_name` for a row — when no family
+ * derives. That fallback keeps #988's own decision intact: `row ? row.display_name : shown` rather than
+ * `row?.display_name ?? shown`, so a matched row publishing an EMPTY display name stays a hit, where the
+ * `??` form would print the value instead and quietly re-decide what a match means.
  *
  * The entries are EXACTLY the published rows, in the daemon's order — nothing deduped, dropped,
- * reordered or synthesised. `id` is the row's `value`, so onSelect(id) submits it with no lookup;
- * ComposerOptionsPanelOption splits id from label for precisely this menu. Two rows sharing a `value` are
- * both carried and both wear aria-current: bounded (both submit the same value, so the pick is still
- * right) and accepted, because AC2's "exactly the published rows" outranks the tidier list.
+ * reordered or synthesised, and the derivation did not change that: two rows deriving to ONE family are
+ * both shown, each still submitting its own `value`. `id` is the row's `value`, so onSelect(id) submits it
+ * with no lookup; ComposerOptionsPanelOption splits id from label for precisely this menu. Two rows
+ * sharing a `value` are both carried and both wear aria-current: bounded (both submit the same value, so
+ * the pick is still right) and accepted, because AC2's "exactly the published rows" outranks the tidier
+ * list.
  */
 export function composerModelMenuModel(
   models: ModelListEntry | null | undefined,
@@ -138,13 +197,34 @@ export function composerModelMenuModel(
   // whole rule here too: a daemon that published a row whose `value` is '' would have that row marked on
   // an inherited-default session, which is the lookup answering honestly rather than a case to guard.
   const sessionRow = publishedRowFor(models, firstShown(layers.picked, layers.stored))
+  // #1095's SOURCE CHAIN for the trigger: on a hit the row's `resolved_model`, then that same row's
+  // `value`; on a miss the shown string itself. `resolved_model` leads because the trigger's job is to
+  // name what RUNS, and it is the one field naming the concrete identifier behind an alias. The `value`
+  // step is an ORDINARY SECOND SOURCE rather than a guard against an unseen case: `resolved_model` is not
+  // reliably populated, and the captured fixture WireModelOption's docblock cites carries the literal
+  // `<unmeasured>` on four of its five rows.
+  const family = row
+    ? firstShown(modelFamily(row.resolved_model), modelFamily(row.value))
+    : modelFamily(shown)
+  // Today's label, kept as the fallback under the derivation rather than rewritten — so an identifier no
+  // family derives from renders exactly as it renders now. `row ? row.display_name : shown` rather than
+  // `row?.display_name ?? shown` for the reason above: a matched row publishing an EMPTY display name
+  // stays a hit.
+  const verbatim = row ? row.display_name : shown
   return {
-    label: row ? row.display_name : shown,
+    label: family === '' ? verbatim : family,
     currentId: sessionRow ? sessionRow.value : null,
-    options: (models?.models ?? []).map((published) => ({
-      id: published.value,
-      label: published.display_name
-    }))
+    // A ROW READS ITS OWN `value`, NEVER ITS `resolved_model` (AC3), and that asymmetry with the trigger
+    // is the point rather than an oversight. `value` is claude's argument vocabulary — `default` names no
+    // family — and a row's job is to name a CHOICE. `default` IS its own choice: derived from
+    // `resolved_model` it would wear the label of the row it resolves to, and the panel would show two
+    // identical rows submitting different values. From `value` it reads the daemon's own word capitalised.
+    // Two rows deriving to one label are both shown and each still submits its own `value`; `id` is
+    // untouched, so nothing about the write changes.
+    options: (models?.models ?? []).map((published) => {
+      const rowFamily = modelFamily(published.value)
+      return { id: published.value, label: rowFamily === '' ? published.display_name : rowFamily }
+    })
   }
 }
 
@@ -162,7 +242,13 @@ export function composerModelMenuModel(
  * index), and `onSelect` still dispatches only a value a published ROW carries — a hostile daemon cannot
  * make this control send a string it did not itself publish. Each reaches exactly one JSX TEXT
  * position, where React escapes it — never dangerouslySetInnerHTML, never an attribute, a URL, a
- * filename, a cache key, a lookup path or a log. `value` reaches four non-sink places, all the panel's:
+ * filename, a cache key, a lookup path or a log.
+ *
+ * SINCE #1095 those two text positions usually carry a DERIVED FAMILY instead (modelFamily above). That is
+ * strictly less exposure, not more: a family is a `[A-Za-z]+` prefix with one character upper-cased, so a
+ * control byte or a terminal escape can now reach the DOM only through the unchanged verbatim fallback —
+ * the same path that carries it today. The positions themselves are the same two, and the derivation adds
+ * no sink. `value` reaches four non-sink places, all the panel's:
  * `key={option.id}` (React's own keyed reconciliation, a Map internally), a string comparison against
  * currentId, the onSelect pass-through, and an array index. No plain object is keyed by any of it, and
  * nothing on this path is logged at all.

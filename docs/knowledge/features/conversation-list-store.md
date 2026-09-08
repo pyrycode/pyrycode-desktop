@@ -442,9 +442,10 @@ listener
   fans out on a *conversation* mutation (promote/rename/archive/change-workspace); renaming a workspace
   touches no conversation, so before this ticket the sidebar kept a stale label for a rename performed
   from another client until an unrelated mutation or a reconnect happened to re-list it. `workspace_updated`
-  closes that gap — correlated by `in_reply_to` to whoever asked for the rename (the outbound verb is
-  [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), not yet built) and pushed unsolicited
-  to every other connected client, both shapes decoding and re-listing identically. **`shouldRefreshList`
+  closes that gap — correlated by `in_reply_to` to whoever asked for the rename (the outbound verb,
+  [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), has since shipped; its sender, the
+  Edit-workspace dialog #1180, has not) and pushed unsolicited to every other connected client, both
+  shapes decoding and re-listing identically. **`shouldRefreshList`
   never reads `path` or `label`, and that is a security property here, not only a shape preference**:
   patching a row's label straight from this frame would put untrusted daemon text on screen bypassing the
   `conversations` reply's own decode — the same reasoning [channel list](channel-list.md)'s § Workspace

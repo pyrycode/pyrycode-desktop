@@ -365,13 +365,14 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   downstream keyed by conversation). **[#714](../codebase/714.md) widened the emit to carry it onward as
   `conversationId`** — the last arm in the family (#724/#732/#737/#742 widened the other four) and the
   only one with a live consumer already built: a daemon-asserted routing key, never rendered, never a
-  filename/cache key/lookup path, reaching no sink. It **stops at the announced-model bridge**
-  (`translateModelAnnounced`), which still rebuilds a fresh `{ model, truncated }` literal — `AnnouncedModel`
-  and [the announced-model store](announced-model-store.md) are unaffected, still holding one value. The
-  arm's own security clause used to be arithmetic ("exactly one untrusted string crosses IPC … rather than
-  two"); #714 replaced it rather than renumbering it, since counting to two would have asserted the id is
-  untrusted text of `model`'s kind, which it is not. The per-conversation consumer is #588 / #674, not yet
-  built. Not deduped: the transport holds no state, so N daemon frames (including a verbatim repeat)
+  filename/cache key/lookup path, reaching no sink. It stopped at the announced-model bridge
+  (`translateModelAnnounced`) only through [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146),
+  which widened that literal to carry the id one hop further, as a `Map` key inside [the announced-model
+  store](announced-model-store.md) — never copied into the held `AnnouncedModel` record, reaching neither
+  of that value's DOM sinks. The arm's own security clause used to be arithmetic ("exactly one untrusted
+  string crosses IPC … rather than two"); #714 replaced it rather than renumbering it, since counting to
+  two would have asserted the id is untrusted text of `model`'s kind, which it is not. Not deduped: the
+  transport holds no state, so N daemon frames (including a verbatim repeat)
   produce N events — that repeat is what tells #588 the value is still current. Ships dormant no longer:
   [the announced-model store (#588, shipped)](announced-model-store.md) is an independent observer
   alongside the exhaustive bridges, which keep their no-ops permanently — **four** of them as of

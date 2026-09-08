@@ -50,11 +50,13 @@ surface could draw anyway. The store's own `null`-vs-`''` contract stays intact 
 [Announced-model store](announced-model-store.md) and the run-configuration sheet still read it.
 
 **The announcement is ranked below a pick and above the stored choice, deliberately not above a
-confirmed pick.** `announcedModelStore` holds one record with no sequence or timestamp, so it carries no
-information about whether it is older or newer than a pick — ranking it above a *confirmed* pick would
-let a stale pre-pick announcement beat the pick the instant the daemon confirms it, making a confirm and
-a rejection render identically. The ordering is a client-side judgment call, not something the daemon's
-frames can settle.
+confirmed pick.** A held announcement carries no sequence or timestamp, so it carries no information
+about whether it is older or newer than a pick — ranking it above a *confirmed* pick would let a stale
+pre-pick announcement beat the pick the instant the daemon confirms it, making a confirm and a rejection
+render identically. `announcedModelStore` keyed itself by conversation in #1146, and that left this
+property true per key: each conversation's held record is still the bare two fields, with nothing added
+to date or order it against a pick made in the same chat. The ordering is a client-side judgment call,
+not something the daemon's frames can settle.
 
 | Input | Rendering |
 |---|---|

@@ -414,12 +414,13 @@ daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,pe
 `RunConfigView` gained a **sixth section**, `RunningModelSection`, rendered immediately *before*
 `ModelSection` — reading order is "what is running, then what you can switch to." It reads **no
 state from this store**: its data comes from the sibling [Announced-model
-store](announced-model-store.md) (`useAnnouncedModelStore(selectAnnouncedModel)`, a fourth read
-added to the `RunConfigSections` container alongside this store's `selectSnapshot`) and, since
-\#975, a fifth: [Model-list store](model-list-store.md)'s published rows for the active
-conversation. It exists because this store's `snapshot.model` is the daemon's *persisted override*,
-which reads `''` / unmarked on a daemon where nothing was overridden — honest, but
-indistinguishable from broken; the section answers what claude actually announced instead.
+store](announced-model-store.md) — `useAnnouncedModelStore(selectAnnouncedModelFor(conversationId))`
+since #1146 keyed that store by conversation (a fourth read added to the `RunConfigSections` container
+alongside this store's `selectSnapshot`) — and, since #975, a fifth: [Model-list
+store](model-list-store.md)'s published rows for the active conversation. It exists because this store's
+`snapshot.model` is the daemon's *persisted override*, which reads `''` / unmarked on a daemon where
+nothing was overridden — honest, but indistinguishable from broken; the section answers what claude
+actually announced instead.
 
 At #560 ship time, resolution was an exact-match lookup against `MODEL_CATALOG`, four hardcoded
 family tokens. **#975 deleted the catalog** (see [Conversation shell — workspace and run

@@ -334,13 +334,12 @@ src/renderer/src/
   `exitActiveConversation` / `unpairAction` shape, which is what makes the two negatives (pairing
   another server clears nothing; cancelling clears nothing) — and the unpair clear-then-navigate
   ordering — assertable at all in a repo with no DOM. `clearPairingScopedState` itself is unchanged
-  beyond its prose; unpair still runs the full thirteen-store clear, in the same order. Carves out
-  `conversationActivityStore` (still blanks every server's turn state on any `connected` edge — filed as
-  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)) and flags `announcedModelStore`
-  (single app-wide slot, now stale after a pair-another — filed as
-  [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146), see [Announced-model
-  store](announced-model-store.md#edge-cases-and-limitations)) as known, deliberately unwidened
-  residue.
+  beyond its prose; unpair still runs the full thirteen-store clear, in the same order. Carved out, at
+  the time, `conversationActivityStore` (still blanked every server's turn state on any `connected` edge
+  — filed as [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145), closed below) and flagged
+  `announcedModelStore` (a single app-wide slot, left stale after a pair-another — filed as
+  [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146), closed below too) as known,
+  deliberately unwidened residue.
 - [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) · Spec:
   `docs/specs/architecture/1145-scoped-activity-reset.md` — closes #1141's carve-out. Widens
   `clearPairingScopedState` to a fourteenth store,
@@ -361,3 +360,12 @@ src/renderer/src/
   re-armability test's comment) plus two more found outside that list by grepping the moved symbol
   (`runConfigLive.ts` and its test cited `clearAllActivity` as the reconnect discriminator; it is now
   `resetActivityFor`, the discriminator itself unchanged).
+- [#1146](https://github.com/pyrycode/pyrycode-desktop/issues/1146) · Spec:
+  `docs/specs/architecture/1146-scope-the-announced-model-store-by-conversation.md` — closes #1141's
+  other carve-out, and does it differently from #1145's shape: rather than widening
+  `clearPairingScopedState`'s reconnect-edge clear to a new store, it keys
+  [`announcedModelStore`](announced-model-store.md) by `conversationId` so the stale-across-servers case
+  is answered by construction — a record can only be read back under the conversation it was announced
+  for. `clearAnnouncedModel` keeps its name, its nullary signature, and its place in this file's
+  `ClearPairingScopedStateDeps` set entirely unchanged; only its body became a whole-map drop instead of a
+  single-record reset, so this file and `PairedShell` needed no edit at all.

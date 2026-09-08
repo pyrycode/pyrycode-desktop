@@ -282,9 +282,10 @@ value, so the two surfaces can show different colours for the same number today;
 later.
 
 The five-character growth at the top step (`Context: 100%` → `Context high: 100%`, 13 → 18 characters, the
-`white-space: nowrap` bound `.composer__context` re-states) lands on a row that was already overflowing its
+`white-space: nowrap` bound `.composer__context` re-states) landed on a row that was already overflowing its
 800px-minimum-window content box before this ticket touched it — filed as its own follow-up rather than
-fixed here, since widening the row is a footer-layout change this ticket has no reason to make.
+fixed here, since widening the row is a footer-layout change this ticket had no reason to make. See
+"Footer row shrink policy (#1107)" below for the fix.
 
 **`ContextUsageControl()`** — module-private container, the single-selector-read shape #797's
 `ComposerErrorChipControl` established (since collapsed into `ComposerErrorSlotControl` by #963, above):
@@ -302,7 +303,88 @@ guarantee ([Composer status row](conversation-shell-composer-status.md#composer-
 `.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
 (no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
 input's *text* start, deliberately not with `.composer-status`'s box-edge alignment; the two rows are
-inset differently by design. `gap: var(--space-5)` is declared now
-(the design's measured 20px item rhythm), inert with one child at #811 but live between the Actions
-trigger and the context reading since #680; #682/#683 inherit the same row spacing instead of each
-re-deriving it.
+inset differently by design. The row's item rhythm is `column-gap: min(3.5%, var(--space-5))` since
+\#1107 — see below; it was a flat `gap: var(--space-5)` (the design's measured 20px) from #811 through
+\#682/#683, inert with one child and then live between the Actions trigger and the context reading.
+
+## Footer row shrink policy (#1107)
+
+At the app's documented 800px minimum window the row above overflowed its content box: five fixed
+`--space-5` gaps (100px), two `nowrap` items with no give (`.composer__actions`, `.composer__context`),
+one `flex: 0 0 auto` item (`ComposerAttachButton`), and three labels whose `min-width: 0` truncation
+chains never fired because the boxes *above* each label — the `<button>` and, above that,
+`.composer-options-anchor` — both kept the default `min-width: auto`, which floors a flex item at its own
+already-clamped content. The row's content was its floor, the floor exceeded the 284px content box, and
+`.paired-shell__pane`'s `overflow: hidden` ([Paired shell § the pane
+card](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670)) clipped the
+remainder — the attach button and the tail of the context reading simply vanished off the pane's right
+edge, with no visual sign anything was cut. Filed while building [#1062](#composer-footer-row-811)'s
+context-severity ladder, whose five-character growth was the trigger for measuring the row, not its
+cause. Fixed by [`docs/specs/architecture/1107-composer-footer-row-shrink-policy.md`](../../specs/architecture/1107-composer-footer-row-shrink-policy.md).
+
+**The policy, in one line: whitespace gives first, then every labelled control gives together, and the
+context reading never gives.** Three rules, no markup change beyond one wrapper span, no new class beyond
+it:
+
+- **`.composer__footer`** — `gap: var(--space-5)` became `column-gap: min(3.5%, var(--space-5))`.
+  `column-gap` rather than the `gap` shorthand because the row is single-line `nowrap`, so `row-gap` has
+  no meaning in it. `3.5%` is derived, not chosen: the smallest tenth of a percent that still reaches the
+  20px ceiling at the app's own 1100px default window (footer content box 584px, 20/584 = 3.43%), so the
+  ceiling holds from a 1088px window up and the row is pixel-identical to its pre-#1107 self at every
+  shipped width — the gap only compresses where the row was already broken. A percentage `column-gap`
+  resolves against the row's own content box, which is definite here (a stretched child of the `.composer`
+  column); at the 800px minimum with worst-case content the gap measures ~10px, about a third of the
+  row's shortfall.
+- **`.composer-options-anchor` and `.composer__footer-button`** both gain `min-width: 0`, which is what
+  lets row pressure reach a label at all — the two boxes a shrink has to pass through between the row and
+  each of the three bounded labels (`.composer__model-label`, `.composer__effort-label`,
+  `.composer__permission-label`). **No label `max-width` is retuned** — that is the fix both labels'
+  shipped comments named and both declined to perform, and retuning one would make the row's fit depend on
+  whatever vocabulary the daemon happens to publish. `.composer__footer-button` additionally gains
+  `overflow: hidden`, which stops a squeezed control from painting its own chevron outside its box and
+  recreating the row's overflow from the inside — structural rather than arithmetic, so no footer control
+  can contribute scrollable overflow whatever the daemon publishes. It must never reach
+  `.composer-options-anchor` itself, which is the open options panel's containing block
+  ([Composer options panel](conversation-shell-composer-options-panel.md)) and would clip the panel out of
+  existence; the split is what `e2e/composer-options-clamp.spec.ts`
+  ([Composer options panel](conversation-shell-composer-options-panel.md)) and every menu-open spec
+  re-confirm green. It cannot clip a `:focus-visible` ring either — an outline is
+  not clipped by the focused element's own `overflow`.
+- **`.composer__context` gains nothing.** Its guarantee is an absence: no `min-width: 0`, no non-visible
+  `overflow`, so with `white-space: nowrap` its automatic minimum size is its own full text and flexbox
+  cannot shrink it at any deficit. `flex-shrink: 0` would be exactly equivalent and therefore inert, so it
+  is not declared — the comment names the two properties whose later addition would silently retire the
+  guarantee.
+
+**`ComposerActionsMenu`'s label moved into `<span className="composer__actions-label">`** — a change the
+plan itself said it would not make, added after the mechanism above was proven: a bare text node inside a
+flex button is an *anonymous* flex item, which no selector can reach, so it refused to shrink below its
+own min-content and `.composer__footer-button`'s new `overflow: hidden` clipped its chevron off the end
+instead (measured 15.2px against 56px wanted — the only one of the four triggers to lose its glyph rather
+than ellipsize). `.composer__actions-label` carries the same `min-width: 0` + `overflow: hidden` +
+`text-overflow: ellipsis` chain as its three sibling labels, but **no `max-width`**: those three bound
+daemon-authored text, this one is `COMPOSER_ACTIONS_LABEL`, a client-owned constant with nothing to bound,
+and a number here would be the "number in a single control's rule" the whole policy exists instead of.
+`ComposerActionsMenu.test.tsx`'s exact-equality assertion on the trigger's announced content moved to the
+wrapped form and stayed an exact equality; the accessible name is still computed from contents, so the
+ellipsis is visual only.
+
+**Accepted, checked residual: `.composer__permission-label` (`Bypass permissions` at its widest) can now
+ellipsize at the 800px minimum**, which that label's own comment had refused to do by `max-width` alone —
+"the one label naming a security posture" argument. Judged a net improvement rather than a violation:
+before #1107 the same content silently vanished off the pane's clipped edge with no truncation signal at
+all; an ellipsis is a visible one, the mode's full name is still in the control's accessible name and its
+own open menu, and the `min()` ceiling makes the whole policy a no-op above a 1088px window. At 800px with
+every label maximally long the four triggers compress to roughly two or three characters each — the honest
+floor of six controls in a 284px content box — while the context reading and every control's presence,
+order, chevron and hit target are untouched; no control is ever dropped.
+
+**Two review findings shipped non-blocking, left for the next touch of this row rather than reworked**:
+the `.composer__footer-button` comment's closing paragraph still describes the Actions label as an
+untouched bare text node — stale as of the same commit that wraps it in `.composer__actions-label` — and
+`e2e/composer-footer-overflow.spec.ts`'s narrow-window checkpoint has no read that distinguishes the
+800px layout from the 1100px launch width it follows, so a first-satisfying-read `expect.poll` could in
+principle settle before the post-`setSize` relayout. The spec's launch-width rhythm assertion is a genuine
+detector and is what reddens on `main`; the narrow-width AC1 assertion is the one to harden, on the
+`e2e/composer-options-clamp.spec.ts` precedent of polling a value that changes across the resize (e.g.
+`window.innerWidth`, which `setSize` moves, rather than one that is already satisfied at launch width).

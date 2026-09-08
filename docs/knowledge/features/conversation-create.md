@@ -166,7 +166,12 @@ By #241, three independent `assertNever`-guarded `DaemonEvent` switches exist
 all three — `daemonEventBridge`/`timelineBridge` return `null`, `modalBridge` folds it into its
 existing null fall-through list. The real consumer at #241 time was
 [the new-discussion FAB's bridge](new-discussion-fab.md) (#242), which subscribes directly via
-`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above. [#515](../codebase/515.md)
+`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above. `requestNewConversation`
+got a second caller in [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178):
+each sidebar workspace row's hover-revealed plus, sending that group's own `cwd` rather than the client's
+saved default — the first caller to pass this constructor a `cwd` that is daemon-asserted text rather than
+a client-side setting, verbatim and unnormalised, relying on `isCreateConversationPayload` and the
+fresh-literal rebuild in `daemonConnection.createConversation` at the boundary below. [#515](../codebase/515.md)
 later added a second, independent consumer on the same event: the [conversation list
 store](conversation-list-store.md)'s `subscribeConversations` now also re-requests the list on
 `conversationCreated`, so the row lands in the store instead of only triggering navigation. The two
@@ -218,6 +223,8 @@ one.
 
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
+- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+  (#1178) — the second caller, sending a workspace group's own `cwd` instead of the saved default.
 - [Conversation list store](conversation-list-store.md) / [#515 codebase notes](../codebase/515.md) —
   the second `conversationCreated` consumer, added later: re-requests the list so the new row lands in
   the store on the same event the FAB navigates on.

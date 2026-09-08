@@ -41,8 +41,9 @@
 
    `position: relative` is #1058's only other edit here, and it is a STACKING fix, not decoration. An
    absolutely positioned ::before at z-index: auto paints in step 6 of the painting order — above every
-   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header, .channel-list__host
-   and .channel-list__workspace-label are all unpositioned, while .channel-list__row is already relative
+   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header and
+   .channel-list__host are unpositioned, while .channel-list__row — and, since #1178,
+   .channel-list__workspace-head — are already relative
    and .channel-list__actions / .channel-list__fab are sticky at z-index: 1. Without this one declaration
    the headers and host rows would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
    defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
@@ -234,16 +235,56 @@
   background: var(--color-outline);
 }
 
-/* The workspace row heading each group under a host row (#703, Figma 106:3098) — structurally the host
-   row one indent deeper. The 24px LEFT inset is the whole point of the rule: it is the 8px-deeper indent
-   (vs the host row's 16px) that shows the workspace nested under the host, and it is how the design draws
-   the nesting. The right inset stays 16px, so the row's trailing edge lines up with the host row's. The
-   design's 10px gap has no slot on the 4px scale — --space-2 (8px) and --space-3 (12px) are equally close,
-   so the tie breaks toward 12px, making the glyph→label rhythm identical to the host row directly above.
-   Centering the 12px glyph against the label's 20px line box reproduces the design's `Row icon` wrapper
-   frame (106:3110) without a wrapper element.
+/* #1178 — THE WORKSPACE HEAD ROW'S WRAPPER, which is what carries the nest. The redrawn Hosts frame
+   (106:3160) puts the workspace row and its channel list inside one `Workspace` wrapper (405:7469) at
+   `pl-[20px]`, so the row runs from 20px in from the card's content edge to that edge: 340 wide in the
+   360 content box, as the component (399:1059) draws it.
 
-   #704 made the row the group's disclosure control, so the block below is now a <button> and this rule
+   `margin-left` rather than a padding on a group element, for `.channel-list__row`'s reason one rule
+   down: there is no group wrapper — the group's conversation rows stay FLAT siblings of the
+   `.channel-list` column (#703/#704 emit no element for them), the ancestry 28 e2e specs click through
+   and the precondition of the adjacent-row rule. This wrapper holds the HEAD ROW ONLY.
+
+   `position: relative` is the second half of the rule and the reason the element exists at all: the plus
+   below is absolutely positioned, and `.channel-list` is itself `position: relative` (for the stacking
+   reason its own rule states), so without a nearer containing block the control would pin itself to the
+   SCROLL COLUMN rather than to this row. This is `.channel-list__row`'s idiom exactly, one level up.
+
+   No `min-width: 0` here, matching `.channel-list__row`: this is a flex item of a COLUMN container, where
+   the automatic minimum size applies to the main (vertical) axis, so the floor that would defeat the
+   label's ellipsize chain is the one on the BUTTON below — where it is declared. */
+.channel-list__workspace-head {
+  display: flex;
+  align-items: center;
+  position: relative;
+  margin-left: var(--space-5);
+}
+
+/* The workspace row heading each group under a host row (#703, Figma 106:3098; redrawn by #1178 as
+   Workspace 399:1059 / 405:7456) — structurally the host row one indent deeper.
+
+   THE GEOMETRY IS THE WHOLE POINT OF #1178 AND EVERY NUMBER IS DRAWN. The drawing gives the row
+   `pl-[8px] py-[4px] pr-[32px]` with a 10px gap, inside the wrapper's 20px nest. Measured from the card's
+   content edge that puts the 12px folder at 20 + 8 = 28 and the label at 28 + 12 + 10 = 50 — which is
+   exactly where `.channel-list__row-open` puts the channel titles beneath it, so THE WORKSPACE LABEL AND
+   THE CHANNEL TITLES SHARE ONE LEFT EDGE. That alignment is what the retune is for.
+
+   This replaces the pre-redraw reading (a 24px left inset, a 16px right one, and a --space-3 gap chosen
+   by a tie-break between 8 and 12 because 10 had no slot on the scale). The 2px deviation that tie-break
+   introduced is what put the label at 48 against the titles' 50; `e2e/sidebar-tree-geometry.spec.ts`
+   recorded it as accepted beside `WORKSPACE_ICON_X` and it expires here. The gap is now written as the
+   SUM `--space-2 + 2px` so the arithmetic stays legible rather than hidden behind a new token — the same
+   shape, and the same reason, as `.channel-list__row-open`'s `calc(--space-2 + 6px + --space-2)`.
+
+   The 32px right padding is the Idle variant's `pr-[32px]`, reserving the trailing slot the plus is
+   positioned OVER rather than laid out in. It deliberately stays 32 and not the Hover variant's 52: that
+   extra 20 belongs to #1180's pen, and it arrives with that ticket.
+
+   The height is DERIVED and never declared: `--space-1` top and bottom over the label's 20px line box is
+   the drawing's 28. A hard `height` would swallow an overflow silently (`.composer__footer`'s measured
+   precedent), so the e2e box read stays a detector of this box.
+
+   #704 made the row the group's disclosure control, so the block below is a <button> and this rule
    picks up the three things that costs. The reset (appearance / border / background / cursor / text-align)
    is `.channel-list__row-open`'s verbatim. The next two are NOT cosmetic — they repair inheritance the
    element swap breaks, which is why every other <button> in this file carries them too:
@@ -252,11 +293,17 @@
      - `color`: a <button> resets it to the UA `buttontext`, and the folder glyph is fill="currentColor",
        so the glyph would mis-paint (visibly, in the dark scheme) where it used to inherit from
        `.channel-list`. `__save`, `__rename`, `__archive`, `__settings` and `__fab` all set it for this.
-   The 6px radius is the Figma's `rounded-[6px]` (106:3098), an EXACT --radius-xs with no ±token mapping;
-   #703 skipped it because there was no fill for it to clip, and the hover below is that fill. No
-   `width: 100%`: `.channel-list` is a flex column at the default align-items:stretch, so the row already
-   fills the sidebar exactly as the <div> did, and a width would fight the padding (if it ever fails to
-   fill, the fix is `align-self: stretch`).
+   The 6px radius is the Figma's `rounded-[6px]`, an EXACT --radius-xs with no ±token mapping. Since #1178
+   deleted the hover fill it clips no background of its own and shapes the `:focus-visible` outline alone —
+   `.channel-list__row-open`'s posture since #1171, and for the same reason.
+
+   `flex: 1 1 auto` + `min-width: 0` REPLACE the old reliance on `align-items: stretch`, and the pair is
+   load-bearing rather than a copy of the neighbour. The button is now a flex item of a ROW-direction
+   wrapper, so `flex-grow` is what spans it to the content edge (its focus rectangle covering the whole
+   row) — and `min-width: auto` would resolve to the CONTENT-based floor on the main axis, a floor that is
+   opaque to `.channel-list__workspace-label`'s own `min-width: 0` / `overflow: hidden` chain. Without the
+   zero here an unbounded daemon `cwd` widens the row and takes the 400px sidebar with it (the reach
+   `.paired-shell__sidebar`'s `min-width: 0` comment already records for these three nowrap labels).
 
    The row is styled IDENTICALLY in both disclosure states — the design draws one state and no chevron, so
    there is nothing to differentiate. Should a collapsed appearance ever be designed, style it off
@@ -267,8 +314,10 @@
   appearance: none;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-6);
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: calc(var(--space-2) + 2px);
+  padding: var(--space-1) var(--space-8) var(--space-1) var(--space-2);
   border: 0;
   border-radius: var(--radius-xs);
   background: none;
@@ -278,15 +327,77 @@
   font-family: var(--font-sans);
 }
 
-/* The `.channel-list__row-open` interactive treatment, the file's precedent for a row-shaped control. The
-   design pins no hover or focus state for this row (`get_variable_defs` on 106:3098 returns only the
-   label's color and type), so the file's own convention decides them rather than an invention. */
-.channel-list__workspace:hover {
-  background: var(--color-surface-container);
-}
+/* #1178 DELETED `.channel-list__workspace:hover { background: var(--color-surface-container) }`. It was
+   the file's own convention standing in where the design pinned no hover state — which its comment said
+   in as many words. The redrawn component now pins one (Hover 399:1060), and that state differs from
+   Idle by its controls ALONE: no fill, no chevron, no background. So the rule is removed rather than
+   retuned, and the plus appearing is the row's hover feedback.
 
+   `:focus-visible` stays, per the file convention — it is an OUTLINE, not a fill, so it says nothing
+   about the drawn hover state either way. */
 .channel-list__workspace:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+/* THE CREATE-CHAT PLUS (#1178, Figma "Icon Edgeless" 399:1065 in the Hover variant) — a hover-revealed
+   trailing control on the workspace row, the `.channel-list__save` treatment one level up the tree.
+
+   THE BOX IS 20 × 20 AND THE GLYPH IS 16 × 16, WHICH REPRODUCES THE DRAWING WITH NO 2px LITERAL. The node
+   places its 16px box at `right: 2px; top: 6.01px` in the 28px row. A 20px (`--space-5`) box at
+   `right: 0`, offset `--space-1` from the top, centring a 16px glyph, lands that glyph at right 2 (the
+   box's 4px of slack, halved) and top 4 + 2 = 6 — the drawn rectangle, derived from tokens rather than
+   restated as an inset. It also leaves the row's 28px height untouched, because the control is out of the
+   flex flow entirely.
+
+   Its 16px box sits directly under the host row's two connection dots, so the column of trailing marks
+   lines up: both end flush with the card's content edge.
+
+   SELF-CONTAINED AND NOT KEYED TO BEING THE ONLY CONTROL. #1180 adds a 14px pen at `right: 28px` beside
+   it (and the Hover variant's `pr-[52px]` with it); nothing here has to move for that, because this rule
+   positions itself against the wrapper's trailing edge rather than against a sibling's absence.
+
+   `--color-primary` (#9dcbfc) is the drawn fill. No background, no hover circle, no radius — the drawing
+   draws none, exactly as on the row's own trailing controls. The `:focus-visible` outline stays, per the
+   file convention.
+
+   INVISIBLE AT REST, `opacity` AND NEVER `display: none` / `visibility: hidden` — #1171's ruling, and
+   the mechanism is load-bearing rather than a style choice: a display-none control cannot take focus, so
+   the plus would leave the tab order and the accessibility tree, which is precisely what AC3 forbids
+   ("keyboard-reachable at all times"). Playwright counts an opacity-0 element as visible and moves the
+   pointer onto it before clicking, which hovers the row on the way, so a drive needs no explicit hover.
+
+   The reveal hangs off THE ROW's hover (the wrapper, (0,2,0)) so the glyph is already there when the
+   pointer arrives at it, and off the control's own `:focus-visible` ((0,2,0)) so Tab reaches it — both
+   over the base (0,1,0). */
+.channel-list__workspace-create {
+  position: absolute;
+  right: 0;
+  top: var(--space-1);
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.channel-list__workspace-create:focus-visible {
+  outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+.channel-list__workspace-head:hover .channel-list__workspace-create {
+  opacity: 1;
+}
+
+/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+.channel-list__workspace-create-icon {
+  display: block;
 }
 
 /* The folder glyph — the `.channel-list__host-icon` rule verbatim: `display: block` is the file's icon
@@ -325,9 +436,9 @@
 
    `margin-left` is the channel-list indent — `--space-7` since #1171 read the REDRAWN frame, up from the
    20 the first read of 103:2985 gave. A row is 332 wide in the 360 content box, starts 48 from the card's
-   edge, and still ends flush with the host row's connection dots. The 28 comes from the list frame now
-   sitting inside a `Workspace` wrapper together with the workspace row; that row's own half of the
-   wrapper is #1178's, not this rule's.
+   edge, and still ends flush with the host row's connection dots. The 28 comes from the list frame
+   sitting inside a `Workspace` wrapper together with the workspace row; that wrapper's other half landed
+   in #1178 as `.channel-list__workspace-head`'s own 20px nest, so the two are 8px apart as drawn.
 
    A margin on each row rather than a padding on a list wrapper because there is no list wrapper: rows are
    flat siblings of the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click
@@ -347,8 +458,9 @@
    LEFT is 22px, written as the sum `--space-2 + 6px + --space-2` because no single token is 22 and the
    arithmetic is the whole point: the drawing's 8px inset, then the 6px status dot, then the 8px gap after
    it (Hover row 398:7266 reads its dot frame at x=8 and its title at x=22). That 22 puts the title 50
-   from the card's content edge — exactly where #1178 puts the workspace label, so the channel titles and
-   the workspace label above them share one left edge. RIGHT is `--space-7` (28px), the trailing padding
+   from the card's content edge — which is exactly where #1178 landed the workspace label, so the channel
+   titles and the workspace label above them share one left edge. Moving either without the other breaks
+   the alignment `e2e/sidebar-tree-geometry.spec.ts` now asserts as an equality. RIGHT is `--space-7` (28px), the trailing padding
    the drawing reserves for the Hover variant's 12px control, which is positioned over it rather than laid
    out in it. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the archive screen's
    rows are untouched.

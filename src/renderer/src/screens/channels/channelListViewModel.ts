@@ -65,8 +65,15 @@ export const UNKNOWN_WORKSPACE_LABEL = 'Unknown workspace'
 
 // The fallback group's grouping key. `''` is collision-proof BY CONSTRUCTION rather than by guessing an
 // improbable string: a `cwd` of `''` has no usable segment, so any row that could collide with the
-// sentinel is already in the fallback bucket. Module-local — nothing outside compares against it.
-const UNKNOWN_WORKSPACE_KEY = ''
+// sentinel is already in the fallback bucket.
+//
+// EXPORTED since #1178, which gave the sidebar its first consumer that must tell this group from a real
+// one: the workspace row's plus sends the group's key as a create's `cwd`, and this key names no
+// directory. It is emphatically NOT the `null` "take the daemon default" signal — `CreateConversationPayload`
+// keeps those distinct on the wire — so the group draws no plus at all. Compared against the KEY and
+// never against `UNKNOWN_WORKSPACE_LABEL`, for `workspaceLabelFor`'s stated both-directions reason: a
+// real directory named `Unknown workspace` is an ordinary group and keeps its control.
+export const UNKNOWN_WORKSPACE_KEY = ''
 
 /** One workspace group: its exact `cwd` grouping key, its display label, and its rows in array order. */
 export type WorkspaceGroup = {

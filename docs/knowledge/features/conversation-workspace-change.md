@@ -186,6 +186,9 @@ no unit test of its own.
 
 - [Edit workspace dialog](edit-workspace-dialog.md) (#1180) — this verb's live caller: the workspace
   row's hover pen, the dialog it opens, and the `label: null`-on-folder-segment send rule.
+- [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / #1293 — the real-`pyry`
+  proof of this verb's round trip, driven through the Edit workspace dialog against a real spawned
+  daemon rather than the stateful fake.
 - [Conversation rename (transport)](conversation-rename.md) / [#359](../codebase/359.md) — the
   structural and guard twin this slice clones (two required strings, second field renamed).
 - [Conversation promote (transport)](conversation-promote.md) / [#273](../codebase/273.md) — origin

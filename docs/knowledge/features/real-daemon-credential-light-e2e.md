@@ -28,11 +28,12 @@ assert the new title lands in the channel list (old title gone). Sibling action 
 harness and shipped: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete),
 [#441](../codebase/441.md) (workspace — recent-workspaces + create-folder), [#443](../codebase/443.md)
 (save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly),
-`e2e/real-daemon-session-settings.spec.ts` (#481 — see below), and `e2e/real-daemon-create-channel.spec.ts`
+`e2e/real-daemon-session-settings.spec.ts` (#481 — see below), `e2e/real-daemon-create-channel.spec.ts`
 (#1283 — the Channels-tree [Create-channel dialog](create-channel-dialog.md)'s promoted create, see
-§ Proving a promoted create is genuine below). A sixth verb, dequeue, stayed **demoted to Inbox without
-shipping**: it needs a sustained turn this claude-less mode can't run, so it stays an empty observable
-subset on this tier.
+§ Proving a promoted create is genuine below), and `e2e/real-daemon-workspace-rename.spec.ts` (#1293 —
+the [Edit workspace dialog](edit-workspace-dialog.md)'s rename, see § Proving `rename_workspace` is
+genuine below). A sixth verb, dequeue, stayed **demoted to Inbox without shipping**: it needs a
+sustained turn this claude-less mode can't run, so it stays an empty observable subset on this tier.
 
 **set-session-settings was demoted once, under its original ticket #442, then revisited and shipped
 under #481.** #442's verdict — "the confirmation never touches the DOM, optimistic-first" — is half true
@@ -126,6 +127,57 @@ ancestor to scope a row locator by. The spec instead asserts the whole ordered l
 shows the workdir's `work` label in the diff, while a hypothetical canonicalising daemon (one that
 resolved the seed and the created row's `cwd` to different string forms) would instead show the same label
 twice. A bare `toHaveCount(1)` collapses both failures into the same number and tells you nothing.
+
+### Proving `rename_workspace` is genuine, and the label-clearing trap a fresh registry hides (#1293)
+
+`e2e/real-daemon-workspace-rename.spec.ts` is the real-daemon twin of #1180's
+[Edit workspace dialog](edit-workspace-dialog.md) fake-tier spec, `sidebar-workspace-edit.spec.ts`. The
+fake twin's `conversationStateFake` answers whatever `rename_workspace { path, label }` the client
+sent, so it proves the frame leaves the app and nothing about whether a real `pyry` has a handler for
+it — `rename_workspace` (pyrycode#2158 / pyrycode#2208) is a new daemon verb that shipped client-side
+(#1289) against that fake alone. It reuses #1283's `seedCwdSubdir` option fixture unchanged — no
+fixture change was needed.
+
+**The label-clearing trap this spec exists to pin apart.** `requestRenameWorkspace`
+([edit-workspace-dialog.md](edit-workspace-dialog.md)) sends `label: null` — the daemon's
+clear-this-label value — exactly when the trimmed typed name equals `workspaceLabelFor(cwd)`, the
+**folder segment**, not the label currently displayed. On a fresh registry the daemon holds no
+`workspace_label` at all, so the row's pre-save label *is* that folder segment. A spec that typed a new
+name equal to the seed's own folder would therefore send a **clear**, the row would fall back to that
+same folder segment after the round trip, and the drive would run, click, and assert green while proving
+nothing about a handler existing at all. The spec pins the two apart with a plain
+`expect(NEW_LABEL).not.toBe(SEED_FOLDER)` beside the pre-read, asserted rather than trusted — the same
+shape #1283's `DAEMON_DEFAULT_LABEL` guard uses. **Worth carrying to the next real-daemon spec that
+types a name onto a workspace-shaped field:** check whether the client's own send logic special-cases
+the value equal to the daemon's fallback display string before treating any assertion built on it as
+non-vacuous.
+
+**Diagnostic hygiene: no `cwd`/path assertion, unlike the fake twin.** The fake twin asserts the
+dialog's path line renders the workspace `cwd`; this spec declines that read, because on the real tier
+`cwd` is an absolute path under a temp `daemonHome` and a failing diff would print it whole. Every
+value this spec asserts is a client-owned constant (`SEED_FOLDER`, `NEW_LABEL`), so the worst any
+assertion here can print is a directory basename — `workspaceLabelFor` takes only the last
+segment — the same posture #1283's spec settled on. Verified rather than assumed:
+`playwright.real-claude.config.ts` enables no screenshot, trace or video, so a failure yields text
+diffs only, never a window capture of the open dialog (the one surface that renders the full path).
+
+**Two failure signatures, and a longer timeout must never paper over either.** A `pyry` predating
+pyrycode#2208 omits `workspace_label` from its list reply; `requireStringOrNull` in
+`parseConversationSummary` fails closed on the missing key, so the whole list decode throws and
+**nothing renders** — the readiness gate (`.channel-list__rename`) times out on an empty sidebar. That
+is a stale binary, fixed by rebuilding `pyry`. A daemon carrying the field but registering no
+`rename_workspace` handler renders the sidebar normally and the label simply never moves off
+`SEED_FOLDER` — the #949-class gap this tier exists to catch, and what the closing read
+(`ROUNDTRIP_TIMEOUT_MS`) is tuned to catch rather than mask. A daemon that *rejects* the rename
+presents identically to the second signature, since this verb is fire-and-forget and the client
+surfaces no rejection at all (edit-workspace-dialog.md § Edge cases) — a red here is "the daemon did
+not relabel", not yet definitively "the daemon has no handler".
+
+No `requiredCapabilities` declared, as with every claude-less sibling on this tier: the #933 gate reads
+the hello-ack **intersection** against the one capability string this client advertises
+(`interactive`), and naming a workspace-specific string the daemon doesn't know would convert a
+genuine missing-handler red into a permanent skip — which still counts against the gate floor and
+parks the ticket forever.
 
 ## How it works
 
@@ -275,6 +327,10 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
 - [Create-channel dialog](create-channel-dialog.md) / #1179 — the Channels-tree workspace plus and its
   dialog; this tier's `real-daemon-create-channel.spec.ts` (#1283) is its real-daemon proof, and the
   first spec on this tier to exercise `create_conversation`'s promoted branch.
+- [Edit workspace dialog](edit-workspace-dialog.md) / #1180 — the workspace row's hover pen and its
+  rename dialog; this tier's `real-daemon-workspace-rename.spec.ts` (#1293) is its real-daemon proof.
+- [Conversation workspace change § Workspace rename](conversation-workspace-change.md) / #1289 — the
+  `rename_workspace` wire contract #1293 proves against a real `pyry` for the first time.
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the outbound write half
   `real-daemon-session-settings.spec.ts` proves against a real daemon: `setSessionSettings`, the
   confirmed/rejected correlation, and the presence contract.

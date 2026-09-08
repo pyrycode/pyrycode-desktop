@@ -364,6 +364,22 @@ export function ChannelList({
         <EditHostDialogView
           name={editHostName}
           status={editHostStatus}
+          // #1300 — the clicked row's OWN identity, looked up HERE because this is the only place both
+          // halves are already in scope: `servers` off `serverInfoStore` and the id the pen closed over.
+          // `renderServerTrees` could not supply it — it receives `readonly string[]`, ids alone — which
+          // is why nothing below this container changes for this ticket.
+          //
+          // `find` cannot match the wrong machine, and that is checked rather than assumed:
+          // `pairedServerStore` treats a repeated `server` id as MALFORMED on decode and its `save` adds
+          // -or-replaces by key, so the id is unique at two layers — and that store's own retrieval uses
+          // this identical shape. `?? null` normalises `find`'s `undefined` to the view's one absent
+          // form, which is what a reseed or an unpair under an open dialog produces.
+          //
+          // The displayed pair and the write target can never disagree: both derive from this same
+          // `editHostServerId` cell in the same render, and the save arrow below fixes the id before its
+          // await. The values are handed down as DISPLAY STRINGS and nothing else — the dialog module's
+          // header states the full sink list, and the relay URL is never dialled from either side.
+          server={servers.find((entry) => entry.serverId === editHostServerId) ?? null}
           onNameChange={setEditHostName}
           // Cancel closes and writes nothing (AC1). It is never disabled, so it is the exit even while a
           // write is outstanding; the next open re-seeds all three cells, so there is nothing to clear.

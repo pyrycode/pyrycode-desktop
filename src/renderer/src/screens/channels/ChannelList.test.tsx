@@ -1077,9 +1077,18 @@ describe('ChannelListView', () => {
       // subtree fragment, which `HostRow`'s ban list had to be amended for. A key is reconciliation
       // identity and reaches no sink — never serialised, never emitted here — and this is what pins that
       // claim. The two ids are sentinels chosen to appear nowhere else in the markup.
+      //
+      // #1300 made this the SIDEBAR half of a claim that now spans two surfaces. The container began
+      // handing a machine's id and relay URL to the Edit host dialog that ticket, so the guard here is
+      // what says the sidebar itself did not gain them on the way: this render has no dialog open — the
+      // container opens it off `editHostServerId`, which starts `null` in every static render — so an id
+      // appearing in this markup would mean it leaked into a row, not into the dialog. The dialog's own
+      // half is `EditHostDialog.test.tsx`'s, where the same SENTINEL idiom pins each value to exactly one
+      // occurrence immediately after its caption.
       const markup = twoServers()
       expect(markup).not.toContain(DEFAULT_SERVER)
       expect(markup).not.toContain(SECOND_SERVER)
+      expect(markup).not.toContain('edit-host')
     })
 
     it('adds no element to the row, row-open or section-header match sets (AC5)', () => {

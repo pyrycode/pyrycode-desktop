@@ -350,6 +350,11 @@ function modelAnnouncedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'model_announced', ts: FIXED_TS, payload })
 }
 
+/** A `thinking_progress` plaintext, wrapping an arbitrary payload (#1313). */
+function thinkingProgressPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'thinking_progress', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` plaintext, wrapping an arbitrary payload (#564). */
 function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -2007,6 +2012,130 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: modelAnnouncedPlaintext({ ...ANNOUNCED, truncated: 'true' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — thinking_progress stream (#1313)', () => {
+  /** The daemon's canonical fixture (testdata/thinking_progress.json). */
+  const PROGRESS = {
+    conversation_id: 'conv-1',
+    estimated_tokens: 1200,
+    estimated_tokens_delta: 240
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a thinking_progress into exactly one thinkingProgress event (conversation_id carried)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: thinkingProgressPlaintext(PROGRESS) })
+
+    const events = emitted(sink).slice(before)
+    // A strict toEqual on the whole event, asserted POSITIVELY: the arm has exactly `type` /
+    // `estimatedTokens` / `conversationId` — and NO `daemonTs`, which this assertion pins for free
+    // (an extra defined property fails a toEqual). The omission is #1312's design carried forward:
+    // that decode arm takes no FrameTimestamp, because a stored thinking_progress is still skipped
+    // and there is no served-page half for a (type, ts) key to join against.
+    expect(events).toEqual([{ type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }])
+    // The frame's conversation_id reaches the emitted event VERBATIM — the routing key #1314
+    // attributes by.
+    expect(JSON.stringify(events)).toContain('conv-1')
+  })
+
+  it('emits exactly the three modeled properties — the delta does NOT cross, nor any snake key', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: thinkingProgressPlaintext({ ...PROGRESS, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    // One assertion proving three things at once: `estimated_tokens_delta` does not cross (nothing
+    // consumes it, and the wire says the deltas received do not sum to the turn's total, so no
+    // consumer may accumulate them), the snake spellings do not cross, and the emit is a literal
+    // built from named fields rather than a spread of the decoded payload — a spread would carry
+    // all three.
+    expect(Object.keys(events[0]).sort()).toEqual(['conversationId', 'estimatedTokens', 'type'])
+    expect(JSON.stringify(events)).not.toContain('240')
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('carries a ZERO reading across as a value — nothing on this leg consults truthiness', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: thinkingProgressPlaintext({ ...PROGRESS, estimated_tokens: 0, estimated_tokens_delta: 0 })
+    })
+
+    // Neither Go field carries `omitempty`, so the daemon's zero value is legal traffic. A
+    // truthiness test anywhere on this leg would read it as an absence and drop the event.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'thinkingProgress', estimatedTokens: 0, conversationId: 'conv-1' }
+    ])
+  })
+
+  it('does NOT dedup: two identical readings each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (let i = 0; i < 2; i++) {
+      drivers[0].emit({ type: 'message', plaintext: thinkingProgressPlaintext(PROGRESS) })
+    }
+
+    // Two frames, two events — no coalescing, no last-value memo, none keyed by conversation. The
+    // wire re-fires as the count climbs, and suppressing a repeat would invent semantics the daemon
+    // does not have.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' },
+      { type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' }
+    ])
+  })
+
+  it('emits a reading that DROPS below the last one — no monotonic filter on this leg', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (const estimated_tokens of [120, 240, 15]) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: thinkingProgressPlaintext({ ...PROGRESS, estimated_tokens })
+      })
+    }
+
+    // THE case a "sanity" optimiser eats. `estimated_tokens` restarts near zero at every
+    // inference-request boundary — four times inside the daemon's own committed single-turn capture
+    // — so a monotonic or grew-since-last filter here would silently swallow ordinary traffic, not
+    // noise. All three emit, in wire order.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'thinkingProgress', estimatedTokens: 120, conversationId: 'conv-1' },
+      { type: 'thinkingProgress', estimatedTokens: 240, conversationId: 'conv-1' },
+      { type: 'thinkingProgress', estimatedTokens: 15, conversationId: 'conv-1' }
+    ])
+  })
+
+  it('drops a malformed thinking_progress without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: thinkingProgressPlaintext({ ...PROGRESS, estimated_tokens: '1200' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

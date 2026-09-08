@@ -308,6 +308,7 @@ export function translateTimelineEvent(
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':
+    case 'thinkingProgress':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -360,6 +361,13 @@ export function translateTimelineEvent(
       // exactly as the batch appearing was. It is worth saying rather than assuming, because a
       // dismissal is the kind of event that reads like something that "happened during the turn": it
       // does not, and there is no turn to file it under.
+      // thinkingProgress (#1313) lands here by the same queueState rule (#720) — no turn_id, opens and
+      // closes no turn — and it is the member of this group a reader is most likely to want here,
+      // since a mid-turn reading of how much claude thought reads exactly like thread chrome for the
+      // running turn. Its no-op is DORMANT rather than permanent: whether the reading draws through
+      // this bridge, as `apiRetry` (#493) and `compacting` (#496) eventually did, or through a
+      // subscriber of its own, as `questionShown` (#885) did, is the #1314 render slice's call and not
+      // this carry slice's. What is settled here is only that nothing draws it yet.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

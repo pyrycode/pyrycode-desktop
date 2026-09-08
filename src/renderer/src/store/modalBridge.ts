@@ -159,6 +159,7 @@ export function translateModalEvent(
     case 'modelAnnounced':
     case 'questionShown':
     case 'questionDismissed':
+    case 'thinkingProgress':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -200,6 +201,10 @@ export function translateModalEvent(
       // first-answer-wins, while this retires a question batch against its own nonce, and the daemon
       // contract has no question-answer frame at all yet. Its no-op is PERMANENT on the same #850
       // grounds as its sibling.
+      // thinkingProgress (#1313) is the least modal-like member of the group and needs the least
+      // argument: it is a mid-turn READING, nothing daemon-side is waiting on an answer, and there is
+      // no `modal_id` to resolve it against. Its consumer is the #1314 render slice, so this no-op is
+      // PERMANENT — nothing in this store will ever claim a reading.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

@@ -1549,6 +1549,46 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversationId: inbound.modelAnnounced.conversation_id
             })
             return
+          case 'thinking-progress':
+            // The thinking-token data path (#1313, decoded at #1312). Emit a fresh literal carrying
+            // the reading and the routing key, copied BY NAME from the already-decoded,
+            // already-validated payload — never a spread of inbound.thinkingProgress (the
+            // assistant-delta idiom), so a decoder that later grows a field cannot smuggle it across
+            // IPC. The decode stays fail-closed upstream: a missing or non-number reading drops the
+            // whole line without emitting.
+            //
+            // TWO OF THE THREE DECODED FIELDS CROSS. `estimated_tokens_delta` is deliberately left
+            // behind: nothing consumes it (#1314 shows the total alone), and the wire's own contract
+            // says the deltas received do not sum to the turn's total, so an arm carrying one would
+            // invite exactly the accumulation it forbids. NO `daemonTs` either — the decode arm takes
+            // no FrameTimestamp, because a stored `thinking_progress` is still skipped and there is
+            // no served-page half for a (type, ts) key to join against; `model-announced` directly
+            // above, not `api-retry`, is the precedent for this literal's shape.
+            //
+            // `conversation_id` crosses as `conversationId`: a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg — all four exhaustive bridges no-op
+            // the arm until #1314. It reaches no log either, here or upstream: emitDaemonEvent is
+            // log-free by construction and the decode's log line is content-free, which matters for
+            // the reading beside it as much as for the id — how much claude thought is a side-channel
+            // on private work.
+            //
+            // DELIBERATELY STATELESS: no dedup, no coalescing, no timer, no last-value memo, and none
+            // keyed by the id either. The temptation is sharper here than on any neighbour, because
+            // the frames arrive in a climbing run that LOOKS like it wants smoothing — and the two
+            // obvious rules would both be wrong. Suppressing a repeat starves #1314 of the re-fire
+            // that says the reading is current; filtering a reading that dropped eats ordinary
+            // traffic, since `estimated_tokens` restarts near zero at every inference-request
+            // boundary, four times inside the daemon's own committed single-turn capture. A rate
+            // limit on a flooding daemon would be the only mutable state on this leg, keyed by a
+            // daemon-supplied id and fed by a daemon-supplied stream; the render loop is where that
+            // belongs, if anywhere. Not compile-forced (this inner switch has no assertNever) — the
+            // round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'thinkingProgress',
+              estimatedTokens: inbound.thinkingProgress.estimated_tokens,
+              conversationId: inbound.thinkingProgress.conversation_id
+            })
+            return
           case 'background-task-started':
             // The background-task open data path (#564). Emit a fresh literal carrying all six fields,
             // copied BY NAME from the already-decoded, already-validated payload — never a spread of

@@ -315,6 +315,17 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('thinkingProgress → null (consumed by the #1314 render slice, not the session store)', () => {
+    expect(
+      translateDaemonEvent({ type: 'thinkingProgress', estimatedTokens: 1200, conversationId: 'conv-1' })
+    ).toBeNull()
+    // A zero reading is a legitimate value rather than an absence (neither Go field carries
+    // `omitempty`), and it is no more a session action than a large one.
+    expect(
+      translateDaemonEvent({ type: 'thinkingProgress', estimatedTokens: 0, conversationId: 'conv-1' })
+    ).toBeNull()
+  })
+
   it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

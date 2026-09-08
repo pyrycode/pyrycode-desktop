@@ -853,6 +853,28 @@ type BaseDaemonEvent =
   // conversationDeleted-was-a-no-op-until-#376 precedent). No token, key, or raw frame can ride a bare
   // string path (AC-by-construction).
   | { type: 'workspaceFolderCreated'; path: string }
+  // The workspace-updated arm (#1288) — the daemon's report that a WORKSPACE's label changed, where the
+  // sibling above reports that a workspace DIRECTORY was made. Carries the two fields FLAT (fresh
+  // literals, not the wire payload object): the small-payload emit idiom its neighbours use
+  // (workspaceFolderCreated naming `path`, conversationDeleted naming `id`), keeping events.ts free of a
+  // WorkspaceUpdatedPayload import. Emitted from a frame that is CORRELATED by in_reply_to when this
+  // client asked for the rename and UNSOLICITED otherwise — both decode and emit identically, so no
+  // correlation state is threaded and no handle rides the arm.
+  //
+  // NO CONSUMER READS EITHER FIELD, AND THAT IS THE DESIGN — read this before writing the first one.
+  // The event is a REFRESH TRIGGER: `shouldRefreshList` reacts to its OCCURRENCE and re-requests the
+  // conversation list, and the label that reaches the sidebar rides the authoritative `conversations`
+  // reply on ConversationSummary.workspace_label, through the decode path #1287 hardened. Do NOT patch a
+  // row from these fields — that would put untrusted daemon text on screen bypassing the list decode.
+  //
+  // BOTH STRINGS ARE UNTRUSTED DAEMON-SUPPLIED TEXT, and the warning binds at this declaration precisely
+  // because nothing reads them today: `label` is operator-chosen text owed PLAIN-TEXT rendering, NEVER
+  // HTML (no innerHTML / dangerouslySetInnerHTML); `path` is a REMOTE daemon-side filesystem path that
+  // must never be resolved into a local filesystem operation, never keyed into a lookup (it is the
+  // obvious key for a future workspace map and a plain object would resolve `__proto__`), never a
+  // filename or cache key, and never a log argument. No token, key, or raw frame can ride two bare
+  // strings (AC-by-construction).
+  | { type: 'workspaceUpdated'; path: string; label: string | null }
   // The create_workspace_folder REJECTION arm (#396), the rejected twin of workspaceFolderCreated.
   // Emitted by the MAIN-side correlation gate (daemonConnection.ts) when a content-free daemon `error`
   // (#116) arrives whose `Envelope.in_reply_to` matches a pending create_workspace_folder request — the

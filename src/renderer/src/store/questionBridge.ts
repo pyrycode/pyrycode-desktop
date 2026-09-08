@@ -151,6 +151,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'workspaceUpdated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':

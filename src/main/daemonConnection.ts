@@ -1774,6 +1774,33 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               path: inbound.workspaceFolderCreated.path
             })
             return
+          case 'workspace-updated':
+            // The workspace-updated data path (#1288). Emitted UNCONDITIONALLY on decode: the frame is
+            // correlated by in_reply_to when this client asked for the rename and unsolicited otherwise,
+            // and both mean the same thing to every consumer — a workspace's label moved — so NO
+            // correlation state is threaded and the two shapes reach one emit. A fresh literal naming
+            // each of the two fields FLAT (the workspaceFolderCreated / conversationDeleted idiom for a
+            // small payload; only the six-field conversationUpdated wraps a wire type by reference),
+            // never a spread of the decoded payload, so a decoder that ever grew a field cannot smuggle
+            // it across IPC.
+            //
+            // The server stamp is INHERITED, not written here: emitDaemonEvent applies #1068's origin,
+            // bound main-side at construction from the paired record this client holds. Nothing reads an
+            // origin off `path`, and nothing here could — which is the point, since a daemon naming a
+            // server in its payload would be claiming a slot.
+            //
+            // The list-reflect slice consumes this as a REFRESH TRIGGER (conversationListBridge's
+            // shouldRefreshList) and reads neither field; the label reaches the sidebar on the
+            // authoritative `conversations` reply that refresh asks for. `path` is an untrusted REMOTE
+            // path and `label` untrusted operator text — plain-text-only, never resolved locally, never
+            // logged. Not compile-forced (this inner switch has no assertNever) — the round-trip test
+            // guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'workspaceUpdated',
+              path: inbound.workspaceUpdated.path,
+              label: inbound.workspaceUpdated.label
+            })
+            return
           case 'conversation-updated': {
             // The conversation-updated data path (#273). Emitted UNCONDITIONALLY on decode, first and
             // before any correlation below — the record is a list-refresh trigger for every consumer

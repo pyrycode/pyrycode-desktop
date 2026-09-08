@@ -141,6 +141,7 @@ export function translateModalEvent(
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
     case 'workspaceFolderRejected':
+    case 'workspaceUpdated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':

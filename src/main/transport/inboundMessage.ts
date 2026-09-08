@@ -57,6 +57,7 @@ import type {
   ConversationDeletedPayload,
   RecentWorkspace,
   WorkspaceFolderCreatedPayload,
+  WorkspaceUpdatedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption,
@@ -688,6 +689,23 @@ export type InboundDaemonMessage =
   | { kind: 'conversation-deleted'; conversationDeleted: ConversationDeletedPayload }
   | { kind: 'recent-workspaces'; recentWorkspaces: RecentWorkspace[] }
   | { kind: 'workspace-folder-created'; workspaceFolderCreated: WorkspaceFolderCreatedPayload }
+  // The `workspace-updated` kind (#1288) carries the decoded two-field WorkspaceUpdatedPayload — the
+  // daemon's report that a WORKSPACE's label changed, where its `workspace-folder-created` neighbour
+  // reports that a workspace DIRECTORY was made. Correlated by `in_reply_to` to whoever asked for the
+  // rename and pushed UNSOLICITED to every other interactive client, so both shapes are real traffic.
+  //
+  // IT CARRIES NO `inReplyTo`, and the absence is the design — the `attachment-stored` argument in a
+  // different key. The three kinds that DO carry one need the envelope id BECAUSE it is their correlation.
+  // Here nothing correlates on it: the consumer treats this frame as a refresh trigger, and the outbound
+  // rename verb (#1289) learns its write landed from the re-listed rows exactly as every other client
+  // does. Surfacing the handle would hand a consumer a plausible-looking match key nothing matches on.
+  // `workspace-folder-created` above is the precedent: always correlated, no handle, payload sufficient.
+  //
+  // NEITHER FIELD IS READ BY ANY CONSUMER, deliberately. The emit carries them across IPC and the
+  // renderer's list bridge reacts to the OCCURRENCE alone, letting the daemon's authoritative
+  // `conversations` reply land the new label. `path` is an untrusted REMOTE path and `label` untrusted
+  // operator text; both are opaque here, resolved against no filesystem, and neither reaches a log.
+  | { kind: 'workspace-updated'; workspaceUpdated: WorkspaceUpdatedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
@@ -2253,6 +2271,31 @@ function parseWorkspaceFolderCreatedPayload(payload: unknown): WorkspaceFolderCr
 }
 
 /**
+ * Narrow an opaque payload into a WorkspaceUpdatedPayload (#1288). Fail-closed like
+ * parseWorkspaceFolderCreatedPayload, whose `path` posture it inherits, plus the nullable second field:
+ * an `isRecord` guard, then the required `path` string and the required, NULLABLE `label`. Returns a
+ * FRESH two-field object; unknown server-added keys are tolerated (forward-compat) but NOT copied through.
+ *
+ * THE TWO FIELDS HAVE DELIBERATELY DIFFERENT NULLABILITY, and reaching for one helper on both is the
+ * reflex to resist. A `null` PATH names no workspace and must fail the frame; a `null` LABEL is the value
+ * "this workspace's label was cleared", distinct from an OMITTED key, which is an absence and fails
+ * closed. That separation is what keeps a cleared label distinguishable from a truncated frame — the
+ * ConversationUpdatedPayload.workspace_label contract this mirrors.
+ *
+ * Its messages name the failure CATEGORY only — `path` is an untrusted daemon-side REMOTE path that could
+ * echo a `$HOME` / username / project name, and `label` is untrusted operator-chosen text, so NEITHER is
+ * ever interpolated (requireString / requireStringOrNull emit the client-owned field NAME alone).
+ */
+function parseWorkspaceUpdatedPayload(payload: unknown): WorkspaceUpdatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed workspace_updated payload')
+  }
+  const path = requireString(payload, 'path')
+  const label = requireStringOrNull(payload, 'label')
+  return { path, label }
+}
+
+/**
  * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
  * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
  * category only — an option `label` is untrusted `claude`-surfaced display text.
@@ -3390,6 +3433,25 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'workspace-folder-created', workspaceFolderCreated }
+    }
+    case 'workspace_updated': {
+      // Narrow BEFORE logging so a malformed frame (a missing / non-string `path`, a `label` that is
+      // neither string nor null) throws first and leaves no record. NEITHER decoded field is logged —
+      // only the frame's byte length + one-way hash, reusing the existing content-free field set.
+      // Deliberately NO `count` field (the workspace_folder_created #381 posture): the set stays
+      // type/bytes/hash. `path` could echo a $HOME / username and `label` is operator-chosen text, so
+      // nothing but the shape is recorded. `code` is a client-owned literal, never the peer's `type`.
+      //
+      // `Envelope.in_reply_to` is deliberately NOT read: the frame decodes identically whether the
+      // daemon correlated it to this client's own rename or pushed it unsolicited (see the kind above).
+      const workspaceUpdated = parseWorkspaceUpdatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'workspace_updated',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'workspace-updated', workspaceUpdated }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

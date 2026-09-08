@@ -262,6 +262,12 @@ export type EnvelopeType =
   | 'set_system_prompt'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
+  // The daemon's report that a WORKSPACE's label changed (#1288) — correlated by `in_reply_to` to the
+  // client that asked for the rename, and pushed UNSOLICITED to every other connected interactive one, so
+  // a rename performed anywhere reaches every open client. Distinct from `conversation_updated` beneath
+  // it, which fans out on a CONVERSATION mutation: a bare workspace rename produces no such frame, which
+  // is exactly the gap this type closes. Carries WorkspaceUpdatedPayload. SSOT pyrycode#2209.
+  | 'workspace_updated'
   | 'conversation_updated'
   // ONE frame carrying BOTH directions: it rides upload (client → daemon) and retrieval
   // (daemon → client) alike, and all eight AttachmentChunkPayload fields are always present in
@@ -2610,6 +2616,34 @@ export interface CreateWorkspaceFolderPayload {
  */
 export interface WorkspaceFolderCreatedPayload {
   path: string
+}
+
+/**
+ * Inbound `workspace_updated` body (daemon → client). Mirrors the daemon's
+ * WorkspaceUpdatedPayload{Path string; Label *string} field-for-field (pyrycode#2209), wire order
+ * `path, label`.
+ *
+ * BOTH SHAPES ARE REAL TRAFFIC: the daemon correlates this frame by `in_reply_to` to the client that
+ * asked for the rename, and pushes it UNSOLICITED to every other connected interactive client. A client
+ * that never asked still receives it, which is the whole point — a rename from anywhere lands everywhere.
+ *
+ * ITS OWN two-field shape, deliberately not an alias of any sibling: the verb owns its wire surface (the
+ * standing rule in this neighbourhood). `path` takes WorkspaceFolderCreatedPayload.path's posture — the
+ * workspace's canonical daemon-side path, an untrusted REMOTE path carried as OPAQUE DISPLAY TEXT that
+ * this client never `fs`- / `path.resolve`-s, never keys a lookup on, and never logs the value of.
+ * `label` takes ConversationUpdatedPayload.workspace_label's contract verbatim — `string | null` (the
+ * daemon uses `*string` WITHOUT `omitempty`, so a cleared label is a literal `null` and NEVER an absent
+ * key), untrusted opaque display text that nothing parses. An EMPTY string is a value, not an absence.
+ *
+ * NOTHING IN THIS CLIENT READS EITHER FIELD, and that is by design rather than by omission. The frame is
+ * a REFRESH TRIGGER: it re-requests the conversation list, and the label that reaches the sidebar rides
+ * the authoritative `conversations` reply on `ConversationSummary.workspace_label`. Do NOT patch a row
+ * from these fields — that would put untrusted daemon text on screen bypassing the list decode path.
+ * Do NOT drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile change. See #1288.
+ */
+export interface WorkspaceUpdatedPayload {
+  path: string
+  label: string | null
 }
 
 /**

@@ -369,3 +369,22 @@ by that decision, and they would reopen if it were reversed.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
+
+## Revisions
+
+**2026-09-08 — both Open Questions resolved; no design change.**
+
+1. *Does the sidebar re-render on a re-list that changes only a workspace label?* **Yes.**
+   `e2e/workspace-updated-relist.spec.ts` drives the whole path and the row's text moves from the old
+   label to the new one. Falsified as well as confirmed: with the `workspaceUpdated` disjunct disabled in
+   `shouldRefreshList` and the app rebuilt, the spec's closing assertion reddens, so it detects the
+   feature rather than passing on a fake seeded with the new label. No production change followed.
+2. *Does `renameWorkspace` need to update rows, or is the `labels` map alone enough?* **Both must move**,
+   as the plan anticipated. The map feeds rows minted or moved into the workspace later; the held rows
+   carry their own `workspace_label` and are what `list_conversations` answers with — and that reply, not
+   the pushed frame, is what the sidebar renders. Implemented as specified.
+
+One thing the plan did not anticipate, recorded because it shaped the tests rather than the design: the
+`connected()` helper in `daemonConnection.test.ts` is **describe-local**, defined afresh in each of a dozen
+describes rather than hoisted, so the new describe carries its own copy. That is the file's existing
+convention, not a duplication introduced here.

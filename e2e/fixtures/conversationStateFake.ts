@@ -13,7 +13,8 @@ import type {
   PromoteConversationPayload,
   ChangeWorkspacePayload,
   RecentWorkspace,
-  RecentWorkspacesPayload
+  RecentWorkspacesPayload,
+  WorkspaceUpdatedPayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -68,6 +69,33 @@ const DEFAULT_SEED: ConversationSummary = {
   workspace_label: null,
 }
 
+/**
+ * The fake's `buildReplyFrames`, plus the one seam a spec needs to change daemon-held state MID-TEST
+ * (#1288). Everything else the fake models is driven by the app's own outbound verbs; a workspace rename
+ * is not, because the frame that reports one arrives whether or not this client asked for anything (the
+ * outbound `rename_workspace` verb is #1289 and this fake does not model it).
+ *
+ * A CALLABLE WITH A PROPERTY rather than an object of two members, and that shape is deliberate. 29 spec
+ * files pass this straight through as `launchPairedApp({ buildReplyFrames })`; a function carrying an
+ * extra property is still assignable to the bare `(inbound) => Uint8Array[]` that option takes, so the
+ * seam costs ZERO call-site edits, where returning `{ buildReplyFrames, renameWorkspace }` would touch
+ * all 29.
+ */
+export interface ConversationStateFake {
+  (inboundPlaintext: Uint8Array): Uint8Array[]
+  /**
+   * Rename one workspace the way the daemon does: update the label held for `cwd` AND every held row in
+   * it, then return the unsolicited `workspace_updated` broadcast frame for the spec to push through
+   * `daemon.pushFrame`.
+   *
+   * ONE CALL DOES BOTH HALVES, on purpose. The state change is what the follow-up `list_conversations`
+   * answers with — and that reply, not this frame, is what the sidebar actually renders — while the frame
+   * is what triggers that re-list. Split into two calls a spec could push a frame announcing a label the
+   * fake does not hold, which is a state the daemon cannot produce and which would prove nothing.
+   */
+  renameWorkspace(cwd: string, label: string | null): Uint8Array
+}
+
 export interface ConversationStateFakeOptions {
   /** Initial held list, in wire order. Default: a single promoted, named row (DEFAULT_SEED). */
   conversations?: ConversationSummary[]
@@ -92,7 +120,7 @@ export interface ConversationStateFakeOptions {
  */
 export function conversationStateFake(
   options: ConversationStateFakeOptions = {}
-): (inboundPlaintext: Uint8Array) => Uint8Array[] {
+): ConversationStateFake {
   // One mutable source of state, held per factory call. Copy each seed row so a caller's SEED literal is
   // never mutated across runs. Order is preserved (append on create, in-place edit otherwise), so
   // `list_conversations` reflects wire order.
@@ -123,7 +151,7 @@ export function conversationStateFake(
   // Monotonic id source for minted rows — deterministic, no clock/random.
   let nextCreatedId = 1
 
-  return (inbound: Uint8Array): Uint8Array[] => {
+  const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
     // Trusted input: decodeEnvelope throwing would be a genuine bug in the app-under-test, not a case to
     // swallow — let it surface (the production decoder fails closed; a fake does not re-do that job).
     const env = decodeEnvelope(inbound)
@@ -214,6 +242,22 @@ export function conversationStateFake(
         return []
     }
   }
+
+  // The mid-test seam (#1288). Attached to the callable rather than returned beside it — see
+  // ConversationStateFake for why that keeps 29 spec files untouched.
+  return Object.assign(buildReplyFrames, {
+    renameWorkspace(cwd: string, label: string | null): Uint8Array {
+      // BOTH the per-cwd map and every held row move. The map is what a row minted or moved INTO this
+      // workspace later reads; the rows are what `list_conversations` answers with, and that reply is
+      // what the sidebar renders — so updating only one of the two would leave the drive asserting
+      // against a fake the daemon could not produce.
+      labels.set(cwd, label)
+      for (const row of list) {
+        if (row.cwd === cwd) row.workspace_label = label
+      }
+      return workspaceUpdatedFrame(cwd, label)
+    }
+  })
 }
 
 /** Find the held row by its conversation id, or undefined if the id is absent (a defensive no-op case). */
@@ -262,6 +306,19 @@ function conversationUpdatedFrame(row: ConversationSummary): Uint8Array {
       last_used_at: row.last_used_at,
       workspace_label: row.workspace_label
     } satisfies ConversationUpdatedPayload
+  })
+}
+
+/** `workspace_updated` BROADCAST — the two-field WorkspaceUpdatedPayload (#1288). No `in_reply_to`: the
+ *  daemon correlates this frame to whoever asked for the rename and pushes it UNSOLICITED to every other
+ *  client, and the unsolicited shape is the one a spec drives, since nothing here sends the rename verb
+ *  (that is #1289). The client decodes both identically. */
+function workspaceUpdatedFrame(path: string, label: string | null): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'workspace_updated',
+    ts: FIXED_TS,
+    payload: { path, label } satisfies WorkspaceUpdatedPayload
   })
 }
 

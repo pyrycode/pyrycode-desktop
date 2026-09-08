@@ -791,6 +791,135 @@ describe('ChannelListView', () => {
         expect(labels).toEqual([FALLBACK, FALLBACK])
       })
     })
+
+    describe("the row's own pen and plus (#1185)", () => {
+      // The static tier owns the whole four-arm handler matrix, and it is the ONLY tier that can reach
+      // it at all this ticket: no caller passes either handler yet (#1187 and #1189 do), so a running
+      // window draws neither control. Everything below therefore renders `HostRow` directly.
+      //
+      // What this tier CANNOT say, stated so a reader does not mistake the gap for coverage: the drawn
+      // geometry (right 2 / right 28, --color-primary) and "clicking fires that handler" both need a
+      // caller and land with #1187 / #1189. The one running-app criterion that IS observable today —
+      // a row with NEITHER handler keeps its dots on hover — is `e2e/host-row-hover-controls.spec.ts`'s.
+      const noop = (): void => {}
+
+      // The sibling block's sentinel discipline, restated because that constant is scoped to it: a label
+      // with no regex-, HTML- or attribute-significant character, so "occurs exactly once" is a statement
+      // about the render and not about escaping. Distinct from every marker in this file.
+      const HOST_NAME = 'Pyrybox-Sentinel'
+
+      const renderRow = (over: { add?: () => void; edit?: () => void } = {}): string =>
+        renderToStaticMarkup(
+          <HostRow
+            label={HOST_NAME}
+            serverId={DEFAULT_SERVER}
+            onAddWorkspace={over.add}
+            onEditHost={over.edit}
+          />
+        )
+
+      const both = (): string => renderRow({ add: noop, edit: noop })
+
+      // The operator's words, restated here rather than imported from the screen's constants: these are
+      // the two names a screen reader speaks, so a copy change must fail this file rather than be
+      // re-blessed by the value under test.
+      const ADD_NAME_MARKER = 'aria-label="Add workspace"'
+      const EDIT_NAME_MARKER = 'aria-label="Edit host"'
+
+      // Each class carries its closing quote, the guard the row's own marker states: `.channel-list__host`
+      // matches whole class tokens, so neither of these can silently join its locator's match set.
+      const ADD_MARKER = 'class="channel-list__host-add"'
+      const EDIT_MARKER = 'class="channel-list__host-edit"'
+
+      // The design's two boxes (Host Hover 399:1408 — the plus 16 × 16 at right 2, the pen 14 × 14 at
+      // right 28), pinned as whole opening runs so a resize, a re-exported viewBox or a lost
+      // `aria-hidden` all fail here rather than in a screenshot nobody takes.
+      const ADD_ICON_MARKER =
+        '<svg class="channel-list__host-add-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">'
+      const EDIT_ICON_MARKER =
+        '<svg class="channel-list__host-edit-icon" viewBox="0 0 12 12" width="14" height="14" fill="currentColor" aria-hidden="true">'
+
+      it('draws both controls, named, when both handlers are passed (AC4)', () => {
+        const markup = both()
+        expect(countOf(markup, ADD_NAME_MARKER)).toBe(1)
+        expect(countOf(markup, EDIT_NAME_MARKER)).toBe(1)
+        expect(countOf(markup, ADD_MARKER)).toBe(1)
+        expect(countOf(markup, EDIT_MARKER)).toBe(1)
+      })
+
+      it('draws NEITHER without handlers, leaving the shipped row byte-identical (AC2, AC5)', () => {
+        // The production row until #1187 and #1189 land. Its dots and every marker the #710/#718/#1070
+        // guards pin are asserted here as well as in their own block, because this is the render those
+        // two tickets will change and this is where a regression would first show.
+        const markup = renderRow()
+        expect(countOf(markup, ADD_NAME_MARKER)).toBe(0)
+        expect(countOf(markup, EDIT_NAME_MARKER)).toBe(0)
+        expect(countOf(markup, ADD_MARKER)).toBe(0)
+        expect(countOf(markup, EDIT_MARKER)).toBe(0)
+        expect(markup).not.toContain('<button')
+        expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
+        expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(1)
+        expect(hostDotTagsIn(markup)).toHaveLength(2)
+      })
+
+      it('withholds each control INDEPENDENTLY of the other (AC4)', () => {
+        // Not a restatement of the two arms above: a `create`-style bundle, or one `if` covering both,
+        // would pass those two and fail these. #1187 and #1189 land on their own schedules, so the row
+        // has to draw one control alone in the window between them.
+        const addOnly = renderRow({ add: noop })
+        expect(countOf(addOnly, ADD_NAME_MARKER)).toBe(1)
+        expect(countOf(addOnly, EDIT_NAME_MARKER)).toBe(0)
+
+        const editOnly = renderRow({ edit: noop })
+        expect(countOf(editOnly, ADD_NAME_MARKER)).toBe(0)
+        expect(countOf(editOnly, EDIT_NAME_MARKER)).toBe(1)
+      })
+
+      it('draws the design’s two glyph boxes (AC1)', () => {
+        const markup = both()
+        expect(countOf(markup, ADD_ICON_MARKER)).toBe(1)
+        expect(countOf(markup, EDIT_ICON_MARKER)).toBe(1)
+      })
+
+      it('renders the pen BEFORE the plus, so tab order runs left to right (AC4)', () => {
+        // Deliberately the reverse of `WorkspaceRow`'s, whose plus-first order its own header records as
+        // a COST forced by `e2e/sidebar-workspace-create.spec.ts`'s single-Tab assertion. Both controls
+        // here are absolutely positioned, so this drives the tab order and nothing else, and no shipped
+        // spec constrains it — which is why it is pinned here rather than left to drift.
+        const markup = both()
+        expect(markup.indexOf(EDIT_MARKER)).toBeLessThan(markup.indexOf(ADD_MARKER))
+      })
+
+      it('makes each a plain, unnested <button type="button"> (AC4)', () => {
+        // "Clicking it fires that handler and nothing else" has two halves this tier can state: the
+        // button cannot submit anything (`type`), and neither control sits inside the other or inside a
+        // third button whose handler a click would also reach (#274's rule). The handler-firing half
+        // needs a caller and lands with #1187 / #1189.
+        const markup = both()
+        expect(countOf(markup, `<button type="button" ${ADD_MARKER}`)).toBe(1)
+        expect(countOf(markup, `<button type="button" ${EDIT_MARKER}`)).toBe(1)
+        expect(countOf(markup, '<button')).toBe(2)
+        for (const tag of markup.split('<button').slice(1)) {
+          expect(tag.slice(0, tag.indexOf('</button>'))).not.toContain('<button')
+        }
+      })
+
+      it('keeps the label out of BOTH controls’ attributes, and off the row tag (AC4)', () => {
+        // `HostRow`'s four declined sinks, re-asserted over the subtree this ticket adds — the reason
+        // the two names are compile-time constants and not a `{ label, onEdit }` bundle a caller could
+        // fill with the machine's name. The label still occurs exactly ONCE, immediately after the label
+        // span's opening tag, which catches an `aria-label`, a `title` and anything nobody thought to ban.
+        const markup = both()
+        expect(countOf(markup, HOST_NAME)).toBe(1)
+        expect(markup.indexOf(HOST_NAME)).toBe(
+          markup.indexOf(HOST_LABEL_OPEN) + HOST_LABEL_OPEN.length
+        )
+        expect(markup).not.toContain('title=')
+        // The row tag itself, whole: no `aria-label`, no `title`, and no modifier token that would stop
+        // `HOST_ROW_MARKER` matching. Asserting the opening tag EXACTLY is what makes that complete.
+        expect(markup.slice(0, markup.indexOf('>') + 1)).toBe('<div class="channel-list__host">')
+      })
+    })
   })
 
   describe('one subtree per paired server (#1070)', () => {

@@ -323,46 +323,53 @@
    `position: relative` is #801's edit here — the containing block for the status dot below, the
    `position: relative` parent + `position: absolute` child idiom this file already uses at :500.
 
-   `margin-left` is the design's channel-list indent (103:2985, pl-[20px]): the rows sit one step in from
-   the host and workspace rows, so a row is 340 wide in the 360 content box and the open row's fill
-   (#1098) starts 40px from the card's edge and ends flush with the host dots. A margin on each row
-   rather than a padding on a list wrapper because there is no list wrapper: rows are flat siblings of
-   the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click through. The
-   adjacent-row rule below sets margin-top alone and leaves this longhand as it is. */
+   `margin-left` is the channel-list indent — `--space-7` since #1171 read the REDRAWN frame, up from the
+   20 the first read of 103:2985 gave. A row is 332 wide in the 360 content box, starts 48 from the card's
+   edge, and still ends flush with the host row's connection dots. The 28 comes from the list frame now
+   sitting inside a `Workspace` wrapper together with the workspace row; that row's own half of the
+   wrapper is #1178's, not this rule's.
+
+   A margin on each row rather than a padding on a list wrapper because there is no list wrapper: rows are
+   flat siblings of the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click
+   through. The adjacent-row rule below sets margin-top alone and leaves this longhand as it is. */
 .channel-list__row {
   display: flex;
   align-items: center;
   position: relative;
-  margin-left: var(--space-5);
+  margin-left: var(--space-7);
 }
 
 /* The open action — the old full-width row button, reset then holding the row's single label.
    `flex: 1 1 auto` + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0
    flex-shrink idiom).
 
-   The LEFT padding is `--space-8` (32px) rather than the `--space-4` the other three sides keep: that is
-   the Figma's title inset (node 103:2968, title at x=32), and the space the status dot's absolute box no
-   longer reserves for itself. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the
-   archive screen's rows are untouched.
+   THE HORIZONTAL PADDING IS ASYMMETRIC AND BOTH SIDES ARE DRAWN (#1171; they were 32 / 16 before it).
+   LEFT is 22px, written as the sum `--space-2 + 6px + --space-2` because no single token is 22 and the
+   arithmetic is the whole point: the drawing's 8px inset, then the 6px status dot, then the 8px gap after
+   it (Hover row 398:7266 reads its dot frame at x=8 and its title at x=22). That 22 puts the title 50
+   from the card's content edge — exactly where #1178 puts the workspace label, so the channel titles and
+   the workspace label above them share one left edge. RIGHT is `--space-7` (28px), the trailing padding
+   the drawing reserves for the Hover variant's 12px control, which is positioned over it rather than laid
+   out in it. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the archive screen's
+   rows are untouched.
 
    #1097 — THE DESKTOP ROW'S 24px, DERIVED AND NEVER DECLARED. `--space-1` (4px) top and bottom over
    `.channel-list__title`'s 16px line box computes to exactly the node's 24, with no `height` anywhere in
-   this file. That is deliberate and it is what keeps the e2e height assertion a DETECTOR: a trailing
-   affordance left at its old 40px box would push this row past 24 and redden, where a hard `height: 24px`
-   would swallow the overflow silently (`.composer__footer`'s hard 20px height is the measured precedent —
-   a boundingBox().height assertion against it can never fail for that reason).
+   this file. That is deliberate and it is what keeps the e2e height assertion a DETECTOR of THIS box: a
+   hard `height: 24px` would swallow an overflow silently (`.composer__footer`'s hard 20px height is the
+   measured precedent — a boundingBox().height assertion against it can never fail for that reason). What
+   it stopped detecting at #1171 is the trailing controls: absolutely positioned, they are out of the flex
+   line and can no longer size the row at all, so `e2e/sidebar-row-geometry.spec.ts` pins each control's
+   own box directly instead.
 
    The `gap` the old title · time layout needed is GONE rather than retuned. With the time deleted there is
-   no second item for it to fall between, and the node's 10px gap is the arithmetic behind the title's x=32
-   (16 dot inset + 6 dot + 10) — already paid by the `--space-8` left padding above — not a declaration to
-   port.
+   no second item for it to fall between, and the drawing's 8px gap is the arithmetic behind the title's
+   x=22 — already paid by the left padding above — not a declaration to port.
 
-   `--radius-xs` is the node's 6px corner, and it belongs HERE rather than on `.channel-list__row` because
-   this is the only element in the row that paints: the wrapper is transparent at rest, so the corner is
-   observable on the `:hover` fill and the `:focus-visible` outline below. Deliberately NOT extended to the
-   wrapper to make the fill span the trailing affordances — the node draws no affordances, and #1098 ("the
-   sidebar fills the row of the chat you have open") is where the open-row fill and its surface get
-   decided. #1097 does not mark the open row at all. */
+   `--radius-xs` is the node's 6px corner. Since #1171 it is on BOTH this element and the wrapper, and
+   that is not a duplicate: the wrapper's corner shapes the hover and open FILLS, which both paint there,
+   while this one shapes the `:focus-visible` OUTLINE below — the two affordances highlight independently
+   (#274), so the ring must follow the button's own box even though the button no longer paints. */
 .channel-list__row-open {
   appearance: none;
   flex: 1 1 auto;
@@ -374,7 +381,7 @@
   text-align: left;
   display: flex;
   align-items: center;
-  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-8);
+  padding: var(--space-1) var(--space-7) var(--space-1) calc(var(--space-2) + 6px + var(--space-2));
   font-family: var(--font-sans);
 }
 
@@ -395,35 +402,53 @@
 /* #801 — where the status dot SITS. Its box, ring and blink are #800's and are declared at :808 with the
    component; this rule is the call site's positioning only.
 
-   OUT OF FLOW, on purpose. In the row's flex flow the dot would push the <button>'s left edge to x≈22, so
-   the :hover / :focus-visible fill would stop short of the row's leading edge and leave a visible notch
-   around the dot. Absolutely positioned at the design's 16px inset, the dot reaches the Figma's x=16 while
-   the button keeps spanning the whole row, so both rectangles are exactly what they were.
+   OUT OF FLOW, on purpose, and #1171 kept it there on the SURVIVING half of the reason. The notch reason
+   expired with that ticket: the hover fill moved off the button and onto the wrapper, so a button that
+   started 22px in would no longer leave an unfilled gap around the dot. The CLICK-THROUGH reason did not.
+   The dot is a SIBLING of the button, so in flow the leading 22px would stop being part of the button and
+   a click on the dot — or on the 8px inset before it — would open nothing. Absolutely positioned over a
+   button that spans the row, with `pointer-events: none` so the 6px box does not swallow the click, is
+   what makes that clause of #1171's AC4 hold. `pointer-events` does not affect the accessibility tree, so
+   the dot's `role="img"` and its name are still announced.
 
-   `pointer-events: none` is what keeps a CLICK on the dot opening the conversation — the 6px box sits over
-   the button and would otherwise swallow it. It does not affect the accessibility tree, so the dot's
-   `role="img"` and its name are still announced.
+   `left` is `--space-2` since #1171 (16 before it): the 6px box sits at x=8…14 in the row.
 
-   VERTICALLY CENTRED ON THE ROW, and #1097 SETTLED THAT — this is a ruling, not a deferral. #800's review
-   handed the question forward and #801 declined the drawn offset only because the shipped row was not yet
-   the design's 24px row. It is now, so the excuse expired and the measurement had to be re-read.
-
-   In the Figma frame the dot instance is a 14px-TALL, 6px-wide FRAME occupying y=4…18, and its painted
-   circle sits at cy=11 INSIDE that frame — so the circle's centre lands at y=15 in a 24px row whose centre
-   is y=12, the 3px drop. That 3px is an artifact of the component's own 14px wrapper, not a design
-   intention about where a dot sits: the app draws a BARE 6px dot with no wrapper, so reproducing the offset
-   would port the wrapper's internal padding without the wrapper. The dot stays centred. Cheap to flip later
-   if the drawn offset is what is wanted — it is one `top` value. */
+   VERTICALLY CENTRED ON THE ROW — a ruling since #1097, and since #1171 one the DRAWING ITSELF makes.
+   #800's review handed the question forward, #801 declined the drawn offset because the shipped row was
+   not yet 24px tall, and #1097 measured the then-current frame: a 14px-tall dot FRAME at y=4…18 with its
+   circle at cy=11, which lands 3px below a 24px row's centre. #1097 rejected that 3px as an artifact of a
+   wrapper the app does not draw. The redrawn instance settles it outright: a 6×11 frame top-aligned in the
+   row's 16px content box with its circle at cy=8, so the circle's centre is y=12 in a 24px row — the row's
+   own centre. Nothing to reconcile any more; only `left` moved. */
 .channel-list__row > .conversation-status-dot {
   position: absolute;
-  left: var(--space-4);
+  left: var(--space-2);
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
 }
 
-.channel-list__row-open:hover {
-  background: var(--color-surface-container);
+/* THE HOVER FILL, ON THE WRAPPER AND NOT THE BUTTON (#1171; it was `.channel-list__row-open:hover` in
+   `--color-surface-container` #1d2024 before). Two changes at once, and both are drawn: the Hover variant
+   398:7258 fills the whole row `--color-primary-container` (#134a74) behind the same 6px corner.
+
+   IT HAD TO LEAVE THE BUTTON. The trailing control is a SIBLING of the button, not a child (an
+   interactive control cannot nest inside a <button>, #274), and since #1171 it sits over the button's
+   28px trailing padding — so a fill on the button would drop the instant the pointer reached the glyph
+   and the row would flicker. `.channel-list__row:hover` keeps the fill under the pointer across the whole
+   row, the way the `:has()` rule below already keeps the open fill there.
+
+   THE OPEN FILL STILL WINS, and there is no longer a suppression rule for it. The old
+   `.channel-list__row-open[aria-current='true']:hover { background: none }` existed only because the
+   button's opaque hover would otherwise paint OVER the wrapper's open fill; with nothing painting on the
+   button there is nothing to suppress, so #1171 deleted it. The `:has()` rule's (0,3,0) outranks this
+   rule's (0,2,0), so hovering the open row leaves it `--color-on-primary` on specificity, not on source
+   order. That also makes the e2e assertion for it a real detector for the first time: both candidate
+   fills now paint on the SAME element, where before only the button's own computed background could see
+   the conflict (a parent's computed background is blind to a child painting over it). */
+.channel-list__row:hover {
+  background: var(--color-primary-container);
+  border-radius: var(--radius-xs);
 }
 
 .channel-list__row-open:focus-visible {
@@ -437,9 +462,11 @@
    THE FILL IS ON THE WRAPPER, WHICH IS WHAT #1097 LEFT UNDECIDED. `.channel-list__row-open` is a
    `flex: 1 1 auto` SIBLING of the trailing Save-as-channel / Rename controls, not their parent, so a
    fill on it would stop short and leave an unfilled tail on any row that carries one. The wrapper
-   already spans the row, so the fill spans the affordances the node itself does not draw. The corner
-   comes WITH it: at rest the wrapper paints nothing, which is why #1097 put `--radius-xs` on the button
-   for the hover fill and the focus ring and deliberately did not extend it here.
+   already spans the row, so the fill spans the affordances the node itself does not draw. (#1171 moved
+   those controls out of the flex flow, so the button now spans the row too — but the ruling stands and
+   its reason only got stronger: the control still is not the button's child, so a fill on the button
+   would drop the moment the pointer reached the glyph.) The corner comes WITH it — and since #1171 the
+   `:hover` rule above paints and rounds this same wrapper, so the two agree rather than compete.
 
    BACKGROUND AND CORNER ONLY — no padding, no border, no min-height. The row's 24px is DERIVED (4px
    button padding over a 16px line box, no `height` anywhere), so anything that grew this box would
@@ -461,21 +488,15 @@
   border-radius: var(--radius-xs);
 }
 
-/* The open fill WINS OVER THE HOVER. Splitting the fill from the button leaves `.channel-list__row-open:hover`
-   painting `--color-surface-container` — `#1d2024`, fully opaque — on top of the wrapper's fill across the
-   button's share of an open row. Suppressing it is the whole of AC4's first clause, and this selector's
-   (0,3,0) beats the base rule's (0,2,0), so it wins on specificity rather than on source order.
-
-   MEASURED, not argued: deleting this rule alone and rebuilding reddens
-   `e2e/sidebar-row-geometry.spec.ts`'s hover assertion with `rgb(29, 32, 36)` where it wants a
-   transparent button, and reddens nothing else in the file.
+/* #1171 DELETED `.channel-list__row-open[aria-current='true']:hover { background: none }` from here. It
+   suppressed the button's own opaque hover, which would otherwise have painted over the wrapper's open
+   fill across the button's share of an open row; the button stopped painting on hover when the fill moved
+   to the wrapper, so there is nothing left to suppress. The open-over-hover ruling itself is unchanged
+   and is recorded on the `:hover` rule above, which is now where it is enforced.
 
    `:focus-visible` is untouched, here and on every other row: it is an OUTLINE, not a fill, so the two
-   affordances still highlight independently (#274). So are the trailing controls' own hover circles —
-   that same ruling, and the node draws no trailing control at all. */
-.channel-list__row-open[aria-current='true']:hover {
-  background: none;
-}
+   affordances still highlight independently (#274). The trailing controls' own hover circles are gone
+   with the same ticket — the drawing draws no circle and no background behind the glyph. */
 
 /* The open row's label is `M3/body/small-emphasized`, which differs from the body-small the resting row
    wears in WEIGHT ALONE — same family, size, line height, tracking and colour. So this is one
@@ -485,36 +506,61 @@
   font-weight: var(--text-body-small-weight-emphasized);
 }
 
-/* The Save-as-channel affordance (#274) — an icon-only trailing button on Recent rows. De-emphasized
-   vs the title (on-surface-variant); a round hover target; focus-visible outline (the file convention).
+/* The Save-as-channel affordance (#274) — an icon-only trailing button on Recent rows, redrawn by #1171
+   as the Hover variant's 12px "Icon Edgeless" (398:7266, x=328 in a 348-wide row, y centred). It was an
+   always-visible in-flow 16px Material glyph in on-surface-variant with a round hover circle; all three
+   of those went.
 
-   #1097 SIZED IT TO THE ROW. `.channel-list__row` is `display: flex; align-items: center`, so its tallest
-   child sets its height — and a 24px glyph in `--space-2` padding was a 40px box that would have held the
-   desktop row open at 40 and made the node's 24 unreachable. A 16px glyph in `--space-1` is 24 exactly.
-   The glyph's own size is an attribute on the <svg> in ChannelList.tsx, so the pair moves together; the
-   `viewBox="0 0 24 24"` is the coordinate system and is unaffected. A 24px pointer target is accepted: this
-   is a mouse-driven desktop window and the design's own row is 24px. `margin-right` is a HORIZONTAL inset,
-   out of scope, and unchanged. */
+   OUT OF THE FLEX FLOW rather than laid out in it, which is the change every measurement below follows
+   from. Absolute inside `.channel-list__row` (already `position: relative`), the button spans the WHOLE
+   row, so its `:focus-visible` rectangle no longer shrinks on rows that carry a control and a click
+   anywhere in the trailing padding still opens the conversation. It also means this control can no longer
+   size the row: the derived 24px answers to the button alone now.
+
+   THE BOX IS 28 × 24 AND THE GLYPH IS 12 × 12. `--space-7` wide is exactly the button's trailing padding,
+   and `padding-right: --space-2` with `justify-content: flex-end` lands the glyph's right edge 8px in from
+   the row's right edge — the drawing's inset, and what the acceptance pins. The BOX is deliberately larger
+   than the glyph: the acceptance pins the glyph's rectangle, not the box's, and a 28 × 24 pointer target
+   is the same accepted-for-a-mouse-driven-window size #1097 settled on.
+
+   `--color-primary` (#9dcbfc) is the drawn fill, replacing on-surface-variant. There is no hover circle
+   and no background of any kind behind the glyph — the drawing draws none, so `--radius-full` and the
+   `:hover` background went with it. The `:focus-visible` outline stays, per the file convention.
+
+   INVISIBLE AT REST, `opacity` AND NEVER `display: none` / `visibility: hidden`. On every row including
+   the open one (Juhana's ruling, 2026-09-06: the Active variant as drawn carries a pen, but that is a
+   leftover of building Active from Hover and is not ported). The hiding mechanism is load-bearing, not a
+   style choice: a display-none control cannot take focus, and nine shipped specs click or await these
+   controls without hovering first — five of them `real-daemon-*` readiness gates holding a
+   `toBeVisible()` under a handshake timeout, which `playwright.config.ts` runs in the real tier alone.
+   Playwright counts an opacity-0 element as visible and moves the pointer onto it before clicking, which
+   hovers the row on the way, so those specs need no edit. `visibility: hidden` would fail the same gates
+   and would take the control out of the accessibility tree besides.
+
+   The reveal hangs off `.channel-list__row:hover` (0,3,0) and each control's own `:focus-visible`
+   (0,2,0), both over the base (0,1,0). The ROW's hover rather than the control's, so the glyph is already
+   there when the pointer arrives at it. Keyboard focus reveals it too, so Tab still reaches it. */
 .channel-list__save {
-  flex: 0 0 auto;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--space-7);
+  height: var(--space-6);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  margin-right: var(--space-2);
-  padding: var(--space-1);
+  justify-content: flex-end;
+  padding: 0 var(--space-2) 0 0;
   border: none;
-  border-radius: var(--radius-full);
   background: none;
-  color: var(--color-on-surface-variant);
+  color: var(--color-primary);
   cursor: pointer;
-}
-
-.channel-list__save:hover {
-  background: var(--color-surface-container);
+  opacity: 0;
 }
 
 .channel-list__save:focus-visible {
   outline: 1px solid var(--color-outline);
+  opacity: 1;
 }
 
 .channel-list__save-icon {
@@ -522,31 +568,37 @@
 }
 
 /* The Rename affordance (#360) — an icon-only trailing button on saved Channel rows, the symmetric
-   counterpart to Save-as-channel on Recent rows. Identical icon-button treatment: de-emphasized
-   on-surface-variant, a round hover target, a focus-visible outline — and, since #1097, the same
-   `--space-1` padding around a 16px glyph, for the same reason recorded on `.channel-list__save` above:
-   in the row's centred flex line the tallest child decides the row's height, and the old 40px box would
-   have made the node's 24px row unreachable. */
+   counterpart to Save-as-channel on Recent rows. Identical treatment, and since #1171 that means the
+   whole absolutely-positioned, hover-revealed `--color-primary` block recorded on `.channel-list__save`
+   above. Only the glyph differs: the Channels tree draws the pen, the Chats tree the chevron. */
 .channel-list__rename {
-  flex: 0 0 auto;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--space-7);
+  height: var(--space-6);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  margin-right: var(--space-2);
-  padding: var(--space-1);
+  justify-content: flex-end;
+  padding: 0 var(--space-2) 0 0;
   border: none;
-  border-radius: var(--radius-full);
   background: none;
-  color: var(--color-on-surface-variant);
+  color: var(--color-primary);
   cursor: pointer;
-}
-
-.channel-list__rename:hover {
-  background: var(--color-surface-container);
+  opacity: 0;
 }
 
 .channel-list__rename:focus-visible {
   outline: 1px solid var(--color-outline);
+  opacity: 1;
+}
+
+/* The reveal itself. One rule for both controls: they are disjoint by section, so a row only ever has
+   one of them, and splitting this in two would say the two sections behave differently when they do not. */
+.channel-list__row:hover .channel-list__save,
+.channel-list__row:hover .channel-list__rename {
+  opacity: 1;
 }
 
 .channel-list__rename-icon {

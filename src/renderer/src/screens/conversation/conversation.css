@@ -1718,7 +1718,8 @@
 /* #296 — the drop / cancel affordance on a queued row (an icon-only button). A LEADING sibling of the
    queued bubble: because .message-row--user is right-aligned (justify-content: flex-end), placing it
    before the bubble sits it at the row's inner (left) edge, next to the bubble. The compact icon-button
-   treatment — the .channel-list__save / .status-sheet__close idiom: de-emphasized on-surface-variant
+   treatment — the .archive__restore / .status-sheet__close idiom (it read .channel-list__save until
+   #1171 redrew that control as a hover-revealed --color-primary glyph): de-emphasized on-surface-variant
    content, a round hover surface, a focus-visible outline. The 18px icon + --space-2 padding makes a
    compact ~34px touch target (no bare width literal — the file convention). align-self centers it against
    the bubble regardless of bubble height. It inherits the row's 50% dimming (#1214: .message-row--queued's

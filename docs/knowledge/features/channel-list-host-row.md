@@ -390,16 +390,55 @@ here.
 **CSS.** `.edit-host*` is its own class family in `channels.css` — a reuse of `.edit-workspace*` or
 `.rename-conversation*` would join those classes' Playwright strict-mode match sets and violate rather
 than fail an assertion (`e2e/sidebar-workspace-edit.spec.ts`, `e2e/conversation-create-rename.spec.ts`).
-Mirrors `.edit-workspace*` declaration for declaration minus the path line (the server id and relay URL
-are [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)'s), plus a `.edit-host__error`
-line on `.save-as-channel__error`'s recipe. No `max-height`/`overflow-y` pair: unlike the workspace
-dialog's unbounded `cwd`, everything this panel renders is either client-owned copy or a label bounded
-at `MAX_HOST_LABEL_LENGTH` inside a single-line input.
+Mirrors `.edit-workspace*` declaration for declaration minus the path line, plus a `.edit-host__error`
+line on `.save-as-channel__error`'s recipe. **Since [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)
+the panel also carries the `max-height: 90%` / `overflow-y: auto` pair `.edit-workspace` has always
+had** — this ticket's own comment declined the pair on the premise that everything the panel renders is
+client-owned copy or a label bounded at `MAX_HOST_LABEL_LENGTH` inside a single-line input, and #1300
+falsified that premise by adding an unbounded relay URL (§ below). The comment was corrected in place
+rather than left standing next to code that contradicted it.
+
+**The identity block ([#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)).** No Figma
+node draws this dialog at all, so the block follows [`EditWorkspaceDialogView`](edit-workspace-dialog.md)'s
+own `cwd` line instead: which machine this row actually is, under the field that renames it — the same
+`{ serverId, relayUrl }` pair [Settings' Connection → Server row](server-info-channel.md) already shows.
+Unlike that one-line precedent, two values need to be tellable apart, so each gets its own caption
+(`Server ID`, `Relay`) — a `display: block` `<span>` caption immediately followed by the value as a
+direct text child of the same `<p>` (`.edit-host__detail`), `overflow-wrap: anywhere` so a URL with no
+space still wraps rather than growing the panel past its `max-width`.
+
+`EditHostDialogView` takes one new prop, `server: ServerInfoValue | null`, rather than the two separate
+strings the ticket's own Technical Notes suggested. [`serverInfoStore`](server-info-channel.md)'s state
+docblock already rejects an unobservable pair of nullable fields as ceremony without benefit, and the
+lookup miss (id present, relay absent) is not a state the container's lookup can ever produce — the
+entry is found whole or not at all. One nullable object makes that impossible state unrepresentable
+rather than merely untested; the substance (both values arrive as props, the view looks nothing up) is
+unchanged. `ChannelList` does the lookup in the one place both halves are already in scope —
+`servers.find((entry) => entry.serverId === editHostServerId) ?? null` — so nothing below the container
+changes: `renderServerTrees` (§ above) only ever has the bare id to pass down.
+
+On a miss (a reseed or an unpair while the dialog is open) both captions stay and the value slot renders
+a client-owned `Unavailable` rather than an empty string or a closed dialog — a blank slot would be
+indistinguishable from a value that failed to arrive, and closing would discard an in-progress rename
+for a reason that has nothing to do with it. Both values are the same semi-trusted QR/paste-payload text
+`pairedServerStore`'s own header calls the id untrusted, reaching this view only as an auto-escaped
+React child — `HostRow`'s label already declines four sinks (no `title`, no `aria-label`, no derived
+id/key/lookup path, no log line) and this block holds over all four unchanged, plus a fifth the relay
+URL specifically needs: **displayed, never dialled** — no `new URL`, no `<a href>`, no `window.open` —
+the one value here that invites the opposite instinct.
 
 **Tests.** Unit: `EditHostDialog.test.tsx` (new) covers the chrome, the blank-enabled/round-trip
 departures, the length bound measured on the trimmed name, and `requestSetHostLabel`'s three outcomes
 against a spy. `ChannelList.test.tsx` extends to cover `hostRowEditSeed`'s four arms and that
-`ChannelListView` threads `onEditHost` to every host row. E2E, fake tier: `e2e/sidebar-host-edit.spec.ts`
+`ChannelListView` threads `onEditHost` to every host row. [#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)
+extends both further: `EditHostDialog.test.tsx` gains the identity block's rendered-text coverage
+(populated and per-caption, a long relay URL held whole — the `hostRowLabel` 128-character idiom, the
+wrap is CSS and never a slice — and the `server: null` miss rendering `Unavailable` under both
+captions), plus the sink guard riding `ChannelList.test.tsx`'s existing SENTINEL idiom rather than a new
+one: a sentinel id and a sentinel relay each occurring exactly once, immediately after their own
+caption's close. `ChannelList.test.tsx`'s sidebar-side sentinel test gained a line of its own: with the
+dialog closed, which every static render is, neither value reaches the sidebar markup either. E2E, fake
+tier: `e2e/sidebar-host-edit.spec.ts`
 (new) drives Cancel, a blank Save (the clear), a reopen reading the field back empty, a rename visible
 on both of one machine's rows while a second paired machine's rows stay untouched, and a Settings
 round-trip remount proving the value reached main's at-rest store rather than only the renderer
@@ -407,7 +446,12 @@ singleton the Save wrote — a `reuseUserDataDir` relaunch cannot observe this c
 never reconnects, so `renderBody`'s first gate returns `null` and the sidebar draws nothing; recorded
 under that spec's own `## Revisions` in
 [the architecture spec](../../specs/architecture/1299-edit-host-dialog.md). `host-row-hover-controls.spec.ts`
-is inverted rather than replaced — see the correction above.
+is inverted rather than replaced — see the correction above. #1300 extends the same spec with the
+two-machine identity check: machine A's dialog carries `FIRST_SERVER_ID` and its own relay URL read off
+the fixture handle (`${servers[0].forwarder.url}/v1/client`, never a literal — the port is an ephemeral
+loopback one), and machine B's pen opens a dialog carrying B's own pair, asserted by exact per-element
+text rather than substring (`fake-daemon` is a prefix of `fake-daemon-2`, so a `toContainText` would
+pass on the wrong row).
 
 ## Related
 
@@ -454,3 +498,10 @@ is inverted rather than replaced — see the correction above.
 - [#1299 spec](../../specs/architecture/1299-edit-host-dialog.md) — the Edit host dialog's full design:
   the two departures from `EditWorkspaceDialogView`, the positive-arm write contract, and the
   reopen-while-saving gap recorded under § The Edit host dialog above.
+- [#1300 spec](../../specs/architecture/1300-edit-host-dialog-server-id-and-relay.md) — the identity
+  block's full design and security review: the one-nullable-object prop shape, the lookup-miss
+  placeholder, the `max-height`/`overflow-y` correction, and why the relay URL is displayed but never
+  dialled. Recorded under § The Edit host dialog above.
+- [Server-info store](server-info-channel.md) — `ServerInfoValue`'s `{ serverId, relayUrl }` shape, the
+  `serverInfo` handler's field allowlist, and Settings' Connection → Server row, the one other surface
+  showing this same pair.

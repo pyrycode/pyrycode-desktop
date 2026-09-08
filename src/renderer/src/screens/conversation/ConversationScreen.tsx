@@ -223,9 +223,9 @@ export function ConversationScreen({
   // site, because both render identically; the test that CAN fail is the empty-string-key one in
   // ConversationScreen.test.tsx's `selectOpenTimelineFor` describe.
   const thread = openTimeline === null ? initialTimelineState : openTimeline
-  // The six names below are `TimelineState`'s own six fields, so every line of JSX under this container is
-  // untouched by the cutover. Subscribing to the whole slice rather than to six narrow selectors is
-  // re-render-neutral: each of the five scalars' own comments recorded that it "adds no meaningful
+  // The seven names below are `TimelineState`'s own seven fields, so every line of JSX under this container
+  // is untouched by the cutover. Subscribing to the whole slice rather than to seven narrow selectors is
+  // re-render-neutral: each of the six scalars' own comments recorded that it "adds no meaningful
   // re-render churn beyond the items delta already here", so these are the same renders from one
   // subscription instead of six.
   //
@@ -240,7 +240,13 @@ export function ConversationScreen({
   //   compacting       — #496: the auto-compaction liveness fact; a plain boolean.
   //   localSendPending — #650: the locally-opened working-indicator window — the one renderer-sourced
   //                      scalar of the five, opened by the operator's own send.
-  const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
+  //   thinkingTokens   — #1314: the latest thinking-token reading, or null. The second of the six to
+  //                      carry a value rather than a liveness fact, and like `apiRetry`'s two integers
+  //                      it is a number and no string field, so the view's "structurally cannot carry a
+  //                      daemon string" guarantee is preserved. It does NOT join the `ThreadStatus`
+  //                      record below: that record decides WHICH of the five labels the slot shows, and
+  //                      the reading changes none of that — it only extends the text of one of them.
+  const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens } = thread
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
   // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
@@ -448,6 +454,7 @@ export function ConversationScreen({
           )}
           toolName={openToolName(items)}
           retry={apiRetry}
+          thinkingTokens={thinkingTokens}
         />
       </ComposerStatusArea>
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
@@ -2001,7 +2008,14 @@ export type WorkingIndicatorState = 'thinking' | 'working' | 'retrying' | 'compa
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
 // the retry arm interpolates anything, and what it interpolates is two integers (below).
-function statusRowCopy(state: WorkingIndicatorState, retry: ApiRetryStatus | null): string {
+// #1314: the estimate reaches the `'thinking'` arm ALONE. AC2 freezes the other four — a retry, a
+// compaction, a stall and the generic working label each keep their own constant verbatim, and none of
+// them is about a think whose depth there is a reading of.
+function statusRowCopy(
+  state: WorkingIndicatorState,
+  retry: ApiRetryStatus | null,
+  thinkingTokens: number | null
+): string {
   switch (state) {
     case 'retrying':
       return apiRetryLabel(retry)
@@ -2010,10 +2024,44 @@ function statusRowCopy(state: WorkingIndicatorState, retry: ApiRetryStatus | nul
     case 'stalled':
       return STALL_COPY
     case 'thinking':
-      return THINKING_COPY
+      return thinkingLabel(thinkingTokens)
     case 'working':
       return WORKING_COPY
   }
+}
+
+// #1314: the thinking copy with the daemon's running token estimate folded into it — `apiRetryLabel`'s
+// sibling directly below, and written to its shape deliberately: the constant, one hole, one client-owned
+// unit. ONE TEXT RUN, not constant-plus-span, for the reason stated on `ThinkingIndicator` — the row's
+// label ellipsizes as a unit and two runs draw two ellipses on overflow.
+//
+// The `~` is not decoration. The daemon's own docs call this "approximate progress for spinners/pills, not
+// the authoritative billed output_tokens", so the label must never read as a number to bill against.
+//
+// FORMATTED DEFENSIVELY, which is this arm's stated security obligation and not a style choice. The decode
+// (`parseThinkingProgressPayload` → `requireNumber`) proves `typeof value === 'number'` AND NOTHING MORE:
+// NaN, ±Infinity, negatives and fractions all decode successfully and structured clone carries every one
+// of them across the contextBridge intact. So a value that is not a non-negative finite number is not a
+// reading, and the honest render is the bare copy — a DEGRADE on `apiRetryLabel(null)`'s precedent, never
+// a throw, since a hostile or buggy daemon must not be able to blank the status row.
+//
+// NOTHING HERE IS SIZED BY THE READING. No `repeat`, no `Array(n)`, no `padStart`, no loop bounded by it —
+// the obligation is never to size an allocation from a daemon-asserted integer, and a right-aligned
+// formatter written as `padStart(estimate)` would allocate gigabytes from a claim. Two comparisons, one
+// `Math.round` and one interpolation, all O(1). No length cap is needed on top: a JS number stringifies to
+// at most ~24 characters, which is `apiRetryLabel`'s own recorded reason for interpolating with no bound.
+//
+// `Math.round` at both scales rather than a floor or a truncation: below 1000 it is the identity on every
+// integer, so a real reading is verbatim (AC3) and only a fractional one is normalised — no digits after
+// the point ever reach the DOM. At 1000 and above it rounds to the nearest hundred, so 1250 → 1300 and
+// 1249 → 1200. `0` takes the ordinary path and renders as `~0 tokens`: it is a reading, not an absence.
+function thinkingLabel(thinkingTokens: number | null): string {
+  if (thinkingTokens === null || !Number.isFinite(thinkingTokens) || thinkingTokens < 0) {
+    return THINKING_COPY
+  }
+  const shown =
+    thinkingTokens < 1000 ? Math.round(thinkingTokens) : Math.round(thinkingTokens / 100) * 100
+  return `${THINKING_COPY} ~${shown} tokens`
 }
 
 // #967: the retry label with #493's attempt counter folded into it. The counter shows iff `total > 0`,
@@ -2126,11 +2174,13 @@ function apiRetryLabel(retry: ApiRetryStatus | null): string {
 export function ThinkingIndicator({
   state,
   toolName,
-  retry
+  retry,
+  thinkingTokens
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
   retry: ApiRetryStatus | null
+  thinkingTokens: number | null
 }): JSX.Element | null {
   if (state === null) return null
   // The tool name belongs to the working/thinking state alone (#967, AC1). ONE const drives both the label
@@ -2147,7 +2197,7 @@ export function ThinkingIndicator({
   const labelClass = `conversation__thinking composer-status__label${
     toolLabel !== null ? ' composer-status__label--tool' : ''
   }${state === 'stalled' ? ' composer-status__label--stalled' : ''}`
-  const label = toolLabel ?? statusRowCopy(state, retry)
+  const label = toolLabel ?? statusRowCopy(state, retry, thinkingTokens)
   return <span className={labelClass}>{label}</span>
 }
 

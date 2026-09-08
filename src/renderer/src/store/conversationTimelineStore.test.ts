@@ -46,6 +46,7 @@ const timelineFor = (store: Store, conversationId: string): TimelineState | null
 
 /** "Observed; nothing in the thread" — a PRESENT slice, and a different reading from `null`. */
 const emptyTimeline: TimelineState = {
+  thinkingTokens: null,
   items: [],
   phase: 'idle',
   stalled: false,
@@ -120,6 +121,7 @@ describe('conversationTimelineStore', () => {
     store.getState().dispatchFor('c1', { type: 'apiRetry', active: true, current: 1, total: 3 })
     store.getState().dispatchFor('c1', { type: 'compacting', active: true })
     store.getState().dispatchFor('c1', { type: 'stallDetected' })
+    store.getState().dispatchFor('c1', { type: 'thinkingProgress', estimatedTokens: 512 })
     store.getState().dispatchFor('c2', delta('t2', 'quiet'))
 
     expect(timelineFor(store, 'c1')).toEqual({
@@ -128,16 +130,20 @@ describe('conversationTimelineStore', () => {
       stalled: true,
       apiRetry: { current: 1, total: 3 },
       compacting: true,
-      localSendPending: true
+      localSendPending: true,
+      thinkingTokens: 512
     })
-    // The payload is the whole flat timeline, so none of the five scalars leaks across the key.
+    // The payload is the whole flat timeline, so none of the six scalars leaks across the key. #1314's
+    // reading joins them, and it is the one a leak would be most visible on: the status row would report
+    // how deep a think in ANOTHER conversation had got.
     expect(timelineFor(store, 'c2')).toEqual({
       items: [{ kind: 'assistantText', turnId: 't2', text: 'quiet' }],
       phase: 'idle',
       stalled: false,
       apiRetry: null,
       compacting: false,
-      localSendPending: false
+      localSendPending: false,
+      thinkingTokens: null
     })
   })
 

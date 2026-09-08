@@ -180,6 +180,29 @@ absence check, which is the trap AC4 names.
 - Whether the tool-named label should carry the estimate. Resolved in § 5: it does not — AC2 freezes the
   other states, and the tool label already supersedes the thinking copy.
 
+## Revisions
+
+**2026-09-08 — the `ThinkingIndicator` prop cascade, and why this stays one ticket.** The § A5 self-check
+counted four consumer call sites (the `TimelineState` literals in four test files) and missed a fifth
+group: `thinkingTokens` is a **required** prop on `ThinkingIndicator` (§ 5), so all seventeen
+`<ThinkingIndicator …>` sites in `ConversationScreen.test.tsx` need it, plus the one production mount.
+That is over the ten-call-site boundary, and it is stated here rather than quietly absorbed.
+
+The ticket stays whole anyway, on the **floor** rule, which the brief says wins when floor and ceiling
+disagree. The only seam available is store-half (AC1) / label-half (AC2–AC4), and the store half's scalar
+has exactly one consumer in the entire app — the label. That is the one-consumer child the floor rule
+forbids, and #1313 was already the carry-only slice in this chain; a second one would leave two tickets
+having drawn nothing. Split depth is not the reason (parent #1235, grandparent none, so a split was
+permitted), so no `needs-human:sizing` is warranted.
+
+The prop stays **required** rather than optional, which is what creates the cascade: `toolName`'s and
+`retry`'s own recorded reasoning is that an optional prop lets the container silently omit it and `tsc` is
+the only detector this repo has here, since every container test renders the initial store. Making it
+optional to buy off seventeen one-token edits would trade the only available detector for typing.
+
+Every other line of the boundary holds unchanged: 4 production files, ~765 lines of total written work,
+one new export (`selectThinkingTokens`), 4 acceptance criteria.
+
 ## Security review
 
 Audited against the `thinkingProgress` arm's own SECURITY block in `src/shared/ipc/events.ts`, which states

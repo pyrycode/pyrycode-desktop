@@ -9,9 +9,17 @@ and #749 (the clears). #747 shipped the holder alone — no writer, no reader �
 unread" posture the [background-task roster store](background-task-roster-store.md) shipped for #573
 before its first reader (#568) landed. [#748](../codebase/748.md) then shipped the first writer: a
 second, independent daemon-event subscriber, `conversationActivityBridge.ts`. [#749](../codebase/749.md)
-closed the store out — `dropConversation` on a `conversationDeleted` arm and `clearAllActivity` on the
-`connected` edge — so the map is now bounded across both a single deletion and a pairing change. It is
-still read by nobody — the still-unbuilt sidebar (#676) is the first reader.
+closed the store out — `dropConversation` on a `conversationDeleted` arm and a whole-map
+`clearAllActivity` on the `connected` edge — so the map was bounded across both a single deletion and a
+pairing change. [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) then split that second
+half in two: since [#1117](daemon-connection-routing.md) the app holds one live connection per paired
+server and since #1068 every event carries the id of the server it came from, so a `connected` edge
+firing for server B was blanking every OTHER server's dots too, with nothing to re-assert one until that
+conversation's own next `turnState`. The `connected` edge now runs a new setter,
+`resetActivityFor`, scoped to the reconnecting server's own conversations; `clearAllActivity` moved to
+the pairing boundary instead, joining `clearPairingScopedState` as its fourteenth member (see [Paired
+shell](paired-shell.md)). It is still read by nobody — the still-unbuilt sidebar (#676) is the first
+reader.
 
 [Conversation status resolver](conversation-status.md) (#799) is the first module to consume
 `ConversationActivityEntry` as a type — the only symbol it imports, and only via `import type`, so this
@@ -58,13 +66,21 @@ here rather than re-derived.
   a hook-bound accessor. Returns `entries.get(id) ?? null`. `null` is a stable reference, so no
   `EMPTY_*` constant is hoisted and no object is built per call. There is no whole-map selector; nothing
   in this store or its two sibling tickets reads the map wholesale.
-- **Eviction path** ([#749](../codebase/749.md)): two members beside the four setters.
-  `dropConversation(conversationId)` removes exactly one key — guards on `entries.has`, returning the
-  state object itself (waking no subscriber) when the key is absent, otherwise cloning the outer map and
-  deleting on the clone so every surviving entry stays `Object.is`-identical to what was held before.
-  `clearAllActivity()` drops every key, shaped after `backgroundTaskRosterStore.ts`'s `resetRosters`
-  (`size === 0` guard, else a fresh empty `Map` — never the module-shared `initialConversationActivityState`
-  constant, which would alias every cleared instance to one object).
+- **Eviction path** ([#749](../codebase/749.md), split by
+  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)): three members beside the four
+  setters. `dropConversation(conversationId)` removes exactly one key — guards on `entries.has`,
+  returning the state object itself (waking no subscriber) when the key is absent, otherwise cloning the
+  outer map and deleting on the clone so every surviving entry stays `Object.is`-identical to what was
+  held before. `resetActivityFor(conversationIds: ReadonlySet<string>)` — added by #1145 as the
+  reconnect reset — iterates the HELD keys (bounded by what this store holds, not by the server's
+  conversation count) and drops the ones present in the given set, the `resetBacklogsFor` /
+  `resetRostersFor` shape reused verbatim: no held key listed ⇒ the state object comes back, so a first
+  connect, a reconnect of a server holding nothing here, and an already-empty map all wake no listener.
+  A `ReadonlySet` membership test rather than a `Record` lookup, so `'__proto__'` stays an ordinary key
+  on both the held side and the listed side. `clearAllActivity()` drops every key, shaped after
+  `backgroundTaskRosterStore.ts`'s `resetRosters` (`size === 0` guard, else a fresh empty `Map` — never
+  the module-shared `initialConversationActivityState` constant, which would alias every cleared instance
+  to one object). Since #1145 this is no longer wired to the `connected` edge — see below.
 - **Hostile keys:** `ReadonlyMap` is mandated over `Record<string, …>` specifically so `'__proto__'`,
   `'constructor'` and `''` are ordinary keys by construction rather than by validation —
   `Map.prototype.get`/`.set` never touch the prototype chain. The write path uses no computed object
@@ -102,18 +118,38 @@ here rather than re-derived.
   (`events.ts:109-110`, `:459-466`, `:467-472`), so there's no id to key a write on. Bounded (every turn
   ends with a `turnState`), not latched, but coarser than the open conversation. Closing it needs the
   transport widening in #675, out of scope for #748.
-- **Eviction wiring** ([#749](../codebase/749.md)): two early-return branches in
+- **Eviction wiring** ([#749](../codebase/749.md), rescoped by
+  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)): two early-return branches in
   `subscribeConversationActivity`, ahead of the translator switch — `conversationDeleted` →
   `dropConversation(event.id)` (no truthiness guard; `''` is a real id) and `connected` →
-  `clearAllActivity()`. Deliberately **not** registered in `clearPairingScopedState`: on that file's own
-  discriminator ("does a reconnect to the SAME daemon need to clear it?") the answer is yes, since a
-  turn running when the socket dropped may have finished while it was down — so the `connected` edge is
-  the enforcement instead, matching the `backgroundTaskRosterBridge.ts` precedent. Because the bridge is
-  mounted App-level (outside `PairedShell`) and every pairing change re-handshakes, one listener covers
-  both the unpair route flip and the pair-another-server transition that never unmounts the shell. The
+  `resetActivityForServer(originOf(event))`. On `clearPairingScopedState`'s own discriminator ("does a
+  reconnect to the SAME daemon need to clear it?") the answer is yes and stays yes — a turn running when
+  the socket dropped may have finished while it was down — but until #1145 the `connected` branch called
+  the nullary `clearAllActivity()`, so it was scoped to "the app's one connection," which since
+  [#1117](daemon-connection-routing.md) each paired server holds its own live connection of stopped being
+  true: server B's reconnect was blanking every OTHER paired server's dots, with nothing to re-assert one
+  until that conversation's own next `turnState` (a running turn's end). `originOf`, a local copy of the
+  `'serverId' in event` idiom six other bridges already carry, reads #1068's client-bound stamp — never
+  `event.ack.server_id` — and the bridge stays store-free: turning that origin into the conversation ids
+  to drop is `ConversationActivityData`'s job, resolving it through
+  [conversation list store](conversation-list-store.md)'s shared `selectConversationIdsFor` at reset
+  time (not subscribe time), the `QueueData` composition-root shape reused verbatim. Scoping the edge
+  retired the self-heal it was incidentally providing at the pairing boundary, so `clearAllActivity` now
+  runs instead from `clearPairingScopedState` — see [Paired shell](paired-shell.md) — as its fourteenth
+  member; a re-pair to the same box would otherwise show a finished turn's working dot until that
+  conversation's next `turnState`, which for a turn that ended while unpaired never arrives. Because the
+  bridge is mounted App-level (outside `PairedShell`) and every pairing change re-handshakes, the
+  `connected` branch still covers both the unpair route flip and the pair-another-server transition that
+  never unmounts the shell — that part of the `backgroundTaskRosterBridge.ts` precedent is unchanged. The
   delete seam is a third, independent listener on the `conversationDeleted` arm — deliberately not
   folded into `PairedShell.tsx`'s existing `useConversationDeletedExit`, whose callback gates on the id
   matching the *open* conversation, where eviction must be ungated.
+  `ConversationActivityDeps`' `resetActivityForServer: (origin: ConversationListOrigin) => void` is the
+  first member of that named-object dep set (#749) that does not fully collapse onto the four
+  `(id, boolean)` setters — a two-parameter setter can no longer be assigned *into* its one-parameter
+  slot — which narrows, rather than retires, the cross-wire hazard the object shape was chosen against;
+  it still collapses the other way, since a single-parameter function is assignable to a two-parameter
+  slot and `ConversationListOrigin` admits a bare `string`.
 
 ## Edge cases and limitations
 
@@ -124,11 +160,29 @@ here rather than re-derived.
 - **No fifth fact for `localSendPending`.** That scalar is renderer-sourced, opened only by the open
   conversation's own composer send with no daemon involvement — it has no natural per-conversation
   reading and isn't held here.
-- **Bounded across a delete and a pairing change, not within one.** [#749](../codebase/749.md) closed
-  the two eviction paths named above, so growth no longer survives a conversation delete or a pairing
-  change. The residue *between* handshakes — a long-lived pairing that names many conversations without
-  deleting any — is still uncapped by design; #676, the first reader, is the natural place to add a real
-  ceiling if one is ever wanted.
+- **Bounded across a delete and a pairing change; the reconnect bound widened at #1145.** [#749](../codebase/749.md)
+  closed the two eviction paths named above, so growth no longer survives a conversation delete or a
+  pairing change. Growth used to also be bounded *since the last handshake*, on the ground that
+  `clearAllActivity` emptied the whole map on every `connected` edge; since
+  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) scoped that edge to the reconnecting
+  server's own listed conversations, an entry for a conversation that appears in **no** server's
+  conversation list — reachable, since any of the four daemon arms can arrive before that conversation's
+  list has landed — survives every reconnect and is collected only by `clearAllActivity` at the next
+  pairing boundary. The residue *within* one pairing is still uncapped by design, the same widening
+  [queue store](queue-store.md), [background-task roster store](background-task-roster-store.md) and
+  [modal store](modal-store-bridge.md) each took while holding far larger per-entry payloads than this
+  store's four booleans; #676, the first reader, is the natural place to add a real ceiling if one is
+  ever wanted.
+- **The reconnect reset rides the shared, non-exclusive resolution — a hostile server can widen its own
+  reconnect's blast radius, never destructively.** `resetActivityFor` is fed by
+  [conversation list store](conversation-list-store.md)'s `selectConversationIdsFor`, not the stricter
+  `selectExclusiveConversationIdsFor` [`clearServerScopedState`](paired-shell.md) uses — a deliberate
+  choice, not an oversight (#1145 security review). A confused or hostile server B that lists server A's
+  conversation ids in its own reply can make its own reconnect drop A's entries for those ids, but the
+  worst outcome is a missing dot that A's own next `turnState` restores; nothing is destroyed and nothing
+  is unrecoverable, which is exactly the case the shared selector is for. The exclusive sibling exists
+  for `clearServerScopedState` instead, where an over-broad answer would destroy another machine's
+  retained threads with no backfill.
 - **Log-free by construction.** No `console.*` on any path — the only value a diagnostic could carry is
   the untrusted `conversationId`, and the content-free diagnostics rule (#126) keeps it out. A read miss
   is silent by design, not a swallowed error.
@@ -147,6 +201,17 @@ here rather than re-derived.
   beside without migrating.
 - [Announced-model store](announced-model-store.md) — documents the same-name-different-shape trap this
   store's `apiRetrying` (vs. thread timeline's `apiRetry` counter record) deliberately avoids by naming.
+- [Queue store](queue-store.md) / [Background-task roster store](background-task-roster-store.md) /
+  [Modal store](modal-store-bridge.md) — the three worked precedents for #1145's reconnect-reset shape:
+  each scoped its own `connected`-edge whole-map clear to the reconnecting server's own conversations via
+  `selectConversationIdsFor`, then moved its nullary whole-map clear into `clearPairingScopedState`. This
+  store is the fourth and — per that ticket's estimate — the cheapest of the four, since `clearAllActivity`
+  already existed in exactly the shape the pairing-boundary set wanted.
+- [Conversation list store](conversation-list-store.md) — the source of `selectConversationIdsFor` /
+  `EMPTY_CONVERSATION_IDS` (#1138) this store's reconnect reset consumes as its fourth caller, and of the
+  stricter `selectExclusiveConversationIdsFor` it deliberately does not.
+- [Paired shell](paired-shell.md) — `clearAllActivity` is `clearPairingScopedState`'s fourteenth member
+  since #1145, wired in `PairedShell`'s `clearPairingDeps`, ahead of `clearAllLastRead`.
 - [#747 codebase notes](../codebase/747.md) — the holder's implementation summary and lessons learned.
 - [#748 codebase notes](../codebase/748.md) — the writer's implementation summary, the
   `store/` → `screens/` import argument, and lessons learned.

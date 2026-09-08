@@ -381,8 +381,11 @@ new-discussion FAB's own subscription on the same event, #242)
 - **`selectConversationIdsFor` import surface, since #1138**: `import { selectConversationIdsFor } from
   '@renderer/store/conversationListStore'`, called from `queueBridge.ts`'s `QueueData` composition
   root against `conversationListStore.getState()` at reconnect-reset time — see [queue
-  store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets). Not yet called from #1139's or
-  #1140's bridges (both not yet shipped).
+  store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets). Three further consumers have
+  since landed, each at the same reset-time composition root rather than subscribe time:
+  `backgroundTaskRosterBridge.ts` (#1139), `modalBridge.ts` (#1140), and
+  `conversationActivityBridge.ts`'s `ConversationActivityData` (#1145) — see [conversation activity
+  store](conversation-activity-store.md#configuration-and-usage).
 - `clearAllConversations` is invoked only by `clearPairingScopedState` (via `PairedShell.tsx`'s
   `clearPairingDeps`), never two-way-bound from a component — see § AC5 below.
 - **`clearConversationsFor` / `selectExclusiveConversationIdsFor` import surface, since #1196**: both are

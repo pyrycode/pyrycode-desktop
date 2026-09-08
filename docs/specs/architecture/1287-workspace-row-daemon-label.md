@@ -372,3 +372,26 @@ Full-suite `npm test` and the whole Playwright tier are the verifier's gate, not
 **Date:** 2026-09-08
 </content>
 </invoke>
+
+## Revisions
+
+**2026-09-08 — one existing log assertion had to change, and the fixture cascade had a category the plan
+did not name.**
+
+- `inboundMessage.test.ts`'s #1249 test "logs the same content-free record whether or not the ack is
+  correlated" asserted `expect(lines[0]).not.toContain('41')` over the WHOLE log line, including the
+  `hash` field. That field is a sha256 over the frame bytes, so adding one payload field reshuffled it,
+  and the new digest happens to contain `e641`. The assertion's intent (the correlation handle is not
+  logged) is right; its implementation was a lottery, since a 64-hex-character digest carries a given
+  two-character decimal substring most of the time. Narrowed to sweep every logged field EXCEPT `hash`,
+  with the reasoning in a comment: the digest is derived from the frame by construction, so it cannot be
+  an echo of anything the frame contains. Not a behaviour change and not a weakening — the fix is in the
+  test only, and the production log is byte-identical.
+- The plan counted the cascade as "full literals of the three payload shapes", found by
+  `git grep 'last_message_ts:'` and by `tsc`. Two categories escaped both, and cost a cycle each:
+  **inline envelope payloads in main-side tests** (`daemonConnection.test.ts`,
+  `daemonConnection.roundtrip.test.ts`) are typed `unknown` at the envelope boundary, so `tsc` sees
+  nothing and only the runtime decode rejects them; and **a `ConversationUpdatedPayload` literal in an
+  e2e spec with no `last_message_ts`** (`channel-system-prompt.spec.ts`), which the grep could not match
+  and no tsconfig covers. The e2e one was found by the ad-hoc `tsc --noEmit` sweep over `e2e/`, which is
+  the only thing that typechecks that directory. Both are recorded under Lessons learned on the PR.

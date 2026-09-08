@@ -14,7 +14,8 @@ const conversation = (id: string): ConversationCreatedPayload => ({
   is_promoted: true,
   cwd: '/home/pyry/project',
   name: 'Design review',
-  last_used_at: '2026-09-07T09:00:00Z'
+  last_used_at: '2026-09-07T09:00:00Z',
+  workspace_label: null
 })
 
 /** All nine effects as spies, with the departed set and the open conversation as the two knobs. */

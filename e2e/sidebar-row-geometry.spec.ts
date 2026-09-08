@@ -100,6 +100,7 @@ const seed = (over: Partial<ConversationSummary>): ConversationSummary => ({
   cwd: WORKSPACE_CWD,
   last_message_ts: '2026-07-07T12:00:00.000Z',
   last_used_at: '2026-07-07T12:00:00.000Z',
+  workspace_label: null,
   ...over
 })
 

@@ -2083,9 +2083,15 @@ function parseQueueStatePayload(payload: unknown): QueueStatePayload {
  * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
  * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
  * unarchived), never absences, so requireStringOrNull / requireBoolean check the TYPE, not truthiness.
- * Returns only the seven known fields; unknown server-added keys are tolerated (forward-compat) but
+ * Returns only the eight known fields; unknown server-added keys are tolerated (forward-compat) but
  * NOT copied through — this is what keeps the emitted event minimal. Its messages name the failure
- * category only — a `name` / `cwd` could echo a conversation title or workspace path.
+ * category only — a `name` / `cwd` / `workspace_label` could echo a conversation title, a workspace path
+ * or a workspace name.
+ *
+ * `workspace_label` (#1287) takes the `name` treatment for the same reason: the daemon writes the key
+ * unconditionally, so `null` is a VALUE and an absent key fails closed. That direction is deliberate —
+ * defaulting an absent key to `null` would let a stale or impersonating daemon silently suppress a label
+ * the user set from another client, which is exactly the outcome the field exists to make impossible.
  */
 function parseConversationSummary(payload: unknown): ConversationSummary {
   if (!isRecord(payload)) {
@@ -2098,7 +2104,17 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
   const cwd = requireString(payload, 'cwd')
   const last_message_ts = requireString(payload, 'last_message_ts')
   const last_used_at = requireString(payload, 'last_used_at')
-  return { id, name, is_promoted, is_archived, cwd, last_message_ts, last_used_at }
+  const workspace_label = requireStringOrNull(payload, 'workspace_label')
+  return {
+    id,
+    name,
+    is_promoted,
+    is_archived,
+    cwd,
+    last_message_ts,
+    last_used_at,
+    workspace_label
+  }
 }
 
 /**
@@ -2158,10 +2174,11 @@ function parseRecentWorkspacesPayload(payload: unknown): RecentWorkspace[] {
  * `last_used_at` required strings, `is_promoted` a required boolean (the `yolo` #180 idiom — the check
  * is on the TYPE, so `false` decodes as the value `false`, never an absence, and a non-boolean throws),
  * and `name` a required, nullable string (`null` is a valid value — an unnamed scratch conversation,
- * AC5 — but a missing/`undefined` field throws). Returns only the five known fields; unknown
- * server-added keys (e.g. a spurious is_archived/last_message_ts) are tolerated (forward-compat) but
- * NOT copied through. Its messages name the failure category only — a `name` / `cwd` could echo a title
- * or workspace path.
+ * AC5 — but a missing/`undefined` field throws), and `workspace_label` (#1287) a required, nullable
+ * string on the same contract. Returns only the six known fields; unknown server-added keys (e.g. a
+ * spurious is_archived/last_message_ts) are tolerated (forward-compat) but NOT copied through. Its
+ * messages name the failure category only — a `name` / `cwd` / `workspace_label` could echo a title, a
+ * workspace path or a workspace name.
  */
 function parseConversationCreatedPayload(payload: unknown): ConversationCreatedPayload {
   if (!isRecord(payload)) {
@@ -2172,7 +2189,8 @@ function parseConversationCreatedPayload(payload: unknown): ConversationCreatedP
   const cwd = requireString(payload, 'cwd')
   const name = requireStringOrNull(payload, 'name')
   const last_used_at = requireString(payload, 'last_used_at')
-  return { id, is_promoted, cwd, name, last_used_at }
+  const workspace_label = requireStringOrNull(payload, 'workspace_label')
+  return { id, is_promoted, cwd, name, last_used_at, workspace_label }
 }
 
 /**
@@ -2182,9 +2200,12 @@ function parseConversationCreatedPayload(payload: unknown): ConversationCreatedP
  * `is_promoted` a required boolean (the `yolo` #180 idiom — the check is on the TYPE, so `false` decodes
  * as the value `false`, never an absence, and a non-boolean throws), and `name` a required, nullable
  * string (`null` is a valid value — an update that left the name unset, AC — but a missing/`undefined`
- * field throws). Returns only the five known fields; unknown server-added keys (e.g. a spurious
- * is_archived/last_message_ts) are tolerated (forward-compat) but NOT copied through. Its messages name
- * the failure category only — a `name` / `cwd` could echo a title or workspace path.
+ * field throws), and `workspace_label` (#1287) a required, nullable string on the same contract — the
+ * live path by which a label set from another client reaches the sidebar, since this arm is an
+ * unsolicited broadcast rather than a reply. Returns only the six known fields; unknown server-added
+ * keys (e.g. a spurious is_archived/last_message_ts) are tolerated (forward-compat) but NOT copied
+ * through. Its messages name the failure category only — a `name` / `cwd` / `workspace_label` could echo
+ * a title, a workspace path or a workspace name.
  */
 function parseConversationUpdatedPayload(payload: unknown): ConversationUpdatedPayload {
   if (!isRecord(payload)) {
@@ -2195,7 +2216,8 @@ function parseConversationUpdatedPayload(payload: unknown): ConversationUpdatedP
   const name = requireStringOrNull(payload, 'name')
   const cwd = requireString(payload, 'cwd')
   const last_used_at = requireString(payload, 'last_used_at')
-  return { id, is_promoted, name, cwd, last_used_at }
+  const workspace_label = requireStringOrNull(payload, 'workspace_label')
+  return { id, is_promoted, name, cwd, last_used_at, workspace_label }
 }
 
 /**

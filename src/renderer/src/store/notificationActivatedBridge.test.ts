@@ -19,7 +19,8 @@ const created: ConversationCreatedPayload = {
   is_promoted: false,
   cwd: '/home/pyry/project',
   name: null,
-  last_used_at: '2026-07-11T12:00:00Z'
+  last_used_at: '2026-07-11T12:00:00Z',
+  workspace_label: null
 }
 
 // A fake onDaemonEvent that captures the listener and hands back an off spy — the bridge-test idiom.

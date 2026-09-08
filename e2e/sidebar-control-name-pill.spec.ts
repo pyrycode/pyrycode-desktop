@@ -79,7 +79,8 @@ const promotedRows = (): ConversationSummary[] =>
     is_archived: false,
     cwd: WORKSPACE_CWD,
     last_message_ts: '2026-07-07T12:00:00.000Z',
-    last_used_at: '2026-07-07T12:00:00.000Z'
+    last_used_at: '2026-07-07T12:00:00.000Z',
+    workspace_label: null
   }))
 
 // The tall list, pushed as an UNSOLICITED `conversations` envelope after launch. It cannot be the launch

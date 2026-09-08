@@ -536,7 +536,8 @@ describe('createDaemonConnection conversations round-trip (in-process fake targe
     is_archived: false,
     cwd: '/home/user/project',
     last_message_ts: '2026-07-08T00:00:00Z',
-    last_used_at: '2026-07-09T00:00:00Z'
+    last_used_at: '2026-07-09T00:00:00Z',
+    workspace_label: null
   }
   const CONV_UNNAMED = {
     id: 'conv-2',
@@ -545,7 +546,8 @@ describe('createDaemonConnection conversations round-trip (in-process fake targe
     is_archived: true,
     cwd: '/tmp/scratch',
     last_message_ts: '2026-07-07T00:00:00Z',
-    last_used_at: '2026-07-07T12:00:00Z'
+    last_used_at: '2026-07-07T12:00:00Z',
+    workspace_label: null
   }
 
   /** A crafted conversations reply envelope carrying the given rows. */

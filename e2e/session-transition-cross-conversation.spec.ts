@@ -49,7 +49,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS
+  last_used_at: FIXED_TS,
+  workspace_label: null
 }
 
 // The three session ids this drive tells apart, mutually non-substring so a widened comparison would be

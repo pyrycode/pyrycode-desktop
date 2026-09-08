@@ -28,6 +28,7 @@ const row = (over: Partial<ConversationSummary> = {}): ConversationSummary => ({
   cwd: '/home/pyry/project',
   last_message_ts: '2026-07-10T12:00:00Z',
   last_used_at: '2026-07-10T12:05:00Z',
+  workspace_label: null,
   ...over
 })
 
@@ -86,6 +87,10 @@ describe('conversationListStore', () => {
         cwd: '/home/pyry/project',
         last_message_ts: '2026-07-10T12:00:00Z',
         last_used_at: '2026-07-10T12:05:00Z',
+        // #1287's daemon-held workspace name rides through untouched like every other wire field. Spelled
+        // out rather than omitted: this literal IS the verbatim-hold proof, so a field left off it would
+        // narrow the claim to "holds the fields we remembered to list".
+        workspace_label: null,
         serverId: 'srv-1'
       }
     ])

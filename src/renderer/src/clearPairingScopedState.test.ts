@@ -59,7 +59,8 @@ const conversation: ConversationCreatedPayload = {
   is_promoted: false,
   cwd: '/home/pyry/work',
   name: 'Server A channel',
-  last_used_at: '2026-07-30T09:00:00Z'
+  last_used_at: '2026-07-30T09:00:00Z',
+  workspace_label: null
 }
 
 const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message on server A' }]
@@ -612,7 +613,8 @@ describe('clearPairingScopedState', () => {
       is_archived: false,
       cwd: '/home/pyry/old',
       last_message_ts: '2026-09-01T12:00:00Z',
-      last_used_at: '2026-09-01T12:05:00Z'
+      last_used_at: '2026-09-01T12:05:00Z',
+      workspace_label: null
     }
     conversations.getState().setConversations([summary], 'srv-old')
     conversations.getState().setConversations([{ ...summary, id: 'c-other' }], 'srv-other')

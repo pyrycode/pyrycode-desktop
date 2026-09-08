@@ -13,6 +13,7 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
     cwd: '/tmp',
     last_message_ts: '2026-01-15T12:00:00.000Z',
     last_used_at: '2026-01-15T12:00:00.000Z',
+    workspace_label: null,
     ...over
   }
 }

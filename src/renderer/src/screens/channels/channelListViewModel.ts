@@ -123,20 +123,43 @@ export function workspaceLabelFor(cwd: string): string | null {
  * of `'2'` would jump ahead of every earlier group. `Map` preserves insertion order for all keys, which
  * is what makes AC4's "group order follows first appearance, no sort anywhere" hold — including for the
  * fallback group, which is ordered by first appearance like any other and is NOT pinned last.
+ *
+ * THE LABEL AND THE KEY HAVE DIFFERENT SOURCES SINCE #1287, AND KEEPING THEM APART IS LOAD-BEARING. The
+ * label now prefers the daemon-held `workspace_label` (pyrycode#2208) over the folder name; the key is
+ * still the raw `cwd` and NOTHING ELSE. That separation is not tidiness: this function has one output
+ * that is display-only (`label`) and one that makes a round trip back OUT to the wire (`key`, which the
+ * workspace row's plus sends as a create's `cwd` — see the `CollapsibleWorkspaceGroup` call site in
+ * `ChannelList`). Keying on the label instead would send a daemon-asserted workspace NAME to the daemon
+ * as a DIRECTORY PATH. A unit test asserts `key === row.cwd` for a labelled row — on the KEY, not on the
+ * label — so a "the label is the nicer identity" refactor reddens rather than shipping.
+ *
+ * The label comes from the group's FIRST row. The daemon stores one label per exact `cwd` string, so
+ * every row of a group agrees and reading the first is the cheapest way to say so; it also falls out of
+ * the `Map` for free, since a group's label is written only when the group is created. TWO deliberate
+ * non-preferences sit on top of it:
+ *   - THE FALLBACK GROUP ignores its rows' labels entirely and always reads `UNKNOWN_WORKSPACE_LABEL`.
+ *     It is a BUCKET, not a workspace — every row with an unusable `cwd` collapses into it whatever its
+ *     origin — so naming it after one member would assert something false about the others.
+ *   - A NON-NULL LABEL IS USED VERBATIM, blank included: no trim, no blank-to-fallback guard, the exact
+ *     opposite of `titleFor`. A label is state a user set from some client, and rewriting a blank one
+ *     locally would make this desktop disagree with every other client about what the workspace is
+ *     called, silently and only on this machine. Refusing a blank belongs to the verbs that SET one
+ *     (#1288 / #1289) and to the dialog that sends it (#1180), where it can be refused to the user's face.
  */
 export function groupByWorkspace(
   rows: readonly ConversationSummary[]
 ): readonly WorkspaceGroup[] {
   const groups = new Map<string, { label: string; rows: ConversationSummary[] }>()
   for (const row of rows) {
-    const label = workspaceLabelFor(row.cwd)
-    const key = label === null ? UNKNOWN_WORKSPACE_KEY : row.cwd
+    const segment = workspaceLabelFor(row.cwd)
+    const key = segment === null ? UNKNOWN_WORKSPACE_KEY : row.cwd
     const existing = groups.get(key)
     if (existing !== undefined) {
       existing.rows.push(row)
       continue
     }
-    groups.set(key, { label: label ?? UNKNOWN_WORKSPACE_LABEL, rows: [row] })
+    const label = segment === null ? UNKNOWN_WORKSPACE_LABEL : (row.workspace_label ?? segment)
+    groups.set(key, { label, rows: [row] })
   }
   return Array.from(groups, ([key, group]) => ({ key, label: group.label, rows: group.rows }))
 }

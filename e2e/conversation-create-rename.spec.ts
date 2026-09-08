@@ -37,7 +37,8 @@ const SEED: ConversationSummary = {
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: '2026-07-07T12:00:00.000Z',
-  last_used_at: '2026-07-07T12:00:00.000Z'
+  last_used_at: '2026-07-07T12:00:00.000Z',
+  workspace_label: null
 }
 
 // The name the sheet rename gives the created (initially unnamed) row. A fixed literal DISTINCT from

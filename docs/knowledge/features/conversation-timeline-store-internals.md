@@ -29,7 +29,7 @@ speculative observer here would defend an unobserved need.
 translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
 // (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538) / messageReceived->
-// userText (#1223), each rebuilt as a fresh named-field literal (never `return event`, never a spread
+// userText (#1223) / thinkingProgress (#1314), each rebuilt as a fresh named-field literal (never `return event`, never a spread
 // — for stallDetected and connected->reconnected, both sides are nullary, so the "literal" is
 // arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
 // toolUse/toolResult — apiRetry's DaemonEvent side also carries conversationId since #737, which the
@@ -50,12 +50,16 @@ translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent |
 // the flat timelineStore only, whose items no screen reads.
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
-// switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': return event.conversationId
+// switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': case 'thinkingProgress':
+//   return event.conversationId
 //   case 'sessionTransition': case 'connected': return null
 //   default: return null }
-// The nine id-carrying owned arms (#784 moved `unrecognizedMessage` into this group) share one
-// `return event.conversationId` (non-nullable: a missing or non-string conversation_id already fails
-// the decode without emitting). The two id-less owned arms — `sessionTransition` and `connected`, and
+// The ten id-carrying owned arms (#784 moved `unrecognizedMessage` into this group, #1314 moved
+// `thinkingProgress` in beside it) share one `return event.conversationId` (non-nullable: a missing or
+// non-string conversation_id already fails the decode without emitting) — #1314's arm resolves from this
+// group with no cast and no probe, since the field is required on it, and it routes by the frame's own
+// conversation rather than through `timelineWriteTarget`'s open-conversation fallback. The two id-less
+// owned arms — `sessionTransition` and `connected`, and
 // neither will ever gain a wire conversation id — share one `return null`: not dormant, just nothing to
 // attribute. `default` is unreachable in production: subscribeTimeline only calls this on
 // translateTimelineEvent's non-null path. Unchanged in signature, body, and both design-oracle tests
@@ -151,14 +155,24 @@ there's no counter to discard on the falling edge. The reducer arm collapses to 
 rising/falling branch split needed.
 
 `thinkingProgress` ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at
-[#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) joins the `null` fall-through group
-here — **dormantly**, unlike `slashCommandList`/`modelList`/`historyPageReceived`/`historyRequestFailed`/
-`systemPromptReceived`/`workspaceUpdated` above it in declaration order, which this bridge nulls
-permanently. It is the member of this group a reader is most likely to want owned here: a mid-turn
-reading of how much claude thought reads like thread chrome for the running turn, the same test
-`apiRetry`/`compacting` pass. Whether it lands as a seventh owned arm the way those two eventually did,
-or through a fifth independent subscriber the way `questionShown` (#885) and `slashCommandList` (#954)
-did instead, is left to whichever ticket claims it — nothing here decides the shape in advance.
+[#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) is now an owned arm, claimed by
+[#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) — filter-and-copy like `apiRetry`/
+`compacting` (drops `conversationId`, copies `estimatedTokens` verbatim into a fresh literal), but the
+translation it feeds is unlike either: `apiRetry`/`compacting` fold an edge into a presence
+(`reduceTimeline` decides what `active` means), while this frame carries no edge at all — the state
+literally *is* the payload, so `reduceTimeline`'s `thinkingProgress` arm assigns rather than branches. See
+[Thread timeline § The reducer](thread-timeline.md#the-reducer) for the `thinkingTokens` scalar's three
+clearing edges, none of which live in this bridge. Between #1313 and #1314 it sat dormantly in the `null`
+fall-through group below, the member of that group a reader was most likely to want owned here.
+
+**The reducer's `assertNever` default is a live secret sink, not a formality — #1314's own RED proved
+it.** `reduceTimeline`'s exhaustive `switch` over `ThreadEvent` ends `default: assertNever(event)`, whose
+job is `JSON.stringify`-ing whatever reaches it into an `Unhandled thread event: …` `Error`. Before the
+`thinkingProgress` case existed, driving one frame through the newly-owned bridge arm hit exactly that
+default with `{"type":"thinkingProgress","estimatedTokens":120}` — the reading, a side-channel on how much
+claude thought about private work, landed in an Error message on the spot. Adding the reducer case is what
+keeps it out; folding a future arm into a bare `default` rather than a named case would reopen the same
+hole silently.
 
 ## The opening ask (#1259)
 

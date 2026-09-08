@@ -235,6 +235,7 @@ now empty, and their copy is a wider `state` union on this one view instead:
                                          { phase, apiRetry, compacting, stalled }, localSendPending)}
                                 toolName={openToolName(items)}
                                 retry={apiRetry}
+                                thinkingTokens={thinkingTokens}
 ```
 
 The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
@@ -269,10 +270,15 @@ props: the tool name on `toolName: string | null` (`toolWorkingCopy` keeps its c
 it, and the name reaches the DOM only as an auto-escaped text child, never through an HTML sink), and —
 new in #967 — the retry counter's two integers on `retry: ApiRetryStatus | null` (no string field, so the
 "this prop structurally cannot carry a daemon string" guarantee `ApiRetryIndicator` used to hold on its
-own is preserved verbatim on the merged view). Both are required for `toolName`'s own recorded reason: an
-optional prop lets the container silently omit it, and nothing in this repo could catch that since every
-container test renders the initial store, so `tsc` is the only available detector and the type must be
-the one that fails.
+own is preserved verbatim on the merged view) — and, new in [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314), the running thinking-token estimate on
+`thinkingTokens: number | null` (also a bare number, same guarantee). All three are required for
+`toolName`'s own recorded reason: an optional prop lets the container silently omit it, and nothing in
+this repo could catch that since every container test renders the initial store, so `tsc` is the only
+available detector and the type must be the one that fails. **#1314 paid that reason's cost in full**: the
+prop's own consumer count is one (the label), but `tsc` making it required is what turned all seventeen
+pre-existing `<ThinkingIndicator …>` sites in `ConversationScreen.test.tsx` into compile errors rather than
+a silent gap — recorded as the plan's own `## Revisions` entry on why the ticket stayed whole rather than
+splitting at that cascade.
 
 **The tool name is scoped to the working/thinking state alone — reversed by #967.** Until #967 the
 `state === null` guard was what enforced #493's and #496's supersede rules, and the tool name then won
@@ -299,7 +305,8 @@ load-bearing for the truncation bound: one text run ellipsizes as one unit, so o
 is truncated away and replaced by the ellipsis the truncation itself draws — two runs would render two
 ellipses. `ApiRetryIndicator`'s retired bubble *did* render constant-plus-span (`.api-retry__counter`,
 CSS deleted with it), which is exactly why the counter is interpolated into the label's own string
-instead (`apiRetryLabel`, below) rather than carried in a nested span. The class attribute keeps its
+instead (`apiRetryLabel`, below) rather than carried in a nested span — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)'s running thinking-token estimate takes the identical shape in the thinking
+state (`thinkingLabel`, below), for the same reason. The class attribute keeps its
 shipped order and appends at most one modifier: `conversation__thinking composer-status__label`, plus
 ` composer-status__label--tool` in the working/thinking state with a name, or
 ` composer-status__label--stalled` in the stalled state — mutually exclusive by construction, since
@@ -489,9 +496,31 @@ interpolates it into one string instead — `retry === null || retry.total <= 0`
 view used, never `current / total` (`NaN` at `0/0`). Both integers are guaranteed JS numbers, not daemon
 strings: `parseApiRetryPayload` (`src/main/transport/inboundMessage.ts`) narrows them with
 `requireNumber` and throws `WireDecodeError` otherwise, which is also what bounds the interpolation's
-length — a JS number stringifies to at most 24 characters. A module-private `statusRowCopy(state, retry)`
-is the total switch that picks among all five labels, with **no `default`**, so a sixth
-`WorkingIndicatorState` member is a `tsc` error here rather than a silently unlabelled row.
+length — a JS number stringifies to at most 24 characters. A module-private `statusRowCopy(state, retry,
+thinkingTokens)` is the total switch that picks among all five labels, with **no `default`**, so a sixth
+`WorkingIndicatorState` member is a `tsc` error here rather than a silently unlabelled row. **The estimate
+reaches the `'thinking'` arm alone** — AC2 froze the other four states verbatim, so a retry, a compaction,
+a stall and the generic working label never carry it, and neither does the tool-named label (the tool name
+already supersedes the thinking copy unconditionally).
+
+**`thinkingLabel(thinkingTokens: number | null): string`** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is `apiRetryLabel`'s sibling, written to the identical shape — the constant, one
+hole, one client-owned unit — and reads `` `${THINKING_COPY} ~${shown} tokens}` `` when a reading is held,
+the bare `THINKING_COPY` otherwise. The `~` is not decoration: the daemon's own docs call the reading
+"approximate progress for spinners/pills, not the authoritative billed output_tokens", so the label must
+never read as a number to bill against. `shown` is the reading verbatim below 1000 and rounded to the
+nearest hundred at 1000 and above (`1250` → `~1300 tokens`, `1249` → `~1200 tokens`); `0` takes the
+ordinary path and renders `~0 tokens` — a reading, not an absence. **Formatted defensively, which is this
+arm's stated security obligation, not a style choice**: `requireNumber` at the decode boundary
+(`src/main/transport/inboundMessage.ts`) proves only `typeof value === 'number'` — NaN, `Infinity` and
+negatives all decode successfully and survive the contextBridge — so `thinkingLabel` degrades to the bare
+copy for `null` and for anything that is not a non-negative finite number, the `apiRetryLabel(null)`
+degrade posture rather than a throw, since a hostile or buggy daemon must not be able to blank the status
+row. Two comparisons, one `Math.round`, one interpolation — no `repeat`, `Array(n)`, `padStart` or loop
+bounded by the reading, which is the concrete failure mode a right-aligned formatter written as
+`padStart(estimate)` would open (gigabytes allocated from a daemon claim); the plan's security review
+carried this forward as a Phase B ban rather than a one-time check. See [Thread timeline § Edge
+cases](thread-timeline.md#edge-cases-and-limitations) for the `thinkingTokens` scalar this label reads and
+its own non-monotonic contract.
 
 **The stall keeps reading as a problem, but as a colour modifier instead of a bubble role.**
 `.bubble--stall` used to carry `color: var(--color-error)` plus a 4px `border-left` accent bar (the

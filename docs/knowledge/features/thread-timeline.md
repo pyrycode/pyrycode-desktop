@@ -75,8 +75,9 @@ type ThreadEvent =
   | { type: 'reset' }
   | { type: 'reconnected' }
   | { type: 'dropUserText'; messageId: string }
+  | { type: 'thinkingProgress'; estimatedTokens: number }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null }
 interface ApiRetryStatus { current: number; total: number }
 ```
 
@@ -103,7 +104,23 @@ what a `dropUserText` removal (below) deliberately leaves it as live in [Convers
 Thinking / working indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
 not restated here.
 
-**`toolCall.input` / `toolUse.input` ([#643](../codebase/643.md)) is not a sixth scalar** — it's an
+**`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314), decoded at
+[#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312), carried by
+[#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313)) is a sixth such scalar, and the first
+to carry a reading with no edge of its own** — `number | null`, the daemon's latest running thinking-token
+estimate for the open conversation, or `null` when none is held. Like `apiRetry` it is `| null` rather
+than a plain flag, because there is a value to carry; unlike `apiRetry` the payload is a bare `number`, not
+a record — one reading, nothing to pair it with. **`0` is a held reading, not an absence**: the wire has no
+`omitempty`, so the daemon's zero is legal traffic, and the field is `| null` specifically so "no reading
+yet" and "a reading of nothing" stay distinguishable. It is also **not monotonic** — the value restarts
+near zero at every inference-request boundary, several times inside one committed turn capture — so the
+arm assigns the latest reading rather than comparing magnitudes; there is no `Math.max` here and never
+should be. Its clearing rule matches neither `stalled`'s (turn activity does **not** clear it — claude
+interleaving a tool call with its thinking must not blank a live reading) nor `apiRetry`/`compacting`'s
+(there is no falling edge on the wire to wait for): it clears on a `turnState` that is not `'thinking'`, on
+`turnEnd`, and on `reconnected`, plus `reset` for free — see § The reducer.
+
+**`toolCall.input` / `toolUse.input` ([#643](../codebase/643.md)) is not a seventh scalar** — it's an
 optional field on an existing arm/item pair, the tool's own input fields as name → value
 (pyrycode#1678, decoded at the transport by [#642](../codebase/642.md)). Absent means the wire omitted
 it (a pre-#1678 daemon); an empty map is the distinct fact "this daemon sent no fields for this call."
@@ -213,15 +230,16 @@ thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-th
 | `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text, keeping the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt`. `seq` carried, not consulted — arrival order is authoritative. |
 | `toolUse` | append a fresh `toolCall` with `result: null` |
 | `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
-| `turnState` | set `phase`; same reference if unchanged (no-churn) |
-| `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
+| `turnState` | set `phase`; same reference if unchanged (no-churn); clears `thinkingTokens` to `null` when `event.state !== 'thinking'` (the widened guard below lets a repeat `turn_state{idle}` through when a reading is still held, rather than early-outing and leaving it stale) — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
+| `turnEnd` | append a `turnBoundary`; does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
+| `thinkingProgress` | assign `thinkingTokens: event.estimatedTokens` verbatim (same reference on a verbatim repeat — the wire has no dedup and re-fires as the count climbs); `items`/`phase`/every other scalar untouched — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `userText` | append a fresh `userText` item, carrying the event's `createdAt`, `messageId` and `attachments` unconditionally and by reference (never coalesced, so unlike `assistantDelta` there is no earlier stamp or set to preserve — [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 | `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
-| `reset` | returns `initialTimelineState` — all five fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
-| `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false` via a hand-written five-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all four are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md) |
+| `reset` | returns `initialTimelineState` — all seven fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
+| `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false`, `thinkingTokens`→`null` via a hand-written six-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all six (including `phase === 'idle'`) are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md), widened for `thinkingTokens` by [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) since a reading held across a reconnect would report the depth of a think that finished on the other side of the disconnect |
 | `dropUserText` | remove the **first** `userText` item whose `messageId` strictly equals `event.messageId` (`removeUserEcho`, below); same `items` reference on no match. The **only** arm that removes an item — everything else appends or coalesces. Every chrome scalar, `localSendPending` included, is carried through unchanged; not a second `userText` producer and not its inverse — see § Edge cases — [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
@@ -243,9 +261,21 @@ shape as `apiRetry`**: every other arm carries it through unchanged, and the two
 guards do not gain a compaction term either — `compacting` clears only on its own explicit falling
 edge. Unlike `apiRetry`, there's no counter to carry, so the arm collapses to a single
 same-reference-or-fresh-state ternary rather than a two-branch rising/falling split.
-`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false }`;
-pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, `selectCompacting` are
-the only read surface.
+**`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is a sixth,
+independent axis with a clearing rule that matches neither of the two shapes above** — not
+`stalled`'s self-clear-on-turn-activity (every content arm carries it through unchanged: `stalled` is
+turn activity, but `thinkingTokens` is not cleared by it, since claude interleaves tool calls with its own
+thinking) and not `apiRetry`/`compacting`'s own-falling-edge-only clear (the wire sends no falling edge
+for this frame at all). Instead it clears on the turn's own lifecycle: a `turnState` that is not
+`'thinking'`, a `turnEnd`, or a `reconnected`. Two of the reducer's same-reference no-op guards widen for
+it and one deliberately does not: `turnState`'s guard gains `(event.state === 'thinking' || state.thinkingTokens
+=== null)` so a repeat `turn_state{idle}` against a held reading is not early-outed into staleness;
+`reconnected`'s `nothingLive` guard gains `&& state.thinkingTokens === null` for the same reason; `toolResult`'s
+orphan/duplicate guard does **not** widen, since a tool result is not one of this scalar's three clearing
+edges and must stay the same-reference no-op it already is.
+`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false, localSendPending: false, thinkingTokens: null }`;
+pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, `selectCompacting`,
+`selectLocalSendPending`, `selectThinkingTokens` are the only read surface.
 
 ### Internal helpers (unexported)
 
@@ -336,6 +366,17 @@ with the `attachments` field documented above (§ Types).
   ([#496](../codebase/496.md)), `apiRetry`'s clearing inversion again. Unlike `apiRetry`, the wire
   carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
   `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
+- **`thinkingTokens` is a reading, never a value to compare against a maximum** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — the daemon's own docs call it "approximate progress for
+  spinners/pills, not the authoritative billed output_tokens", and it restarts near zero at every
+  inference-request boundary (observed four times inside one committed single-turn capture). A monotonic
+  filter or an accumulator would silently eat that ordinary traffic and freeze the label at the first
+  request's peak; the arm assigns rather than compares. `estimated_tokens_delta` does not cross the IPC
+  boundary and is not accumulated here — the payload's own contract states the deltas do not sum to the
+  turn's total.
+- **`requireNumber` proves only `typeof value === 'number'`** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — NaN, `Infinity` and negatives all decode and cross the contextBridge
+  intact (ADR 0002 drift forbids a range check at the decode boundary), so this module carries the value
+  unvalidated by design. The render-side `thinkingLabel` formatter is the actual boundary — see
+  [Conversation shell § Thinking / working indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
 - **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
   the first, [#531](../codebase/531.md) the second, [#652](../codebase/652.md) the third.** A
   conversation switch clears the timeline via `activateConversation`, gated on the active conversation's
@@ -428,7 +469,8 @@ with the `attachments` field documented above (§ Types).
 ## Related
 
 - [Thread timeline — history](thread-timeline-history.md) — the ticket-by-ticket build-out of every arm,
-  scalar and field, split out from this page on 2026-09-04.
+  scalar and field, including the per-ticket `#XXX codebase notes` links this page used to carry, split
+  out from this page on 2026-09-04 (and trimmed further on 2026-09-08 to stay under the size cap).
 - [#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039) — added `attachments` to `userText`,
   covered in full above (§ Types, § Edge cases). Sole producer: [composer send](composer-send.md)'s
   `ComposerSendDeps.takeAttachments`, fed by [Composer attach § Pending
@@ -444,8 +486,6 @@ with the `attachments` field documented above (§ Types).
   slice that renders the stamp into [#969](../codebase/969.md)'s empty meta-row time slot. [Conversation
   shell — message bubble § The meta row](conversation-shell-message-bubble.md#the-meta-row) has the
   formatter and render-slot design.
-- [#286 codebase notes](../codebase/286.md) — added the fifth `ThreadItem` kind, `sessionBoundary`,
-  and its `TimelineRow` render row + pure long-form relative-time view-model.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md) — full
   rationale, every reducer arm's normative contract, and the Strangler-Fig coexistence decision.
 - [#121 codebase notes](../codebase/121.md) — implementation summary and the `as`-cast rework.
@@ -454,74 +494,16 @@ with the `attachments` field documented above (§ Types).
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the `DaemonEvent → SessionAction`
   translator #202's `wire → ThreadEvent` bridge is modeled on.
 - [Conversation timeline store](conversation-timeline-store.md) — the store + bridge #202 built over
-  this module.
+  this module; its [internals](conversation-timeline-store-internals.md) page documents
+  `timelineBridge.ts`'s `translateTimelineEvent`/`timelineTargetFor`, including the `thinkingProgress`
+  arm [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) claimed.
 - [Conversation timeline holder](conversation-timeline-holder.md) — a second, per-conversation-keyed
   store (#755) that imports `TimelineState`/`ThreadEvent`/`reduceTimeline` from this module unchanged,
   reusing the reducer rather than writing a second one.
-- [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
-  `assistantDelta`/`turnEnd` `DaemonEvent` arms this module's `ThreadEvent` union targets.
-- [#202 codebase notes](../codebase/202.md) — the store + bridge slice built on this module.
-- [#203 codebase notes](../codebase/203.md) — the render slice; resolved the React-key question (array
-  index) and derived the streaming cursor structurally from the reducer's append-only/tail-mutation
-  invariant.
-- [#214 codebase notes](../codebase/214.md) — the `turn_state` transport slice: wire types, decode
-  (closed-enum idiom), and the `turnState` `DaemonEvent`/`ThreadEvent` arms; gave `selectPhase` its
-  first real source.
-- [#217 codebase notes](../codebase/217.md) — the `tool_use` transport slice: wire types, decode
-  (required-string presence, no enum), and the `toolUse` `DaemonEvent`/`ThreadEvent` arms; gave
-  `reduceTimeline`'s `toolUse` arm its first real feed, appending a `toolCall` item onto `selectItems`.
-- [#229 codebase notes](../codebase/229.md) — the `tool_result` transport slice, the vertical's last
-  transport slice: wire types, decode (four required strings + one `requireBoolean`), and the
-  `toolResult` `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult`
-  correlation its first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
-- [#230 codebase notes](../codebase/230.md) — extends #218's pending `toolCall` chip to resolve in
-  place from `item.result`, and introduces desktop's first error-family design token, `--color-error`.
-- [#696 codebase notes](../codebase/696.md) — extracts the `toolCall` arm into an exported `ToolRow`
-  and reverses #230's decision not to surface `result.resultSummary`, drawing it in a bounded body
-  behind a still-unwired `expanded` flag.
-- [#245 codebase notes](../codebase/245.md) — added the fourth `ThreadItem` kind, `userText`, dormant
-  with a placeholder render arm.
-- [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires
-  `userText`'s producer and real render row, and retires the coarse `MessageThread` in the same commit.
-- [#315 codebase notes](../codebase/315.md) — the transport slice: decodes `stall` into the (at ship
-  time) nullary `stallDetected` `DaemonEvent`, shipped dormant.
-- [#732 codebase notes](../codebase/732.md) — widened `stallDetected` with `conversationId`; the id
-  stops at the timeline bridge, so `ThreadEvent.stallDetected` above is unaffected.
-- [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
-  `stallDetected` arm, and `StallIndicator` (retired, folded into `ThinkingIndicator` by #967 — see
-  [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
-- [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
-  non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
-- [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
-  arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
-  supersede predicate (`ApiRetryIndicator` retired, folded into `ThinkingIndicator` by #967 — see
-  [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
-- [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
-  non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
-- [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
-  `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
-  second `shouldShowThinking` clause (`CompactingIndicator` retired, folded into `ThinkingIndicator` by
-  #967 — see [Conversation shell § Thinking / working indicator § Retired by
-  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)).
-- [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
-  `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
-- [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
-  switch, via [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
-- [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
-  ending, unconditional, via
-  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
-- [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
-  optional `DaemonEvent.toolUse.input` field, shipped dormant.
-- [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried
-  unchanged and by reference through the bridge and the reducer; ships dormant.
-- [#773 codebase notes](../codebase/773.md) — widens the `toolResult`/`ToolResult` pair with
-  `resultDetail`, wire through item in one ticket rather than #642/#643's split; ships dormant.
-- [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
-  the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
-  preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)
-  and `queueStore` #197 already got.
+- Every per-ticket `#XXX codebase notes` link this section used to carry (#199/#202/#203/#214/#217/#229/
+  #230/#696/#245/#179/#286/#315/#732/#317/#492/#493/#495/#496/#528/#530/#531/#642/#643/#773/#538) moved to
+  [Thread timeline — history § Related](thread-timeline-history.md#related) on 2026-09-08 to stay under
+  the size cap; nothing about the current contract changed.
 - [Paired shell](paired-shell.md) — the container `activateConversation` lives beside, and the nav sites
   that now dispatch `reset` on an actual conversation switch.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
@@ -539,3 +521,11 @@ with the `attachments` field documented above (§ Types).
   holder](conversation-timeline-holder.md)) on the same `message_id` the [queue
   store](queue-store.md)'s `QueuedItem` now carries (pyrycode#2092). Full design, including why the
   removal fires at the click rather than on a confirming snapshot: `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
+- [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312) (decode) /
+  [#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313) (IPC carry, dormant) /
+  [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) (this module's `thinkingProgress` arm
+  and `thinkingTokens` scalar) — covered in full above (§ Types, § The reducer, § Edge cases). Render
+  consumer: [Conversation shell § Thinking / working
+  indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)'s
+  `thinkingLabel`. Full design and the security review of the unbounded daemon integer:
+  `docs/specs/architecture/1314-thinking-token-estimate-status-row.md`.

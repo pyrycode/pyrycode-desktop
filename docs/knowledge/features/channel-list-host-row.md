@@ -299,6 +299,16 @@ background, no hover circle, `fill="currentColor"`/`aria-hidden="true"` on the S
 the workspace pair one, and copying those buttons wholesale would have pulled it in; the host row's pill
 is #1190's ticket.
 
+**#1190 inherits an occupied top band, not an empty one.** The Channels section header's own plus grew a
+name pill in [#1304](channel-list-section-header-pair-control.md#the-hoverfocus-name-pill-channelscsschannellisttsx-added-by-1304),
+and that pill hangs *below* its control (`top: 100%`) rather than centred on its band, landing in this
+row's own 12px of top padding. `.channel-list` isn't a stacking context and this row is `position:
+relative; z-index: auto` — the same slot as the header — so tree order, not `z-index`, decides: this
+row's subtree paints after the header's, and `.channel-list__host-status`/`.channel-list__host-add` paint
+*over* that pill, not under it, when both are up at once (reachable: the header's pill on `:focus-visible`
+while this row's controls fill on their own `:hover`). #1190's own pill, if placed the same way, would sit
+in this same band relative to the *next* row instead.
+
 **The row's right padding goes from 0 to 52px** (`calc(var(--space-8) + var(--space-5))`,
 `.channel-list__workspace`'s own value) **in both states, not only on hover** — reserving the trailing
 slot unconditionally is what stops a long label re-truncating the moment the pointer arrives. The row

@@ -1211,7 +1211,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   section](features/conversation-shell-session-and-channel-info.md#system-prompt-section-1078)** is the
   first reader.
 
-- [Channel List — the section header's pair-new-host control (#1303)](features/channel-list-section-header-pair-control.md) —
+- [Channel List — the section header's pair-new-host control (#1303, #1304)](features/channel-list-section-header-pair-control.md) —
   both the Channels and Chats section headers now carry a 16px plus, drawn at rest and filled
   `--color-primary` (unlike every other trailing control in this tree, which reveals only on hover), that
   opens the same `pairServer` route Settings' "Pair another server" row already opens. The accessible
@@ -1224,7 +1224,14 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   routing](features/paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for that
   mechanism. Builder self-review PASS; the spec's Revisions section records that `PairedShell.test.tsx`
   needed one edit after all (not the predicted zero) and that the e2e drive was falsified before being
-  trusted, against a hardcoded `'settings'`.
+  trusted, against a hardcoded `'settings'`. **#1304** then gave that plus its own hover/focus name pill,
+  the fourth control in the sidebar to wear `.channel-list__control-name` — a deviation from the three
+  shipped instances' band-centred placement, moved to `top: 100%` after measurement showed the sticky
+  `.channel-list__actions` cluster's `top` resolves against the scrollport's *content* box and so overhangs
+  the header by `--space-1` more than flow arithmetic predicts. The moved-down pill now paints under the
+  first host row's own trailing furniture rather than over anything, a fact worth reading before #1190
+  gives that row its own pill. Verifier PASS, two non-blocking SHOULD FIXes (a click-through comment's
+  rationale and a missing paint-order paragraph, both prose-only — addressed here).
 
 ## Architecture
 

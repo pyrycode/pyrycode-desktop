@@ -57,9 +57,62 @@ rule deleted:
   copied wholesale.** The host-row and workspace-row plusses are `opacity: 0`, revealed by their row's
   `:hover`/`:focus-within`; the drawing shows this control filled `--color-primary` in every state it
   draws, at rest. There is no reveal rule, no `:has()`-guarded swap, no hover circle, no radius and no
-  background — [#1304](https://github.com/pyrycode/pyrycode-desktop/issues/1304) (blocked on this ticket)
-  is what adds the hover pill the drawing shows on `:hover`. The `:focus-visible` outline stays, per the
-  file convention, but no longer doubles as the reveal, since there is nothing to reveal.
+  background. The `:focus-visible` outline stays, per the file convention, but no longer doubles as a
+  reveal, since there is nothing to reveal — [#1304](https://github.com/pyrycode/pyrycode-desktop/issues/1304)
+  gave the control its own name instead (below).
+
+## The hover/focus name pill (`channels.css`/`ChannelList.tsx`, added by [#1304](https://github.com/pyrycode/pyrycode-desktop/issues/1304))
+
+The fourth control in the sidebar to wear `.channel-list__control-name` — minted by #1172 for the row's
+trailing controls, reused by #1181 for the workspace row's plus. `SectionHeader`'s button gains a
+`<span className="channel-list__control-name" aria-hidden="true">{PAIR_NEW_HOST_CONTROL_LABEL}</span>`
+appended after the `<svg>`, so the spoken name (`aria-label`) and the drawn one read the same constant and
+cannot drift; there is still no `label` prop anywhere in this chain for a caller to interpolate operator or
+daemon text into either. `aria-hidden` is belt-and-braces — the button's `aria-label` already overrides
+child text for the accessible name, which stays exactly "Pair new host" at count two whether or not a pill
+is showing.
+
+The trigger is the control's own `:hover`/`:focus-visible`, written beside `.channel-list__pair` rather
+than joined onto #1172's or #1181's selector list (#1181's convention: each rule names the elements that
+can carry a pill). Unlike the row and workspace controls there is no glyph-reveal rule sharing that
+selector — this control draws at rest — so the pill's trigger is the *only* hover/focus rule on it. Shown
+and hidden are `display: block`/`none`, never opacity, so a hidden pill reports no box at all.
+
+**Placement is a stated deviation from the three shipped instances**, discovered by measurement rather
+than assumed. The shipped form centres the pill on its control's own band (`top: 50%` +
+`translateY(-50%)`); here that band collides with `.channel-list__actions`, the Channels header's
+immediately preceding sibling. The flow read — "gapless column, no margins, so the cluster's bottom edge is
+the header's top edge" — is wrong: the cluster is `position: sticky; top: var(--space-1)`, and a sticky
+offset resolves against the scrollport's **content** box, i.e. inside `.channel-list`'s own `--space-1` top
+padding, so at scroll top the cluster sits `--space-1` *past* its flow position. Read off a running window
+at scroll top: the cluster's bottom edge is at 76; band-centring puts the pill's top at 70; top-aligning
+(`top: 0`) puts it at 72 — both under a cluster painting at `z-index: 1`, and reachably so (the cluster's
+buttons are transparent at rest but fill on `:hover`, while the pill can be up on the plus's
+`:focus-visible`). So the pill hangs **below** the control instead — `top: 100%; transform: none`, landing
+at 92, clear of the cluster by the plus's own height — overriding only those two declarations; the ground,
+ink, type, padding, radius, `right: 0`, `pointer-events: none` and `nowrap` are all the shared block's.
+Declined: `top: var(--space-1)` (centred in the header's 32px box) clears the cluster too, but only by an
+exact tangency a one-pixel change would reopen, while covering the glyph it names.
+
+**The move downward changes what the pill sits under, not just what it clears.** `.channel-list` is
+deliberately not a stacking context (`position: relative; z-index: auto`), and `.channel-list__section-header`
+and `.channel-list__host` are both `position: relative` with `z-index: auto` — the same stacking-context
+slot — so tree order decides and the first host row's subtree paints *after* the header's. The pill's 24px
+(top 92, header top 72) falls inside the header's 12px bottom padding and 12px of the first host row, which
+puts it under that row's own `position: absolute` furniture — `.channel-list__host-status` (the connection
+dots) and `.channel-list__host-add` — rather than the other way around. `pointer-events: none` is what
+keeps a click through the pill landing on the plus regardless of what's on top; no `z-index` fixes the
+paint order without also lifting the pill over the sticky actions cluster it was moved to clear. See
+[Channel List — the host row § Geometry](channel-list-host-row.md) for that row's own furniture, and note
+this for [#1190](https://github.com/pyrycode/pyrycode-desktop/issues/1190) before giving the host row its
+own pill in the same file.
+
+**The colour trap, read by name rather than by export.** `get_design_context` on the Pill node
+(`347:6617`) prints `--schemes/primary-container`/`on-primary-container` transposed against `tokens.css`;
+the node's own screenshot (dark ground, light ink) is what actually settles it. The shipped pill reads
+`--color-primary-container` (ground) and `--color-on-primary-container` (ink) by name, matching
+`rgb(19, 74, 116)` ground / `rgb(207, 228, 255)` ink — the fourth ticket in a row to hit this transposition,
+and the e2e computed-colour read is the only tier that can see it at all.
 
 **The class, `channel-list__pair`, shares no token** with `channel-list__row`, `__row-open`,
 `__section-header`, `__workspace` or `__host` — Playwright runs locators in strict mode, and an element
@@ -112,12 +165,25 @@ trap), a plus clicked from the list (cancel → list), and Settings → "Pair an
 covers it, because a regression in the new origin-recording machinery is what this spec exists to catch.
 The real-daemon tier is untouched.
 
+**E2E, fake tier (`e2e/sidebar-section-header-plus-name-pill.spec.ts`, added by #1304), one launch, one
+continuous drive** — the `sidebar-workspace-plus-name-pill.spec.ts` model. Pushes an unsolicited tall
+`conversations` envelope first so "at scroll top" is a scroller position rather than a list that never
+moved, then drives both headers' pills through mount/hidden, hover, computed style (the colour-trap
+detector), geometry (24px tall, top edge on the header's top edge, right edge on the header's right edge,
+and the **actions-edge criterion** — the pill's top at or below `.channel-list__actions`'s bottom, which is
+the assertion the deviation exists for and the one band-centring reddens), trigger scope (hovering the
+label alone shows nothing), keyboard `:focus-visible` via a real `Tab`, and a click-through proving
+`pointer-events: none` still lands on the plus. Neither sibling pill spec
+(`sidebar-control-name-pill.spec.ts`, `sidebar-workspace-plus-name-pill.spec.ts`) needed an edit — both
+were already scoped to their own control's class, unlike #1181's edit to the row spec.
+
 ## Related
 
 - [Channel List home screen](channel-list.md) — the parent document; § What it does links back here.
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — `HostRow`'s
-  compile-time-constant accessible-name ruling this control inherits, and the hover-revealed plus/pen
-  pair this control's "drawn at rest" geometry deliberately departs from.
+  compile-time-constant accessible-name ruling this control inherits, the hover-revealed plus/pen pair
+  this control's "drawn at rest" geometry deliberately departs from, and the row furniture this control's
+  pill now paints under (§ Geometry) — read before giving that row its own pill in #1190.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat
   plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
   (#1178) — the class-isolation precedent (`channel-list__workspace-head`) and the same glyph path.
@@ -130,5 +196,10 @@ The real-daemon tier is untouched.
 - [#1303 spec](../../specs/architecture/1303-section-header-pair-new-host.md) — the design doc, its
   Revisions section recording that `PairedShell.test.tsx` needed one line after all (not zero, as
   predicted) and that the e2e drive was falsified-before-trusted against a hardcoded `'settings'`.
-- Deferred: [#1304](https://github.com/pyrycode/pyrycode-desktop/issues/1304) (blocked on this ticket) —
-  the "Pair new host" hover pill the drawing shows on `:hover`.
+- [#1304 spec](../../specs/architecture/1304-section-header-plus-name-pill.md) — the design doc; its
+  Revisions section records the placement moving from top-aligned to `top: 100%` after the actions-cluster
+  measurement contradicted the original flow arithmetic.
+- [Channel List — the row's desktop geometry § The workspace row's plus names itself in a
+  pill](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181) (#1181) —
+  the shipped `.channel-list__control-name` treatment this ticket's pill reuses verbatim bar two
+  placement declarations.

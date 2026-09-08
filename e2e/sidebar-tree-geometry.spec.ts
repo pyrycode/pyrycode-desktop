@@ -38,9 +38,13 @@ const LIST_INSET_PX = 28
 // Host 106:3094 px-[16px]: the glyph at 16 inside the row, the label 12 (icon) + 12 (gap) further.
 const HOST_ICON_X = CARD_INSET_PX + 16
 const HOST_LABEL_X = HOST_ICON_X + 12 + 12
-// Workspace 106:3098 pl-[24px]. (Its label is NOT pinned: the design's 10px icon→label gap has no slot on
-// the 4px scale and the row keeps --space-3, a 2px deviation channels.css records at the rule.)
-const WORKSPACE_ICON_X = CARD_INSET_PX + 24
+// Workspace 399:1059, placed as 405:7456 inside the `pl-[20px]` wrapper 405:7469 (#1178): the row nests
+// 20 in, then `pl-[8px]` puts the 12px folder at 28, then the drawing's 10px gap puts the label at 50.
+// The pre-#1178 reading was a 24px inset and a --space-3 gap chosen by a tie-break, which left the label
+// at 48; that 2px deviation was recorded here as accepted and expires with this ticket.
+const WORKSPACE_ROW_X = CARD_INSET_PX + 20
+const WORKSPACE_ICON_X = CARD_INSET_PX + 28
+const WORKSPACE_LABEL_X = CARD_INSET_PX + 50
 // The redrawn Channel row (Hover 398:7266): an 8px left inset, then the 6px dot, then an 8px gap — dot
 // at 8 and title at 22 inside the row, where #801's leading geometry had them at 16 and 32. Offset by
 // the two insets, the title lands 70 from the card's edge and 50 from its content edge: the same left
@@ -101,6 +105,7 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
   const hostLabels = page.locator('.channel-list__host-label')
   const workspaces = page.locator('.channel-list__workspace')
   const workspaceIcons = page.locator('.channel-list__workspace-icon')
+  const workspaceLabels = page.locator('.channel-list__workspace-label')
   const rows = page.locator('.channel-list__row')
   const dots = page.locator('.channel-list__row .conversation-status-dot')
   const titles = page.locator('.channel-list__title')
@@ -132,7 +137,7 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
   // these read the container's padding, not each element's own. ---
   for (const header of await headers.all()) expectAbout((await boxOf(header, 'header')).x - left, CARD_INSET_PX)
   for (const host of await hosts.all()) expectAbout((await boxOf(host, 'host row')).x - left, CARD_INSET_PX)
-  for (const ws of await workspaces.all()) expectAbout((await boxOf(ws, 'workspace row')).x - left, CARD_INSET_PX)
+  for (const ws of await workspaces.all()) expectAbout((await boxOf(ws, 'workspace row')).x - left, WORKSPACE_ROW_X)
   for (const row of await rows.all()) expectAbout((await boxOf(row, 'sidebar row')).x - left, ROW_X)
 
   // --- 2. The row spans to the content edge — the open row's fill (#1098) ends where the card's inset
@@ -145,13 +150,29 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
     expectAbout(right - (box.x + box.width), CARD_INSET_PX)
   }
 
+  // ...and so does the workspace row, which is the OTHER half of #1178's nest. Block 1 pins its leading
+  // edge 20 in and this one pins its trailing edge flush with the content edge, so a row that took the
+  // nest as a symmetric inset — or as a shrink — reddens here rather than passing on one edge. 340 wide
+  // in the 360 content box, as the component draws it.
+  for (const ws of await workspaces.all()) {
+    const box = await boxOf(ws, 'workspace row')
+    expectAbout(right - (box.x + box.width), CARD_INSET_PX)
+  }
+
   // --- 3. The glyphs and labels land on the design's x: this is the alignment an operator actually sees,
   // each level's marker one step further in than the one above it. ---
   for (const icon of await hostIcons.all()) expectAbout((await boxOf(icon, 'host glyph')).x - left, HOST_ICON_X)
   for (const label of await hostLabels.all()) expectAbout((await boxOf(label, 'host label')).x - left, HOST_LABEL_X)
   for (const icon of await workspaceIcons.all()) expectAbout((await boxOf(icon, 'workspace glyph')).x - left, WORKSPACE_ICON_X)
+  for (const label of await workspaceLabels.all()) expectAbout((await boxOf(label, 'workspace label')).x - left, WORKSPACE_LABEL_X)
   for (const dot of await dots.all()) expectAbout((await boxOf(dot, 'status dot')).x - left, DOT_X)
   for (const title of await titles.all()) expectAbout((await boxOf(title, 'row title')).x - left, TITLE_X)
+
+  // The alignment #1178 exists for, asserted as an EQUALITY between the two constants rather than as two
+  // independent numbers that happen to agree. The workspace label and the channel titles beneath it share
+  // one left edge, so moving either padding without the other fails here even if both still land on a
+  // round number.
+  expect(WORKSPACE_LABEL_X).toBe(TITLE_X)
 
   // --- 4. The section's vertical rhythm: the first host row's top sits 32 under its header's top (a bare
   // 20px line plus the 12px header→hosts gap), in both sections. ---

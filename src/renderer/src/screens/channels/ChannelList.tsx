@@ -78,7 +78,13 @@ import { ConversationStatusDot } from './ConversationStatusDot'
 // #1097 dropped `formatLastActivity` from this import list, not from the module: the sidebar row no
 // longer draws a last-activity time, but the helper keeps its three other callers (the Archive
 // screen's subtitle, WorkspacePickerSheet and ConversationScreen) and its own unit tests.
-import { titleFor, partitionActive, groupByWorkspace, groupByServer } from './channelListViewModel'
+import {
+  titleFor,
+  partitionActive,
+  groupByWorkspace,
+  groupByServer,
+  UNKNOWN_WORKSPACE_KEY
+} from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
 // PlaceholderList (#140). A pure render slice over the already-shipped #208 conversationListStore: the
@@ -203,6 +209,11 @@ export function ChannelList({
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
         onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
+        // #1178 — the SECOND caller of the shipped constructor, and the whole of the wiring: it already
+        // took the cwd as a required parameter, so the FAB's client-owned default and the workspace
+        // row's own path are its two arguments and no bridge changed. `window.pyry` is dereferenced
+        // inside the arrow alone, never during render (the onNewConversation discipline).
+        onCreateChat={(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
@@ -253,6 +264,7 @@ export function ChannelListView({
   onOpenSettings,
   onOpenArchive,
   onNewConversation,
+  onCreateChat,
   onSaveAsChannel,
   onRename
 }: {
@@ -278,6 +290,11 @@ export function ChannelListView({
   onOpenSettings: () => void
   onOpenArchive: () => void
   onNewConversation: () => void
+  // #1178 — start a chat in the named workspace, the sidebar's first create that is not the client's
+  // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
+  // and a defaulted prop would let a future caller silently render a sidebar with no per-workspace route
+  // to a new chat. The `cwd` is the group's key and travels verbatim; this view never inspects it.
+  onCreateChat: (cwd: string) => void
   onSaveAsChannel: (row: ConversationSummary) => void
   onRename: (row: ConversationSummary) => void
 }): JSX.Element {
@@ -290,7 +307,15 @@ export function ChannelListView({
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
       </div>
-      {renderBody(conversations, serverIds, openConversationId, onOpen, onSaveAsChannel, onRename)}
+      {renderBody(
+        conversations,
+        serverIds,
+        openConversationId,
+        onOpen,
+        onCreateChat,
+        onSaveAsChannel,
+        onRename
+      )}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -708,34 +733,89 @@ function HostConnectionDotsControl({ serverId }: { serverId: string }): JSX.Elem
 // The glyph is a seventh inline Material path in this file's idiom — the `folder` shape, its `d` copied
 // from WorkspacePickerSheet's module-local FolderIcon but sized 12px to match the host row's level marker
 // rather than that file's 24px control.
+//
+// #1178 GAVE THE ROW A WRAPPER, and the wrapper is what nests it. The drawing (Workspace 399:1059,
+// placed as 405:7456 inside the `pl-[20px]` wrapper 405:7469) runs the row from 20px in from the card's
+// content edge to that edge, with its label landing where the channel titles under it already sit. Two
+// things force the element rather than a padding:
+//   - THE PLUS NEEDS A POSITIONED ANCESTOR THAT IS THE ROW. `.channel-list` is `position: relative` for
+//     a stacking reason (channels.css says which), so an absolutely positioned control with no nearer
+//     containing block would pin itself to the scroll COLUMN rather than to this row.
+//   - THE PLUS CANNOT NEST INSIDE THE DISCLOSURE. An interactive control inside a <button> is invalid
+//     and unreachable (#274), so the two are SIBLINGS — which is also the whole of "clicking the plus
+//     does not toggle the fold": the click never reaches the disclosure's handler.
+// The wrapper holds the HEAD ROW ONLY, never the group's conversation rows: those stay flat siblings of
+// `.channel-list`, the ancestry 28 e2e specs click through and the precondition of the adjacent-row rule.
+//
+// ITS CLASS ENDS IN A TOKEN OF ITS OWN, deliberately. `.channel-list__workspace` does not match
+// `channel-list__workspace-head` (class selectors match whole tokens), and `ChannelList.test.tsx` pins
+// `class="channel-list__workspace"` WITH its closing quote, so the wrapper cannot silently join either
+// locator — the guard `WorkspaceRow`'s comment above states, applied to the element this ticket adds.
+//
+// The plus is drawn only when `onCreate` is given: the optional-callback shape `Row` already uses for
+// `onSaveAsChannel`, and the whole of the per-tree difference. The Chats tree passes it, the Channels
+// tree will pass its own (#1179), and the unknown-workspace group is passed none by `renderServerTrees`.
+//
+// The control's name is `CREATE_CHAT_CONTROL_LABEL`, a client-owned constant — the workspace label goes
+// nowhere near it, on the same four-sink rule the disclosure declines above. Its glyph is the design's
+// own export (Font Awesome plus, the 16×16 "Icon Edgeless" the Hover variant places at right 2, top 6),
+// an eighth inline path in this file's idiom.
 function WorkspaceRow({
   label,
   expanded,
-  onToggle
+  onToggle,
+  onCreate
 }: {
   label: string
   expanded: boolean
   onToggle: () => void
+  onCreate?: () => void
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      className="channel-list__workspace"
-      aria-expanded={expanded}
-      onClick={onToggle}
-    >
-      <svg
-        className="channel-list__workspace-icon"
-        viewBox="0 0 24 24"
-        width="12"
-        height="12"
-        fill="currentColor"
-        aria-hidden="true"
+    <div className="channel-list__workspace-head">
+      <button
+        type="button"
+        className="channel-list__workspace"
+        aria-expanded={expanded}
+        onClick={onToggle}
       >
-        <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-      </svg>
-      <span className="channel-list__workspace-label">{label}</span>
-    </button>
+        <svg
+          className="channel-list__workspace-icon"
+          viewBox="0 0 24 24"
+          width="12"
+          height="12"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+        </svg>
+        <span className="channel-list__workspace-label">{label}</span>
+      </button>
+      {onCreate && (
+        // Icon-only button — `aria-label` supplies the accessible name (the `.channel-list__save`
+        // pattern), since the glyph alone carries no text. Invisible at rest and revealed by the row's
+        // hover or by its own keyboard focus; `channels.css` says why that reveal is `opacity` and never
+        // `display: none`, and it is what keeps the control focusable and present in the accessibility
+        // tree without a prior hover.
+        <button
+          type="button"
+          className="channel-list__workspace-create"
+          aria-label={CREATE_CHAT_CONTROL_LABEL}
+          onClick={onCreate}
+        >
+          <svg
+            className="channel-list__workspace-create-icon"
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
+          </svg>
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -779,10 +859,16 @@ function WorkspaceRow({
 export function CollapsibleWorkspaceGroup({
   label,
   defaultExpanded = true,
+  onCreateChat,
   children
 }: {
   label: string
   defaultExpanded?: boolean
+  // #1178 — start a chat in THIS group's workspace, or `undefined` for a group that offers none (every
+  // Channels-tree group until #1179, and the unknown-workspace group in either tree). Nullary: the
+  // `cwd` is closed over by `renderServerTrees`, which is the level that holds the group's key, so this
+  // component never handles a daemon-derived path at all.
+  onCreateChat?: () => void
   children: ReactNode
 }): JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -791,6 +877,7 @@ export function CollapsibleWorkspaceGroup({
       <WorkspaceRow
         label={label}
         expanded={expanded}
+        onCreate={onCreateChat}
         // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render
         // and is a check-then-act race against React's batching (ToolRow:746 / UnrecognizedRow:858).
         onToggle={() => setExpanded((open) => !open)}
@@ -816,6 +903,12 @@ type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 // import for one word — the ruling `HOST_ROW_FALLBACK_LABEL` already records for `SERVER_ROW_LABEL`.
 const RENAME_CONTROL_LABEL = 'Rename'
 const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
+
+// #1178 — the workspace row's plus, named in the same idiom and for the same reasons. Read once today,
+// by the control's `aria-label`; #1181's pill becomes its second reader, which is why it is a constant
+// and not a literal at the call site. The words are the client's own and never the workspace label:
+// `Create ${label}` would put daemon text in an attribute, which is the MUST FIX #696's review named.
+const CREATE_CHAT_CONTROL_LABEL = 'Create chat'
 
 /**
  * One section's rows, grouped by server and then by workspace (#1070) — the level the design has always
@@ -850,7 +943,12 @@ const SAVE_AS_CHANNEL_CONTROL_LABEL = 'Save as channel'
 function renderServerTrees(
   rows: readonly SidebarRow[],
   serverIds: readonly string[],
-  renderRow: (row: SidebarRow) => JSX.Element
+  renderRow: (row: SidebarRow) => JSX.Element,
+  // #1178 — start a chat in a named workspace, or `undefined` for a tree that offers none. OPTIONAL and
+  // trailing, which is what carries the per-tree difference now that ONE helper draws both trees: the
+  // Chats call supplies it, the Channels call does not (its own control is #1179). Takes the `cwd`
+  // rather than the group, so the caller states exactly what crosses this seam.
+  onCreateChat?: (cwd: string) => void
 ): JSX.Element {
   const { servers, unattributed } = groupByServer(serverIds, rows)
   const workspaceGroups = (serverRows: readonly SidebarRow[]): JSX.Element[] =>
@@ -861,7 +959,25 @@ function renderServerTrees(
     // scopes keys per sibling list, so the group keys (cwd strings) and the row keys (c.id) never share
     // one, and neither shares one with the server fragments a level up.
     groupByWorkspace(serverRows).map((group) => (
-      <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
+      <CollapsibleWorkspaceGroup
+        key={group.key}
+        label={group.label}
+        // THE GROUP'S KEY IS ITS `cwd` (`groupByWorkspace`), passed VERBATIM: not normalised, not
+        // trimmed, no `path` module, no local resolution. It is daemon-asserted text making its first
+        // trip back OUT as a command field, so the only safe handling is to echo exactly what was
+        // received — main re-validates it at the untrusted IPC boundary and rebuilds a fresh three-field
+        // literal before it reaches the wire.
+        //
+        // The unknown group is skipped: its key is `UNKNOWN_WORKSPACE_KEY`, the empty string, which
+        // names no directory and is NOT the `null` "take the daemon default" signal the payload keeps
+        // distinct. Decided on the KEY, never on the label — a real directory named "Unknown workspace"
+        // is an ordinary group and keeps its plus.
+        onCreateChat={
+          onCreateChat === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+            ? undefined
+            : () => onCreateChat(group.key)
+        }
+      >
         {group.rows.map(renderRow)}
       </CollapsibleWorkspaceGroup>
     ))
@@ -888,6 +1004,9 @@ function renderBody(
   // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
   openConversationId: string | null,
   onOpen: (row: ConversationSummary) => void,
+  // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which is the one
+  // place the two trees are told apart now that `renderServerTrees` draws both.
+  onCreateChat: (cwd: string) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -956,7 +1075,7 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ))}
+      ), onCreateChat)}
     </>
   )
 }

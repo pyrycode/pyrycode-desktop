@@ -133,6 +133,7 @@ const render = (
       onOpenSettings={noop}
       onOpenArchive={noop}
       onNewConversation={noop}
+      onCreateChat={noop}
       onSaveAsChannel={noop}
       onRename={noop}
     />
@@ -174,6 +175,13 @@ const ROW_OPEN_MARKER = 'class="channel-list__row-open"'
 // `__workspace-icon` / `__workspace-label`.
 const WORKSPACE_ROW_MARKER = 'class="channel-list__workspace"'
 const WORKSPACE_LABEL_OPEN = 'class="channel-list__workspace-label">'
+
+// #1178 — the wrapper that nests the workspace head row and hosts its trailing plus, and the plus's own
+// accessible name. The wrapper's marker is a DIFFERENT exact attribute value from `WORKSPACE_ROW_MARKER`
+// above and cannot join it: that one carries its closing quote, so `class="channel-list__workspace-head"`
+// is not a match for it. That is the whole reason the class ends in a token of its own.
+const WORKSPACE_HEAD_MARKER = 'class="channel-list__workspace-head"'
+const CREATE_CHAT_MARKER = 'aria-label="Create chat"'
 
 // The disclosure state the workspace row carries once it becomes a collapse control (#704). React
 // serialises `aria-expanded={boolean}` to the literal strings "true" / "false", so these are exact
@@ -968,6 +976,105 @@ describe('ChannelListView', () => {
       expect(tags[0]).not.toContain('boom')
       // …while the label itself still renders, escaped, as the button's text child.
       expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
+    })
+  })
+
+  describe('the workspace row’s create-chat plus (#1178)', () => {
+    // The #704 shape verbatim — one row per tree, both in the SAME workspace — so the counts below sit
+    // on top of the ones that describe already pins. The trees differ ONLY in whether they hand the
+    // create callback down, which is what makes the Channels-tree zero an assertion about wiring rather
+    // than about an absent group.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    // The two trees, split on the divider — `renderBody` emits it between them, so this is exact rather
+    // than approximate and reads no section label's text (the #1070 describe's own treatment).
+    const treesOf = (markup: string): { channels: string; chats: string } => {
+      const at = markup.indexOf('channel-list__divider')
+      return { channels: markup.slice(0, at), chats: markup.slice(at) }
+    }
+
+    // The plus's own opening tag, sliced so its attribute set can be asserted WHOLE — the
+    // `workspaceRowTagsIn` treatment on the control instead of on the row. Tag-scoped rather than
+    // document-scoped for that helper's stated reason: `aria-label` legitimately appears elsewhere in
+    // the same render (the FAB, the gear, Archive), so a document-wide assertion would be plain wrong.
+    const createTagsIn = (markup: string): string[] => {
+      const tags: string[] = []
+      const marker = 'class="channel-list__workspace-create"'
+      for (let at = markup.indexOf(marker); at !== -1; ) {
+        const end = markup.indexOf('>', at)
+        tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+        at = markup.indexOf(marker, end)
+      }
+      return tags
+    }
+
+    it('draws the plus on the Chats tree’s workspace row and on no Channels one (AC3)', () => {
+      const markup = bothTrees()
+      const { channels, chats } = treesOf(markup)
+      // Both trees draw a workspace row for the same `cwd`, so a count that came from the GROUPS being
+      // absent rather than from the callback being withheld would fail here first.
+      expect(countOf(channels, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(chats, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(channels, CREATE_CHAT_MARKER)).toBe(0)
+      expect(countOf(chats, CREATE_CHAT_MARKER)).toBe(1)
+      // The control is a real <button>, so it is in the accessibility tree and keyboard-reachable at
+      // rest — the half AC3 asks for that a class name alone would not prove.
+      const tags = createTagsIn(markup)
+      expect(tags).toHaveLength(1)
+      expect(tags[0].startsWith('<button ')).toBe(true)
+      expect(tags[0]).toContain('type="button"')
+      expect(tags[0]).toContain(CREATE_CHAT_MARKER)
+    })
+
+    it('draws the design’s 16px glyph inside it (AC2)', () => {
+      // The whole opening run, not a width alone: one marker then fixes the class, the viewBox, both
+      // box dimensions, the currentColor fill and the aria-hidden together, the way this file pins the
+      // dots' full attribute values.
+      expect(bothTrees()).toContain(
+        '<svg class="channel-list__workspace-create-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">'
+      )
+    })
+
+    it('wraps each workspace head row once, without joining the row’s own marker (AC5)', () => {
+      const markup = bothTrees()
+      expect(countOf(markup, WORKSPACE_HEAD_MARKER)).toBe(2)
+      // The guard the wrapper's class name exists for: `class="channel-list__workspace"` still matches
+      // exactly once per group, so #703/#704's counts are untouched rather than silently doubled.
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(2)
+      const tags = workspaceRowTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('title=')
+      }
+    })
+
+    it('withholds the plus from the unknown-workspace group (AC3)', () => {
+      // Its key is `''` — NOT the `null` "take the daemon default" signal, so a create sent with it
+      // would name no directory at all. The group still renders its row; only the control is withheld.
+      const markup = render([row({ id: 'd1', name: 'x', is_promoted: false, cwd: '' })])
+      expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+      expect(countOf(markup, CREATE_CHAT_MARKER)).toBe(0)
+    })
+
+    it('keeps the daemon-derived label out of the control’s attributes', () => {
+      // The control's name is a client-owned constant, so the `cwd` behind the group reaches none of its
+      // attributes — the four-sink rule `WorkspaceRow` already states, re-asserted on the element this
+      // ticket adds beside it.
+      const markup = render([
+        row({ id: 'd1', name: 'x', is_promoted: false, cwd: '/home/me/<img src=x onerror=boom>' })
+      ])
+      const tags = createTagsIn(markup)
+      expect(tags).toHaveLength(1)
+      expect(tags[0]).not.toContain('img')
+      expect(tags[0]).not.toContain('onerror')
+      expect(tags[0]).not.toContain('boom')
+      expect(tags[0]).not.toContain('title=')
     })
   })
 

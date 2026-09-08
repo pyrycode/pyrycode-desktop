@@ -128,6 +128,16 @@ step from body-small to `M3/body/small-emphasized` (500) — the two type tiers 
 independently still stands), and so are the trailing controls' own hover circles — the node draws no
 trailing control at all.
 
+[#1174](https://github.com/pyrycode/pyrycode-desktop/issues/1174) hung a third rule off these same two
+carriers: `.channel-list__row:hover > .conversation-status-dot--idle` and
+`.channel-list__row:has(> .channel-list__row-open[aria-current='true']) > .conversation-status-dot--idle`
+fill an idle row's [status dot](conversation-status-dot.md) `--color-primary`. Scoped to `--idle` rather
+than the bare dot class, so it never competes with the dot's own painted modifiers (`--working` etc.) — see
+[Conversation status dot § how it works](conversation-status-dot.md) for the specificity math. Declared
+beside these two rules in `channels.css` rather than in the dot's own CSS block, for the same reason the
+dot's own positioning already lives at this call site: the selectors it hangs off belong to the row
+wrapper, not the dot.
+
 **Lessons learned, folded in at their sites above:**
 
 - **A wrapper's computed `background-color` cannot see a child painting over it.** The natural assertion

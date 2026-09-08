@@ -311,3 +311,15 @@ that a later scenario needed.
   `e2e/host-row-per-server.spec.ts` riding this same two-daemon launch. See [Channel List — the host row
   and its connection dots](channel-list-host-row.md). Design notes in
   `docs/specs/architecture/1091-launch-against-two-fake-daemons.md`.
+
+**[#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288) added
+`e2e/workspace-updated-relist.spec.ts`**, riding `launchPairedApp` and `conversationStateFake` like every
+scenario above, but the first to need a fixture seam for changing daemon-held state *mid-test* rather than
+at launch: `conversationStateFake` gained `renameWorkspace(cwd, label)`, attached as a property on the
+returned `buildReplyFrames` callable rather than returned beside it, so all 29 spec files that destructure
+`{ buildReplyFrames: fake }` stay untouched. One `test`, three steps — read the OLD workspace label (load
+bearing: without it the closing read would pass against a fake seeded with the new label all along), call
+`fake.renameWorkspace` and push the returned frame via `daemon.pushFrame`, then read the NEW label — with
+no relaunch and no reconnect anywhere in the drive, proving the daemon's unsolicited `workspace_updated`
+frame reaches a live sidebar. See [Channel List § Fixture note](channel-list.md) and [conversation list
+store](conversation-list-store.md) for the production-side re-list trigger this spec exercises.

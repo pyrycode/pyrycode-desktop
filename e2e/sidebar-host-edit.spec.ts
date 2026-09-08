@@ -1,4 +1,10 @@
-import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import {
+  test,
+  expect,
+  seedConversationsFrame,
+  FIRST_SERVER_ID,
+  SECOND_SERVER_ID
+} from './fixtures/launchPairedApp'
 
 // #1299 — the dialog the host row's pen opens, and the rename that leaves. Only this tier can answer any
 // of it: `vitest.config.ts` sets `environment: 'node'` and every renderer spec is a
@@ -55,6 +61,20 @@ const B_ROWS = [1, 3]
 // for a cold runner.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 
+// #1300 — the two captions on the identity block, restated rather than imported for the FALLBACK_LABEL
+// reason above: they are what the user reads, so a copy change must redden this file loudly.
+const ID_CAPTION = 'Server ID'
+const RELAY_CAPTION = 'Relay'
+
+// #1300's relay URL is a DYNAMIC loopback port, so it is read off the fixture handle and never written as
+// a literal. This is the shape `launchPairedApp` paired each machine with, and `serverInfoHandler` answers
+// `relayUrl` straight off that at-rest record — so what the dialog shows is exactly this string.
+//
+// Extending this drive's own secret-hygiene rule to the new assertions: both comparands are HARNESS-owned
+// — a fixture constant and a URL this run's own forwarder minted — so a failure diff on this tier can
+// still print only what the harness wrote, never operator or daemon text.
+const relayUrlOf = (url: string): string => `${url}/v1/client`
+
 test('the host row’s pen renames the machine, clears it, and the name outlives a sidebar remount', async ({
   launchPairedApp
 }) => {
@@ -67,7 +87,7 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // added is a tally of how many frames the client sent. Step 6 reads that tally; nothing else does, and it
   // records a NUMBER, never a byte of any frame.
   let inboundFrames = 0
-  const { page } = await launchPairedApp(
+  const { page, servers } = await launchPairedApp(
     {
       buildReply: () => {
         inboundFrames += 1
@@ -83,6 +103,22 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   const nameField = page.locator('.edit-host__input')
   const save = page.locator('.edit-host__save')
   const pens = page.locator('.channel-list__host-edit')
+  // #1300 — the two identity lines of whichever dialog is open. `.edit-host__detail` is the whole
+  // captioned line; `allTextContents` therefore returns caption + value concatenated, which is what
+  // `identityLines` below builds its expectations to match. Reading the LINE rather than a value span is
+  // deliberate: it pins the caption to its value, so a build that swapped the two captions fails here.
+  const identityLines = page.locator('.edit-host__detail')
+  const identityRead = async (): Promise<string[]> =>
+    (await identityLines.allTextContents()).map((text) => text.replace(/\s+/g, ' ').trim())
+  // `expectLabels`'s idiom above: an auto-waiting poll compared with toEqual, so the read retries while
+  // the dialog paints AND the comparison stays EXACT. Exactness is load-bearing here and a substring
+  // check would not do — `fake-daemon` is a prefix of `fake-daemon-2`, so a `toContainText` would pass
+  // against the wrong machine's row, which is precisely what AC2 exists to catch.
+  const expectIdentity = async (serverId: string, relayUrl: string): Promise<void> => {
+    await expect
+      .poll(identityRead, { timeout: ROUNDTRIP_TIMEOUT_MS })
+      .toEqual([`${ID_CAPTION}${serverId}`, `${RELAY_CAPTION}${relayUrl}`])
+  }
 
   const labelsRead = async (): Promise<string[]> =>
     (await hostLabels.allTextContents()).map((text) => text.trim())
@@ -108,14 +144,36 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   await expect(dialog).toBeVisible()
   await expect(page.locator('.edit-host__title')).toHaveText('Edit host')
   await expect(nameField).toHaveValue(OLD_LABEL)
+  // #1300/AC1: the dialog names WHICH machine this row is — machine A's own server id and relay URL,
+  // each under its own caption, under the Name field. Both comparands come from the harness rather than
+  // from a literal: the id is the fixture's exported constant and the relay URL is this run's own
+  // ephemeral loopback port, which no literal could name.
+  await expectIdentity(FIRST_SERVER_ID, relayUrlOf(servers[0].forwarder.url))
   // AC1's sink clause, checked on the live DOM rather than on a server render: no element inside the open
   // dialog carries a `title`, and none carries an `aria-label` — the dialog is named by its title element
-  // through `aria-labelledby`, and the untrusted label reaches the field's `value` and nothing else.
+  // through `aria-labelledby`, and the untrusted label reaches the field's `value` and nothing else. Since
+  // #1300 this covers the two identity lines too, which is AC3's live half: neither value reaches an
+  // attribute, and the relay URL in particular reaches no `href`.
   expect(await dialog.locator('[title]').count()).toBe(0)
   expect(await dialog.locator('[aria-label]').count()).toBe(0)
+  expect(await dialog.locator('a').count()).toBe(0)
   await page.locator('.edit-host__cancel').click()
   await expect(dialog).toHaveCount(0)
   await expectLabels(OLD_LABEL, FALLBACK_LABEL)
+
+  // --- 2b. #1300/AC2: MACHINE B's pen opens a dialog carrying B's OWN id and relay, not A's. This is the
+  // criterion the unit tier cannot reach — it needs two machines actually paired, which `secondServer`
+  // gives this launch — and it is what pins the container's lookup to the id the clicked pen closed over
+  // rather than to `servers[0]`. Row index 1 is machine B in the Channels tree (document order is the
+  // paired-server list's, oldest first, repeated per section), and the count assertion in step 1 is what
+  // makes that arithmetic safe. Machine B carries no label, so its field opens EMPTY while its identity
+  // lines are fully populated — the two are independent, which is itself worth pinning. ---
+  await pens.nth(1).click()
+  await expect(dialog).toBeVisible()
+  await expectIdentity(SECOND_SERVER_ID, relayUrlOf(servers[1].forwarder.url))
+  await expect(nameField).toHaveValue('')
+  await page.locator('.edit-host__cancel').click()
+  await expect(dialog).toHaveCount(0)
 
   // --- 3. AC2/AC3: Save is ENABLED on a blank name — the departure from the Edit workspace dialog — and
   // saving one clears the stored label, so both of machine A's rows read the generic word again. The

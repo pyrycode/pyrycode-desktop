@@ -2,6 +2,7 @@ import { MAX_HOST_LABEL_LENGTH } from '@shared/ipc/pairing'
 import type { HostLabelResult } from '@shared/ipc/hostLabel'
 import { mapHostLabel } from '../../store/hostLabelLoader'
 import type { HostLabelValue } from '../../store/hostLabelStore'
+import type { ServerInfoValue } from '../../store/serverInfoStore'
 
 // #1299: the Edit host dialog — what the host row's hover pen opens, and the pen's FIRST caller. `HostRow`
 // has drawn that pen behind an optional `onEditHost` since #1185 and `channels.css` has carried its
@@ -40,6 +41,20 @@ import type { HostLabelValue } from '../../store/hostLabelStore'
 // `RenameConversationDialogView` already ship for exactly this. `HostRow`'s four declines are re-derived
 // rather than inherited and hold here in full — no `title`, no `aria-label`, no id / key / lookup path
 // built from it, no class-name interpolation, no log line.
+//
+// #1300 ADDS THE IDENTITY BLOCK — the row's own server id and relay URL under the Name field, which is
+// what makes this a place to CHECK a host rather than only rename one. Both are SEMI-TRUSTED: they are
+// QR/paste-payload fields held verbatim (`pairedServerStore`'s own header calls the `server` id untrusted
+// input), reaching the renderer through the shipped `serverInfo` handler, which crosses exactly those two
+// non-secret keys per entry and no other record field. So the decline list above extends over them
+// UNCHANGED: each reaches one auto-escaped React child and nothing else.
+//
+// ⭐ THE RELAY URL IS DISPLAYED, NEVER DIALLED. No `new URL`, no `<a href>`, no `window.open`. An anchor
+// is the obvious reflex here and it would turn a semi-trusted string into a navigation sink; a bare
+// escaped child does not. What makes the value safe to put on screen at all is a check one layer down
+// rather than an assumption: `parsePairingPayload` rejects `relay-has-credentials` for any URL carrying a
+// `username` or `password`, AFTER the policy verdict and therefore on every accepted host, the dev
+// loopback included — so no stored relay can carry an embedded credential for this line to print.
 
 // A stable id tying the dialog's aria-labelledby to its title element (the EDIT_WORKSPACE_TITLE_ID idiom).
 // A single FIXED id, never one derived from the server id: only one Edit host dialog is open at a time
@@ -57,6 +72,29 @@ const EDIT_HOST_TITLE_ID = 'edit-host-title'
 const EDIT_HOST_ERROR_COPY = 'Could not save that name'
 
 /**
+ * The two captions on the identity block (#1300). `EditWorkspaceDialogView` renders its ONE path line
+ * bare and says why — one line needs no caption. Two do: a relay URL announces itself with its scheme,
+ * an opaque server id does not, and a reader who cannot name the second value has not been told which
+ * machine this is. Client-owned copy, apostrophe-free by design (renderToStaticMarkup escapes ' →
+ * &#x27;, the standing desktop lesson).
+ */
+const EDIT_HOST_SERVER_ID_CAPTION = 'Server ID'
+const EDIT_HOST_RELAY_CAPTION = 'Relay'
+
+/**
+ * What a caption's value slot reads when the container's lookup MISSED — a reseed or an unpair can empty
+ * the paired-server list while this dialog is open. Client-owned, naming neither value and carrying no
+ * backend detail, `EDIT_HOST_ERROR_COPY`'s rule.
+ *
+ * It is a WORD rather than an empty slot, and the captions stay rather than the block being dropped.
+ * Three properties, each asked for by name: not a crash (this is a rendered arm, not a dereference); not
+ * a blank, which is indistinguishable from a real value that failed to arrive; and not a panel that
+ * jumps. The dialog is NOT closed either — a miss has nothing to do with the rename being typed, and
+ * closing would destroy it for an unrelated reason.
+ */
+const EDIT_HOST_DETAIL_UNAVAILABLE = 'Unavailable'
+
+/**
  * The dialog's round-trip state, held by the container. Three arms rather than a boolean pair, so
  * "in flight" and "failed" cannot both be true and neither can be lost: `idle` is the created-in state,
  * `saving` spans the invoke, and `failed` is where a write that answered `error` — or answered nothing
@@ -69,6 +107,15 @@ export type EditHostSaveStatus = 'idle' | 'saving' | 'failed'
  * the row's STORED label — `hostRowEditSeed`, not the word the row displays); `status` is the injected
  * round-trip state. The three effects are REQUIRED injected props (the "a view that cannot act is a bug"
  * rule).
+ *
+ * `server` IS ONE NULLABLE OBJECT, NOT TWO NULLABLE STRINGS, and that is a deliberate departure from the
+ * ticket's own suggestion. `serverInfoStore`'s state docblock rejects `ServerInfoValue[] | null` because
+ * it would add a distinction no consumer reads — "an unobservable impossible-state pair", the same
+ * ceremony-without-benefit test that kept that store's mutation a setter. Two nullable strings here
+ * reproduce exactly that pair: an id present with the relay absent is not a state the container's lookup
+ * can produce, because the miss is ATOMIC — the entry is found whole or not at all. One prop makes the
+ * impossible state unrepresentable rather than merely untested. The substance is unchanged: both values
+ * arrive as props from the container and this view looks nothing up.
  *
  * SAVE IS REFUSED ON EXACTLY ONE CONDITION BEYOND THE ROUND TRIP: a trimmed name longer than
  * MAX_HOST_LABEL_LENGTH. It is NOT refused on blank, which is where this parts company with
@@ -93,12 +140,14 @@ export type EditHostSaveStatus = 'idle' | 'saving' | 'failed'
 export function EditHostDialogView({
   name,
   status,
+  server,
   onNameChange,
   onCancel,
   onSave
 }: {
   name: string
   status: EditHostSaveStatus
+  server: ServerInfoValue | null
   onNameChange: (next: string) => void
   onCancel: () => void
   onSave: () => void
@@ -137,6 +186,33 @@ export function EditHostDialogView({
             disabled={busy}
           />
         </label>
+        {/* #1300: the identity block — which machine this row actually is, under the field that renames
+            it. It is the host's counterpart to `.edit-workspace__path`, and it renders in EVERY status:
+            which machine the dialog names does not depend on whether a write is in flight.
+
+            ONE wrapper element rather than two loose <p>s, so the panel's 16px column gap falls between
+            the field and the block while the two lines sit at the tighter gap inside it.
+
+            Each value is a DIRECT TEXT CHILD of its <p>, immediately after a block-level caption span —
+            the Name field's own label-over-value shape, one element up, which is what lets the caption
+            read as a caption without a second nesting level or a value span to locate it by. Ordinary
+            inline flow puts the value on its own line; `overflow-wrap: anywhere` on the <p> is what
+            breaks a URL carrying no space, and the panel's max-height + overflow-y bounds the height
+            neither value has a length limit on.
+
+            The sink list in this module's header holds over both: an auto-escaped child each, and NO
+            attribute of the block, its lines or its captions derives from either — no `title`, no
+            `aria-label`, no id, no key, no class-name interpolation, no href and no log line. */}
+        <div className="edit-host__details">
+          <p className="edit-host__detail">
+            <span className="edit-host__detail-label">{EDIT_HOST_SERVER_ID_CAPTION}</span>
+            {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.serverId}
+          </p>
+          <p className="edit-host__detail">
+            <span className="edit-host__detail-label">{EDIT_HOST_RELAY_CAPTION}</span>
+            {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.relayUrl}
+          </p>
+        </div>
         {/* The failure line (AC3) — spec-added, not in the Figma, the `save-as-channel__error` idiom.
             Rendered ONLY when the write failed; `idle` and `saving` render none. */}
         {status === 'failed' && <p className="edit-host__error">{EDIT_HOST_ERROR_COPY}</p>}

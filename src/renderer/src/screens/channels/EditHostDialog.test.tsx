@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MAX_HOST_LABEL_LENGTH } from '@shared/ipc/pairing'
 import type { HostLabelResult } from '@shared/ipc/hostLabel'
+import type { ServerInfoValue } from '../../store/serverInfoStore'
 import {
   EditHostDialogView,
   requestSetHostLabel,
@@ -13,13 +14,30 @@ import {
 // pen that opens this dialog is `ChannelList.test.tsx`'s; the click, the hover, the drawn box and the
 // round trip are `e2e/sidebar-host-edit.spec.ts`'s. This file proves the dialog's own markup and the
 // write helper's outcome routing (AC1/AC3).
+//
+// #1300 adds the identity block, and this file is its ONLY unit home: `ChannelList.test.tsx` cannot
+// render this dialog at all, because the container opens it off `editHostServerId` and that cell starts
+// `null` in every static render. Which machine's entry the container looks up is `sidebar-host-edit`'s,
+// where two servers can actually be paired.
 const noop = (): void => {}
 
-function renderView(name: string, status: EditHostSaveStatus = 'idle'): string {
+// The identity pair a populated lookup hands down. Shares no substring with `pyrybox`, the label every
+// assertion in this file counts occurrences of, nor with any class name or caption here.
+const SERVER: ServerInfoValue = {
+  serverId: 'srv-attic-9',
+  relayUrl: 'wss://relay.example/v1/client'
+}
+
+function renderView(
+  name: string,
+  status: EditHostSaveStatus = 'idle',
+  server: ServerInfoValue | null = SERVER
+): string {
   return renderToStaticMarkup(
     <EditHostDialogView
       name={name}
       status={status}
+      server={server}
       onNameChange={noop}
       onCancel={noop}
       onSave={noop}
@@ -30,6 +48,15 @@ function renderView(name: string, status: EditHostSaveStatus = 'idle'): string {
 const SAVE_DISABLED = /edit-host__save"[^>]*disabled/
 const CANCEL_DISABLED = /edit-host__cancel"[^>]*disabled/
 const INPUT_DISABLED = /edit-host__input"[^>]*disabled/
+
+// #1300 — each caption's whole opening-to-closing run, so an assertion can pin a value IMMEDIATELY
+// after its own caption rather than merely somewhere in the markup. Restated here rather than exported
+// from the view: this is what the user reads, so a copy change must redden these lines loudly.
+const ID_CAPTION = '<span class="edit-host__detail-label">Server ID</span>'
+const RELAY_CAPTION = '<span class="edit-host__detail-label">Relay</span>'
+
+// `ChannelList.test.tsx`'s helper, restated (it is file-local there, not exported).
+const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
 
 describe('EditHostDialogView', () => {
   it('renders an accessible modal dialog titled Edit host (AC1)', () => {
@@ -121,6 +148,86 @@ describe('EditHostDialogView', () => {
     const markup = renderView('Tom & <img src=x onerror=boom>')
     expect(markup).toContain('value="Tom &amp; &lt;img src=x onerror=boom&gt;"')
     expect(markup).not.toContain('<img')
+  })
+
+  it('shows the row’s server id and relay URL, each under its own caption (AC1)', () => {
+    // The exact concatenation is the point: the value sits IMMEDIATELY after its caption's closing tag,
+    // so this pins the pairing as well as the presence. A reader who can see only one of the two lines
+    // still knows which value it is.
+    const markup = renderView('pyrybox')
+    expect(markup).toContain(`${ID_CAPTION}${SERVER.serverId}</p>`)
+    expect(markup).toContain(`${RELAY_CAPTION}${SERVER.relayUrl}</p>`)
+    // UNDER the Name field and above the actions — the field is what the user edits, the block is what
+    // they check it against, and Save must stay the last thing in the panel.
+    const details = markup.indexOf('edit-host__details')
+    expect(details).toBeGreaterThan(markup.indexOf('edit-host__field'))
+    expect(details).toBeLessThan(markup.indexOf('edit-host__actions'))
+  })
+
+  it('holds a long relay URL whole — the wrap is CSS, never a slice (AC1)', () => {
+    // `hostRowLabel`'s 128-character idiom. A value the user opened the dialog to READ has to be
+    // readable whole; an ellipsis or a slice here would answer nothing, which is why the panel took
+    // .edit-workspace's max-height/overflow-y pair rather than bounding the string.
+    const long = `wss://relay.example/${'x'.repeat(300)}`
+    const markup = renderView('pyrybox', 'idle', { serverId: 'srv-1', relayUrl: long })
+    expect(markup).toContain(`${RELAY_CAPTION}${long}</p>`)
+  })
+
+  it('names the same machine in every status (AC1)', () => {
+    // Which machine the dialog names does not depend on whether a write is in flight — the identity
+    // block is derived from the container's lookup, not from the round trip.
+    for (const status of ['idle', 'saving', 'failed'] as const) {
+      expect(renderView('pyrybox', status)).toContain(`${ID_CAPTION}${SERVER.serverId}</p>`)
+    }
+  })
+
+  it('says Unavailable in both slots when the lookup missed, never a blank', () => {
+    // A reseed or an unpair can empty `servers` under an open dialog. Three claims, and each is one the
+    // ticket asks for by name: not a crash (a rendered arm, not a dereference), not a blank the reader
+    // cannot tell from a real value, and not a dropped block that would make the panel jump.
+    const markup = renderView('pyrybox', 'idle', null)
+    expect(markup).toContain(`${ID_CAPTION}Unavailable</p>`)
+    expect(markup).toContain(`${RELAY_CAPTION}Unavailable</p>`)
+    expect(markup).not.toContain(`${ID_CAPTION}</p>`)
+    expect(markup).not.toContain(`${RELAY_CAPTION}</p>`)
+    // The dialog stays open and keeps its rename: the miss has nothing to do with the name being typed.
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('value="pyrybox"')
+  })
+
+  it('lets NEITHER identity value reach an attribute — the SENTINEL idiom (AC3)', () => {
+    // `ChannelList.test.tsx`'s guard applied to this surface rather than reinvented. Markers with no
+    // regex-, HTML- or attribute-significant character, each asserted to occur EXACTLY ONCE and
+    // immediately after its own caption — which catches `title=`, `aria-label=`, an id, a React key, a
+    // class-name interpolation and any attribute nobody thought to ban, in two assertions per value.
+    const ID_SENTINEL = 'Serverid-Sentinel'
+    const RELAY_SENTINEL = 'Relayurl-Sentinel'
+    const markup = renderView('pyrybox', 'failed', {
+      serverId: ID_SENTINEL,
+      relayUrl: RELAY_SENTINEL
+    })
+    expect(countOf(markup, ID_SENTINEL)).toBe(1)
+    expect(markup.indexOf(ID_SENTINEL)).toBe(markup.indexOf(ID_CAPTION) + ID_CAPTION.length)
+    expect(countOf(markup, RELAY_SENTINEL)).toBe(1)
+    expect(markup.indexOf(RELAY_SENTINEL)).toBe(
+      markup.indexOf(RELAY_CAPTION) + RELAY_CAPTION.length
+    )
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label=')
+  })
+
+  it('renders a hostile server id and relay URL as inert text, never live markup', () => {
+    // Both are QR/paste-payload fields held verbatim (`pairedServerStore`'s own header), so the
+    // assertion is about the DELIMITERS: `<`, `>` and `"` are escaped, so no tag is opened and no
+    // attribute is broken out of. The relay URL is DISPLAYED, never dialled — no anchor, no `new URL`.
+    const markup = renderView('pyrybox', 'idle', {
+      serverId: 'srv"><img src=x onerror=boom>',
+      relayUrl: 'wss://r.example/"onmouseover="alert(1)'
+    })
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('"onmouseover="')
+    expect(markup).not.toContain('<a ')
+    expect(markup).not.toContain('href')
   })
 
   it('lets the label reach no attribute but the field’s own value', () => {

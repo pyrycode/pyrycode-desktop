@@ -71,14 +71,20 @@ the **same one blob**:
   constant at the read boundary, and the [input field](pairing-input-screen.md#host-name-field-825) ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)) bounds again for UX, off the same imported constant.
 - **`saveFor(serverId, label)` / `loadFor(serverId)` / `clearFor(serverId)`** are the keyed triple.
   `saveFor` adds-or-replaces that server's label and leaves every other server's untouched — the
-  pairing confirm's write path since \#1156; `loadFor` returns that server's label with the same
-  `null` / `''` / throw semantics as `load`, per id, and is the per-server IPC query's read since
+  pairing confirm's write path since \#1156, and since [#1186](https://github.com/pyrycode/pyrycode-desktop/issues/1186)
+  also the per-server host-label SET channel's save arm, chosen there by a trimmed-non-blank label;
+  `loadFor` returns that server's label with the same `null` / `''` / throw semantics as `load`, per
+  id, and is the per-server IPC query's read since
   [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) (see [Host-label channel § the
   per-server channel](host-label-channel.md#the-per-server-channel-1157)); `clearFor` erases
   exactly that server's label, resolving without a write when the id held none — the per-server
-  unpair arm's erase since \#1156, called unconditionally on a matched unpair. All three take a
-  `serverId` that is untrusted QR/paste input — see Encoding and Security properties below for how it
-  stays off the persistence path.
+  unpair arm's erase since \#1156, called unconditionally on a matched unpair, and since \#1186 also
+  the SET channel's clear arm, chosen there by a trimmed-blank label. `saveFor` and `clearFor` each now
+  have two callers; neither new caller reaches `loadFor`, `load` or `save` — its dep type is
+  `Pick<MultiHostLabelStore, 'saveFor' | 'clearFor'>` — so the set channel can neither read a label
+  back nor touch the un-keyed slot (see [Host-label channel § the per-server SET
+  channel](host-label-channel.md)). All three take a `serverId` that is untrusted QR/paste input — see
+  Encoding and Security properties below for how it stays off the persistence path.
 
 Unlike the other two consumers of the secure store, **the value this store returns is not a
 secret** — it is untrusted display text that later tickets must bound and escape (see Security
@@ -123,13 +129,16 @@ export function createHostLabelStore(deps: {
 `HostLabelStore` stays one flat interface — no `Clearable…` split, for the reason stated when #827
 confirmed it out: `pairedServerStore` splits `PairedServerStore` / `ClearablePairedServerStore`
 because several shipped consumers type against the base and would otherwise need a `clear` stub in
-their fakes, and nothing here needed that split. **Four** consumers exist today, split across both
+their fakes, and nothing here needed that split. **Five** consumers exist today, split across both
 interfaces: `pairingHandler` on `MultiHostLabelStore`'s `saveFor` (since \#1156), the per-server
 `unpairHandler` arm on `MultiHostLabelStore`'s `clearFor` (since \#1156), `hostLabelHandler`'s
 zero-argument arm on `HostLabelStore`'s `load` (unchanged since #824, though what it now reads through
-changed — see Core behavior), and `hostLabelHandler`'s keyed arm on `MultiHostLabelStore`'s `loadFor`
-([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)) — each typed against a disjoint
-`Pick<…, …>`. There was a fifth until
+changed — see Core behavior), `hostLabelHandler`'s keyed read arm on `MultiHostLabelStore`'s `loadFor`
+([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)), and `hostLabelHandler`'s keyed SET
+arm on `Pick<MultiHostLabelStore, 'saveFor' | 'clearFor'>`
+([#1186](https://github.com/pyrycode/pyrycode-desktop/issues/1186)) — one `Pick` reaching **both**
+`saveFor` and `clearFor`, so it is a second caller of each rather than a sixth disjoint consumer — each
+typed against a disjoint `Pick<…, …>`. A sixth existed until
 [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163): the whole-collection `unpairHandler`
 arm on `HostLabelStore`'s `clear`. That arm is deleted, so `clear` now has **no production caller**;
 see § Edge cases for why the interface still carries it.
@@ -318,6 +327,10 @@ silently; see the comment at `hostLabelStore.ts:382-387` pointing at it.
 
  hostLabelHandler's keyed arm (#1157)
   store.loadFor(serverId) ─► decodeLabels ?? [] ─► find(e => e.server === serverId)?.label ?? null
+
+ hostLabelHandler's keyed SET arm (#1186) — after pairedServerStore.loadById(serverId) !== null
+  trim(label) === ''?  → store.clearFor(serverId) ──► mutate queue ─► filter ─► set/delete ─► SecureStore
+                    no  → store.saveFor(serverId, trimmed) ─► mutate queue ─► encodeLabels ─► set ─► SecureStore
 ```
 
 `saveFor` is reached from IPC (renderer → preload `confirmPairing(label?)` → the `isPairingRequest`
@@ -330,7 +343,13 @@ this store — only what it reads through changed. `loadFor` is reached from IPC
 `hostLabelFor(serverId)` → the `isHostLabelServerRequest` guard →
 [`hostLabelHandler`'s keyed arm](host-label-channel.md#the-per-server-channel-1157), which re-applies
 `MAX_HOST_LABEL_LENGTH` the same way `load`'s reader does) — a sibling call, not a replacement; `load`
-is untouched by it. `clear` was reached from [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)
+is untouched by it. `saveFor` and `clearFor` are each reached a second way as of
+[#1186](https://github.com/pyrycode/pyrycode-desktop/issues/1186) (renderer → preload
+`setHostLabelFor(serverId, label)` → the `isHostLabelSetRequest` guard →
+[`hostLabelHandler`'s keyed SET arm](host-label-channel.md), after an existence check against
+`pairedServerStore.loadById` — the trimmed label picks the store call, blank clears, non-blank saves)
+— a third sibling call on each, not a replacement; `loadFor` is untouched by it and the SET arm cannot
+reach `loadFor` or `load` at all. `clear` was reached from [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)
 until [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) — not from IPC at all, but from
 `unpairHandler.ts`'s **whole-collection** listener, once `pairedServerStore.clear()` had itself
 resolved; that listener is deleted, so `clear` is reached from nowhere in production now.
@@ -485,16 +504,19 @@ secure-store consumers — not a secret — so its review reads differently from
   [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s IPC guard, the [read path](host-label-channel.md) bounds again
   at the same constant ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), and so does the
   [input field](pairing-input-screen.md#host-name-field-825) ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)).
-- **Write, read, and erase paths all wired, keyed since \#1156, and keyed-read wired since \#1157.**
-  `src/main/index.ts` constructs the live store once and hands out **four** disjoint `Pick`s over it:
-  `pairingHandler` gets `saveFor`-only ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823),
+- **Write, read, erase and rewrite paths all wired, keyed since \#1156, keyed-read wired since \#1157,
+  keyed-rewrite wired since \#1186.** `src/main/index.ts` constructs the live store once and hands out
+  **five** disjoint `Pick`s over it: `pairingHandler` gets `saveFor`-only ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823),
   re-pointed at `saveFor` by \#1156); the [host-label handler](host-label-channel.md)'s zero-argument
   arm keeps its `load`-only handle ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824),
   unmoved); the per-server unpair arm gets `clearFor`-only
   ([#1149](https://github.com/pyrycode/pyrycode-desktop/issues/1149), re-pointed at `clearFor` by
-  \#1156); the [host-label handler](host-label-channel.md)'s per-server arm gets `loadFor`-only
-  ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157), new) — none able to do another's
-  job. There was a fifth, the whole-collection unpair arm's `clear`-only handle
+  \#1156); the [host-label handler](host-label-channel.md)'s per-server read arm gets `loadFor`-only
+  ([#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)); its per-server SET arm gets
+  `Pick<…, 'saveFor' | 'clearFor'>` plus, over `pairedServerStore`, `loadById`-only
+  ([#1186](https://github.com/pyrycode/pyrycode-desktop/issues/1186), new) — none able to do another's
+  job, and the SET arm's own handle carries no `load` or `loadFor` either. There was a sixth, the
+  whole-collection unpair arm's `clear`-only handle
   ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)), until
   [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) deleted that handler along with its
   registration.
@@ -525,11 +547,16 @@ secure-store consumers — not a secret — so its review reads differently from
   `../pyrycode.paired_server`, or the empty string: every id reads and writes under the same
   `HOST_LABEL_NAME`, and a label stored under one id is retrievable only under that same id. See
   Security properties above for how the decoder keeps `__proto__` specifically inert.
-- **`loadFor` now has a caller.** `saveFor` and `clearFor` gained callers in \#1156;
-  [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157) gave `loadFor` the per-server IPC
-  query (`HOST_LABEL_SERVER_CHANNEL`, `Pick<MultiHostLabelStore, 'loadFor'>`-only) — see [Host-label
-  channel § the per-server channel](host-label-channel.md#the-per-server-channel-1157). The sidebar's
-  own move onto that keyed read is still open, as
+- **`loadFor` now has a caller, and `saveFor`/`clearFor` each have a second one.** `saveFor` and
+  `clearFor` gained their first callers in \#1156; [#1157](https://github.com/pyrycode/pyrycode-desktop/issues/1157)
+  gave `loadFor` the per-server IPC query (`HOST_LABEL_SERVER_CHANNEL`,
+  `Pick<MultiHostLabelStore, 'loadFor'>`-only) — see [Host-label channel § the per-server
+  channel](host-label-channel.md#the-per-server-channel-1157) — and
+  [#1186](https://github.com/pyrycode/pyrycode-desktop/issues/1186) gave `saveFor`/`clearFor` a second,
+  renderer-driven caller, `HOST_LABEL_SET_CHANNEL`, gated by an existence check against
+  `pairedServerStore.loadById` that has no atomicity with the write across the two stores — an unpair
+  landing in that gap leaves an orphan label, self-healing on the next pairing or unpair for that id.
+  The sidebar's own move onto the keyed read is still open, as
   [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070).
 
 ## Related

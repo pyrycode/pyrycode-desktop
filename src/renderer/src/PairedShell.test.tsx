@@ -184,7 +184,12 @@ describe('PairedShell', () => {
   })
 
   it('PairingScreen onCancel → pairServerCancelled returns to settings, non-destructive (#152, AC4)', () => {
-    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled' })).toBe('settings')
+    // #1303 gave the arm its `returnTo`. This case is still about the SETTINGS seam specifically — the
+    // row is clicked while the shell is on `settings`, so that is what the container records — and the
+    // three-origin matrix lives in pairedRoute.test.ts where the reducer's own cases are.
+    expect(
+      nextPairedRoute('pairServer', { type: 'pairServerCancelled', returnTo: 'settings' })
+    ).toBe('settings')
   })
 
   it('PairingScreen onPaired → pairServerPaired lands on the new server’s list (#152, AC3)', () => {

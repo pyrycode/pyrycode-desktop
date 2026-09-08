@@ -38,8 +38,14 @@
  *                                   owed in full.
  *  - `pairedAnotherServer`        — the operator ADDED a server. `pairServer` → `list` inside this
  *                                   shell; nothing has ended and nothing is left.
- *  - `cancelledPairAnotherServer` — the operator backed out of the pairing dialog. `pairServer` →
- *                                   `settings`; no server was reached at all.
+ *  - `cancelledPairAnotherServer` — the operator backed out of the pairing dialog. `pairServer` → the
+ *                                   surface pairing was launched from; no server was reached at all.
+ *                                   That destination read `settings` until #1303, because the Settings
+ *                                   row was the only entry. The section-header plus is a second one, so
+ *                                   the destination is origin-dependent and is decided by the container,
+ *                                   which alone knows where the flow was opened from. WHAT this member
+ *                                   owes is unchanged and is all this module ever claimed: exactly one
+ *                                   nav effect, and no clear.
  */
 export type PairingChange = 'unpaired' | 'pairedAnotherServer' | 'cancelledPairAnotherServer'
 
@@ -52,7 +58,11 @@ export type PairingChange = 'unpaired' | 'pairedAnotherServer' | 'cancelledPairA
  *                                `clearPairingScopedState`'s own interface and its own test.
  *  - `navigateToPairingScreen` — App's route flip to `pairing`, which unmounts this shell.
  *  - `navigateToNewServerList` — the `pairServerPaired` nav, landing on the list (#152 AC3).
- *  - `returnToSettings`        — the `pairServerCancelled` nav, back to Settings (#152 AC4).
+ *  - `returnToPairingOrigin`   — the `pairServerCancelled` nav, back to the surface the flow was opened
+ *                                from (#152 AC4, widened by #1303). It was `returnToSettings` while
+ *                                Settings was the only entry; the name is now the RULE rather than one
+ *                                destination, and this module stays blind to which surface that is —
+ *                                the container records the origin and the nav event carries it.
  *
  * Three separate nav effects rather than one `navigate` the caller pre-binds, because the three
  * destinations are the substance of the decision and not glue: keeping them apart is what lets a
@@ -63,7 +73,7 @@ export interface PairingChangeDeps {
   clearPairingScopedState: () => void
   navigateToPairingScreen: () => void
   navigateToNewServerList: () => void
-  returnToSettings: () => void
+  returnToPairingOrigin: () => void
 }
 
 /** Compile-time exhaustiveness guard: a new PairingChange member without a case is a type error. The
@@ -141,7 +151,7 @@ export function applyPairingChange(deps: PairingChangeDeps, change: PairingChang
       deps.navigateToNewServerList()
       return
     case 'cancelledPairAnotherServer':
-      deps.returnToSettings()
+      deps.returnToPairingOrigin()
       return
     default:
       return assertNever(change)

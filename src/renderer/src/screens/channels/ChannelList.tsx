@@ -124,11 +124,17 @@ import {
 export function ChannelList({
   onOpen,
   onOpenSettings,
-  onOpenArchive
+  onOpenArchive,
+  onPairNewHost
 }: {
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
+  // #1303 — open the pairing flow. A pure injected nav effect like the two above it, dereferencing no
+  // `window.pyry` and touching no store, so this container stays server-renderable. `PairedShell` binds
+  // it to the same `onOpenPairServer` that drives Settings' "Pair another server" row: one act, one
+  // handler, and the container decides where cancel lands from the route rather than from the caller.
+  onPairNewHost: () => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   // The client-owned default workspace (#403), read reactively so the FAB always closes over the current
@@ -251,6 +257,7 @@ export function ChannelList({
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
+        onPairNewHost={onPairNewHost}
         onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
         // #1178 — the SECOND caller of the shipped constructor, and the whole of the wiring: it already
         // took the cwd as a required parameter, so the FAB's client-owned default and the workspace
@@ -438,6 +445,7 @@ export function ChannelListView({
   onOpen,
   onOpenSettings,
   onOpenArchive,
+  onPairNewHost,
   onNewConversation,
   onCreateChat,
   onCreateChannel,
@@ -467,6 +475,12 @@ export function ChannelListView({
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
+  // #1303 — open the pairing flow, drawn on BOTH section headers. REQUIRED rather than optional, the
+  // reasoning its four siblings below already carry: the container must decide, and a defaulted prop
+  // would let a future caller silently render a sidebar whose headers show a plus that opens nothing.
+  // It travels one hop further than `onOpenSettings` — which stops here — because `renderBody` is what
+  // draws the headers and hands it to each of them.
+  onPairNewHost: () => void
   onNewConversation: () => void
   // #1178 — start a chat in the named workspace, the sidebar's first create that is not the client's
   // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
@@ -510,6 +524,7 @@ export function ChannelListView({
         conversations,
         serverIds,
         openConversationId,
+        onPairNewHost,
         onOpen,
         onCreateChat,
         onCreateChannel,
@@ -1522,6 +1537,76 @@ function renderServerTrees(
   )
 }
 
+// The pair-new-host control's accessible name (#1303) — a client-owned module-level constant in the
+// ADD_WORKSPACE_CONTROL_LABEL / EDIT_HOST_CONTROL_LABEL idiom, and a compile-time constant rather than a
+// prop for `HostRow`'s stated security reason: with no `label` field there is no slot for a caller to
+// pass `Pair new host on ${label}` and interpolate untrusted operator or daemon text into an attribute —
+// the exact shape #696's review made a MUST FIX. BOTH headers carry the SAME name by design (the drawing
+// places one component under each), so the e2e locator for it is two-match and is indexed rather than
+// differentiated; `ChannelList.test.tsx` pins the count of two.
+const PAIR_NEW_HOST_CONTROL_LABEL = 'Pair new host'
+
+/**
+ * One section header and the plus that opens the pairing flow (#1303, Figma `Sidebar header` 405:7885
+ * under Channels and 405:7896 under Chats — the same component instance, so neither is a special case).
+ *
+ * THE <header>'S OWN `class` ATTRIBUTE IS EXACTLY WHAT IT WAS, and that is a constraint rather than an
+ * accident: `ChannelList.test.tsx`'s `SECTION_HEADER_MARKER` is a quote-anchored
+ * `class="channel-list__section-header"` substring count read by five specs, and
+ * `e2e/sidebar-tree-geometry.spec.ts` and `e2e/paired-shell-card.spec.ts` both locate on that class. The
+ * button is a CHILD; nothing about the header's own attribute run moves. The header gains
+ * `position: relative` in `channels.css` — the containing block the absolutely positioned button needs —
+ * and its box, its 20px line and the 12px below it are untouched, which is what preserves the 32px
+ * header-to-first-host rhythm AC5 pins.
+ *
+ * THE CLASS SHARES NO TOKEN with `channel-list__row`, `__row-open`, `__section-header`, `__workspace` or
+ * `__host`. Playwright runs locators in strict mode, so an element JOINING an existing locator's match
+ * set raises a strict-mode violation rather than an assertion failure, and 28+ specs ride
+ * `launchPairedApp`'s unfiltered `.channel-list__row-open` click. This guard needs no edit under `e2e/`.
+ *
+ * `label` is one of two client-owned literals from `renderBody` ('Channels' / 'Chats') and reaches the
+ * text child alone. The plus is the drawn control from #1178's workspace row with two deviations the
+ * ticket names: it is painted `--color-primary` and DRAWN AT REST — there is no hover reveal here, so
+ * unlike the row and host-row controls it needs no `:has()`-guarded swap and no pointer to appear.
+ *
+ * `onPairNewHost` is nullary, `HostRow`'s handler shape: the caller closes over nothing per-header, so
+ * there is no argument for a future caller to come to depend on, and `() => void` refuses a function
+ * declaring a parameter so React's synthetic event cannot reach one either.
+ */
+function SectionHeader({
+  label,
+  onPairNewHost
+}: {
+  label: string
+  onPairNewHost: () => void
+}): JSX.Element {
+  return (
+    <header className="channel-list__section-header">
+      {label}
+      <button
+        type="button"
+        className="channel-list__pair"
+        aria-label={PAIR_NEW_HOST_CONTROL_LABEL}
+        onClick={onPairNewHost}
+      >
+        {/* The drawing's `399:1045` "Icon Edgeless" plus — the same glyph #1178 shipped for the
+            workspace row, so `.channel-list__workspace-create-icon`'s 16-unit path is reused verbatim
+            rather than re-exported. `aria-hidden` because the button's `aria-label` is the name. */}
+        <svg
+          className="channel-list__pair-icon"
+          viewBox="0 0 16 16"
+          width="16"
+          height="16"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
+        </svg>
+      </button>
+    </header>
+  )
+}
+
 function renderBody(
   conversations: readonly SidebarRow[] | null,
   // #1070 — the paired servers to draw, in pairing order. Data, so it leads the callbacks like the id
@@ -1531,6 +1616,11 @@ function renderBody(
   // and stays a comparison operand, never a class-name interpolation, an attribute value, a title, an
   // object key or a log line (`ConversationStatusDotControl`'s condition on the same value).
   openConversationId: string | null,
+  // #1303 — open the pairing flow. Handed to BOTH headers, which is the whole of the wiring: the drawing
+  // places the same `Sidebar header` component under Channels and under Chats, so neither is a special
+  // case and there is no per-tree difference to carry. It leads the row callbacks because it is the one
+  // handler this function consumes ITSELF rather than passing to `renderServerTrees`.
+  onPairNewHost: () => void,
   onOpen: (row: ConversationSummary) => void,
   // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
   // its #1179 sibling below — is the one place the two trees are told apart now that
@@ -1575,7 +1665,7 @@ function renderBody(
           or not, so there is nothing left for those conditions to express. `.channel-list__section-header`
           therefore matches exactly two elements in every drawn state, which is what keeps the suite's
           header locators single-match. */}
-      <header className="channel-list__section-header">Channels</header>
+      <SectionHeader label="Channels" onPairNewHost={onPairNewHost} />
       {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
           only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
           AC1) — the symmetric counterpart to Save-as-channel on Recent rows. Those two affordances are
@@ -1612,7 +1702,7 @@ function renderBody(
           list from the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
           instances holding two separate booleans. #1070 extends that property across servers by the same
           mechanism and with nothing to implement for it. */}
-      <header className="channel-list__section-header">Chats</header>
+      <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
       {renderServerTrees(discussions, serverIds, (d) => (
         <Row
           key={d.id}

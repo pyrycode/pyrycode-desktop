@@ -24,28 +24,28 @@ function spyDeps(): {
   clearPairingScopedState: ReturnType<typeof vi.fn>
   navigateToPairingScreen: ReturnType<typeof vi.fn>
   navigateToNewServerList: ReturnType<typeof vi.fn>
-  returnToSettings: ReturnType<typeof vi.fn>
+  returnToPairingOrigin: ReturnType<typeof vi.fn>
 } {
   const clearPairingScopedState = vi.fn()
   const navigateToPairingScreen = vi.fn()
   const navigateToNewServerList = vi.fn()
-  const returnToSettings = vi.fn()
+  const returnToPairingOrigin = vi.fn()
   return {
     deps: {
       clearPairingScopedState,
       navigateToPairingScreen,
       navigateToNewServerList,
-      returnToSettings
+      returnToPairingOrigin
     },
     clearPairingScopedState,
     navigateToPairingScreen,
     navigateToNewServerList,
-    returnToSettings
+    returnToPairingOrigin
   }
 }
 
 /** The nav half of each arm's contract, named so the table below can address one spy by key. */
-type NavEffect = 'navigateToPairingScreen' | 'navigateToNewServerList' | 'returnToSettings'
+type NavEffect = 'navigateToPairingScreen' | 'navigateToNewServerList' | 'returnToPairingOrigin'
 
 /**
  * WHAT EACH PAIRING CHANGE OWES — the whole decision this module makes, in one table.
@@ -58,13 +58,13 @@ type NavEffect = 'navigateToPairingScreen' | 'navigateToNewServerList' | 'return
 const EXPECTED: Record<PairingChange, { clears: boolean; navigates: NavEffect }> = {
   unpaired: { clears: true, navigates: 'navigateToPairingScreen' },
   pairedAnotherServer: { clears: false, navigates: 'navigateToNewServerList' },
-  cancelledPairAnotherServer: { clears: false, navigates: 'returnToSettings' }
+  cancelledPairAnotherServer: { clears: false, navigates: 'returnToPairingOrigin' }
 }
 
 const NAV_EFFECTS: readonly NavEffect[] = [
   'navigateToPairingScreen',
   'navigateToNewServerList',
-  'returnToSettings'
+  'returnToPairingOrigin'
 ]
 
 describe('applyPairingChange', () => {
@@ -109,18 +109,24 @@ describe('applyPairingChange', () => {
     expect(navigateToNewServerList).toHaveBeenCalledTimes(1)
   })
 
-  it('cancelling out of the pair-another flow clears nothing and returns to Settings (#1141 AC3)', () => {
+  it('cancelling out of the pair-another flow clears nothing and returns to the launching surface (#1141 AC3)', () => {
+    // #1303 renamed the dep from `returnToSettings`: with a second entry the destination is no longer
+    // Settings by definition, it is wherever pairing was launched from. WHICH surface that is stays
+    // outside this module — the container records it and the reducer's payload carries it — so what is
+    // asserted here is unchanged and deliberately destination-blind: the cancel arm drives this one
+    // effect, once, and clears nothing.
+    //
     // Unchanged behaviour, newly assertable. Before the lift this arm was a bare `dispatch` inline in
     // the JSX and "cancel clears nothing" was proven by the ABSENCE of a wrapper around it — true, and
     // invisible to every test in the repo. Routing it through the same helper as its two siblings
     // turns that absence into a positive assertion, which is what stops a later reader "restoring
     // symmetry" by wrapping all three.
-    const { deps, clearPairingScopedState, returnToSettings } = spyDeps()
+    const { deps, clearPairingScopedState, returnToPairingOrigin } = spyDeps()
 
     applyPairingChange(deps, 'cancelledPairAnotherServer')
 
     expect(clearPairingScopedState).not.toHaveBeenCalled()
-    expect(returnToSettings).toHaveBeenCalledTimes(1)
+    expect(returnToPairingOrigin).toHaveBeenCalledTimes(1)
   })
 
   it('every change clears exactly as the table says and drives exactly ONE of the three navs', () => {

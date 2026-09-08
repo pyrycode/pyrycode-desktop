@@ -41,16 +41,23 @@
 
    `position: relative` is #1058's only other edit here, and it is a STACKING fix, not decoration. An
    absolutely positioned ::before at z-index: auto paints in step 6 of the painting order — above every
-   non-positioned descendant, which is steps 3 and 5. .channel-list__section-header is unpositioned,
-   while .channel-list__row — and, since #1178, .channel-list__workspace-head, and since #1185
-   .channel-list__host — are already relative
+   non-positioned descendant, which is steps 3 and 5. .channel-list__row — and, since #1178,
+   .channel-list__workspace-head, since #1185 .channel-list__host, and since #1303
+   .channel-list__section-header — are already relative,
    and .channel-list__actions / .channel-list__fab are sticky at z-index: 1. Without this one declaration
-   the headers would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
+   the tree would sit UNDER a 30% black wash while the chat rows stayed bright: a worse
    defect than the flat sheet it replaces. MEASURED, not predicted — deleting this line and rebuilding
    turned e2e/paired-shell-card.spec.ts's hit-test on the host row from `.channel-list__host` to
-   `blocked by .paired-shell__sidebar`. That measurement predates #1185, which positioned the host row
-   for its own trailing controls; the section header is the element the argument now rests on, and the
-   measurement has NOT been retaken against it. Lifting this element into step 6 takes the whole subtree with it,
+   `blocked by .paired-shell__sidebar`.
+
+   ⭐ THE ARGUMENT USED TO REST ON THE SECTION HEADER BEING THE LAST UNPOSITIONED LEVEL, and #1303 ended
+   that: the header takes `position: relative` to be the containing block for its pair-new-host plus, so
+   every level of this tree is now positioned and no descendant is the element the argument turns on any
+   more. Nothing broke and nothing had to move — the declaration on THIS element is what lifts the whole
+   subtree into step 6 regardless of what its descendants do, which is what the measurement above
+   actually established. It stays load-bearing all the same: the headers' text is a text node, not an
+   element, so it has no position of its own to be lifted by, and deleting this line would still put it
+   under the wash. Lifting this element into step 6 takes the whole subtree with it,
    and tree order puts it after the wrapper's ::before. The same idiom, for the same reason, as
    .composer__input over .composer__row::before and .pairing-field__row.
 
@@ -77,15 +84,72 @@
    section's header→hosts gap (103:2966 gap-[12px]); the header's own box is the bare 20px line, so the
    first host row lands 32px under the header's top, as drawn. No top padding either: the Chats header's
    distance from the divider is the divider's own margin, and the Channels header sits directly under the
-   actions cluster until that cluster moves to the design's bottom row. */
+   actions cluster until that cluster moves to the design's bottom row.
+
+   `position: relative` (z-index auto) is #1303's only edit to this rule and the reason the plus below can
+   be positioned at all: `.channel-list` is itself relative for the stacking reason its own rule states,
+   so without a nearer containing block the control would pin itself to the SCROLL COLUMN rather than to
+   its own header. `.channel-list__row`'s idiom exactly, and `.channel-list__host`'s. It adds no box, no
+   size and no offset, so the header's 20px line, its 12px bottom padding and the 32px it puts between
+   itself and the first host row are all untouched — which is what AC5 pins and what
+   e2e/sidebar-tree-geometry.spec.ts reads back. The file's head paragraph tracks what it does to the
+   painting order. */
 .channel-list__section-header {
   padding: 0 0 var(--space-3);
+  position: relative;
   color: var(--color-on-surface-variant);
   opacity: 0.85;
   font-size: var(--text-label-large-size);
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
   font-weight: var(--text-label-large-weight);
+}
+
+/* THE PAIR-NEW-HOST PLUS (#1303, Figma "Icon Edgeless" I405:7885;399:1461 in `Sidebar header` 405:7885,
+   and the identical instance 405:7896 under Chats) — `.channel-list__host-add`'s block with one number
+   changed and one rule deleted.
+
+   THE BOX IS 20 × 20 AND THE GLYPH IS 16 × 16, WHICH REPRODUCES THE DRAWING WITH NO 2px LITERAL. The
+   node places its 16px box at `right: 2px`, centred on the header's 20px line. A `--space-5` box at
+   `right: 0` centring a `--space-4` glyph lands that glyph at right 2 — the box's 4px of slack, halved —
+   and the header's content line is EXACTLY 20px (`--text-label-large-line`), so the box is `top: 0`
+   rather than the rows' `--space-1` offset and the glyph is centred on the line for free. It is out of
+   the flow entirely, so the header's own 32px box is untouched.
+
+   Its box sits directly over the column of trailing marks the host row's plus, the workspace row's plus
+   and the conversation rows' controls already end at: all of them flush with the card's content edge.
+
+   ⭐ DRAWN AT REST — the one place `.channel-list__host-add`'s block must NOT be copied. That control and
+   the workspace pair are `opacity: 0` and revealed by their row's hover; the drawing shows this one
+   filled `--color-primary` in every state it draws, so there is no reveal rule here at all and no
+   `:has()`-guarded swap to write. The `:focus-visible` outline stays, per the file convention; it no
+   longer doubles as the reveal, because there is nothing to reveal.
+
+   No background, no hover circle, no radius — the drawing draws none, exactly as on the other trailing
+   controls, and #1304 (blocked on this ticket) is what adds the hover pill. */
+.channel-list__pair {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: var(--space-5);
+  height: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.channel-list__pair:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* `display: block` is the file's icon convention (__save-icon / __fab-icon). */
+.channel-list__pair-icon {
+  display: block;
 }
 
 /* The host row heading each tree (#710, Figma 106:3094; redrawn by #1185 as Host 399:1366) — the machine

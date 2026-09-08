@@ -265,8 +265,14 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
  *
  * The `pairServer` case passes no `bridge` to PairingScreen — production uses its `window.pyry` default
  * (bridge ?? window.pyry), the same as App's `pairing` route. The two seams are distinct destinations:
- * onCancel → settings (non-destructive, AC4) and onPaired → the new server's list (AC3), so they wire to
- * separate callbacks rather than sharing `onBack`.
+ * onCancel → the surface pairing was launched from (non-destructive, AC4; #1303 widened that from
+ * `settings` alone) and onPaired → the new server's list (AC3), so they wire to separate callbacks
+ * rather than sharing `onBack`.
+ *
+ * #1303 GAVE `onOpenPairServer` A SECOND CONSUMER. It is still one prop and one act — "open the pairing
+ * flow" — reaching SettingsScreen as its `onPairAnother` row and ChannelList as the plus on both section
+ * headers. Nothing here tells the two apart, and nothing needs to: the container decides where cancel
+ * lands from the route it was on when the flow opened, not from which control opened it.
  */
 export function PairedShellView(props: {
   route: PairedRoute
@@ -310,6 +316,14 @@ export function PairedShellView(props: {
               onOpen={props.onOpen}
               onOpenSettings={props.onOpenSettings}
               onOpenArchive={props.onOpenArchive}
+              // #1303 — the SAME `onOpenPairServer` the settings case hands SettingsScreen, reused
+              // rather than given a prop of its own, and that reuse is a decision rather than a
+              // shortcut. Both entries mean exactly "open the pairing flow", and the container makes
+              // cancel's destination a function of the route it was on when this fired rather than of
+              // which control fired it — so a second prop would be two names for one act, with nothing
+              // to tell them apart and every opportunity to drift. It also costs this file's six render
+              // literals in `PairedShell.test.tsx` no edit at all.
+              onPairNewHost={props.onOpenPairServer}
             />
           </div>
           <div className="paired-shell__pane">
@@ -386,9 +400,31 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // co-located with `activateConversation` — that call is the marker for "a third activation must record
   // the id too". The nullary `open` (a notification click, below) records nothing on purpose: it means
   // "show the conversation that is already active", so the pane's identity has not changed. Nothing clears
-  // it on the way out either: the exits (delete, archive, unpair, pair-another) all land on a route where
-  // the pane renders `null`, so the subtree is destroyed and a stale id cannot preserve anything.
+  // it on the way out either — and since #1303 that is load-bearing rather than merely harmless. It used
+  // to rest on "the exits (delete, archive, unpair, pair-another) all land on a route where the pane
+  // renders `null`, so the subtree is destroyed and a stale id cannot preserve anything." Cancelling a
+  // pairing opened from the sidebar plus now lands back on `thread`, so the pane comes UP again on this
+  // id — which is exactly how the operator returns to the chat they left, and it is why this cell must
+  // keep surviving the detour. It is not stale there: the pairing route touches neither
+  // `activeConversationStore` nor this cell, and cancel reaches no server, so the id still names the chat
+  // the store still holds. `ConversationScreen` does remount (it was unmounted while the pairing screen
+  // was up) and its screen-local state resets, which is accepted and is not what #1303 promises.
   const [paneKey, setPaneKey] = useState<string | null>(null)
+  // #1303 — WHERE CANCELLING THE PAIRING FLOW PUTS THE OPERATOR BACK: the route this shell was on when
+  // the flow was opened. Screen-local beside `paneKey` and for its reasons (ADR 0006) — never a store,
+  // never persisted, never sent over IPC — and it dies with the shell on unpair, which is correct, since
+  // a pairing origin has no meaning across pairings.
+  //
+  // RECORDED FROM `route` AT `openPairServer`, NOT PER ENTRY, which is what makes one rule cover both:
+  // neither the Settings row nor either header plus has to know its own name — clicked from Settings the
+  // route reads `settings`, clicked from a plus it reads `list` or `thread`. A second recording site is
+  // the only way the two could ever disagree about the rule, and there is not one.
+  //
+  // SEEDED `'settings'`, the shipped destination, so the never-opened-but-cancelled frame behaves exactly
+  // as it did before this ticket. That frame is unreachable — `pairServerCancelled` is dispatched only by
+  // the pairing screen, which only the `openPairServer` that writes this cell puts up — so the seed
+  // states which behaviour to preserve rather than being a fallback anything relies on.
+  const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
   // #530: recording now goes through activateConversation, which first clears the previous
@@ -474,7 +510,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),
     navigateToPairingScreen: onUnpaired,
     navigateToNewServerList: () => dispatch({ type: 'pairServerPaired' }),
-    returnToSettings: () => dispatch({ type: 'pairServerCancelled' })
+    // #1303 — the origin recorded when the flow opened, handed to the reducer as the event's own
+    // destination. THIS OBJECT MUST STAY A PER-RENDER LITERAL, which it already is and which its own
+    // header argues for a different reason (three members close over per-render values): hoisting it to
+    // module scope, or wrapping it in a `useMemo` whose dependency array omits `pairServerReturn`, would
+    // close over a stale origin and send cancel to the wrong surface — with no type error, and with no
+    // test reddening but the three-origin cases in `pairedRoute.test.ts`.
+    returnToPairingOrigin: () =>
+      dispatch({ type: 'pairServerCancelled', returnTo: pairServerReturn })
   }
   return (
     <PairedShellView
@@ -510,7 +553,15 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // it ADDS a server beside the ones already paired, and the shell never unmounts, so the
       // conversation the operator was reading and everything scoped to it must survive intact.
       onUnpaired={() => applyPairingChange(pairingChangeDeps, 'unpaired')}
-      onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
+      // #1303 — BOTH entries arrive here: the Settings row's "Pair another server" and the plus on each
+      // section header, which `PairedShellView` binds to this same prop. Recording the route FIRST is the
+      // whole of the origin machinery — see `pairServerReturn` above for why it is read off `route` here
+      // rather than passed in by whichever control was clicked. React batches the two calls, and the
+      // arrow is re-created each render, so `route` is never a stale closure.
+      onOpenPairServer={() => {
+        setPairServerReturn(route)
+        dispatch({ type: 'openPairServer' })
+      }}
       onPairServerPaired={() => applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')}
       onPairServerCancelled={() =>
         applyPairingChange(pairingChangeDeps, 'cancelledPairAnotherServer')

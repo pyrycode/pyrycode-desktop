@@ -257,3 +257,25 @@ Both are resolved in Phase B and recorded under `## Revisions` if either moves t
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-08
 
+## Revisions
+
+**2026-09-08 — Open questions resolved. Neither moved the design.**
+
+1. **The header's content line is exactly 20px, so `top: 0` is correct** — as predicted.
+   `line-height: var(--text-label-large-line)` is 20px and the rule's only padding is the 12px below,
+   so a `--space-5` box at `top: 0` lands on the line and the 16px glyph centres in it. Measured rather
+   than reasoned: `e2e/sidebar-pair-new-host.spec.ts` reads the glyph's box against its header's and
+   pins the right edge at 2, the vertical centre at the line's centre, and the header's own box at 32.
+2. **`PairedShell.test.tsx` needed one edit after all, not none** — the prediction in §2 was right about
+   the *cause* and wrong about the *count*. None of its six `PairedShellView` render literals moved, as
+   designed; but one case (`PairingScreen onCancel → pairServerCancelled…`) composes `nextPairedRoute`
+   directly rather than rendering the view, so it needed the arm's new `returnTo`. One line, and it is
+   the Settings seam that case was always about — the three-origin matrix lives in `pairedRoute.test.ts`.
+
+**Also worth recording, since the plan asserted the opposite would be risky:** the e2e drive was
+falsified before being trusted. Hardcoding `returnTo: 'settings'` in the container and rebuilding
+reddened exactly step 2's `expect(thread).toBeVisible()`, which is the assertion the ticket turns on;
+reverting restored green. The four specs AC5 names pass unedited, `e2e/paired-shell-card.spec.ts`'s
+centre hit-test on `.channel-list__section-header` included — the one the header's new
+`position: relative` put at genuine risk.
+

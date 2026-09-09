@@ -301,3 +301,7 @@ a later ticket's question, exactly as it is for those three stores.
   contract on `status`/`limitType`.
 - [#1320 architecture spec](../../specs/architecture/1320-usage-limit-store.md) — this ticket's design,
   the sizing overage (six exported shapes, ~1000 lines, stated and not split), and the security review.
+- [Conversation shell — composer status row and error slot § The usage-limit notice](conversation-shell-composer-status.md#the-usage-limit-notice-the-slots-third-occupant-1321) —
+  [#1321](https://github.com/pyrycode/pyrycode-desktop/issues/1321), the one consumer of this store today:
+  the copy/treatment mapping over `status`/`limitType`/`resetsAt`, where the "no DOM sink" constraint this
+  document states above is discharged.

@@ -380,10 +380,14 @@ export function translateTimelineEvent(
       // rateLimited (#1319) joins this group by the same queueState rule (#720) — no turn_id, opens
       // and closes no turn, so a report about the account's usage window is daemon STATE and not an
       // item IN a turn, however plainly the turn that observed it is the one the operator is watching.
-      // Its no-op here is DORMANT rather than permanent: whether the reading draws as thread chrome
-      // through this bridge, as apiRetry (#493), compacting (#496) and thinkingProgress (#1314) each
-      // eventually did, or through a subscriber of its own, as questionShown (#885) did, is #1320's
-      // call and not this carry slice's. What is settled here is only that nothing draws it yet.
+      // Its no-op here is PERMANENT as of #1320, which made the call this comment used to hold open:
+      // the reading goes to a SUBSCRIBER OF ITS OWN (`usageLimitBridge` → `usageLimitStore`), the
+      // questionShown (#885) route, and NOT to thread chrome through this bridge, the route apiRetry
+      // (#493), compacting (#496) and thinkingProgress (#1314) each eventually took. The deciding fact
+      // is LIFETIME rather than layout: a usage-limit window is conversation-scoped and outlives a turn
+      // end, a `/clear` and a session transition, so state a turn rebuilds would drop it at the wrong
+      // moment and every reducer arm would carry an extra field to prevent that. This case now exists
+      // only so the assertNever guard makes a new arm a compile error.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

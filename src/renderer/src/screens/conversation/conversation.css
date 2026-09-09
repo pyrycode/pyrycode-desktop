@@ -1425,8 +1425,25 @@
    fallback, which is the LIGHT scheme's primary (desktop is dark-only, ADR 0003) — the standing rule in
    .status-row's own comment below.
 
-   flex: 1 1 auto + min-width: 0 are LOAD-BEARING, and not for the reason the retired .bubble--tool-label
-   recorded: see the truncation chain on --tool below.
+   flex: 1 1 auto + a near-zero min-width are LOAD-BEARING, and not for the reason the retired
+   .bubble--tool-label recorded: see the truncation chain on --tool below.
+
+   THE MIN-WIDTH IS A SMALL FLOOR RATHER THAN 0, and #1321 is why. Through that ticket it was a flat 0,
+   which was right while every slot occupant was flex: 0 0 auto and narrow: the group absorbed the whole
+   squeeze and there was always squeeze to spare. The usage notice is neither — up to ~420px of client-owned
+   copy, against a 316px row at the app's 800px minimum window — and against it a 0 floor let the group
+   shrink to 10px, which is UNDER the 14px brand mark it holds. The mark is flex: 0 0 auto and this group
+   sets no overflow, so it did not clip: it painted 4px past the group's box, where the notice (a later
+   sibling, both z-index: auto) covered it. The floor is the mark's own 14px PLUS the gap it owes the label,
+   so the group's content fits its box in both configurations — mark alone at idle, and mark + gap + a label
+   shrunk to nothing under a running turn. Expressed as that sum rather than as a literal 22px, so it
+   follows the gap.
+
+   IT IS INERT FOR EVERY OTHER OCCUPANT, which is what makes it safe in a rule three tickets share: the
+   floor binds only when the slot's occupant is wider than ~294px, and #797's chip measures 155px and
+   #963's button less, so at the 800px minimum both leave the group 161px or more. It also does not weaken
+   the chain below — the group may still shrink far past the label's intrinsic width, which is the only
+   thing that chain needs of it.
 
    min-height: 24px is the Figma group's OWN height (112:3530), added by #963 and load-bearing from the
    moment the row above end-aligned. Through #796 the group had no height and the row's align-items:
@@ -1438,7 +1455,7 @@
 .composer-status__activity {
   display: flex;
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: calc(14px + var(--space-2));
   min-height: 24px;
   align-items: center;
   gap: var(--space-2);
@@ -1502,8 +1519,10 @@
 
      1. .composer-status is a block-level flex item of the .conversation column (align-items: stretch),
         so it has a definite width. Do not give it width: max-content or float it.
-     2. .composer-status__activity — flex: 1 1 auto; min-width: 0. WITHOUT that min-width the group's
-        automatic minimum floors at the label's full intrinsic width and the row grows.
+     2. .composer-status__activity — flex: 1 1 auto plus a min-width far below the label's intrinsic
+        width. WITHOUT that the group's AUTOMATIC minimum floors at the label's full intrinsic width and
+        the row grows. #1321 raised it from 0 to the brand mark's box for a reason of its own (recorded
+        there); the chain is indifferent to the exact value, only to its being nowhere near the label's.
      3. this rule — min-width: 0 plus overflow/ellipsis/nowrap. nowrap is the job (it also collapses an
         embedded newline in a daemon name, so a \n cannot break the line); overflow: hidden both clips the
         run and is the precondition for text-overflow, which applies only when overflow is not visible.
@@ -1632,32 +1651,52 @@
    would couple two occupants that differ in what they draw for the sake of six declarations, and a later
    change to the chip would silently move the notice.
 
-   flex: 0 0 auto is REQUIRED, not decorative, exactly as it is on both neighbours: .composer-status__
-   activity is flex: 1 1 auto; min-width: 0, so without it an oversized daemon tool name in the label
-   would squeeze THIS instead of ellipsizing the label — inverting the row's truncation chain, and
-   remotely triggerable by a hostile or merely buggy daemon. With it the chain still terminates in the
-   label.
+   flex: 0 1 auto + min-width: 0 + the ellipsis chain are a DELIBERATE DEPARTURE from both neighbours,
+   which are flex: 0 0 auto, and the reason is copy LENGTH rather than trust. #797's chip is one fixed
+   155px constant and #963's button less, so a row that must hold 316px of content at the app's 800px
+   minimum window (a 340px conversation pane, less --space-3 twice) can seat either with room over. This
+   occupant's longest string is 404px — `Nearly at usage limit - 7-day window, resets 01.01.2100 at 02:00`,
+   the warning lead on a seven-day window, which always resets on another local day and so always takes the
+   formatter's long form. Copied from the neighbours, that refuses every pixel of the squeeze: the activity
+   group absorbed all of it, went to ZERO width and took the turning mark off the row, and the row still
+   spilled 79px past the pane. THAT IS WHY THIS RULE DOES NOT COPY THEM.
 
-   white-space: nowrap is safe here in a way it would not be for daemon text: every run this element can
-   hold is a client-owned constant or a bounded formatted instant (`usageLimitNotice` renders neither
-   `status` nor `limitType`), so there is no unbounded string to blow the row out. That is
-   .composer__context's ruling, and it is why this occupant needs no ellipsis chain of its own.
+   THE CHAIN STILL TERMINATES IN THE LABEL for the daemon-controlled string, which is what the neighbours'
+   flex: 0 0 auto was protecting and the one property that may not be given up. Flex distributes shrink in
+   proportion to each item's base size, so against an oversized tool name — thousands of px of base against
+   this element's 404 — the activity group takes essentially all of it and ellipsizes, exactly as before.
+   This element gives only when the row is short because of the CLIENT'S OWN copy, which no daemon selects
+   the length of: `usageLimitNotice` renders neither `status` nor `limitType`, so every run here is a
+   client-owned constant or a bounded formatted instant. The inversion the neighbours guard against is
+   remotely triggerable; this rule's own overflow was not, and the two want opposite declarations.
+
+   white-space: nowrap is kept, and the ellipsis is what makes it safe. Wrapping would GROW a row whose
+   height is its occupant's and push the composer down — #963's AC3 from the other side, and #797's own
+   recorded reason. The runs are ordered lead, window, reset, so the clip eats the least important first
+   and the lead — the only run carrying the operator-facing fact — is the last thing to go.
 
    RE-MEASURED WITH THE NOTICE UP, the way #797 measured with the chip and #963 with the button, and NOT
    carried over from either's numbers: headless Chromium, this row's markup, both stylesheets, the
-   fixture's paired shell. .composer-status reads 24 with the notice in the slot — the same 24 the chip
-   produces, and unmoved between the warning and the exhausted arm, which is what the identical geometry
-   on both modifiers buys — and .conversation reports a scrollWidth equal to its clientWidth, i.e. no
-   horizontal overflow. Both are pinned in e2e/composer-usage-limit.spec.ts rather than left as a claim
+   fixture's paired shell, AT THE 800px MINIMUM WINDOW rather than at the 1100 launch width. That width is
+   the correction: the pane is 640px at launch, every string this element can hold fits it, and the fit
+   measured there was an assertion that could not fail. At 800 the row reads 340x24 with a scrollWidth
+   equal to its clientWidth, and so does .conversation — no horizontal overflow at either level. The 316px
+   of row content divides as 22 to the activity group (its floor, above) and 294 to this element, whose
+   scrollWidth is 404: it fits BY COMPRESSING, with 110px of copy clipped. The row reads 24 on the warning
+   arm at the launch width and 24 on the exhausted arm at 800, which is what the identical geometry on both
+   modifiers buys. All of it is pinned in e2e/composer-usage-limit.spec.ts rather than left as a claim
    here, because no vitest detector in this repo can read a resolved style. */
 .composer-status__usage {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-xs);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

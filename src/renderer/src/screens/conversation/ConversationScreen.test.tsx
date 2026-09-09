@@ -3343,7 +3343,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).toContain(`>${COMPOSER_REPAIR_BUTTON_COPY}</button>`)
@@ -3361,7 +3362,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'server.binary_offline', message: 'offline', retryable: true }
         }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).toContain('composer-status__error')
@@ -3380,7 +3382,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
         }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).toContain('composer-status__error')
@@ -3420,7 +3423,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
         }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
@@ -3435,7 +3439,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).not.toContain('aria-label')
@@ -3451,7 +3456,8 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}} notice={null}
+        onRepair={() => {}}
+        notice={null}
       />
     )
     expect(markup).toContain('button-small')

@@ -37,6 +37,21 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // pinned in `usageLimitNotice.test.ts` against locally-constructed moments instead.
 const FAR_FUTURE_RESET = 4_102_444_800
 
+// The app's own documented minimum (src/main/index.ts's `minWidth`), and the width every geometry
+// assertion below is taken at — e2e/composer-footer-overflow.spec.ts's floor and its reason verbatim. The
+// LAUNCH width is where this row's overflow HIDES: the conversation pane is 640px there and the widest
+// notice this drive can produce is under 410, so a fit assertion taken at launch passes on a row that
+// spills 79px at the shipped minimum. The drive narrows TO the floor rather than past it, so
+// `setMinimumSize` is never called and there is nothing to restore.
+const NARROW_WIDTH_PX = 800
+const NARROW_HEIGHT_PX = 600
+
+// The turning brand mark's own width (Figma 112:3530's 14x15.97 vector, `.composer-status__icon`). The
+// status group holding LESS than this is the group annihilated rather than compressed — the failure mode
+// the shipped `flex: 0 0 auto` produced, where the notice took none of the squeeze, the group went to zero
+// and the row overflowed anyway.
+const BRAND_MARK_PX = 14
+
 // `truncated_fields: null` is a VALUE meaning nothing was cut, not an absence — the Go field has no
 // `omitempty`, so the key is always on the wire and `parseRateLimitedPayload` fails closed without it.
 function rateLimitedFrame(status: string, limitType: string, resetsAt: number): Uint8Array {
@@ -57,8 +72,10 @@ function rateLimitedFrame(status: string, limitType: string, resetsAt: number): 
 test('composer status row: the usage-limit notice warns, escalates and clears (AC5)', async ({
   launchPairedApp
 }) => {
-  const { page, daemon } = await launchPairedApp({})
+  const { page, app, daemon } = await launchPairedApp({})
 
+  const statusRow = page.locator('.composer-status')
+  const activity = page.locator('.composer-status__activity')
   const notice = page.locator('.composer-status__usage')
   const warning = page.locator('.composer-status__usage--warning')
   const exhausted = page.locator('.composer-status__usage--exhausted')
@@ -68,12 +85,20 @@ test('composer status row: the usage-limit notice warns, escalates and clears (A
   // rather than once at the end, so "the row does not move across the transition" is a comparison rather
   // than a single reading.
   const rowHeight = async (): Promise<number | undefined> =>
-    (await page.locator('.composer-status').boundingBox())?.height
+    (await statusRow.boundingBox())?.height
+
+  // How far past its own box the ROW's content reaches — the detector, and it is the row rather than
+  // `.conversation` deliberately. `.composer-status` is the box the occupants are laid out in, so it is
+  // where a non-shrinking occupant first spills; the pane reports the same number one level up only
+  // because nothing between them clips. Zero or less is the fix. A single scalar per checkpoint, so a poll
+  // cannot settle on a frame where one of two reads is stale.
+  const rowOverflowPx = (): Promise<number> =>
+    statusRow.evaluate((el) => el.scrollWidth - el.clientWidth)
 
   // The slot is empty at launch — the daemon emits only on a non-benign window, so most conversations
   // never carry a reading and this is the overwhelmingly common state. It is asserted AFTER a positive
   // wait on the row itself, so it cannot pass merely because the composer had not mounted yet.
-  await expect(page.locator('.composer-status')).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(statusRow).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(notice).toHaveCount(0)
 
   // --- AC2 through the wire. `allowed_warning` is the ONE non-benign status ever captured live
@@ -87,6 +112,44 @@ test('composer status row: the usage-limit notice warns, escalates and clears (A
   await expect(exhausted).toHaveCount(0)
   const warningRowHeight = await rowHeight()
 
+  // --- The row's geometry, AT THE APP'S OWN MINIMUM WINDOW and with the WIDEST reading this drive can
+  // produce up. Both halves of that are load-bearing. `allowed_warning` / `seven_day` is the single
+  // combination ever captured live (2026-08-22, claude 2.1.239), a seven-day window always resets on
+  // another local day so it always takes the formatter's long form, and that is this notice's longest
+  // string — measured wider than the exhausted arm's, because the warning lead is the longer of the two.
+  // At the 1100 launch width the conversation pane is 640 and that string fits with room to spare, so a
+  // fit assertion taken there is an assertion that cannot fail. ---
+  await app.evaluate(
+    ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+    { width: NARROW_WIDTH_PX, height: NARROW_HEIGHT_PX }
+  )
+
+  // The row's content is inside its box at the documented minimum. Every geometry read polls: layout
+  // settles a frame after the window does.
+  await expect.poll(() => rowOverflowPx()).toBeLessThanOrEqual(0)
+
+  // And it fits BY COMPRESSING, not because the copy turned out to be short — which is the whole of this
+  // block, since the assertion above is one of absence and a row holding nothing satisfies it perfectly.
+  // An ellipsized flex item is exactly what reports this. The notice's runs are ordered lead, window,
+  // reset, so the ellipsis eats the least important one first and the lead — the only run carrying the
+  // operator-facing fact — is the last thing to go.
+  expect(await notice.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+
+  // The status group is COMPRESSED AND NOT ANNIHILATED. This is the assertion the shipped `flex: 0 0 auto`
+  // failed: with the notice refusing every pixel of the squeeze, the group absorbed all of it, went to
+  // zero width — taking the turning mark and the activity label off the row entirely — and the row still
+  // overflowed. Sharing the squeeze is what leaves the mark drawable.
+  expect((await activity.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(BRAND_MARK_PX)
+
+  // The pane, one level up, therefore reports no horizontal overflow either. Kept beside the row's own
+  // number rather than in place of it: this is the operator-visible consequence, the row's is the cause.
+  expect(
+    await page.evaluate(() => {
+      const el = document.querySelector('.conversation')
+      return el === null ? null : el.scrollWidth - el.clientWidth
+    })
+  ).toBeLessThanOrEqual(0)
+
   // --- AC1 through the wire, and the step that makes the one before it falsifiable. `rejected` is the
   // one string that earns the exhausted wording, and a DIFFERENT window rides with it — so an
   // implementation that ignored either field, or that reused the first reading, shows the wrong pair
@@ -98,19 +161,19 @@ test('composer status row: the usage-limit notice warns, escalates and clears (A
   await expect(warning).toHaveCount(0)
   await expect(notice).toHaveCount(1)
 
-  // The row's own geometry, RE-MEASURED with this occupant up rather than carried over from #797's or
-  // #963's numbers — the discipline both their stylesheet comments set. The notice wears the chip's box
-  // on BOTH arms, differing only in colour, so the row reads 24 and does not move between them. Measured
-  // together with the no-horizontal-overflow check, which is what the row's truncation chain exists to
-  // guarantee against a hostile or merely buggy daemon.
+  // The row's HEIGHT, RE-MEASURED with this occupant up rather than carried over from #797's or #963's
+  // numbers — the discipline both their stylesheet comments set. The notice wears the chip's box on BOTH
+  // arms, differing only in colour, so the row reads 24 and does not move between them: the first reading
+  // was taken at the launch width on the warning arm, this one at the 800px floor on the exhausted arm, so
+  // the pair also states that compressing the row costs it no height. A wrapped or grown occupant would
+  // push the composer down, which is #963's AC3 from the other side.
   expect(warningRowHeight).toBe(24)
-  expect(await rowHeight()).toBe(warningRowHeight)
-  expect(
-    await page.evaluate(() => {
-      const el = document.querySelector('.conversation')
-      return el === null ? null : el.scrollWidth <= el.clientWidth
-    })
-  ).toBe(true)
+  expect(await rowHeight()).toBe(24)
+
+  // And the row still fits on this arm too. Its string is the shorter of the two, so this is the weaker of
+  // the two fit assertions and is kept for what it rules out rather than what it proves: a treatment swap
+  // that changed the box rather than only its colours.
+  await expect.poll(() => rowOverflowPx()).toBeLessThanOrEqual(0)
 
   // --- AC5's clear, driven end to end through the arm that has no other exit. `allowed` is the benign
   // status: it never reaches the store at all — `subscribeUsageLimit` routes it to `clearUsageLimitFor`
@@ -118,4 +181,12 @@ test('composer status row: the usage-limit notice warns, escalates and clears (A
   // closing absence a mutation check rather than a locator that was empty all launch.
   daemon.pushFrame(rateLimitedFrame('allowed', 'five_hour', FAR_FUTURE_RESET))
   await expect(notice).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // The shipped 800px floor is unchanged: this drive fits the row to the window rather than the window to
+  // the row, so a future edit that starts borrowing the minimum the way e2e/composer-options-clamp.spec.ts
+  // does would redden here rather than quietly widening the floor every measurement above is taken at.
+  const [minWidth] = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].getMinimumSize()
+  )
+  expect(minWidth).toBe(NARROW_WIDTH_PX)
 })

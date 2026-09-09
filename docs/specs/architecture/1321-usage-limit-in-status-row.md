@@ -332,7 +332,8 @@ and are pinned in vitest instead.
   The design states the no-timer property and the expiry is one comparison at render. The copy function
   is O(1) with two `Map` lookups and no loop. A flooding hostile relay costs one bounded store entry per
   distinct conversation id, unchanged by this slice, and re-renders one leaf component.
-- **[Layout as a remote-triggered hazard] No findings.** The row's truncation chain is the standing
+- **[Layout as a remote-triggered hazard] No findings.** *(THIS FINDING WAS WRONG. Corrected under
+  Revisions, 2026-09-09 rework leg; kept as written for the audit trail.)* The row's truncation chain is the standing
   hostile-daemon concern here (`.composer-status__label--tool` records it), and this occupant cannot
   invert it: the new block is `flex: 0 0 auto` like both existing occupants, so the activity group
   absorbs the squeeze, and every run in the notice is a client-owned constant or a bounded formatted
@@ -392,3 +393,54 @@ Neither changes a contract stated above.
    chip's colours, and the notice needs no `position: relative` because it has no hidden prefix to
    contain), so lifting would couple them for six declarations and let a later change to the chip move
    the notice. The stylesheet comment records the departure from `.button-small`'s extraction precedent.
+
+**2026-09-09, rework leg — verifier findings on PR #1325.** The copy, the treatments, the untrusted-text
+discipline and the precedence are unchanged; every correction below is geometry, and the first one is a
+retraction rather than a refinement.
+
+4. **The Security review's "[Layout as a remote-triggered hazard] No findings" was wrong, and this entry
+   is its correction.** That paragraph cleared the row on two claims. The first, "the activity group
+   absorbs the squeeze", is true only up to the point the group reaches zero; the second, "no daemon-length
+   string enters the row through this path, so `white-space: nowrap` cannot be blown out", is true and
+   irrelevant, because it weighs only the length the daemon controls and never weighs THE CLIENT'S OWN
+   COPY, which is what actually overflowed. The corrected finding:
+
+   **[Layout as a remote-triggered hazard] MUST FIX — fixed in this leg.** The notice's longest string is
+   404px. The row holds 316px of content at the app's own documented minimum window (`createWindow`'s
+   `minWidth: 800`, a 340px conversation pane less `--space-3` twice). Shipped as `flex: 0 0 auto` with
+   `white-space: nowrap` it neither wrapped nor shrank, so the activity group absorbed the whole squeeze,
+   went to zero width — taking the turning brand mark and the activity label off the row entirely — and the
+   row then spilled 79px past the pane. It IS remotely triggered in the sense the section claimed to have
+   cleared: the daemon chooses which arm renders, and the widest arm is `allowed_warning` on a seven-day
+   window, which is the single combination ever captured live and which always resets on another local day
+   and so always takes the formatter's long form. The other ten findings in that review stand as written.
+
+5. **The notice shrinks and ellipsizes; the activity group gains a floor.** Two stylesheet changes, and
+   both are departures from what the Design section assumed. `.composer-status__usage` becomes
+   `flex: 0 1 auto` with `min-width: 0` and an `overflow`/`text-overflow` chain, which makes "the row does
+   not overflow" true BY CONSTRUCTION for any copy length rather than by the copy happening to be short.
+   That gives up nothing the neighbours' `flex: 0 0 auto` was protecting: flex distributes shrink in
+   proportion to base size, so an oversized daemon tool name still takes essentially all of it and still
+   ellipsizes in the label. `.composer-status__activity`'s `min-width` rises from `0` to the brand mark's
+   box plus its gap, because proportional shrink alone still left the group at 10px under a 14px mark that
+   then painted beneath the notice. The floor is inert for #797's and #963's occupants, which are 155px and
+   less. The runs' order — lead, window, reset — is what makes the clip graceful: the lead is the last
+   thing to go.
+
+6. **Revision 2's geometry numbers are superseded, and so is the claim in `.composer-status__usage`'s own
+   comment that `.conversation` reported no overflow.** Both were measured at the 1100px launch width,
+   where the pane is 640px and every string this element can hold fits it — a fit that could not fail, and
+   therefore no evidence at all. Re-measured at 800x600: the row reads 340x24 with `scrollWidth` equal to
+   `clientWidth` and so does `.conversation`; the 316px divides as 22 to the activity group and 294 to the
+   notice, whose `scrollWidth` is 404, so it fits by compressing with 110px clipped; the row reads 24 on
+   the warning arm at the launch width and 24 on the exhausted arm at 800. The e2e spec now takes every
+   geometry assertion at the floor, against the row rather than the pane, and asserts the compression and
+   the surviving group — `e2e/composer-footer-overflow.spec.ts`'s shape, which exists because a composer
+   row overflowed at exactly this width.
+
+7. **`ComposerErrorSlot`'s header comment moved and was corrected.** It had been left above
+   `ComposerUsageLimitNotice`, so it read as that view's documentation, and two of its claims were
+   falsified by this ticket: the arms are four rather than three, and only the `error` arm delegates to
+   `ComposerErrorChip`. Also corrected: `USAGE_LIMIT_EXHAUSTED_COPY`'s docblock claimed the two leads share
+   no substring, where they share the words "usage limit"; the property the e2e actually relies on is that
+   neither lead is a substring of the other.

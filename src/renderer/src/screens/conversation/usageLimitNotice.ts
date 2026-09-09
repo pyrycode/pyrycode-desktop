@@ -31,9 +31,10 @@ import type { UsageLimitReading } from '../../store/usageLimitStore'
  * the one status that means it.
  *
  * Client-owned and exported so the tests and the sibling constant below can be compared without
- * re-typing the characters, in `COMPOSER_ERROR_CHIP_COPY`'s posture one module over. It shares no
- * substring with the warning lead, which is what lets an e2e locator tell the two arms apart by text
- * alone.
+ * re-typing the characters, in `COMPOSER_ERROR_CHIP_COPY`'s posture one module over. The two leads SHARE
+ * THE WORDS "usage limit" and neither is a SUBSTRING of the other, which is the property an e2e
+ * `toContainText` on either lead relies on: a containment locator tells the arms apart only if the shorter
+ * string cannot be found inside the longer one, and shared words in the middle are harmless to that.
  */
 export const USAGE_LIMIT_EXHAUSTED_COPY = 'Usage limit reached'
 

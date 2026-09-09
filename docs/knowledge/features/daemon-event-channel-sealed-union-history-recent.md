@@ -266,13 +266,17 @@ the combined list again exceeded the size cap.
   "you are blocked" from this arm alone would mislead the operator. Nothing decoded reaches a log on any
   path: `emitDaemonEvent` is log-free by construction and #1318's decode-side log line is pinned
   content-free; together `status`/`limitType` disclose the account's quota posture, a fact about the
-  operator rather than about the frame. Consumed as a **permanent** no-op by three of the four exhaustive
-  bridges (`daemonEventBridge`, `modalBridge`, `questionBridge`) — none of the three will ever own this
-  arm — and a **dormant** no-op by the fourth (`timelineBridge`), the `thinkingProgress` posture exactly.
-  Whether [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) claims it through
-  `timelineBridge` (the `apiRetry`/`compacting`/`thinkingProgress` route) or through a fifth independent
-  subscriber (the `questionShown`/`slashCommandList` route) is that slice's call, not this carry slice's
-  — what is settled here is only that nothing draws it yet.
+  operator rather than about the frame. Consumed as a **permanent** no-op by all four exhaustive bridges
+  (`daemonEventBridge`, `modalBridge`, `questionBridge`, `timelineBridge`) — none of the four will ever
+  own this arm.
+  [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) settled the routing question this
+  paragraph used to leave open: the reading goes to a **fifth independent subscriber**
+  (`usageLimitBridge` → [usage-limit store](usage-limit-store.md)), the `questionShown`/`slashCommandList`
+  route, not through `timelineBridge` the way `apiRetry`/`compacting`/`thinkingProgress` each eventually
+  went. The deciding fact was lifetime rather than layout: a usage-limit window is conversation-scoped and
+  outlives a turn end, a `/clear` and a session transition, so state a turn rebuilds would drop it at the
+  wrong moment and cost every reducer arm an extra field to carry. `timelineBridge`'s `rateLimited` case
+  now exists only so its `assertNever` guard makes a new arm a compile error.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

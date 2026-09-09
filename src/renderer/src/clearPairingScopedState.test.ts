@@ -39,6 +39,7 @@ import {
   createConversationActivityStore,
   selectActivityFor
 } from './store/conversationActivityStore'
+import { createUsageLimitStore, selectUsageLimitFor } from './store/usageLimitStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   BackgroundTask,
@@ -105,6 +106,7 @@ function spyDeps(): {
   clearAllRosters: ReturnType<typeof vi.fn>
   dispatchModal: ReturnType<typeof vi.fn>
   clearAllActivity: ReturnType<typeof vi.fn>
+  clearAllUsageLimits: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -120,6 +122,7 @@ function spyDeps(): {
   const clearAllRosters = vi.fn()
   const dispatchModal = vi.fn()
   const clearAllActivity = vi.fn()
+  const clearAllUsageLimits = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -136,6 +139,7 @@ function spyDeps(): {
       clearAllRosters,
       dispatchModal,
       clearAllActivity,
+      clearAllUsageLimits,
       dispatchSession,
       clearAllLastRead
     },
@@ -151,6 +155,7 @@ function spyDeps(): {
     clearAllRosters,
     dispatchModal,
     clearAllActivity,
+    clearAllUsageLimits,
     dispatchSession,
     clearAllLastRead
   }
@@ -177,7 +182,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all fourteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all fifteen clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -192,6 +197,7 @@ describe('clearPairingScopedState', () => {
       clearAllRosters,
       dispatchModal,
       clearAllActivity,
+      clearAllUsageLimits,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -248,6 +254,12 @@ describe('clearPairingScopedState', () => {
     // are daemon-side conversation ids, and a re-pair to the SAME box reuses them, so an id-taking
     // clear would let the departing daemon choose which of its own dots outlive the pairing.
     expect(clearAllActivity).toHaveBeenCalledWith()
+    expect(clearAllUsageLimits).toHaveBeenCalledTimes(1)
+    // #1320, the same nullary property as the seven whole-map clears above. What the ids it declines to
+    // take would steer here is which ACCOUNT'S quota posture survives the boundary: a reading held after
+    // the pairing ends is attributed to the newly paired daemon's account, and nothing writes the map
+    // until that daemon's own next reading arrives.
+    expect(clearAllUsageLimits).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -257,13 +269,13 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these fourteen stores', () => {
+  it('the pairing-scoped set is exactly these fifteen stores', () => {
     // The tripwire the whole design rests on: this interface IS the enumeration of what "the pairing
-    // ended" means, so a FIFTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
+    // ended" means, so a SIXTEENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails
     // to compile here until it is added to the literal, and then fails this assertion until it is also
     // asserted called above — rather than being silently declared and never invoked. #779 was the
     // seventh, #955 the eighth, #977 the ninth, #1086 the tenth, #1138 the eleventh, #1139 the
-    // twelfth, #1140 the thirteenth and #1145 the fourteenth, and each
+    // twelfth, #1140 the thirteenth, #1145 the fourteenth and #1320 the fifteenth, and each
     // updated this pin, which is the intended cost of adding one; loosening it is not.
     //
     // The pin's stated MOTIVE has changed even though its value has not. It read as a guard against
@@ -285,6 +297,7 @@ describe('clearPairingScopedState', () => {
       'clearAllRosters',
       'clearAllSlashCommandLists',
       'clearAllTimelines',
+      'clearAllUsageLimits',
       'clearAnnouncedModel',
       'clearSessionId',
       'dispatchModal',
@@ -372,6 +385,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(clearAllActivity.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the usage-limit clear runs BEFORE the one effect that can throw (#1320)', () => {
+    // The same constraint a sixth time. `clearAllLastRead` is the only effect here that reaches outside
+    // memory (`localStorage`) and so the only one that can throw; placed last, a throw from it aborts
+    // nothing. Placed BEFORE the usage-limit clear, such a throw would abort it — leaving the departed
+    // ACCOUNT's quota posture held, and this store's residue is re-asserted by nothing at all: the
+    // daemon pushes a reading only when a window is non-benign, there is no request half, and a
+    // `resetsAt: 0` reading never expires, so it would latch until an `allowed` arrives that the daemon
+    // does not currently send.
+    const { deps, clearAllUsageLimits, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(clearAllUsageLimits.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -873,6 +903,65 @@ describe('clearPairingScopedState', () => {
     expect(selectActivityFor('c-listed')(activity.getState())).toBeNull()
     expect(selectActivityFor('c-unlisted')(activity.getState())).toBeNull()
   })
+
+  it('real stores: no usage-limit reading from the ended pairing is readable, and neither the expiry nor an allowed reading would have collected them (#1320 AC4)', () => {
+    const usageLimits = createUsageLimitStore()
+    // The reading that latches hardest: `resetsAt: 0` means claude reported NO reset, so the expiry
+    // never collects it and only an `allowed` reading or this clear can.
+    usageLimits.getState().setUsageLimit({
+      conversationId: 'c-never-expires',
+      status: 'allowed_warning',
+      limitType: 'seven_day',
+      resetsAt: 0
+    })
+    // A dated one, still well inside its window at the instant read below.
+    usageLimits.getState().setUsageLimit({
+      conversationId: 'c-dated',
+      status: 'allowed_warning',
+      limitType: 'five_hour',
+      resetsAt: 1_800_000_000
+    })
+
+    // FIRST, the half that makes this store's membership necessary rather than defensive: neither of
+    // this store's own two exits reaches these readings. The expiry is a read-time comparison and the
+    // `resetsAt: 0` entry has no instant to expire at, so it is readable at every clock value; and the
+    // `allowed` clear is per-conversation and daemon-driven, so it collects nothing on a pairing that
+    // has ended and whose daemon will never speak again.
+    expect(selectUsageLimitFor('c-never-expires', Number.MAX_SAFE_INTEGER)(usageLimits.getState()))
+      .not.toBeNull()
+    expect(selectUsageLimitFor('c-dated', 1_700_000_000)(usageLimits.getState())).not.toBeNull()
+
+    clearPairingScopedState(
+      realDeps(
+        createTimelineStore(),
+        createConversationTimelineStore(),
+        createSessionIdStore(),
+        createAnnouncedModelStore(),
+        createActiveConversationStore(),
+        createSessionStore(),
+        createConversationLastReadStore(),
+        createSlashCommandListStore(),
+        createModelListStore(),
+        createConversationListStore(),
+        createQueueStore(),
+        createBackgroundTaskRosterStore(),
+        createModalStore(),
+        createConversationActivityStore(),
+        usageLimits
+      )
+    )
+
+    // SECOND, the half this ticket adds. Nothing re-asserts a reading on a new pairing — the daemon
+    // pushes one only when a window is non-benign and there is no request half to ask for one — so
+    // without this clear the PREVIOUS ACCOUNT'S quota posture would be attributed to the newly paired
+    // daemon, under conversation ids a re-pair to the same box reuses. Each entry reads back as ABSENT
+    // rather than as an observed-benign one, so #1321's status row draws nothing at all.
+    expect(usageLimits.getState().readings.size).toBe(0)
+    expect(
+      selectUsageLimitFor('c-never-expires', Number.MAX_SAFE_INTEGER)(usageLimits.getState())
+    ).toBeNull()
+    expect(selectUsageLimitFor('c-dated', 1_700_000_000)(usageLimits.getState())).toBeNull()
+  })
 })
 
 function realDeps(
@@ -895,7 +984,9 @@ function realDeps(
   // #1140's thirteenth, defaulted for the same reason.
   modals: ReturnType<typeof createModalStore> = createModalStore(),
   // #1145's fourteenth, defaulted for the same reason.
-  activity: ReturnType<typeof createConversationActivityStore> = createConversationActivityStore()
+  activity: ReturnType<typeof createConversationActivityStore> = createConversationActivityStore(),
+  // #1320's fifteenth, defaulted for the same reason.
+  usageLimits: ReturnType<typeof createUsageLimitStore> = createUsageLimitStore()
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -910,6 +1001,7 @@ function realDeps(
     clearAllRosters: () => rosters.getState().clearAllRosters(),
     dispatchModal: (event) => modals.getState().dispatch(event),
     clearAllActivity: () => activity.getState().clearAllActivity(),
+    clearAllUsageLimits: () => usageLimits.getState().clearAllUsageLimits(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

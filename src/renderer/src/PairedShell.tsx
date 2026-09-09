@@ -50,6 +50,7 @@ import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
 import { timelineStore } from './store/timelineStore'
+import { usageLimitStore } from './store/usageLimitStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -240,6 +241,16 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // dot would sit on a sidebar row indefinitely. Adding it to THIS object is what makes the unpair
   // path below drop it; the call site needed no edit.
   clearAllActivity: () => conversationActivityStore.getState().clearAllActivity(),
+  // #1320: every conversation's held usage-limit reading, dropped as one — the same direct, nullary
+  // shape as the seven setters above, and the FIRST member whose store the `connected` edge does NOT
+  // clear and must not: after a reconnect to the same daemon the account's quota window is exactly what
+  // it was, and there is no request half that could re-fetch a value blanked at that edge. The store's
+  // own two exits cannot cover this boundary either — the expiry has no instant to fire at for a reading
+  // claude reported no reset for, and the per-conversation `allowed` clear is daemon-driven — so without
+  // this entry a departed ACCOUNT's quota posture would latch for the life of the process and be
+  // attributed to the newly paired one. Adding it to THIS object is what makes the unpair path below
+  // drop it; the call site needed no edit.
+  clearAllUsageLimits: () => usageLimitStore.getState().clearAllUsageLimits(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through
@@ -504,7 +515,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // replaces, and the container still subscribes to no store and stays server-renderable.
   //
   // `clearPairingScopedState` is nullary HERE: `applyPairingChange` decides whether a change clears,
-  // never what the clear contains, so `clearPairingDeps` stays module-scope above and the fourteen
+  // never what the clear contains, so `clearPairingDeps` stays module-scope above and the fifteen
   // stores stay behind the helper that enumerates and tests them.
   const pairingChangeDeps: PairingChangeDeps = {
     clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),

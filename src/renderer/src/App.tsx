@@ -19,6 +19,7 @@ import { SlashCommandListData } from './store/slashCommandListBridge'
 import { ModelListData } from './store/modelListBridge'
 import { SystemPromptData } from './store/systemPromptBridge'
 import { SystemPromptWriteData } from './store/systemPromptWriteBridge'
+import { UsageLimitData } from './store/usageLimitBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -278,6 +279,19 @@ function App(): JSX.Element {
   // from the editor surface, the only place the value to write is known, never from this mount, and it
   // is never a retry. Its conversation-lifetime clear is the shared `clearRunConfig` dep member's, not
   // this leaf's. Ships dormant.
+  // UsageLimitData (#1320) is the FOURTEENTH headless leaf: it lands each unsolicited `rateLimited`
+  // reading into the per-conversation usage-limit store for the composer status row (#1321), and routes
+  // an `allowed` one to that store's per-conversation clear instead. Same App-level always-listening
+  // rationale as the pushed frames above, sharpened by WHAT the daemon scopes: the frame names whichever
+  // conversation OBSERVED the account's usage window, which may well be one the operator has never
+  // opened, and a reading can arrive long before #1321's row is mounted — a screen-scoped listener would
+  // miss exactly that. Reactive-only, no gate, and no request half at all: the reading is pushed, never
+  // asked for, and a client-side retry against a relay withholding the frame would be a self-inflicted
+  // spin. Ships dormant. Like AnnouncedModelData and unlike BackgroundTaskRosterData it has no
+  // `connected` branch, and here that is load-bearing rather than incidental: after a reconnect to the
+  // same daemon the account's quota window is exactly what it was, and with no request half a value
+  // blanked at that edge could never be re-fetched. Its pairing-scoped clear is
+  // clearPairingScopedState's (#1320's fifteenth member), not this leaf's.
   return (
     <>
       <ConversationListData />
@@ -293,6 +307,7 @@ function App(): JSX.Element {
       <ModelListData />
       <SystemPromptData />
       <SystemPromptWriteData />
+      <UsageLimitData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

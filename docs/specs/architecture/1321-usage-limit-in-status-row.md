@@ -370,3 +370,25 @@ and are pinned in vitest instead.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-09
+
+## Revisions
+
+**2026-09-09, during implementation.** Both open questions resolved, and one design detail sharpened.
+Neither changes a contract stated above.
+
+1. **The notice shows only on the `connected` arm** — question 1, resolved as the design proposed and now
+   pinned by two `ComposerErrorSlot` cases asserting the exact empty string while disconnected and while
+   connecting, alongside the two that assert it yields to each existing occupant.
+2. **The warning arm is colour only, with no fill** — question 2, resolved as proposed. Confirmed in the
+   running window through the Playwright tier rather than by eye: the row measures 24 tall with the notice
+   in the slot, identical to the chip's, and does not move between the two arms, and `.conversation`
+   reports no horizontal overflow. Those numbers are now in `.composer-status__usage`'s own comment and
+   are asserted in `e2e/composer-usage-limit.spec.ts`. The colour distinction itself rests on the token
+   values — amber `--color-warning` text against the row's ground versus the filled `--color-error-container`
+   pair — and not on a visual inspection, which this tier cannot perform.
+3. **`.composer-status__usage` is its own block rather than a geometry shared with `.composer-status__error`.**
+   The plan said the notice "wears the chip's geometry" without saying whether that meant a lifted rule.
+   It does not: the two occupants differ in what they draw on every arm (the warning takes neither of the
+   chip's colours, and the notice needs no `position: relative` because it has no hidden prefix to
+   contain), so lifting would couple them for six declarations and let a later change to the chip move
+   the notice. The stylesheet comment records the departure from `.button-small`'s extraction precedent.

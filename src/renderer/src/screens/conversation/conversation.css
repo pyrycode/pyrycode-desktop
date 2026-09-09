@@ -1616,6 +1616,73 @@
   border: 0;
 }
 
+/* #1321 — the usage-limit notice, the slot's THIRD occupant and its lowest-priority one. It carries no
+   action, so it wears the CHIP's box (Figma 112:3529) rather than #963's `Button small`: 8px/4px insets
+   around a 16px line, the same 6px corner, body/small. No width and no height declaration, for
+   .composer-status__error's two recorded reasons — the Figma's own width is content plus insets, and
+   under this repo's absent box-sizing reset a `height: 24px` beside `padding: 4px 0` would render a 32px
+   box in a row the notice must not grow.
+
+   ITS OWN BLOCK RATHER THAN A SHARED GEOMETRY LIFTED OUT OF .composer-status__error, and that is a
+   deliberate departure from the "One consumer is not a pattern" trigger .button-small followed one
+   ticket ago. That extraction was possible because #963's button WANTED every declaration of the rule it
+   lifted from. This occupant does not: it takes the chip's box but neither of its colours on one arm and
+   neither on the other, it has no `position: relative` because it has no absolutely-positioned hidden
+   prefix to contain, and #797's chip is reached by e2e locators and by its own describe. Sharing here
+   would couple two occupants that differ in what they draw for the sake of six declarations, and a later
+   change to the chip would silently move the notice.
+
+   flex: 0 0 auto is REQUIRED, not decorative, exactly as it is on both neighbours: .composer-status__
+   activity is flex: 1 1 auto; min-width: 0, so without it an oversized daemon tool name in the label
+   would squeeze THIS instead of ellipsizing the label — inverting the row's truncation chain, and
+   remotely triggerable by a hostile or merely buggy daemon. With it the chain still terminates in the
+   label.
+
+   white-space: nowrap is safe here in a way it would not be for daemon text: every run this element can
+   hold is a client-owned constant or a bounded formatted instant (`usageLimitNotice` renders neither
+   `status` nor `limitType`), so there is no unbounded string to blow the row out. That is
+   .composer__context's ruling, and it is why this occupant needs no ellipsis chain of its own.
+
+   RE-MEASURED WITH THE NOTICE UP, the way #797 measured with the chip and #963 with the button, and NOT
+   carried over from either's numbers: headless Chromium, this row's markup, both stylesheets, the
+   fixture's paired shell. .composer-status reads 24 with the notice in the slot — the same 24 the chip
+   produces, and unmoved between the warning and the exhausted arm, which is what the identical geometry
+   on both modifiers buys — and .conversation reports a scrollWidth equal to its clientWidth, i.e. no
+   horizontal overflow. Both are pinned in e2e/composer-usage-limit.spec.ts rather than left as a claim
+   here, because no vitest detector in this repo can read a resolved style. */
+.composer-status__usage {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: nowrap;
+}
+
+/* The exhausted arm — the one reading that means the operator is actually blocked, so it takes the error
+   PAIR by token name, the chip's own treatment. Never the export's #ffdad6/#ba1a1a, which are the light
+   scheme (the standing rule .composer-status and .status-row already record). */
+.composer-status__usage--exhausted {
+  background: var(--color-error-container);
+  color: var(--color-error);
+}
+
+/* The warning arm, and AC2's "visually distinct from the exhausted one". A DEPARTURE from a literal reuse
+   of #797's chip, and the reason is the copy's: that chip's fill is --color-error-container, so drawing a
+   band in which every turn still runs in it would repeat IN COLOUR exactly the overclaim the two leads
+   are careful to avoid. --color-warning already exists for this attention-not-failure role (it carries
+   the in-progress connection dot), so no new token and no new Figma node.
+
+   COLOUR ALONE, WITH NO FILL, and that is a choice rather than an omission: there is no
+   --color-warning-container token, inventing one would be a design decision this ticket has no mandate
+   for, and amber text against the row's own ground is already unmistakable beside a filled dark-red
+   chip. Geometry is identical on both arms, so the row's height cannot move across the transition. */
+.composer-status__usage--warning {
+  color: var(--color-warning);
+}
+
 /* #963 — the design's `Button small` (component set 347:6645), extracted as a shared treatment on its
    SECOND consumer. The question panel's three action buttons shipped these exact declarations as one
    three-selector rule; this ticket's actionable-error button wants every one of them, so the common half

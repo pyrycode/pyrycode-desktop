@@ -36,6 +36,12 @@ import {
   selectActiveConversation
 } from '../../store/activeConversationStore'
 import {
+  useUsageLimitStore,
+  selectUsageLimitFor,
+  type UsageLimitReading
+} from '../../store/usageLimitStore'
+import { usageLimitNotice } from './usageLimitNotice'
+import {
   initialTimelineState,
   type ThreadItem,
   type TimelineState,
@@ -3635,12 +3641,59 @@ export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX
 //
 // No separate ComposerRepairButton component. Its only job would be to be rendered unconditionally by its
 // single caller — a name and a test surface for no decision.
+// #1321: the notice — claude's usage-window reading, drawn in the slot's LOWEST-PRIORITY arm. The pure,
+// exported view; `usageLimitNotice` owns every character it renders and every decision it makes.
+//
+// PROPS, NOT A STORE READ — the ComposerErrorChip / ConnectionBanner discipline, and here it is the only
+// way the matrix is assertable at all: zustand v5's useStore reads getInitialState() under
+// renderToStaticMarkup, so a container test can reach exactly one arm. `nowSeconds` is INJECTED for the
+// same reason and in the same unit as `selectUsageLimitFor`'s, which makes the markup a pure function of
+// the reading and the instant, exactly as this repo's node-environment specs need.
+//
+// NO DAEMON-AUTHORED STRING REACHES THIS DOM, and that is structural rather than conventional: the only
+// value rendered is `notice.text`, which `usageLimitNotice` composes from client-owned constants plus a
+// formatted instant, and the only value in an attribute is a class picked by an EXPLICIT TWO-WAY
+// CONDITIONAL over the client-owned `treatment` union. Interpolating the treatment into a template would
+// work today and would be one edit away from putting an untrusted string in `className`; the two literals
+// are also what a grep for either class finds. Do not "simplify" this into a template.
+//
+// A <div>, not a <p>, for ComposerErrorChip's recorded reason: this repo ships no global box-sizing or
+// margin reset, so a <p>'s UA margin is a live layout hazard in a row whose height is its occupant's.
+//
+// NO LIVE REGION, on the chip's ruling — the row is not a place to queue announcements. And NO
+// visually-hidden prefix, where the chip needs one: that prefix exists because "Host connection down!"
+// does not say it is an error, whereas both leads here say what they are in plain words, so the visible
+// text is already the accessible name.
+export function ComposerUsageLimitNotice({
+  reading,
+  nowSeconds
+}: {
+  reading: UsageLimitReading | null
+  nowSeconds: number
+}): JSX.Element | null {
+  if (reading === null) return null
+  const notice = usageLimitNotice(reading, nowSeconds)
+  return (
+    <div
+      className={
+        notice.treatment === 'exhausted'
+          ? 'composer-status__usage composer-status__usage--exhausted'
+          : 'composer-status__usage composer-status__usage--warning'
+      }
+    >
+      {notice.text}
+    </div>
+  )
+}
+
 export function ComposerErrorSlot({
   status,
-  onRepair
+  onRepair,
+  notice
 }: {
   status: ConnectionStatus
   onRepair: () => void
+  notice: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -3649,7 +3702,23 @@ export function ComposerErrorSlot({
       </button>
     )
   }
-  return <ComposerErrorChip status={status} />
+  // #1321 SPLIT THIS ARM IN TWO, and the split is what makes AC4 structural. Through #963 the delegate
+  // covered all four connection arms at once, because ComposerErrorChip's own guard returns null on three
+  // of them. With a third occupant below, the `error` discriminant has to be asked HERE, or the notice
+  // would render beside the chip instead of behind it. #797's view, its treatment and its tests are
+  // untouched: this reaches it on exactly the arm it already showed on.
+  if (status.type === 'error') return <ComposerErrorChip status={status} />
+  // The notice fills the slot ONLY WHILE THE CONNECTION IS HEALTHY, which is stricter than AC4's "with a
+  // connection error live" and deliberately so. A connection error — actionable or not — is the more
+  // urgent fact and makes a quota reading stale anyway; the same is true while disconnected or
+  // connecting, where #279's banner is up saying so, and a quota claim beside it would contradict it.
+  //
+  // `notice` is a ReactNode-shaped prop rather than the reading itself — ComposerStatusArea's own
+  // `trailing` seam one level down. This view stays a slot that knows its occupants' PRIORITY and nothing
+  // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
+  // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
+  // rule that an optional prop is the silent-omission hole a type cannot catch.
+  return status.type === 'connected' ? notice : null
 }
 
 // The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
@@ -3704,6 +3773,27 @@ function ComposerErrorSlotControl({
 }): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   const dispatch = useSessionStore((s) => s.dispatch)
+  // #1321: the usage-limit reading for the conversation ON SCREEN, plus the instant it is read at. Two
+  // more narrow-slice subscriptions on the control that already owns this slot, rather than a fourth
+  // container mounted beside it — the slot holds one occupant at a time, so the priority has to be
+  // decided in one place, and that place is the view below.
+  //
+  // THE CLOCK IS READ AT RENDER AND NOTHING IS SCHEDULED FROM `resetsAt`. Expiry is the one comparison
+  // inside `selectUsageLimitFor`, so an expired reading leaves the row on the next render rather than on
+  // a tick; a timer driven off the number would fire immediately whether it were negative or past
+  // setTimeout's clamp. `Math.floor(Date.now() / 1000)` is UNIX SECONDS, which is the unit that selector
+  // documents and the unit `usageLimitNotice` takes — a millisecond value would expire every reading on
+  // arrival with no type error and no symptom beyond "nothing ever shows".
+  //
+  // A fresh selector identity each render is deliberate and costs a re-subscribe, never a loop:
+  // `selectUsageLimitFor` returns the HELD RECORD ITSELF or `null`, both stable references, so
+  // useSyncExternalStore's Object.is check short-circuits — including when another conversation's write
+  // produces a new map holding the same record.
+  const open = useActiveConversationStore(selectActiveConversation)
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const usageLimit = useUsageLimitStore(
+    open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
+  )
 
   const handleRepair = (): void => {
     const open = selectActiveConversation(activeConversationStore.getState())
@@ -3736,8 +3826,20 @@ function ComposerErrorSlotControl({
     )
   }
 
-  return <ComposerErrorSlot status={status} onRepair={handleRepair} />
+  return (
+    <ComposerErrorSlot
+      status={status}
+      onRepair={handleRepair}
+      notice={<ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />}
+    />
+  )
 }
+
+// #1321: the selector for "no conversation is open", hoisted to module scope so its identity is STABLE.
+// Built inline it would be a fresh function every render on that arm, which useSyncExternalStore answers
+// with a re-subscribe per render for a value that is always the same `null`. Typed against the state-only
+// interface, exactly as `selectUsageLimitFor`'s return is.
+const NO_USAGE_LIMIT_READING = (): UsageLimitReading | null => null
 
 // #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
 // "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —

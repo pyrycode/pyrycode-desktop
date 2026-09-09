@@ -23,6 +23,7 @@ import {
   shouldShowThinking,
   StatusSheet,
   ComposerErrorSlot,
+  ComposerUsageLimitNotice,
   ConnectionBanner,
   ComposerErrorChip,
   ContextUsageReading,
@@ -49,6 +50,12 @@ import {
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
+import {
+  USAGE_LIMIT_EXHAUSTED_COPY,
+  USAGE_LIMIT_WARNING_COPY
+} from './usageLimitNotice'
+import type { UsageLimitReading } from '../../store/usageLimitStore'
+import type { ConnectionStatus } from '../../store/sessionStore'
 import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
@@ -3336,7 +3343,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).toContain(`>${COMPOSER_REPAIR_BUTTON_COPY}</button>`)
@@ -3354,7 +3361,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'server.binary_offline', message: 'offline', retryable: true }
         }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).toContain('composer-status__error')
@@ -3373,7 +3380,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
         }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).toContain('composer-status__error')
@@ -3385,19 +3392,19 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
   // rendered-but-empty wrapper.
   it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'disconnected' }} onRepair={() => {}} />)
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'disconnected' }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
   it('renders nothing at all while connecting — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connecting' }} onRepair={() => {}} />)
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connecting' }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
   it('renders nothing at all while connected — not an empty element (AC1)', () => {
     expect(
-      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} />)
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />)
     ).toBe('')
   })
 
@@ -3413,7 +3420,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
           type: 'error',
           error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
         }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
@@ -3428,7 +3435,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).not.toContain('aria-label')
@@ -3444,7 +3451,7 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     const markup = renderToStaticMarkup(
       <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        onRepair={() => {}}
+        onRepair={() => {}} notice={null}
       />
     )
     expect(markup).toContain('button-small')
@@ -3453,6 +3460,160 @@ describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
     // requires and keyboard activation all come from the element, not from the class.
     expect(markup).toContain('<button')
     expect(markup).toContain('type="button"')
+  })
+
+  // #1321's AC4 — the precedence, proven with a SENTINEL rather than with a real notice, so this block
+  // asserts the slot's ordering and nothing about the notice's own markup (which its own describe owns).
+  // Every arm is written in BOTH directions, the #963 rule above: a slot that rendered both occupants
+  // would pass a one-directional check.
+  describe('the usage-limit notice is the lowest-priority occupant (#1321 AC4)', () => {
+    const sentinel = <p>USAGE_NOTICE_SENTINEL</p>
+
+    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot
+          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+          onRepair={() => {}}
+          notice={sentinel}
+        />
+      )
+      expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
+      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
+    })
+
+    it('yields to the connection-error chip on a retryable daemon error', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot
+          status={{
+            type: 'error',
+            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
+          }}
+          onRepair={() => {}}
+          notice={sentinel}
+        />
+      )
+      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
+    })
+
+    // The notice fills the slot only while the connection is HEALTHY. `disconnected` and `connecting`
+    // are stricter than AC4 asks for and deliberately so: #279's banner is up on both, and a quota
+    // claim beside it would contradict the more urgent fact.
+    it.each([
+      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
+      ['connecting', { type: 'connecting' } as ConnectionStatus]
+    ])('renders nothing at all while %s — not the notice, not an empty element', (_label, status) => {
+      expect(
+        renderToStaticMarkup(
+          <ComposerErrorSlot status={status} onRepair={() => {}} notice={sentinel} />
+        )
+      ).toBe('')
+    })
+
+    it('renders the notice, and only the notice, while connected', () => {
+      const markup = renderToStaticMarkup(
+        <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={sentinel} />
+      )
+      expect(markup).toBe('<p>USAGE_NOTICE_SENTINEL</p>')
+    })
+
+    // The empty half: a connected slot with no reading renders nothing at all, which is what keeps the
+    // row's geometry identical to its pre-#1321 shape in the overwhelmingly common case.
+    it('renders nothing at all while connected with no notice to draw', () => {
+      expect(
+        renderToStaticMarkup(
+          <ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} notice={null} />
+        )
+      ).toBe('')
+    })
+  })
+})
+
+// #1321: the notice's own pure view. Injected reading + injected instant, which is the only shape a
+// static server render can prove in this repo — and `usageLimitNotice.test.ts` owns the copy itself, so
+// this block asserts only what is a property of the MARKUP.
+describe('ComposerUsageLimitNotice — the usage-limit reading in the status row (#1321)', () => {
+  const NOW = Math.floor(new Date(2026, 8, 9, 13, 55, 0, 0).getTime() / 1000)
+
+  const reading = (over: Partial<UsageLimitReading>): UsageLimitReading => ({
+    status: 'rejected',
+    limitType: 'five_hour',
+    resetsAt: 0,
+    ...over
+  })
+
+  // The absent case in the STRICT exact-empty form the two describes above use: that is what proves
+  // "nothing at all", which a not.toContain would pass on a rendered-but-empty wrapper.
+  it('renders nothing at all with no reading — not an empty element', () => {
+    expect(
+      renderToStaticMarkup(<ComposerUsageLimitNotice reading={null} nowSeconds={NOW} />)
+    ).toBe('')
+  })
+
+  // AC1/AC2's markup half. Both directions on each arm: the treatment carries the fill, so a view
+  // emitting the base class alone — or both modifiers — would pass a one-directional check and ship an
+  // unstyled notice, or a warning wearing the error fill.
+  it('wears the exhausted modifier, and not the warning one, for a `rejected` reading (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerUsageLimitNotice reading={reading({ status: 'rejected' })} nowSeconds={NOW} />
+    )
+    expect(markup).toContain('composer-status__usage')
+    expect(markup).toContain('composer-status__usage--exhausted')
+    expect(markup).not.toContain('composer-status__usage--warning')
+    expect(markup).toContain(USAGE_LIMIT_EXHAUSTED_COPY)
+  })
+
+  it('wears the warning modifier, and not the exhausted one, for any other status (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerUsageLimitNotice reading={reading({ status: 'allowed_warning' })} nowSeconds={NOW} />
+    )
+    expect(markup).toContain('composer-status__usage--warning')
+    expect(markup).not.toContain('composer-status__usage--exhausted')
+    expect(markup).toContain(USAGE_LIMIT_WARNING_COPY)
+  })
+
+  // A <div>, on ComposerErrorChip's recorded reason — no global margin reset here, so a <p>'s UA margin
+  // would move a row whose height is its occupant's.
+  it('is a <div>, and carries no live region and no hidden prefix', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerUsageLimitNotice reading={reading({})} nowSeconds={NOW} />
+    )
+    expect(markup.startsWith('<div')).toBe(true)
+    expect(markup).not.toContain('aria-')
+    expect(markup).not.toContain('role=')
+    expect(markup).not.toContain('composer-status__error-prefix')
+  })
+
+  // AC3's DOM half, and the discharge of the constraint `usageLimitStore` inherited. Sentinels on both
+  // untrusted fields, checked against the WHOLE markup rather than the text — which covers the class
+  // attribute too, the one place a treatment interpolated into a template would have leaked.
+  it('lets no daemon-authored string reach the DOM, in text or in an attribute (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerUsageLimitNotice
+        reading={{ status: 'DAEMON_STATUS', limitType: 'DAEMON_LIMIT', resetsAt: 0 }}
+        nowSeconds={NOW}
+      />
+    )
+    expect(markup).not.toContain('DAEMON_STATUS')
+    expect(markup).not.toContain('DAEMON_LIMIT')
+    expect(markup).toBe(
+      `<div class="composer-status__usage composer-status__usage--warning">${USAGE_LIMIT_WARNING_COPY}</div>`
+    )
+  })
+
+  // AC3's `resetsAt: 0` half at the markup tier — no epoch anywhere on screen — plus the unnamed-window
+  // arm, both in one render because both are absences and an exact-markup assertion proves them together.
+  it('drops the reset clause and the window name rather than inventing either (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerUsageLimitNotice
+        reading={{ status: 'rejected', limitType: 'overage', resetsAt: 0 }}
+        nowSeconds={NOW}
+      />
+    )
+    expect(markup).toBe(
+      `<div class="composer-status__usage composer-status__usage--exhausted">${USAGE_LIMIT_EXHAUSTED_COPY}</div>`
+    )
+    expect(markup).not.toContain('1970')
   })
 })
 

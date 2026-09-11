@@ -128,3 +128,30 @@ None.
   tool cards across the new row. Undrawn legacy/success boundaries remain skipped.
   Only eligible stopped ends populate `latestTurnEnd`, preserving legacy no-op
   identity on reconnect; recovery still follows the lifecycle specified above.
+
+### 2026-09-11 — verifier triage: pre-launch HTTP 404
+
+The dispatcher failed `sidebar-host-edit.spec.ts` in 248 ms with the raw `ws`
+HTTP 404 error and no launch-fate attachment. `launchPairedApp` awaits both
+`startFakeDaemon` calls before `launchIsolatedApp`; that daemon's pre-open rejection
+is the raw `ws` error path. Playwright's `WebSocketTransport` wraps debugger errors
+with different wording, and `createRelayConnection` consumes unexpected responses.
+The feature's decoder and renderer have not run on this setup path. The forwarder
+and launch fixtures are identical to the merge base. Twenty focused host-edit
+repetitions passed with retries disabled; the original responder remains unknown.
+
+Add `startFakeDaemonForTest` in `e2e/fixtures/fakeDaemonSetup.ts`, used by the paired
+fixture, to classify the observed exact HTTP 404 failure as a static pre-Electron
+setup error. Other failures receive a static setup-error message. No caught error,
+cause, URL, headers, payload, or options enter the report. No retry or production
+change: failures still fail the test, and existing teardown owns the forwarder.
+`fakeDaemonSetup.test.ts` will drive a real local HTTP 404 response, verify success
+pass-through, and check that arbitrary error contents cannot reach the diagnostic.
+Run those unit checks, the stopped-turn checks, build, and the focused host-edit and
+stopped-turn browser specs. Full-suite verification remains dispatcher-owned.
+
+Security review of this revision: PASS. The new boundary is test-fixture errors to
+test reports, with only client-owned messages exposed. No new application IPC,
+storage, credentials, network policy, crypto, timer, or subscription is introduced.
+The test HTTP server closes in teardown. Total planned written work remains below
+800 lines; production-file count and the approved floor exception are unchanged.

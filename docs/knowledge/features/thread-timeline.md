@@ -45,16 +45,16 @@ interface MessageAttachment { attachmentId: string; filename: string }
 
 type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
-  | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial }
+  | { kind: 'toolCall'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
-  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
+  | { type: 'toolUse'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
   | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
-  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string; resultDetail?: string }
+  | { type: 'toolResult'; turnId: string; toolUseId: string; parentToolUseId?: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
@@ -208,6 +208,10 @@ the identical field contract stated above — strict string equality only, never
 key or a React key — rather than restating it. See [Conversation shell — conversation surfaces and
 modals § Queued rows folded into the
 thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
+
+Parent attribution and result precedence are documented in
+[Tool parent attribution](conversation-timeline-store.md#tool-parent-attribution).
+Grouping changes display order only.
 
 ### Permission-denial correlation
 

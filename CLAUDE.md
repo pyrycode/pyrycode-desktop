@@ -83,8 +83,8 @@ The transport, the Noise session, the relay connection supervisor, and the wire 
 
 ## Reading path
 
-1. `docs/PROJECT-MEMORY.md` — conventions and what the project is.
-2. `docs/knowledge/INDEX.md` — the map of features, decisions, and codebase notes.
+1. `docs/knowledge/INDEX.md` — the short startup map.
+2. The owning feature topic. Search `docs/knowledge/CATALOG.md` only when needed.
 3. Your ticket's spec in `docs/specs/architecture/<N>-*.md`.
 
 Live-gate state lives in `docs/knowledge/features/live-e2e-runbook.md` § Current real-claude gate state.
@@ -126,3 +126,9 @@ None of this needs a new command type or a wire change.
 - Don't drift the wire types from the mobile contract.
 - Don't refactor adjacent code while you are there. Touch only what the task needs.
 - Don't add dependencies without justification.
+
+## Shared knowledge
+
+Claude auto memory is disabled. Read the shared knowledge map before task work.
+Record discoveries in the issue, PR, or review for the documentation stage.
+Do not read or write a second private memory store.

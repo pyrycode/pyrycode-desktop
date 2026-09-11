@@ -79,3 +79,5 @@ None. Upstream confirms the four source spellings and report nullability.
 ## Revisions
 
 2026-09-11 — The plain-text bound also applies to an actual result displayed inside a denied row, not only its provisional rejection message. A focused failing test exposed that the inherited result display otherwise bypassed the denial sanitizer. The complete actual result remains in item state; ordinary tool-result presentation is unchanged.
+
+2026-09-11 — Verifier rework: `.tool-row__denied-tag` explicitly uses the body-medium size, line-height, tracking and weight tokens, matching the neighboring count. The inherited button style rendered at 13.3333px; focused Playwright assertions now require the theme's 14px size, 20px line-height, 0.25px tracking and 400 weight.

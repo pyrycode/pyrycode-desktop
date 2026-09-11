@@ -6169,3 +6169,32 @@
   font-size: var(--text-label-small-size);
   line-height: var(--text-label-small-line);
 }
+
+/* Reuse the session label while keeping reported values inside the thread width. */
+.stopped-turn {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.stopped-turn-recovery {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  color: var(--color-primary);
+}
+
+.stopped-turn-recovery > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stopped-turn-recovery > button:disabled {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}

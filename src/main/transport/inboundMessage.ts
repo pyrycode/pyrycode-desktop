@@ -1403,7 +1403,7 @@ export interface DecodedHistoryEntry {
  */
 export type DecodedHistoryEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'turnState'; state: WireTurnState }
   | {
       type: 'toolUse'
@@ -1510,7 +1510,8 @@ function decodeHistoryEvent(
     }
     case 'turn_end': {
       const p = parseTurnEndPayload(payload)
-      return { type: 'turnEnd', turnId: p.turn_id, stopReason: p.stop_reason }
+      return { type: 'turnEnd', turnId: p.turn_id, stopReason: p.stop_reason,
+        outcome: p.outcome, isError: p.is_error, terminalReason: p.terminal_reason, errorCategory: p.error_category }
     }
     case 'turn_state': {
       const p = parseTurnStatePayload(payload)
@@ -1679,7 +1680,14 @@ function parseTurnEndPayload(payload: unknown): TurnEndPayload {
   const conversation_id = requireString(payload, 'conversation_id')
   const turn_id = requireString(payload, 'turn_id')
   const stop_reason = requireString(payload, 'stop_reason')
-  return { conversation_id, turn_id, stop_reason }
+  const boundedReport = (value: unknown): string | undefined =>
+    typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= 256 ? value : undefined
+  return { conversation_id, turn_id, stop_reason,
+    outcome: boundedReport(payload.outcome),
+    is_error: typeof payload.is_error === 'boolean' ? payload.is_error : undefined,
+    terminal_reason: boundedReport(payload.terminal_reason),
+    error_category: boundedReport(payload.error_category)
+  }
 }
 
 /**

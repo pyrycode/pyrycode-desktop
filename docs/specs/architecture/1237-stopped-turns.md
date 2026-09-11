@@ -120,3 +120,11 @@ None.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-11
+
+## Revisions
+
+- 2026-09-11: the new visible boundary requires `Timeline`'s tool-stack join scan
+  to include drawn stopped records. The focused render test demonstrated joined
+  tool cards across the new row. Undrawn legacy/success boundaries remain skipped.
+  Only eligible stopped ends populate `latestTurnEnd`, preserving legacy no-op
+  identity on reconnect; recovery still follows the lifecycle specified above.

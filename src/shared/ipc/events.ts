@@ -77,7 +77,7 @@ import type {
  */
 export type HistoryTimelineEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'turnState'; state: WireTurnState }
   | {
       type: 'toolUse'
@@ -358,7 +358,7 @@ type BaseDaemonEvent =
   // renderer timeline bridge, which rebuilds a fresh ThreadEvent from named fields and omits it;
   // ThreadEvent does not carry it, and the consumers that route by conversation are #756. No token,
   // key, or raw frame.
-  | { type: 'turnEnd'; turnId: string; stopReason: string; conversationId: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string; conversationId: string }
   // The coarse turn-lifecycle arm (#214, widened by #724). Carries `state` (a closed 3-value wire enum)
   // and `conversationId` — the frame's `conversation_id`, copied BY NAME at the emit from an
   // already-validated payload (the decode stays fail-closed: a missing or non-string id fails the whole

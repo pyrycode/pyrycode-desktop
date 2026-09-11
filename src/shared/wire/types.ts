@@ -670,6 +670,11 @@ export interface TurnEndPayload {
   conversation_id: string
   turn_id: string
   stop_reason: string
+  /** Optional on older daemons; reports are untrusted display text, at most 256 UTF-8 bytes. */
+  outcome?: string
+  is_error?: boolean
+  terminal_reason?: string
+  error_category?: string
 }
 
 /**

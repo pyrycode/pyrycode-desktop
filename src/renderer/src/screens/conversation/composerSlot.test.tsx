@@ -90,6 +90,11 @@ describe('ComposerSlot', () => {
     // order, out of the accessibility tree — while leaving the subtree mounted.
     expect(markup).toContain('class="composer" hidden=""')
     expect(markup.match(/hidden=""/g)).toHaveLength(1)
+    // A second footer is outside the hidden composer, immediately after the questionnaire.
+    expect(markup.match(/class="composer__footer"/g)).toHaveLength(2)
+    expect(markup.indexOf('class="composer__footer"')).toBeLessThan(
+      markup.indexOf('class="composer" hidden=""')
+    )
   })
 
   it('keeps the covered composer in the tree rather than unmounting it', () => {
@@ -100,10 +105,9 @@ describe('ComposerSlot', () => {
     expect(markup).toContain('class="composer__input"')
     expect(markup).toContain('class="composer__send"')
     expect(markup).toContain('class="composer__footer"')
-    // .composer__footer is a CHILD of .composer, so the one cover takes the footer row with it — there is
-    // no second element to hide separately.
+    // The original footer remains covered with the composer; the model-only footer precedes it.
     expect(markup.indexOf('class="composer" hidden=""')).toBeLessThan(
-      markup.indexOf('class="composer__footer"')
+      markup.lastIndexOf('class="composer__footer"')
     )
   })
 

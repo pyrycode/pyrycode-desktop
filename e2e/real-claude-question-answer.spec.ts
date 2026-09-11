@@ -1,4 +1,6 @@
 import { type Page } from '@playwright/test'
+import type { DaemonEvent } from '../src/shared/ipc/events'
+import type { WireModelOption } from '../src/shared/wire/types'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -253,11 +255,26 @@ function expectNamesChoiceFirst(continuation: string, chosen: string, unchosen: 
   }
 }
 
-test('real claude raises a clarifying question that answering through the panel resumes the turn with', async ({
+type ModelEvidence = {
+  models: readonly WireModelOption[]
+  announced: string[]
+  conversationId: string
+  batchId: string
+  dismissed: boolean
+  accepted: number
+  rejected: number
+  stop: () => void
+}
+type EvidenceWindow = Window & {
+  pyry: { onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void }
+  questionModelEvidence: ModelEvidence
+}
+
+test('real claude changes model during a question and resumes with the original answer', async ({
   relay,
   daemon,
   page
-}) => {
+}, testInfo) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
 
   // A per-run nonce so reruns differ, never asserted on (Date.now() is fine in a spec).
@@ -296,6 +313,27 @@ test('real claude raises a clarifying question that answering through the panel 
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
+  // Observe only typed public model metadata and batch identity, never tokens or answer text.
+  await page.evaluate(() => {
+    const w = window as unknown as EvidenceWindow
+    const evidence: ModelEvidence = {
+      models: [], announced: [], conversationId: '', batchId: '', dismissed: false,
+      accepted: 0, rejected: 0, stop: () => {}
+    }
+    evidence.stop = w.pyry.onDaemonEvent((event) => {
+      if (event.type === 'modelList') evidence.models = event.models
+      if (event.type === 'modelAnnounced') {
+        evidence.conversationId = event.conversationId
+        evidence.announced.push(event.model)
+      }
+      if (event.type === 'questionShown') evidence.batchId = event.questionBatchId
+      if (event.type === 'questionDismissed' && event.questionBatchId === evidence.batchId) evidence.dismissed = true
+      if (event.type === 'sessionSettingsUpdated') evidence.accepted += 1
+      if (event.type === 'sessionSettingsRejected') evidence.rejected += 1
+    })
+    w.questionModelEvidence = evidence
+  })
+
   await composer.fill(message)
   await sendButton.click()
 
@@ -305,6 +343,31 @@ test('real claude raises a clarifying question that answering through the panel 
   // (an absent multiSelect, or counts outside its 2-4 bound) and it fell through to a permission modal
   // nothing here answers, parking the turn until the approval window elapses.
   await expect(panel).toBeVisible({ timeout: QUESTION_SURFACE_TIMEOUT_MS })
+
+  const originalBatch = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.batchId)
+  expect(originalBatch.length > 0).toBe(true)
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as EvidenceWindow).questionModelEvidence.models.length
+  ), { timeout: HANDSHAKE_TIMEOUT_MS }).toBeGreaterThan(0)
+  const published = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.models)
+  const previous = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.at(-1))
+  expect(Boolean(previous)).toBe(true)
+  const targetIndex = published.findIndex((row) => row.value !== '' &&
+    row.value !== QUESTION_MODEL && row.resolved_model !== previous && row.value.startsWith('opus'))
+  expect(targetIndex, 'daemon must publish a different non-empty Opus model').toBeGreaterThanOrEqual(0)
+  const target = published[targetIndex]
+  const acceptedBefore = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.accepted)
+  await page.locator('.composer__footer:visible').getByRole('button').click()
+  await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem').nth(targetIndex).click()
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as EvidenceWindow).questionModelEvidence.accepted
+  ), { timeout: HANDSHAKE_TIMEOUT_MS }).toBeGreaterThan(acceptedBefore)
+  const preserved = await page.evaluate((batch) => {
+    const evidence = (window as unknown as EvidenceWindow).questionModelEvidence
+    return evidence.batchId === batch && !evidence.dismissed && evidence.rejected === 0
+  }, originalBatch)
+  expect(preserved, 'model change must preserve the original outstanding batch').toBe(true)
+  await expect(panel).toBeVisible()
 
   // The batch's question count, read from the tab row. ONE question draws a bare <span> and no tabs at all,
   // which is why this floors at 1. The trigger asks for one question; CLAUDE DECIDES, and the drive below
@@ -398,4 +461,26 @@ test('real claude raises a clarifying question that answering through the panel 
   //     panel clearing is NOT this proof and is not asserted as one — it clears optimistically, before any
   //     daemon frame answers.
   expectNamesChoiceFirst(continuationOf(before, await assistantText(page)), chosen, unchosen)
+
+  // model_announced comes from system/init on the ensuing user turn, not from set_model itself.
+  // Only send this probe after the original answer has positively resumed Claude.
+  const announcementCount = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.length)
+  const beforeProbe = await assistantText(page)
+  await expect(composer).toBeVisible()
+  await composer.fill('Reply with OK only. Do not use tools.')
+  await sendButton.click()
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as EvidenceWindow).questionModelEvidence.announced.length
+  ), { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(announcementCount)
+  const resolved = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.at(-1))
+  expect(typeof resolved === 'string' && resolved.length > 0 && resolved !== previous).toBe(true)
+  expect(resolved?.startsWith('claude-opus')).toBe(true)
+  await testInfo.attach('resolved-target-model', {
+    body: JSON.stringify({ requested: target.value.slice(0, 256), resolved: resolved?.slice(0, 256) }),
+    contentType: 'application/json'
+  })
+  await expect.poll(async () => continuationOf(beforeProbe, await assistantText(page)).trim().length,
+    { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(0)
+  await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.stop())
 })

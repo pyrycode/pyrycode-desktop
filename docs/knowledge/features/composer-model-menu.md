@@ -21,6 +21,26 @@ spacer and no placeholder held open for it — #811's rule, reapplied. [#682](co
 has since landed and inserted itself between the two, as this section always said it would; this trigger is
 now the row's **third** item, not its second.
 
+## Availability during question batches
+
+While a question batch is open, `ComposerSlot` mounts this menu in a model-only
+`.composer__footer` immediately beneath the questionnaire (#1252). It uses the same
+published options and label layers as the ordinary footer, including the inert and
+absent renderings described below. Mouse and keyboard access work at the 800px minimum
+window width.
+
+The original composer stays mounted and hidden, retaining its draft and covering send,
+actions, effort, permission mode and attachments. The keyed question panel stays mounted
+too: a model pick or settings response preserves the batch, active question, selections
+and Other text. [Continue](question-panel-continue-answer.md) answers that original batch;
+closing it reveals the preserved composer draft.
+
+Picking a different model uses the existing model-only `set_session_settings` write for
+the active session, without sending a chat turn or resolving the question. This relies on
+[daemon control-request delivery](https://github.com/pyrycode/pyrycode/issues/2280), which
+can reach the child while it is waiting for an answer. The optimistic label and rollback
+remain immediate; availability during questions adds no wait-for-next-turn label policy.
+
 ## `composerModelMenuModel`, one pure function deciding all three renderings
 
 `ComposerModelMenu.tsx` exports a pure
@@ -152,8 +172,10 @@ session-less-but-populated menu unopenable, which no AC asks for.
 Picking a row moves the trigger's label to the optimistic value at once and reverts it if the change is
 rejected — not local state: `selectEffectiveSettings`'s pending-overlay-over-confirmed-over-snapshot
 composition is what moves it, and the same composition reverts it when the store drops the pending record
-on rejection. This menu says nothing more on a rejection: the row has a hard 20px height with no slot for
-an error line, and the sheet already names the rejection. This trigger also does not read
+on rejection. The menu itself has no error line in its 20px footer; the
+[composer status row](conversation-shell-composer-status.md#model-settings-rejection)
+and run-configuration sheet name the rejection, including while answering a question.
+This trigger also does not read
 `supports_auto_mode` and does not touch the permission mode — `SettingsChange` has no such field to send,
 and that control belongs to #682.
 
@@ -289,6 +311,19 @@ announcing (an app-lifetime `announcedModelStore` clear followed by no new turn)
 by AC4's "nothing at any layer" rendering.
 
 ## Testing
+
+`e2e/question-answer-continue.spec.ts` holds settings replies while checking the optimistic
+label and preserved answers, then drives a correlated rejection and retry at 800px. It
+captures exact model-only payloads and verifies the original batch's answers and restored
+draft. Scope footer interactions to `.composer__footer:visible`: the hidden composer still
+contains its own menu.
+
+The real question spec must prove Claude continues with the selected answer before
+probing the resolved model on an ensuing user turn. `model_announced` originates in
+`system/init`; the in-band control request creates neither a user turn nor an intermediate
+init. Waiting for an announcement during the parked question therefore observes the wrong
+lifecycle. `e2e/real-claude-question-answer.spec.ts` records the ensuing announcement in its
+`resolved-target-model` attachment. Optimistic panel dismissal alone proves no continuation.
 
 Renderer tests are static server renders (CLAUDE.md); `ComposerModelMenu.test.tsx` covers the view against
 `composerModelMenuModel` directly (each of the three renderings, four explicit near-misses — case fold,

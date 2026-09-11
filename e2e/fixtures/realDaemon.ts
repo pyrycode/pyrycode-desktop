@@ -1,10 +1,10 @@
 import {
   test as base,
   expect,
-  _electron as electron,
   type ElectronApplication,
   type Page
 } from '@playwright/test'
+import { electron } from './electronLaunch'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants, createWriteStream, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'

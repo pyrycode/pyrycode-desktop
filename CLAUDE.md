@@ -30,6 +30,13 @@ The daemon speaks `Noise_IK_25519_ChaChaPoly_BLAKE2s`. This exact variant is loa
 
 ## Build and test
 
+On macOS, every test command that launches Electron must request approved execution
+outside the Codex sandbox on its first attempt. This includes focused Playwright
+specs, full suites, baseline comparisons and real-daemon tests. Never try a sandboxed
+launch first. The shared test launcher rejects the macOS Codex sandbox before
+starting Electron. Do not unset its sandbox marker or change Electron security settings.
+Unit tests and builds can remain sandboxed.
+
 ```bash
 npm install
 npm run dev          # run the app with fast reload

@@ -148,12 +148,13 @@ border painted over a 100% border of the same colour at the same pixels composit
 and a failed row is always `--resolved` too (`tool-row--error` layers only on top of `tool-row--resolved`),
 so a dimmed row and a red border are never the same element.
 
-**A run is DOM adjacency, not item adjacency.** `TimelineRow`'s `turnBoundary` arm renders as `null` and
-emits no element, so two tool calls either side of a closed turn are still DOM-adjacent siblings and still
-join — confirmed by the e2e drive, which closes a turn between the user bubble and the run without
-breaking the bubble-to-first-row 12px gap. `sessionBoundary`, by contrast, draws a real element and
-correctly breaks a run in two. Anything that should interrupt a run needs to render an element for this
-reason; anything structural-only will not.
+**A run follows visible neighbours.** Legacy, clean-success and cancelled `turnBoundary`
+items draw nothing and do not break a tool stack. A [stopped-turn record](conversation-shell-turn-status.md#stopped-turn-records)
+or `sessionBoundary` draws an element and ends the stack. With grouped tool wrappers,
+the [join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins)
+must include that visible stop as well: rendering the label while skipping every
+boundary still joins tool cards across it. The stopped-turn static render test
+asserts that two tools separated by the label receive no joined-row classes.
 
 **Testing.** All four rendered properties here — adjacency, the corner radii, the computed shadow, the
 border colour at a join — are invisible to the `renderToStaticMarkup` unit tier, so `e2e/tool-row-toggle.spec.ts`

@@ -27,9 +27,14 @@ that region is now empty above this row):
 │   ├── .composer-status__activity
 │   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
 │   │   └── {children}          → <ThinkingIndicator/>
-│   └── {trailing}              → <ComposerErrorSlotControl/>       (row's own slot: button or chip, #797/#963, see below)
+│   └── {trailing}              → <ComposerErrorSlotControl/>       (repair, error, recovery or notice)
 └── Composer
 ```
+
+This is the DOM order. `ComposerSlot.statusArea(sendText)` supplies the status area
+through `Composer.beforeComposer`, giving recovery the composer's existing command
+send callback. The status area remains outside the composer's `hidden` subtree,
+so covering the input with a question panel does not hide its messages.
 
 **Never returns `null` — the one deliberate departure from `ThinkingIndicator`'s own zero-footprint
 posture (AC2).** `ThinkingIndicator` still returns `null` at rest; this row's *height* is what must be
@@ -353,6 +358,40 @@ button replacing a bare de-emphasised text button) — accepted because the cons
 recoverable (re-pair by scanning a QR) and a confirm step on an already-terminal state is pure friction,
 per #167's original rationale.
 
+## Stopped-turn recovery
+
+`ComposerErrorSlotControl` reads the open conversation's `timeline.latestTurnEnd`.
+Only a stop that passes [the boundary formatter](conversation-shell-turn-status.md#stopped-turn-records)
+can offer recovery. `terminalReason: 'prompt_too_long'` shows “Context too long.
+Compact or reset the session.” with Compact. Otherwise `billing_error` shows
+“Claude reported a billing error. Check Claude billing on this server.” and
+`authentication_failed` shows “Claude reported an authentication failure. Check
+Claude sign-in on this server.” These are reports about Claude on the affected
+server; Desktop settings cannot repair that account and are not an action here.
+
+Compact sends the client-owned `/compact` through the same `sendText` path as the
+[Actions menu](conversation-shell-actions-menu-and-reader-cutover.md#grey-out-for-an-absent-command-681).
+`markUnavailableActions` checks the published command list at render and again at
+click time: a complete list proving absence disables it; unknown or incomplete
+availability does not. The click also rechecks the open conversation id, and
+`sendText` retains its connection/conversation guards. A command never clears the
+typed draft. Reset session remains the Actions-menu `/clear` action.
+
+Recovery has priority after re-pair and connection errors, before model-settings
+rejection and usage notices; it is visible only while connected. The next local
+submitted message or daemon turn activity clears recovery while preserving the
+boundary; the stopped turn's trailing idle does **not** clear it. Session boundaries,
+reset and reconnect also clear the reading. A timeline reset or eviction drops the
+retained rows too. [The reducer lifecycle](thread-timeline-internals.md#stopped-turn-state)
+defines the exact events; scratch history folds cannot restore recovery, and each
+conversation owns its own reading.
+
+The recovery text wraps within a shrinkable status group. Compact needs both
+`button-small` and `button-small--error`: the base class supplies typography and
+shape only, so omitting the status-action variant leaves native button styling.
+See [browser evidence](e2e-harness.md#stopped-turn-evidence) for draft preservation,
+availability, slot priority and the 800px layout check.
+
 ## Model settings rejection
 
 `ComposerErrorSlotControl` reads `useRunSettingsWriteStore(selectError)`. When the last
@@ -362,9 +401,10 @@ fixed client copy in a `role="alert"` element. It is available both with the ord
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
-The single-occupant priority is repair button → connection-error chip → model rejection
-→ usage notice. Both notices require `connected`; disconnected and connecting states hide
-them. `.composer-status__error--settings` retains the error treatment but uses
+The single-occupant priority is repair button → connection-error chip → stopped-turn
+recovery → model rejection → usage notice. Recovery and both notices require
+`connected`; disconnected and connecting states hide them.
+`.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
 
@@ -384,7 +424,7 @@ original question remains answerable.
 ## The usage-limit notice, the slot's third occupant (#1321)
 
 Draws [the usage-limit store](usage-limit-store.md)'s per-conversation reading in the trailing slot,
-below the actionable-error button, connection-error chip and model rejection in precedence.
+below the actionable-error button, connection-error chip, stopped-turn recovery and model rejection in precedence.
 It remains the slot's lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
 subprocess trust boundary; this slice is where the "no DOM sink" constraint that store inherited is
 **discharged** rather than passed on further.
@@ -439,7 +479,7 @@ the visible text is already the accessible name.
 **`ComposerErrorSlot` grows from three arms to four, and the order is the whole of the one-occupant
 rule:** `shouldOfferRepair(status)` → the button; `status.type === 'error'` → the chip (the discriminant
 now asked explicitly here, where it used to be left to the chip's own guard, so the notice's arm cannot be
-reached while either existing occupant could claim the slot); `status.type === 'connected'` → the notice;
+reached while either existing occupant could claim the slot); `status.type === 'connected'` → `recovery ?? notice`;
 otherwise `null`. The `connected` gate is deliberately **stricter** than "no error live" — while
 disconnected or connecting, [the banner](#composer-error-chip-797) is already up saying so, and a quota
 claim beside it would contradict it, so the notice is suppressed on both of those arms too, not only on

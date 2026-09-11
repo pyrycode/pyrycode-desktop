@@ -47,12 +47,30 @@ relay socket → supervisor → noiseRelayDriver (Noise decrypt)
 | `case 'message'` arm (consumer) | `void` | `try/catch` → a throw is **dropped silently** (no event, no log, caught object not forwarded); `null` → ignored; a result → exactly one `DaemonEvent`. **Never throws out of the module.** |
 | UI | — | A dropped inbound frame surfaces **nothing** (no `failed`, no banner). A single malformed *message* frame is not connection-fatal — the session continues. Deliberately different from a malformed `hello_ack`, which **is** fatal (`failed('malformed-hello-ack')`) because the handshake cannot complete without it. |
 
+### Optional stopped-turn reports
+
+`TurnEndPayload` in `src/shared/wire/types.ts` carries optional `outcome`, `is_error`,
+`terminal_reason` and `error_category`. `parseTurnEndPayload` serves both live
+`turn_end` and `decodeHistoryEvent`: required `conversation_id`, `turn_id` and
+`stop_reason` remain string-validated; malformed optional metadata cannot discard
+an otherwise valid boundary. Each report string must be at most 256 **UTF-8 bytes**;
+wrong types and overlong values become `undefined`, without truncation. Unknown
+strings are accepted. A boolean `false` and empty strings survive separately from
+absence; empty strings provide no display detail.
+
+Do not infer a clean finish from `outcome: 'success'`: it can accompany
+`is_error: true`, including context overflow. Error categories are Claude's reports,
+not verified account findings. The [event channel](daemon-event-channel.md#stopped-turn-metadata)
+carries these fields to the [stopped-record formatter](conversation-shell-turn-status.md#stopped-turn-records),
+which owns control removal and escaped text rendering. Decode diagnostics retain
+only their existing static type, byte count and hash, never report values.
+
 ## Security properties
 
 Ticket carries `security-sensitive`; the architect's security-review verdict is **PASS**. This is the "hostile daemon response" trust boundary — decrypted bytes from a relay peer on an internet-exposed surface.
 
-- **A single explicit boundary.** `payload: unknown` never escapes `parseInboundMessage`; downstream (the consumer arm, `DaemonEvent`, the store) holds only concrete wire types. Envelope metadata (`id` / `ts` / `in_reply_to` / `event_id`) is never forwarded — only `type` (for routing) and the narrowed payload cross.
-- **Fail-closed on every hostile shape.** Malformed / oversized / unparseable / mistyped / unknown-`role` / non-array `messages` / one-bad-element chunk each drops the frame — no partial value ever surfaces.
+- **A single explicit boundary.** `payload: unknown` never escapes `parseInboundMessage`; downstream holds narrowed payloads and explicitly carried envelope metadata. For example, live `turnEnd.daemonTs` carries the envelope timestamp for the history/live join; its report strings remain display-only.
+- **Fail-closed on required shapes.** Malformed / oversized / unparseable frames, mistyped required fields, unknown `role`, non-array `messages`, or one bad element in a message chunk drop the frame. Optional stopped-turn reports are independently discarded as described above.
 - **Content-free-log by construction, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Since [#130](../codebase/130.md) the module *does* log — but only a content-free record (type + `seq` + length + one-way hash), never a payload byte or a decoded field: the modeled arms log a static type literal, the unmodeled arm a **capped** peer type, and every record's `hash` is a full-frame BLAKE2s digest implicitly salted by the server-assigned `id`/`ts`/`message_id` (so the log can't confirm a guessed message). Pinned by a six-method `console`-spy (still green — #130 logs via the injected sink, never `console`), an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value, and an AC4 test asserting the serialized log line contains the hash but **neither** planted secret. Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
 - **Bounded per-frame work.** The size cap makes work O(size) with size capped; a `message_chunk` array is inherently small (each complete message > 60 bytes, cap 65519) and aborts on the first bad element. A hostile daemon cannot flood an unbounded frame; deep-nesting JSON fails closed via the codec's `RangeError` catch.
 

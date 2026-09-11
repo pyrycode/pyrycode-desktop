@@ -63,7 +63,13 @@ import {
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
-import { ComposerActionsMenu } from './ComposerActionsMenu'
+import { ComposerActionsMenu, COMPOSER_ACTIONS } from './ComposerActionsMenu'
+import { markUnavailableActions } from './composerActionAvailability'
+import {
+  slashCommandListStore,
+  useSlashCommandListStore,
+  selectSlashCommandListFor
+} from '../../store/slashCommandListStore'
 import { ComposerPermissionModeMenu } from './ComposerPermissionModeMenu'
 import { ComposerModelMenu } from './ComposerModelMenu'
 import { ComposerEffortMenu } from './ComposerEffortMenu'
@@ -454,21 +460,6 @@ export function ConversationScreen({
           #963: that slot now holds EITHER the chip or an actionable button, so the control filling it owns
           the choice and takes `onUnpaired` down with it — the re-pair flow moved into the slot and #167's
           separate block beneath the composer is gone. */}
-      <ComposerStatusArea
-        isRunning={isTurnRunning(phase)}
-        trailing={<ComposerErrorSlotControl onUnpaired={onUnpaired} onBack={onBack} />}
-      >
-        <ThinkingIndicator
-          state={workingIndicatorStateWithLocalSend(
-            { phase, apiRetry, compacting, stalled },
-            localSendPending
-          )}
-          toolName={openTool?.name ?? null}
-          toolElapsedSeconds={openTool?.elapsedSeconds}
-          retry={apiRetry}
-          thinkingTokens={thinkingTokens}
-        />
-      </ComposerStatusArea>
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
           message entered the timeline" and this screen — which owns the flag — decides that means follow
           the bottom. The Composer learns nothing about scrolling.
@@ -481,6 +472,27 @@ export function ConversationScreen({
           above (the BackgroundTaskPanel idiom below); the question store read stays inside the slot, so a
           question arriving never re-renders this screen. */}
       <ComposerSlot
+        statusArea={(sendText) => (
+          <ComposerStatusArea
+            isRunning={isTurnRunning(phase)}
+            trailing={
+              <ComposerErrorSlotControl
+                onUnpaired={onUnpaired} onBack={onBack} onCommand={sendText}
+              />
+            }
+          >
+            <ThinkingIndicator
+              state={workingIndicatorStateWithLocalSend(
+                { phase, apiRetry, compacting, stalled },
+                localSendPending
+              )}
+              toolName={openTool?.name ?? null}
+              toolElapsedSeconds={openTool?.elapsedSeconds}
+              retry={apiRetry}
+              thinkingTokens={thinkingTokens}
+            />
+          </ComposerStatusArea>
+        )}
         conversationId={activeConversation?.id ?? null}
         phase={phase}
         onMessageSent={followBottom}
@@ -911,11 +923,12 @@ export function Timeline({
   const hiddenRows = new Set(projection.filter((group) =>
     group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
   ).map((group) => group.index))
-  // Hidden descendants stay mounted; joins follow the rows that actually draw. Turn boundaries
-  // render nothing in TimelineRow, while other non-tool rows and indentation changes end a stack.
-  const visible = projection.filter((group) =>
-    !hiddenRows.has(group.index) && rows[group.index]?.item.kind !== 'turnBoundary'
-  )
+  // Hidden descendants stay mounted; only undrawn boundaries are skipped when joining tool rows.
+  const visible = projection.filter((group) => {
+    const item = rows[group.index]?.item
+    return !hiddenRows.has(group.index) &&
+      (item?.kind !== 'turnBoundary' || stoppedTurnText(item) !== null)
+  })
   const joins = new Map(visible.map((group, index) => {
     const previous = visible[index - 1]
     const next = visible[index + 1]
@@ -1182,6 +1195,40 @@ function QueuedRowDrop({
 // while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing. That
 // guard did its job on the unrecognizedMessage row below: the arm arrived as a compile error here.
 //
+/** Reports remain plain display text; never use them as attributes, commands or log values. */
+function stoppedReportText(value: string | undefined): string {
+  if (value === undefined || new TextEncoder().encode(value).length > 256) return ''
+  return value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')
+}
+
+export function stoppedTurnText(item: {
+  stopReason: string
+  outcome?: string
+  isError?: boolean
+  terminalReason?: string
+  errorCategory?: string
+}): string | null {
+  if (item.stopReason === 'cancelled') return null
+  const outcome = stoppedReportText(item.outcome)
+  if (item.isError !== true && (outcome === '' || outcome === 'success')) return null
+  const terminal = stoppedReportText(item.terminalReason)
+  const category = stoppedReportText(item.errorCategory)
+  const reason = terminal && terminal !== 'completed' ? terminal
+    : outcome === 'error_max_turns' ? 'max_turns' : outcome === 'error_max_budget_usd' ? 'budget_exhausted'
+    : category ? 'api_error' : outcome === 'success' ? '' : outcome
+  let text: string
+  switch (reason) {
+    case 'max_turns': text = 'Stopped: turn limit reached'; break
+    case 'budget_exhausted': text = 'Stopped: budget exhausted'; break
+    case 'prompt_too_long': text = 'Stopped: context too long, compact or reset'; break
+    case 'api_error': text = 'Stopped: API error'; break
+    case 'hook_stopped': case 'stop_hook_prevented': text = 'Stopped by a hook'; break
+    case 'model_error': text = 'Stopped: model error'; break
+    default: text = reason ? `Stopped: ${reason}` : 'Stopped: error'
+  }
+  return category ? `${text} (Claude reported: ${category})` : text
+}
+
 // #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
 // message queued. Only the `userText` arm reads it — foldQueuedRows can mark no other kind — and the
 // whole visual difference is that arm's fork.
@@ -1260,10 +1307,10 @@ function TimelineRow({
       // "which rows are expanded" state shape into this slice. Collapsed is the only form the switch
       // produces.
       return <ToolRow item={item} />
-    case 'turnBoundary':
-      // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
-      // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
-      return null
+    case 'turnBoundary': {
+      const text = stoppedTurnText(item)
+      return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
+    }
     case 'sessionBoundary':
       // #286, redrawn #690: the session-boundary delimiter (Figma node 119-3843) — one 16px row, rule /
       // centred label / rule, marking where a /clear, an idle eviction, or a workspace change started a
@@ -3079,11 +3126,13 @@ export function ComposerSendButton({
 function Composer({
   phase,
   onMessageSent,
-  covered
+  covered,
+  beforeComposer
 }: {
   phase: TurnPhase
   onMessageSent: () => void
   covered: boolean
+  beforeComposer: (sendText: (value: string) => boolean) => ReactNode
 }): JSX.Element {
   // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
   // split). Input text is ephemeral single-value screen-local state → useState, never the store
@@ -3267,7 +3316,7 @@ function Composer({
     handleSubmit()
   }
 
-  return (
+  const body = (
     // #906: the native `hidden` attribute is the WHOLE cover mechanism, and one attribute doing three
     // jobs is why it was chosen over the alternatives. It hides the subtree, drops it from the tab order
     // and drops it from the accessibility tree, while leaving every element MOUNTED — so the draft in
@@ -3441,6 +3490,7 @@ function Composer({
       <ComposerAttachOutcome outcome={attach.outcome} />
     </div>
   )
+  return <>{beforeComposer(sendText)}{body}</>
 }
 
 /**
@@ -3477,32 +3527,39 @@ function Composer({
 export function ComposerSlot({
   conversationId,
   phase,
-  onMessageSent
+  onMessageSent,
+  statusArea
 }: {
   conversationId: string | null
   phase: TurnPhase
   onMessageSent: () => void
+  statusArea?: (sendText: (value: string) => boolean) => ReactNode
 }): JSX.Element {
   const batch = useQuestionBatchStore((s) =>
     conversationId === null ? undefined : selectBatchFor(conversationId)(s)
   )
   return (
-    <>
-      {/* KEYED ON THE NONCE (#915), which is a remount instruction and not decoration. The slot holds the
-          question the operator is looking at in component state, and it stays mounted while ANY batch is
-          up — so a batch retired and replaced by a different one for this conversation would otherwise
-          carry the retired batch's position into a list that never had it. React strips `key` from props,
-          so the unguessable value reaches no attribute, no DOM node and no log; it only tells React to
-          rebuild the leaf, which re-seeds its state to the first question. Same-nonce RE-DELIVERY keeps
-          this key unchanged by design — see the clamp in QuestionPanelSlot, which is what covers it. */}
-      {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
-      {batch && (
-        <div className="composer__footer">
-          <ComposerModelMenu conversationId={conversationId} />
-        </div>
+    <Composer
+      phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined}
+      beforeComposer={(sendText) => (
+        <>
+          {statusArea?.(sendText)}
+          {/* KEYED ON THE NONCE (#915), which is a remount instruction and not decoration. The slot holds the
+              question the operator is looking at in component state, and it stays mounted while ANY batch is
+              up — so a batch retired and replaced by a different one for this conversation would otherwise
+              carry the retired batch's position into a list that never had it. React strips `key` from props,
+              so the unguessable value reaches no attribute, no DOM node and no log; it only tells React to
+              rebuild the leaf, which re-seeds its state to the first question. Same-nonce RE-DELIVERY keeps
+              this key unchanged by design — see the clamp in QuestionPanelSlot, which is what covers it. */}
+          {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+          {batch && (
+            <div className="composer__footer">
+              <ComposerModelMenu conversationId={conversationId} />
+            </div>
+          )}
+        </>
       )}
-      <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
-    </>
+    />
   )
 }
 
@@ -3785,11 +3842,13 @@ export function ComposerUsageLimitNotice({
 export function ComposerErrorSlot({
   status,
   onRepair,
-  notice
+  notice,
+  recovery
 }: {
   status: ConnectionStatus
   onRepair: () => void
   notice: JSX.Element | null
+  recovery?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -3814,7 +3873,7 @@ export function ComposerErrorSlot({
   // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
   // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
   // rule that an optional prop is the silent-omission hole a type cannot catch.
-  return status.type === 'connected' ? notice : null
+  return status.type === 'connected' ? recovery ?? notice : null
 }
 
 // The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
@@ -3862,10 +3921,12 @@ export function ComposerErrorSlot({
 // `onUnpaired`, so a bare `<ConversationScreen />` outside the shell still navigates nowhere.
 function ComposerErrorSlotControl({
   onUnpaired,
-  onBack
+  onBack,
+  onCommand
 }: {
   onUnpaired?: () => void
   onBack?: () => void
+  onCommand: (command: string) => boolean
 }): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   const dispatch = useSessionStore((s) => s.dispatch)
@@ -3890,6 +3951,31 @@ function ComposerErrorSlotControl({
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
+  const latest = useConversationTimelineStore((s) =>
+    open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
+  )
+  const menu = useSlashCommandListStore((s) => open === null ? null : selectSlashCommandListFor(open.id)(s))
+  const unavailable = markUnavailableActions(COMPOSER_ACTIONS, menu)
+    .find((action) => action.id === '/compact')?.unavailable === true
+  const stopped = latest !== undefined && stoppedTurnText(latest) !== null
+  const contextOverflow = stopped && latest.terminalReason === 'prompt_too_long'
+  let recoveryCopy: string | null = null
+  if (contextOverflow) {
+    recoveryCopy = 'Context too long. Compact or reset the session.'
+  } else if (stopped && latest.errorCategory === 'billing_error') {
+    recoveryCopy = 'Claude reported a billing error. Check Claude billing on this server.'
+  } else if (stopped && latest.errorCategory === 'authentication_failed') {
+    recoveryCopy = 'Claude reported an authentication failure. Check Claude sign-in on this server.'
+  }
+  const compact = (): void => {
+    const current = selectActiveConversation(activeConversationStore.getState())
+    if (current === null || current.id !== open?.id) return
+    const currentMenu = selectSlashCommandListFor(current.id)(slashCommandListStore.getState())
+    const action = markUnavailableActions(COMPOSER_ACTIONS, currentMenu)
+      .find((entry) => entry.id === '/compact')
+    if (action?.unavailable) return
+    onCommand('/compact')
+  }
   const settingsError = useRunSettingsWriteStore(selectError)
 
   const handleRepair = (): void => {
@@ -3927,6 +4013,15 @@ function ComposerErrorSlotControl({
     <ComposerErrorSlot
       status={status}
       onRepair={handleRepair}
+      recovery={recoveryCopy === null ? null : (
+        <div className="stopped-turn-recovery" role="status">
+          <span>{recoveryCopy}</span>
+          {contextOverflow && (
+            <button type="button" className="button-small button-small--error"
+              disabled={unavailable} onClick={compact}>Compact</button>
+          )}
+        </div>
+      )}
       notice={
         settingsError === 'model' ? (
           <div className="composer-status__error composer-status__error--settings" role="alert">

@@ -27,6 +27,9 @@ the full rationale and normative reducer contract.
 
 Models interleaved messages and tool calls as a pure value type and reducer. Zustand
 integration belongs to the [timeline store](conversation-timeline-store.md).
+Stopped-turn metadata remains on retained boundary rows; the separate
+[latest live stop](thread-timeline-internals.md#stopped-turn-state) supplies transient
+composer recovery without letting older history restore it.
 
 ## Configuration and usage
 

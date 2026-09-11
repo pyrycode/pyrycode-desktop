@@ -119,7 +119,7 @@ export type ThreadItem =
       denial?: ToolDenial
       elapsedSeconds?: number
     }
-  | { kind: 'turnBoundary'; turnId: string; stopReason: string }
+  | { kind: 'turnBoundary'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
   // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
   // dormant; #179 wires the producer (the composer echo) and the render row.
@@ -243,7 +243,7 @@ export type ThreadEvent =
       resultDetail?: string
     }
   | { type: 'turnState'; state: TurnPhase }
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
   // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
   //
@@ -365,6 +365,8 @@ export interface ApiRetryStatus {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Latest live turn end; history replay returns rows only and cannot restore this reading. */
+  latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>
   items: readonly ThreadItem[]
   phase: TurnPhase
   // #317: a coarse, onset-only stall scalar (the `phase`-beside-`items` precedent — NOT a ThreadItem row).
@@ -525,6 +527,27 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
+  const next = reduceTimelineContent(state, event)
+  let latestTurnEnd = state.latestTurnEnd
+  switch (event.type) {
+    case 'turnEnd':
+      latestTurnEnd = event.stopReason !== 'cancelled' &&
+        (event.isError === true || (event.outcome !== undefined && event.outcome !== '' && event.outcome !== 'success'))
+        ? event : undefined
+      break
+    case 'turnState':
+      if (event.state !== 'idle') latestTurnEnd = undefined
+      break
+    case 'userText': case 'assistantDelta': case 'toolUse': case 'toolResult':
+    case 'toolProgress': case 'toolDenied': case 'thinkingProgress':
+    case 'sessionBoundary': case 'reset': case 'reconnected':
+      latestTurnEnd = undefined
+      break
+  }
+  return next.latestTurnEnd === latestTurnEnd ? next : { ...next, latestTurnEnd }
+}
+
+function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
     case 'assistantDelta':
       // Turn activity — clears a live stall (AC2). Already returns a fresh `items`, so just carry
@@ -673,7 +696,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       return {
         items: [
           ...state.items,
-          { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason }
+          { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason,
+            outcome: event.outcome, isError: event.isError, terminalReason: event.terminalReason, errorCategory: event.errorCategory }
         ],
         phase: state.phase,
         stalled: state.stalled,

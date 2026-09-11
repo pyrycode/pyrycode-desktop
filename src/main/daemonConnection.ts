@@ -1433,6 +1433,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'turnEnd',
               turnId: inbound.turnEnd.turn_id,
               stopReason: inbound.turnEnd.stop_reason,
+              outcome: inbound.turnEnd.outcome,
+              isError: inbound.turnEnd.is_error,
+              terminalReason: inbound.turnEnd.terminal_reason,
+              errorCategory: inbound.turnEnd.error_category,
               conversationId: inbound.turnEnd.conversation_id,
               daemonTs: inbound.ts
             })

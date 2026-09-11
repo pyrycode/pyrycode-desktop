@@ -1,6 +1,6 @@
 # Conversation shell — turn status surfaces
 
-What the screen shows while a turn is running: the timeline render, the composer status row's single label (thinking/working, retry, compacting, or stalled — folded into one view by #967), and the background-task panel.
+What the screen shows during and after a turn: the timeline, stopped-turn records, the composer activity label and the background-task panel.
 
 Part of [Conversation shell](conversation-shell.md); see that document for what the screen does, its edge cases and its links.
 
@@ -136,26 +136,10 @@ code-review record.
 
 ## Structured-stream timeline render (#203)
 
-The render slice (L3) of the Phase-2 structured-streaming vertical (transport [#199](../codebase/199.md)
-→ store [#202](../codebase/202.md) → render #203), mounted immediately after `<MessageThread/>`:
-
-```
-.conversation
-├── MessageThread              messages={useSessionStore(selectMessages).map(toMessageViewModel)}
-└── Timeline                   items={useTimelineStore(selectItems)}
-```
-
-`Timeline({ items }: { items: readonly ThreadItem[] })` is `MessageThread`'s twin — a pure, exported,
-in-file component (props-in/markup-out, server-rendered in tests from an injected `ThreadItem[]`, no
-store, no IPC). It reuses `MessageThread`'s scroll region class (`.conversation__thread`) and the
-coarse path's daemon-bubble treatment (`.message-row--daemon` / `.bubble--daemon`) verbatim — no new
-bubble styling. `ThreadItem` (from [thread-timeline](thread-timeline.md)) is already the render model
-(camelCase, `conversation_id`-free, ADR 0008), so the container passes `selectItems`'s result straight
-through — no adapter, unlike the coarse path's `toMessageViewModel`.
-
-Per-item render, by `kind`, with **no `default`/`assertNever`** (an exhaustive switch that degrades an
-unsourced-today kind to `null` rather than throwing — the render-path counterpart to the store
-bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](../codebase/203.md)):
+`Timeline` is the conversation's single thread surface, fed by the open conversation's
+[held timeline](conversation-timeline-holder.md). Its exported view accepts `ThreadItem[]`
+and can be server-rendered from injected items. `TimelineRow` switches exhaustively
+on each item's `kind`; wire-to-render translation belongs to the bridge.
 
 - `assistantText` → one bubble, carrying `data-thread-role="assistant"` as the test hook
   (`MessageThread`'s `data-message-role` counterpart). Since [#609](../codebase/609.md), the bubble
@@ -185,7 +169,7 @@ bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](.
 - `toolCall` → the tool-row chip ([#218](conversation-shell-tool-rows.md#pending-tool-call-row-218), below) — no longer a no-op as
   of that ticket; the resolved success/error treatment ([#230](conversation-shell-tool-rows.md#resolved-tool-call-row-230), below)
   lifted the pending dimming and added the error accent.
-- `turnBoundary` → `null` (structural only; Figma has no per-turn divider).
+- `turnBoundary` → a stopped-turn label when eligible (below), otherwise `null`.
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
 aria-hidden="true">` inside the in-progress bubble, rendered only on the tail item when
@@ -214,6 +198,41 @@ render path was inert at ship time.
 dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
+
+### Stopped-turn records
+
+`stoppedTurnText` suppresses `stopReason: 'cancelled'` first. Otherwise a line draws
+only for `isError: true` or a nonempty outcome other than `success`; success-with-error
+still draws. Legacy and clean-success boundaries remain invisible. A nonempty terminal
+reason other than `completed` wins over the outcome:
+
+| Terminal reason | Label |
+| --- | --- |
+| `max_turns` | Stopped: turn limit reached |
+| `budget_exhausted` | Stopped: budget exhausted |
+| `prompt_too_long` | Stopped: context too long, compact or reset |
+| `api_error` | Stopped: API error |
+| `hook_stopped`, `stop_hook_prevented` | Stopped by a hook |
+| `model_error` | Stopped: model error |
+
+Without a meaningful terminal reason, `error_max_turns` and `error_max_budget_usd`
+use the corresponding limit/budget labels; then a nonempty category selects API-error
+wording, then an unknown outcome uses `Stopped: <value>`. An unknown terminal reason
+also uses that form; an error with no detail uses `Stopped: error`. Every nonempty
+category appends `(Claude reported: <value>)` to the chosen label.
+
+The formatter rechecks each report's 256-byte UTF-8 bound, discards overlong strings,
+and strips Unicode controls, format characters and line/paragraph separators before
+classification. React children escape the remaining text; it never enters markup,
+attributes, URLs, commands or logs. `.stopped-turn` reuses the session-separator label
+typography and shadow, with single-line ellipsis inside the thread width at 800px.
+The row survives [recovery clearing and history replay](thread-timeline-internals.md#stopped-turn-state).
+
+Visible stopped records must participate in the [tool-stack join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins).
+Skipping every boundary joined tool cards across the new label; `stoppedTurn.test.tsx`
+pins this with two tools separated by a stopped record. Only undrawn boundaries
+remain skipped. [Fake-transport coverage](e2e-harness.md#stopped-turn-evidence) proves
+layout and command dispatch; it does not prove live compaction.
 
 ## Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650, folds in retry, compacting and stall since #967)
 

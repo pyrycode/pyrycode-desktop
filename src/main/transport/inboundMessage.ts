@@ -1405,6 +1405,7 @@ export type DecodedHistoryEvent =
       type: 'toolUse'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       name: string
       inputSummary: string
       input?: Readonly<Record<string, string>>
@@ -1424,6 +1425,7 @@ export type DecodedHistoryEvent =
       type: 'toolResult'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       isError: boolean
       resultSummary: string
       resultDetail?: string
@@ -1516,6 +1518,7 @@ function decodeHistoryEvent(
         type: 'toolUse',
         turnId: p.turn_id,
         toolUseId: p.tool_use_id,
+        parentToolUseId: p.parent_tool_use_id,
         name: p.name,
         inputSummary: p.input_summary,
         // Assigned unconditionally, never a conditional spread — the live emit's discipline. An absent
@@ -1544,6 +1547,7 @@ function decodeHistoryEvent(
         type: 'toolResult',
         turnId: p.turn_id,
         toolUseId: p.tool_use_id,
+        parentToolUseId: p.parent_tool_use_id,
         isError: p.is_error,
         resultSummary: p.result_summary,
         resultDetail: p.result_detail
@@ -2198,10 +2202,11 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
   const conversation_id = requireString(payload, 'conversation_id')
   const turn_id = requireString(payload, 'turn_id')
   const tool_use_id = requireString(payload, 'tool_use_id')
+  const parent_tool_use_id = optionalString(payload, 'parent_tool_use_id') || undefined
   const name = requireString(payload, 'name')
   const input_summary = requireString(payload, 'input_summary')
   const input = optionalStringMap(payload, 'input')
-  return { conversation_id, turn_id, tool_use_id, name, input_summary, input }
+  return { conversation_id, turn_id, tool_use_id, parent_tool_use_id, name, input_summary, input }
 }
 
 /** Validate denial shape without interpreting source tokens or collapsing nullable reports. */
@@ -2243,10 +2248,11 @@ function parseToolResultPayload(payload: unknown): ToolResultPayload {
   const conversation_id = requireString(payload, 'conversation_id')
   const turn_id = requireString(payload, 'turn_id')
   const tool_use_id = requireString(payload, 'tool_use_id')
+  const parent_tool_use_id = optionalString(payload, 'parent_tool_use_id') || undefined
   const is_error = requireBoolean(payload, 'is_error')
   const result_summary = requireString(payload, 'result_summary')
   const result_detail = optionalString(payload, 'result_detail')
-  return { conversation_id, turn_id, tool_use_id, is_error, result_summary, result_detail }
+  return { conversation_id, turn_id, tool_use_id, parent_tool_use_id, is_error, result_summary, result_detail }
 }
 
 /**

@@ -37,6 +37,32 @@ that clears the timeline's transient chrome on a fresh handshake. `localSendPend
 ([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
 event the composer dispatches directly (see below), the store's one non-bridge write source.
 
+## Tool parent attribution
+
+Live `tool_use` and `tool_result` payloads carry optional `parent_tool_use_id`.
+`parseToolUsePayload` and `parseToolResultPayload` use the existing optional-string
+validator: missing or empty strings become `undefined`; nonempty strings, including
+whitespace, retain their exact value. Present non-strings follow the malformed-frame
+policy. History uses these same parsers and skips malformed entries individually.
+`toolParent.test.ts` covers both lanes and content-free diagnostics.
+
+The live `daemonConnection` emission and history `DecodedHistoryEvent` translation
+both carry `parentToolUseId` through typed IPC and `translateTimelineEvent` to the
+[thread timeline](thread-timeline.md). `toolUse` stores it on the call. `fillResult`
+still resolves by the result's own `toolUseId`, never the parent id, and adds no row.
+A result may supply a missing parent but cannot erase or replace a known one;
+orphan and duplicate result behavior is unchanged.
+
+Attribution is an in-memory grouping hint, never authorization or diagnostic content.
+Stored arrival order remains unchanged; the [tool-group display projection](conversation-shell-tool-row-header-groups.md#subagent-tool-groups)
+handles orphan recovery and nesting. Assistant-text attribution is outside this feature.
+
+History fixtures need timestamps distinct from live events unless testing replay
+deduplication intentionally: the existing history/live join compares event type and
+timestamp, so a reused timestamp can suppress the historical result being tested.
+The replay unit test and `e2e/tool-groups.spec.ts` verify that attribution survives
+history and that a replayed result actually fills its call.
+
 ## Configuration and usage
 
 - **`useTimelineBridge(getOpenConversationId)` mounts in `App.tsx`**, right after `useDaemonEventBridge()`

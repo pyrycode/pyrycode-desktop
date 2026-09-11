@@ -1307,6 +1307,7 @@ export interface ToolUsePayload {
   conversation_id: string
   turn_id: string
   tool_use_id: string
+  parent_tool_use_id?: string
   name: string
   input_summary: string
   input?: Record<string, string>
@@ -1350,6 +1351,7 @@ export interface ToolResultPayload {
   conversation_id: string
   turn_id: string
   tool_use_id: string
+  parent_tool_use_id?: string
   is_error: boolean
   result_summary: string
   result_detail?: string

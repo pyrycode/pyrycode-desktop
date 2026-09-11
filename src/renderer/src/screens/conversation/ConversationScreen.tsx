@@ -89,6 +89,7 @@ import { serverInfoStore } from '../../store/serverInfoStore'
 import { loadServerInfo } from '../../store/serverInfoLoader'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
+import { groupToolRows } from './groupToolRows'
 import { copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
@@ -391,6 +392,7 @@ export function ConversationScreen({
           an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
           the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
       <Timeline
+        key={openConversationId}
         items={items}
         scrollPin={scrollPin}
         // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
@@ -900,49 +902,68 @@ export function Timeline({
   firstRowKey?: number
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
-  // #1214: the empty branch tests the FOLDED rows, not `items`. Before the fold, a window holding no
-  // echoes but a non-empty backlog drew the empty-state invitation with queued rows underneath it —
-  // reachable from a reconnect into another device's backlog and from a conversation opened fresh here.
-  // After it, that combination draws the queued rows, which is the only reading consistent with "the
-  // backlog is part of this thread".
+  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
+  const projection = groupToolRows(rows.map((row) => row.item))
+  const hiddenRows = new Set(projection.filter((group) =>
+    group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
+  ).map((group) => group.index))
+  // Hidden descendants stay mounted; joins follow the rows that actually draw. Turn boundaries
+  // render nothing in TimelineRow, while other non-tool rows and indentation changes end a stack.
+  const visible = projection.filter((group) =>
+    !hiddenRows.has(group.index) && rows[group.index]?.item.kind !== 'turnBoundary'
+  )
+  const joins = new Map(visible.map((group, index) => {
+    const previous = visible[index - 1]
+    const next = visible[index + 1]
+    const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
+    const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
+    return [group.index, [
+      above?.kind === 'toolCall' && 'tool-group-row--joined-above',
+      below?.kind === 'toolCall' && 'tool-group-row--joined-below',
+      above?.kind === 'toolCall' && above.denial === undefined && above.result?.isError && 'tool-group-row--error-above',
+      below?.kind === 'toolCall' && below.denial === undefined && below.result?.isError && 'tool-group-row--error-below'
+    ].filter(Boolean).join(' ')]
+  }))
   if (rows.length === 0) return <EmptyThread />
-  const lastIndex = items.length - 1
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
-      {rows.map((row, index) => (
-        // Index-derived key for the ITEM rows, counting from `firstRowKey` rather than from zero. The
-        // LIVE list is append-only with tail-mutation and never inserts or reorders mid-list
-        // (threadTimeline.ts: appendDelta grows the tail assistantText in place; every other arm appends
-        // a new tail; fillResult replaces a toolCall at its own index), so index identity is stable per
-        // logical item there and the usual index-key hazard is absent.
-        //
-        // ⭐ #1260: A HISTORY PREPEND IS EXACTLY THE INSERTION THAT PREMISE EXCLUDES, and a bare index
-        // does not survive it. Prepending N rows makes React match key 0 to key 0, so every already-drawn
-        // row is UPDATED IN PLACE with a different item's content while N fresh nodes appear at the END —
-        // after which Chromium's scroll anchoring compensates by the wrong delta, because its anchor node
-        // never moved, it merely started rendering a different message. The reader is left at their
-        // offset looking at a page earlier in the log. Offsetting by the conversation's prepended-row
-        // count names a row's position from the CONVERSATION'S ORIGIN instead, which is stable under both
-        // mutations: an append leaves the offset alone so the streaming bubble is not remounted, and a
-        // prepend of N lowers it by N while every surviving row's index rises by N. Keys go NEGATIVE as a
-        // thread is walked back, which is fine — a React key is a string namespace, not an ordinal.
-        // turnId alone is not collision-safe (a tool can split one turn into two assistantText items,
-        // post-#205), and any text-bearing key would change every delta and remount the growing bubble.
-        //
-        // #1214: the fold preserves that property for item rows (it never reorders or drops one), but its
-        // TAIL rows are a different list whose membership and order follow a replacement snapshot. They
-        // key on `queued_msg_id` — a real per-conversation unique integer, the key the deleted
-        // QueuedBacklog already used — in a `q`-prefixed string namespace that cannot collide with a
-        // numeric index. NEVER `message_id`: that field is compared and never used as an identifier,
-        // which is its contract (#1213 § Security review 1).
-        <TimelineRow
-          key={index < items.length ? firstRowKey + index : `q${row.queued?.queuedMsgId ?? index}`}
-          item={row.item}
-          queued={row.queued}
-          onDropQueued={onDropQueued}
-          inProgress={index === lastIndex && row.item.kind === 'assistantText'}
-        />
-      ))}
+      {projection.map((group) => {
+        const row = rows[group.index]
+        if (!row) return null
+        const key = firstRowKey + group.index
+        const hidden = hiddenRows.has(group.index)
+        if (row.item.kind !== 'toolCall') return (
+          <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+            item={row.item} queued={row.queued} onDropQueued={onDropQueued}
+            inProgress={group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+        )
+        const content = (
+          <ToolRow
+            item={row.item}
+            group={group.count > 0 ? {
+              count: group.count,
+              running: group.running
+            } : undefined}
+            expansion={{
+              expanded: expandedTools.has(key),
+              onToggle: () => setExpandedTools((previous) => {
+                const next = new Set(previous)
+                if (next.has(key)) next.delete(key)
+                else next.add(key)
+                return next
+              })
+            }}
+          />
+        )
+        // Origin-relative identity survives history prepends and display regrouping. Keep hidden
+        // descendants mounted so their own result expansion survives an outer collapse.
+        return (
+          <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+            className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
+            {content}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -1534,21 +1555,26 @@ function denialDisplayText(text: string): string {
 
 export function ToolRow({
   item,
-  defaultExpanded = false
+  defaultExpanded = false,
+  group,
+  expansion
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
+  group?: { count: number; running: boolean }
+  expansion?: { expanded: boolean; onToggle: () => void }
 }): JSX.Element {
   const { result, denial } = item
-  const expandable = result !== null || denial !== undefined
-  const [expanded, setExpanded] = useState(defaultExpanded)
+  const expandable = group !== undefined || result !== null || denial !== undefined
+  const [localExpanded, setExpanded] = useState(defaultExpanded)
+  const expanded = expansion?.expanded ?? localExpanded
   const rowClass =
     denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
         : 'tool-row'
-  const body = expanded && expandable
+  const body = expanded && (result !== null || denial !== undefined)
   const resultText = denial !== undefined
     ? denialDisplayText(result?.resultSummary ?? denial.message)
     : result?.resultSummary ?? ''
@@ -1629,7 +1655,10 @@ export function ToolRow({
               NO GAP FALLS WHERE THIS ISN'T, for free: .tool-row__right's gap lands only BETWEEN two
               children, so not rendering the element IS AC2 — no modifier class, no pending variant.
               #854's "the whole group, not just the chevron" argument one level down again. */}
-          {result && result.resultDetail !== undefined && result.resultDetail !== '' && (
+          {group && (
+            <span className="tool-row__count">{group.count} {group.count === 1 ? 'tool' : 'tools'}{group.running ? ' · running' : ''}</span>
+          )}
+          {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
@@ -1672,7 +1701,7 @@ export function ToolRow({
           aria-expanded={expanded}
           // Functional updater, never `setExpanded(!expanded)`: the latter reads a captured value and
           // is a check-then-act race against React's batching (UnrecognizedRow:775's form).
-          onClick={() => setExpanded((open) => !open)}
+          onClick={() => expansion ? expansion.onToggle() : setExpanded((open) => !open)}
         >
           {chipRuns}
         </button>

@@ -13,7 +13,8 @@ cases and its links.
 - [Full-width bordered tool row](conversation-shell-tool-row-box.md) — #722 restyles the chip from the
   mobile mock's hug-width pill to the desktop design's full-width bordered box.
 - [Tool row header groups](conversation-shell-tool-row-header-groups.md) — #854 splits the chip into
-  `.tool-row__left`/`.tool-row__right` and draws the chevron.
+  `.tool-row__left`/`.tool-row__right` and draws the chevron; also covers subagent nesting,
+  retained expansion, descendant counts and visible-neighbour joins.
 - [Tool row header run routing](conversation-shell-tool-row-run-routing.md) — #855 makes the lead and
   subject runs independently switchable per call.
 - [Tool row result count](conversation-shell-tool-row-result-count.md) — #856 draws the daemon's short

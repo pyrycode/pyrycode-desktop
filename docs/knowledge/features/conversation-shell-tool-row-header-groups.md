@@ -29,14 +29,12 @@ would paint *over* the chevron before the chip-level clip ever ran. `.tool-row__
 moves — without it the roles above invert and an oversized name squeezes the chevron instead of
 ellipsizing the headline, the `.composer-status__error` reasoning with the names swapped.
 
-**The right group is gated on `result !== null`** — the same binding that already forks `rowClass`, the
-chip's `<button>`/`<div>` fork, and `body` — never a second predicate, never `expanded`. The whole group is
-gated, not just the chevron: an always-rendered empty `.tool-row__right` would still take one side of the
-chip's 12px gap and drag a pending row's trailing edge away from a resolved row's, which is exactly the "a
-resolving row does not shift" property #722 shipped and pinned with three chip-width equalities in
-`e2e/tool-row-toggle.spec.ts` — unedited by this ticket, and still green because the pending `<div>`
-branch is `result === null` by construction, so it can never reach the group that renders inside the
-shared `chipRuns` fragment both branches consume.
+**The right group follows `expandable`: a result, a denial, or descendants.** A pending
+leaf still draws neither the right group nor its gap. An Agent/Task with descendants
+has a button and chevron even before its result arrives, so its children can be opened
+while running. The count slot shows the group's descendant count instead of the
+parent's result detail; calls without children retain the ordinary result-detail slot.
+See [Subagent tool groups](#subagent-tool-groups) below.
 
 **The chevron** is a bare inline `<svg viewBox="0 0 4 8" width="4" height="8" fill="currentColor"
 aria-hidden="true">`, the same idiom every chevron in this file already follows
@@ -63,7 +61,7 @@ content and is fine. Layout comes from `display: flex` in the CSS, not from the 
 
 **Tests.** Two byte-level assertions in `ConversationScreen.test.tsx` were updated in place (not
 loosened) to expect the new wrapper spans and the chevron as the right group's last child; new cases pin
-that a pending row draws neither `.tool-row__right` nor `.tool-row__chevron` nor a gap where either would
+that a pending leaf draws neither `.tool-row__right` nor `.tool-row__chevron` nor a gap where either would
 be, that the chevron carries `aria-hidden="true"` and nothing else exposes an accessible name, that an
 error row still draws the chevron (it follows the body, never the outcome), and that an expanded row's
 header markup is byte-identical to the collapsed row's (no rotation class, no `--expanded` variant). A new
@@ -82,3 +80,62 @@ chevron), the expanded body (`.tool-row__body`, #706's field list, #780's comman
 See commit `2c90c01` for the full record; there is no `docs/knowledge/codebase/854.md` — that directory
 was frozen 2026-08-26, and this section is #854's only home.
 
+
+## Subagent tool groups
+
+`groupToolRows.ts` projects the conversation's stored arrival order into display order;
+it does not reorder timeline state. Only calls named exactly `Agent` or `Task` can own
+children through `parentToolUseId`. Roots and siblings retain their relative arrival
+order, including interleaved parallel agents. Assistant text remains independent:
+this feature does not attribute or group assistant deltas.
+
+A missing parent leaves the tool at the root until a history prepend supplies its
+Agent/Task owner. A reference to an ordinary tool also stays flat. Iterative traversal
+and disconnection of cyclic parent links keep every row reachable; identifiers are
+Map equality hints within this conversation, never authority or DOM attributes.
+Indentation uses `--space-4` per level, capped at two levels (16px and 32px with the
+current tokens). Deeper descendants retain their full ancestry for visibility and counts.
+
+New groups start collapsed. Their headers retain the call description and count distinct
+descendant tool-use ids, excluding the parent. `running` remains visible while the
+parent or any descendant has neither a result nor a denial. Both readings update while
+collapsed. Expanding a pending group reveals children without drawing an empty result
+body; nested groups keep their own collapse state.
+
+### Expansion identity
+
+`Timeline` controls expansion for **every** tool row, keyed by its origin-relative
+index (`firstRowKey + index`). Separate leaf and group state would close an expanded
+leaf when history gives it its first child. Tool wrappers stay under one React parent
+and remain mounted while hidden, preserving child-result and inner-group expansion
+through outer collapse, results, history prepends and regrouping. The mounted timeline
+is keyed by conversation, so this UI state cannot leak into another conversation.
+See [history prepend identity](conversation-timeline-store.md#edge-cases-and-limitations).
+
+### Visible tool-row joins
+
+Join decisions follow visible neighbours at the same **capped** indentation, skipping
+collapsed descendants and undrawn `turnBoundary` items. A visible non-tool row or a
+change in indentation ends the stack. Direct `.tool-row + .tool-row` selectors alone
+cannot implement this: the mounted wrappers interrupt DOM adjacency even for ordinary
+calls with no children. Client-owned wrapper classes extend the existing join rules
+for flattened internal corners, overlapping borders, adjacent error edges and a shadow
+only on the stack's last row.
+
+Visible wrappers are flex columns so the child's negative join margin reduces wrapper
+height without collapsing through it. Hidden wrappers retain `display: none`, consuming
+neither height nor thread gap. See [tool-row box treatment](conversation-shell-tool-row-body.md).
+
+### Verification
+
+`toolGroups.test.tsx` covers projection order, depth cap, orphan recovery, cycles,
+distinct counts, denial completion and reducer/history attribution. Static markup
+cannot prove retained interaction or border geometry. `e2e/tool-groups.spec.ts` drives
+interleaved live calls, nested expansion, result resolution and history regrouping;
+it also measures joins through collapse and child-result expansion. Keep the ordinary
+stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup did
+not prevent the wrapper regression. Fake transport proves this client behavior; no
+additional live-Claude acceptance gate is needed.
+
+Source: [subagent tool groups design](../../specs/architecture/1239-subagent-tool-groups.md)
+and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328).

@@ -83,6 +83,7 @@ export type HistoryTimelineEvent =
       type: 'toolUse'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       name: string
       inputSummary: string
       input?: Readonly<Record<string, string>>
@@ -102,6 +103,7 @@ export type HistoryTimelineEvent =
       type: 'toolResult'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       isError: boolean
       resultSummary: string
       resultDetail?: string
@@ -754,6 +756,7 @@ type BaseDaemonEvent =
       conversationId: string
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       name: string
       inputSummary: string
       input?: Readonly<Record<string, string>>
@@ -798,6 +801,7 @@ type BaseDaemonEvent =
       conversationId: string
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       isError: boolean
       resultSummary: string
       resultDetail?: string

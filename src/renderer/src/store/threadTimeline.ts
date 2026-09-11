@@ -102,6 +102,7 @@ export type ThreadItem =
       kind: 'toolCall'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       name: string
       inputSummary: string
       // #643: the tool's own input fields, name → value, carried from the `toolUse` event unchanged.
@@ -220,6 +221,7 @@ export type ThreadEvent =
       type: 'toolUse'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       name: string
       inputSummary: string
       input?: Readonly<Record<string, string>>
@@ -233,6 +235,7 @@ export type ThreadEvent =
       type: 'toolResult'
       turnId: string
       toolUseId: string
+      parentToolUseId?: string
       isError: boolean
       resultSummary: string
       resultDetail?: string
@@ -466,7 +469,8 @@ function appendDelta(
 function fillResult(
   items: readonly ThreadItem[],
   toolUseId: string,
-  result: ToolResult
+  result: ToolResult,
+  parentToolUseId?: string
 ): readonly ThreadItem[] {
   let filled = false
   const next = items.map((item) => {
@@ -474,7 +478,7 @@ function fillResult(
     // type-checks as a valid ThreadItem with no cast. `filled` fills only the first match.
     if (!filled && item.kind === 'toolCall' && item.toolUseId === toolUseId && item.result === null) {
       filled = true
-      return { ...item, result }
+      return { ...item, result, parentToolUseId: item.parentToolUseId ?? parentToolUseId }
     }
     return item
   })
@@ -545,6 +549,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             kind: 'toolCall',
             turnId: event.turnId,
             toolUseId: event.toolUseId,
+            parentToolUseId: event.parentToolUseId,
             name: event.name,
             inputSummary: event.inputSummary,
             // #643: carried onto the item verbatim — unconditional and BY REFERENCE. Never
@@ -581,7 +586,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         isError: event.isError,
         resultSummary: event.resultSummary,
         resultDetail: event.resultDetail
-      })
+      }, event.parentToolUseId)
       // Turn activity — clears a live stall (AC2). Same-reference no-op ONLY when the result changed
       // nothing AND no stall is live; an orphan/duplicate result against a live stall must still clear
       // it, so the guard widens with `&& !state.stalled`. From `initialTimelineState` (stalled already

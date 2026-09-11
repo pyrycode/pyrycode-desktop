@@ -5,7 +5,7 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import { translateTimelineEvent, timelineTargetFor, liveJoinKeyFor } from './timelineBridge'
 import { reduceHistoryPage, withoutLiveEntries } from './historyPageBridge'
 import { createRunSettingsWriteStore } from './runSettingsWriteStore'
-import { subscribeRefusalRecovery } from './runSettingsWriteBridge'
+import { subscribeRefusalRecovery, subscribeRunSettingsWrite } from './runSettingsWriteBridge'
 
 const report: ModelRefusalEvent = { type: 'modelRefusalFallback', originalModel: 'original', fallbackModel: 'fallback',
   scope: 'session', refusalCategory: 'unknown', banner: 'Explanation', truncatedFields: null, droppedFields: [] }
@@ -62,6 +62,10 @@ describe('refusal timeline', () => {
     const rejected = reduceTimeline(pending, { type: 'refusalWriteSettled', changeId: 'one', confirmed: false })
     expect(rejected.refusalOffer?.report).toEqual(report)
     expect(rejected.refusalOffer?.changeId).toBeUndefined()
+    expect(rejected.refusalOffer).toHaveProperty('rejected', true)
+    const retry = reduceTimeline(rejected, { type: 'refusalWriteStarted', offer: rejected.refusalOffer!, changeId: 'two' })
+    expect(retry.refusalOffer).not.toHaveProperty('rejected', true)
+    expect(reduceTimeline(retry, { type: 'refusalWriteSettled', changeId: 'one', confirmed: false })).toBe(retry)
     expect(reduceTimeline(pending, { type: 'refusalWriteSettled', changeId: 'one', confirmed: true }).refusalOffer).toBeUndefined()
     const newer = reduceTimeline(pending, refusal)
     expect(reduceTimeline(newer, { type: 'refusalWriteSettled', changeId: 'one', confirmed: true })).toBe(newer)
@@ -73,6 +77,57 @@ describe('refusal timeline', () => {
     expect(next.refusalOffer).toBeUndefined()
     expect(next.items).toBe(before.items)
   })
+})
+
+it.each(['a', 'b'])('retains a correlated rejection received while %s is open after navigation clears settings', rejectedWhileOpen => {
+  const timelines = createConversationTimelineStore(), writes = createRunSettingsWriteStore()
+  const listeners = new Set<(event: DaemonEvent) => void>()
+  const onEvent = (listener: (event: DaemonEvent) => void) => {
+    listeners.add(listener)
+    return () => { listeners.delete(listener) }
+  }
+  let open = 'a'
+  const offRecovery = subscribeRefusalRecovery(onEvent, writes, timelines, () => open)
+  const offSettings = subscribeRunSettingsWrite(onEvent, writes.getState().dispatch)
+  const get = (id: string) => timelines.getState().timelines.get(id)!.timeline.refusalOffer
+  const navigate = (id: string) => {
+    writes.getState().dispatch({ type: 'conversationSwitched' })
+    open = id
+  }
+  const start = (changeId: string) => {
+    timelines.getState().dispatchFor('a', { type: 'refusalWriteStarted', offer: get('a')!, changeId })
+    writes.getState().dispatch({ type: 'changeDispatched', changeId, change: { field: 'model', value: 'original' } })
+  }
+  const emit = (event: DaemonEvent) => listeners.forEach(listener => listener(event))
+  try {
+    for (const id of ['a', 'b']) timelines.getState().dispatchFor(id, refusal)
+    const other = get('b')
+    start('one')
+    navigate('b')
+    navigate('a')
+    expect(writes.getState().pending.size).toBe(0)
+    expect(get('a')?.changeId).toBe('one')
+    navigate(rejectedWhileOpen)
+    emit({ type: 'sessionSettingsRejected', changeId: 'one' })
+    navigate('a')
+    expect(writes.getState().error).toBeNull()
+    expect(get('a')).toEqual({ report, rejected: true })
+    expect(get('b')).toBe(other)
+    start('two')
+    expect(get('a')).toEqual({ report, changeId: 'two' })
+    navigate('b')
+    emit({ type: 'sessionSettingsRejected', changeId: 'one' })
+    expect(get('a')?.changeId).toBe('two')
+    emit({ type: 'sessionSettingsUpdated', sessionId: 's', changeId: 'two' })
+    navigate('a')
+    expect(get('a')).toBeUndefined()
+    expect(get('b')).toBe(other)
+    expect(timelines.getState().timelines.get('a')?.timeline.items).toHaveLength(1)
+  } finally {
+    offSettings()
+    offRecovery()
+  }
+  expect(listeners.size).toBe(0)
 })
 
 it('observes only later intents/events, isolates conversations, correlates replies, and tears down', () => {

@@ -4011,13 +4011,14 @@ function ComposerErrorSlotControl({
   const sessionId = useSessionIdStore(selectSessionId)
   const writes = useRunSettingsWriteStore(s => s)
   const offer = useConversationTimelineStore(s => open === null ? undefined : s.timelines.get(open.id)?.timeline.refusalOffer)
-  const modelPending = [...writes.pending.values()].some(change => change.field === 'model')
+  // Navigation clears settings writes; the retained offer still owns an outstanding recovery.
+  const modelPending = offer?.changeId !== undefined || [...writes.pending.values()].some(change => change.field === 'model')
   const switchBack = (): void => {
     const currentId = activeConversationStore.getState().activeConversation?.id
     const currentOffer = currentId === undefined ? undefined : conversationTimelineStore.getState().timelines.get(currentId)?.timeline.refusalOffer
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
-    if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer ||
+    if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer || currentOffer.changeId !== undefined ||
         sessionStore.getState().status.type !== 'connected' || !isAddressableSessionId(currentSession) ||
         [...currentWrites.pending.values()].some(change => change.field === 'model')) return
     changeSetting({ sessionId: currentSession, sendCommand: window.pyry.sendCommand,
@@ -4077,7 +4078,7 @@ function ComposerErrorSlotControl({
       )}
       refusal={offer && isAddressableSessionId(sessionId) ? (
         <div className="model-refusal-recovery">
-          {settingsError === 'model' && (
+          {(offer.rejected || settingsError === 'model') && (
             <div className="composer-status__error composer-status__error--settings" role="alert">
               Could not change the model — try again.
             </div>

@@ -375,7 +375,11 @@ export interface ApiRetryStatus {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
-  refusalOffer?: { report: Extract<ModelRefusalEvent, { type: 'modelRefusalFallback' }>; changeId?: string }
+  refusalOffer?: {
+    report: Extract<ModelRefusalEvent, { type: 'modelRefusalFallback' }>
+    changeId?: string
+    rejected?: boolean
+  }
   /** Latest live turn end; history replay returns rows only and cannot restore this reading. */
   latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>
   items: readonly ThreadItem[]
@@ -569,10 +573,10 @@ function reduceRefusalOffer(
       return event.refusal.scope === 'session' && event.refusal.originalModel !== '' && event.refusal.fallbackModel !== ''
         ? { report: event.refusal } : undefined
     case 'refusalWriteStarted':
-      return offer === event.offer ? { ...offer, changeId: event.changeId } : offer
+      return offer === event.offer ? { report: offer.report, changeId: event.changeId } : offer
     case 'refusalWriteSettled':
       if (offer?.changeId !== event.changeId) return offer
-      return event.confirmed ? undefined : { report: offer.report }
+      return event.confirmed ? undefined : { report: offer.report, rejected: true }
     case 'refusalModelSelected':
       return offer?.changeId === event.changeId ? offer : undefined
     case 'refusalModelAnnounced':

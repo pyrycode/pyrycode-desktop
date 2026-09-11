@@ -29,6 +29,61 @@ function fake(captured: Envelope[]) {
 }
 const writes = (captured: Envelope[]) => captured.filter(env => env.type === 'set_session_settings')
 
+for (const rejectWhileAway of [false, true]) {
+  test(`Switch back stays pending across navigation and retains rejection ${rejectWhileAway ? 'while away' : 'after returning'}`, async ({ launchPairedApp }) => {
+    const captured: Envelope[] = []
+    const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured) })
+    const action = page.getByRole('button', { name: 'Switch back', exact: true })
+    const rows = page.locator('.model-refusal')
+    const rejection = page.getByRole('alert').filter({ hasText: 'Could not change the model — try again.' })
+    const navigate = async (conversation: typeof SEEDED_ROW) => {
+      const requestsBefore = captured.filter(env => env.type === 'request_session_settings').length
+      await page.locator('.channel-list__row-open').filter({ hasText: conversation.name }).click()
+      await expect.poll(() => captured.filter(env => env.type === 'request_session_settings').length).toBeGreaterThan(requestsBefore)
+      await expect(page.locator('.composer__model-label')).toHaveText('Haiku')
+      await expect(rows).toHaveCount(conversation.id === SEEDED_ROW.id ? 1 : 0)
+    }
+    daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
+    daemon.pushFrame(frame('model_refusal_fallback', refusal()))
+    await expect(action).toBeEnabled()
+    await action.click()
+    await expect.poll(() => writes(captured).length).toBe(1)
+    await expect(action).toBeDisabled()
+    await navigate(other)
+    await expect(action).toHaveCount(0)
+    await navigate(SEEDED_ROW)
+    await expect(action).toBeDisabled()
+    // Native disabled controls suppress activation even after the settings snapshot has returned.
+    await action.evaluate(button => (button as HTMLButtonElement).click())
+    expect(writes(captured)).toHaveLength(1)
+    if (rejectWhileAway) await navigate(other)
+    daemon.pushFrame(frame('error', {}, writes(captured)[0].id))
+    if (rejectWhileAway) {
+      // A later frame is an observable barrier after the rejection reaches the app while B is open.
+      daemon.pushFrame(frame('model_refusal_no_fallback', {
+        conversation_id: other.id, original_model: 'haiku', refusal_category: '', banner: '',
+        truncated_fields: null, dropped_fields: null
+      }))
+      await expect(rows).toHaveText('Refused by haiku')
+      await expect(action).toHaveCount(0)
+      await expect(rejection).toHaveCount(0)
+      await navigate(SEEDED_ROW)
+    }
+    await expect(rejection).toBeVisible()
+    await expect(action).toBeEnabled()
+    await action.click()
+    await expect.poll(() => writes(captured).length).toBe(2)
+    await expect(action).toBeDisabled()
+    await expect(rejection).toHaveCount(0)
+    expect(writes(captured)[1].payload).toEqual({ session_id: 'addressable-session', model: original })
+    daemon.pushFrame(frame('session_settings_updated', { session_id: 'addressable-session' }, writes(captured)[1].id))
+    await expect(page.locator('.composer__model-label')).toHaveText('Opus')
+    await expect(action).toHaveCount(0)
+    await expect(rows).toHaveCount(1)
+    expect(captured.filter(env => env.type === 'send_message')).toHaveLength(0)
+  })
+}
+
 test('session fallback discloses Claude text, keeps the draft, rejects then confirms Switch back', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured) })

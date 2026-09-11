@@ -69,8 +69,9 @@ dims the shadow with it, the composite Figma renders), and `.session-delimiter__
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new
 bottom sheet (Figma node 20-48), reusing the Run-configuration `StatusSheet`'s `.status-sheet__*`
 chrome verbatim — the second sheet to do so. Renders the active conversation's **About** detail
-(Workspace `cwd` + Last activity), a **System prompt** section (#1078), an empty **Actions** section
-slot, and a monospace **Channel ID** footer. Renderer-contained: no transport, IPC, or wire code.
+(Workspace `cwd` + Last activity), read-only **Session** facts (#1241), a **System prompt** section
+(#1078), **Actions**, and a monospace **Channel ID** footer. The Session report arrives through the
+validated daemon event path; the sheet owns only its display.
 
 ```
 .conversation
@@ -85,6 +86,7 @@ slot, and a monospace **Channel ID** footer. Renderer-contained: no transport, I
                 ├── "About" section-header
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
+                ├── "Session" + two detail rows     Claude version / Reported permission mode (conversation !== null)
                 ├── SystemPromptSection              #1078, conversation !== null only — see below
                 ├── "Actions" section-header
                 ├── .channel-info__actions          mount point for #366/#367/#368 (Rename+Archive built, Delete #367 open)
@@ -143,9 +145,48 @@ Escape-to-dismiss is wired via the same `document`-`keydown`-listener-scoped-to-
 `import { type KeyboardEvent } from 'react'` shadows the DOM type). Untested here, same as #276's
 Escape/outside-click and `StatusSheet`'s open-on-click wiring — the suite is `renderToStaticMarkup`-only,
 no jsdom, so interactive effects are reviewed glue, not asserted. Not security-sensitive: the only daemon
-strings rendered (`name`/`cwd`/`id`) are already rendered elsewhere in this file as auto-escaped React
-children, same posture as `WorkspaceChip`. See [#365 codebase notes](../codebase/365.md) for the full
+strings rendered by the original shell (`name`/`cwd`/`id`) are already rendered elsewhere in this file
+as auto-escaped React children, same posture as `WorkspaceChip`. Session report text follows the
+bounded display rules below. See [#365 codebase notes](../codebase/365.md) for the full
 design and patterns established.
+
+### Session reports
+
+For an identified conversation, **Session** sits after About and before System prompt, reusing the
+desktop sheet's section heading and detail rows. **Claude version** and **Reported permission mode**
+show **Not reported** before a report arrives or when that field is an empty string. Unknown mode
+names and non-semver version strings display verbatim as escaped React text, bounded to 256 Unicode
+code points per field and allowed to wrap. **Truncated** appears separately beneath a value when
+`truncated_fields` names its wire field (`claude_code_version` or `permission_mode`), or when the local
+display cap cuts it. An empty reported field can therefore show both Not reported and Truncated.
+With no conversation, the existing placeholder remains and Session is omitted.
+
+These are reported claims, never permission controls: they do not change the selected permission
+setting or approval behavior. A `session_facts` frame neither starts a turn nor identifies a session,
+and creates no timeline entry. It carries no resolved effort; no effort value is inferred from it.
+The [decoder](inbound-message-decode.md) requires all three string fields (including
+`conversation_id`) and `truncated_fields: string[] | null`, discards unknown payload fields, and
+preserves empty strings and unknown truncation field names. Shape validation must not narrow the
+permission report to the control-request enum. Malformed reports use the existing decode failure
+path; diagnostics contain only static classification, frame length and hash, never report text.
+
+`SessionFactsData`, mounted in `App`, subscribes through the [daemon-event channel](daemon-event-channel.md)
+even while the sheet is closed. `sessionFactsStore` retains the latest complete report in an in-memory
+Map keyed by conversation id, following the [announced-model store](announced-model-store.md) pattern.
+Every report replaces both values and the truncation metadata, including empty strings and null or
+empty lists; it is not a partial merge. The sheet selects only its conversation's record, with null
+for an unknown conversation. Closing the sheet, switching conversations and reconnecting retain
+reports; `clearPairingScopedState` unconditionally clears the whole Map at pairing teardown. Reports
+are not persisted, and receipt has no turn, modal or question action.
+
+**Testing.** `SessionFacts.test.tsx` covers the pure view's missing, empty, unknown, escaped and
+truncated states, section order and no-conversation placeholder. Static rendering cannot prove the
+app-level listener is mounted. `e2e/channel-session-facts.spec.ts` sends facts before opening the
+sheet, then waits for a later conversation-list frame to become visible as a delivery barrier. That
+ordering prevents a sheet-mounted listener from accidentally passing the pre-open retention check.
+The fake-transport test also observes updates while open and switches both ways between two
+conversations. Store and cleanup tests cover complete replacement, isolation, hostile Map keys and
+pairing reset. See [verification boundaries](development-verification.md#what-each-test-tier-proves).
 
 **Rename action ([#368](../codebase/368.md)).** The Actions slot's first filler: a Material 3 tonal
 pill (Figma 20:89, `.channel-info__action`) rendered only when the container supplies an `onRename?`
@@ -190,7 +231,7 @@ in, JSX out, no store, no `window.pyry`); `SystemPromptSection` is the thin cont
 two stores, owns the draft, and dispatches.
 
 `ChannelInfoSheetView` gained one optional prop, `systemPromptSection?: ReactNode`, rendered between
-the About block and the `Actions` section header — the `StatusSheet` `children` slot idiom in narrow
+the Session rows and the `Actions` section header — the `StatusSheet` `children` slot idiom in narrow
 form, keeping the view itself pure. `ChannelInfoSheet` supplies
 `<SystemPromptSection conversationId={conversation.id} />` only in the `conversation !== null` branch,
 the same callback-gate the Rename/Archive/Delete actions use, so the list-opened graceful-empty case

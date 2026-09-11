@@ -35,7 +35,8 @@ message bubble. `Timeline`'s array-index key strategy is untouched; `toolUseId` 
 unread here, reserved for [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206)'s result
 correlation.
 
-This is the **pending** (`result: null`) treatment only — the whole `.tool-row` sits at 50% opacity,
+This is the **pending** (`result: null`, no `denial`) treatment only — the whole `.tool-row`
+sits at 50% opacity,
 the unresolved-state dimming. #206 (later split into transport #229 + render #230) fills `result` and
 owns lifting (or overriding) that dimming plus the success/error visual; this ticket's chip styling
 stays untouched by that follow-up. Every value in the three new `.tool-row*` CSS rules is a token
@@ -69,7 +70,8 @@ wrapper `className`; the chip's inner markup — the two spans — is **byte-ide
 
 `tool-row--resolved` lifts the pending 50% dimming (`opacity: 1`) for **both** outcomes — the
 resolved-success treatment is exactly the mock's chip with the dimming lifted, no accent added.
-`tool-row--error` layers on top only when `result.isError`, retinting `.tool-row__chip`'s border from
+`tool-row--error` layers on top only when `result.isError` and no explicit denial is attached,
+retinting `.tool-row__chip`'s border from
 the neutral `--color-outline-variant` to a new token, `--color-error` (`#ffb4ab` — M3 default dark
 error role, tone 80; desktop's **first** error-family token, mirrored from the same M3 scheme
 `tokens.css`'s header names as the palette's source, since no Figma node in this file references an
@@ -112,29 +114,24 @@ the three designs.
 (As above, the second run's text source is [#705](#collapsed-tool-row-headline-705)'s picker, not raw
 `inputSummary`, as of that ticket.)
 
-`const body = expanded ? result : null` drives both the wrapper's `tool-row--expanded` modifier and the
-body element, so a pending row (`result === null`) is structurally incapable of showing a body no matter
-what the flag says. The result text's only sink is `<pre>` text children (`white-space: pre`, so
+`expandable = result !== null || denial !== undefined` gates the disclosure button and
+chevron; `expanded && expandable` gates the body and `tool-row--expanded` modifier.
+A call with neither result nor denial cannot expand, even with `defaultExpanded`.
+The result text's only sink is `<pre>` text children (`white-space: pre`, so
 daemon-emitted newlines survive — the machine-output side of the same reflow-vs-preserve rule
 `.unrecognized-row__raw` established), bounded to `max-height: 240px` + `overflow: auto` (that literal
 copied from `.unrecognized-row__raw`, the file's only other `overflow: auto` result body — **neither has
 a `tabindex`**, a known pre-existing gap in both, not yet fixed). An empty result
 (`resultSummary === ''`, exact) renders the client-owned `TOOL_RESULT_EMPTY_COPY` ("No output") instead
-of a blank gap; an error result gets its own `tool-row__body--error` modifier on the body container,
+of a blank gap; an error result without a denial gets its own `tool-row__body--error`
+modifier on the body container,
 independent of the pre-existing `tool-row--error` on the chip's wrapper.
 
-**#696 shipped the body with no way to reach it** — the production call site passed no `expanded` flag,
-so the branch existed only for the DOM-less `renderToStaticMarkup` test tier to exercise directly (this
-repo's unit tier has no jsdom/happy-dom/@testing-library — see `e2e-harness.md` — so nothing there could
-ever click). **#697 supplied the control.** The chip on a *resolved* row becomes the disclosure control
-itself — the Figma pill (node `16-28`, chip `16-29`) has two runs and no third slot, so the whole pill
-forks between a `<div>` (pending) and a real `<button aria-expanded>` (resolved), gated on `result`, the
-same condition the wrapper's `--resolved` modifier already reads. A pending row keeps its original `<div
-className="tool-row__chip" data-thread-role="tool">` byte-for-byte and offers no affordance at all —
-"activated while pending" is unreachable rather than guarded. The prop that controls the body
-(`ToolRow`'s `expanded`) was renamed `defaultExpanded` at the same time: under #696 it was a controlled
-value; under #697 the toggle owns a component-local `useState(defaultExpanded)` and the prop is only the
-mount-time initial value, so the old name would have been a quiet lie about what a re-render could do.
+The disclosure owns component-local `useState(defaultExpanded)`; the prop sets only
+its mount-time initial value. A result or an explicit denial makes the header a real
+`<button aria-expanded>`; a call awaiting both keeps its non-interactive `<div>`.
+Static rendering can exercise the initial open state, but only Playwright can prove
+that clicking toggles it.
 
 **Where the boolean lives is the interesting design call**, and it's the same shape
 the repo's other expand/collapse row, `UnrecognizedRow`, has shipped with since it landed —
@@ -169,6 +166,50 @@ enriching the body through markdown); see the `SAFETY` comment block in `Convers
 
 See [#696 codebase notes](../codebase/696.md) and [#697 codebase notes](../codebase/697.md) for the full
 design, testing strategy, and patterns established.
+
+## Permission-denied tool-call row
+
+An explicit [timeline denial](thread-timeline.md#permission-denial-correlation) immediately
+adds a literal **Denied** header tag and makes the row expandable, even before a result
+arrives. `tool-row--denied` takes precedence over error styling on both wrapper and body;
+the name, subject, tag and attribution use muted `--color-on-surface-variant` ink.
+Ordinary successes and errors without a denial keep their existing presentation.
+The header/body layout stays intact; this report adds no allow/retry action or policy change.
+
+The expanded body places attribution above the result text, using exact source tokens:
+
+| `decisionReasonType` | Attribution |
+| --- | --- |
+| `classifier` | Denied by the auto classifier |
+| `rule` | Denied by a permission rule |
+| `mode` | Denied by the permission mode |
+| `asyncAgent` | Denied by an async agent |
+| Empty or unknown | Denied by the permission gate |
+
+Append `: <reason>` only when the original reason is nonempty. Never display an unknown
+source token as attribution. While waiting for a result, the result block shows the
+marker's rejection message; an arriving actual result replaces that provisional text,
+while attribution remains. An empty displayed result uses the existing “No output” copy.
+Report arrays are retained in state without becoming attribution or visible report labels.
+
+`denialDisplayText` strips terminal escape sequences and non-layout control characters,
+then takes at most 4096 JavaScript string units per field. Reason, provisional message,
+and **actual result summary in a denied row** all take this path and render as escaped
+React text; tabs and line breaks survive. Sanitizing only the provisional message leaves
+the later result branch unbounded. The full actual result remains in state; ordinary
+result rendering is unchanged. No denial prose enters HTML, attributes, URLs or logs.
+
+`openToolName` immediately skips denied calls: another pending tool can still name the
+working label, otherwise a responding turn shows “Working…”. Denial does not finish the
+turn or alter the indicator's phase/priority rules. See [turn status](conversation-shell-turn-status.md).
+
+The tag needs the complete body-medium typography quartet, even though the disclosure
+button sets a font family: the browser otherwise supplies default button sizing.
+`e2e/tool-denied.spec.ts` asserts computed 14px size, 20px line-height, 0.25px tracking
+and 400 weight, alongside real IPC delivery, clicks and positive Running Bash → Running
+Read → Working transitions. Static denial tests cover attribution, ordering and sanitized
+text, but cannot prove typography or interaction. See the
+[implementation spec](../../specs/architecture/1238-tool-denial.md).
 
 ## Collapsed tool-row headline (#705)
 

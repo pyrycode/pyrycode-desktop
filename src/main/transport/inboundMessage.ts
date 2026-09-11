@@ -51,6 +51,7 @@ import type {
   HistoryPagePayload,
   ToolUsePayload,
   ToolResultPayload,
+  ToolDeniedPayload,
   QueuedItem,
   QueueStatePayload,
   ConversationSummary,
@@ -731,6 +732,7 @@ export type InboundDaemonMessage =
     }
   | ({ kind: 'tool-use'; toolUse: ToolUsePayload } & FrameTimestamp)
   | ({ kind: 'tool-result'; toolResult: ToolResultPayload } & FrameTimestamp)
+  | ({ kind: 'tool-denied'; toolDenied: ToolDeniedPayload } & FrameTimestamp)
   | { kind: 'queue-state'; queueState: QueueStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
@@ -1408,6 +1410,17 @@ export type DecodedHistoryEvent =
       input?: Readonly<Record<string, string>>
     }
   | {
+      type: 'toolDenied'
+      turnId: string
+      toolUseId: string
+      toolName: string
+      decisionReasonType: string
+      decisionReason: string
+      message: string
+      truncatedFields: readonly string[] | null
+      droppedFields: readonly string[] | null
+    }
+  | {
       type: 'toolResult'
       turnId: string
       toolUseId: string
@@ -1509,6 +1522,20 @@ function decodeHistoryEvent(
         // map stays absent rather than becoming `{}`, which is the different fact that the daemon sent
         // no fields for this call.
         input: p.input
+      }
+    }
+    case 'tool_denied': {
+      const p = parseToolDeniedPayload(payload)
+      return {
+        type: 'toolDenied',
+        turnId: p.turn_id,
+        toolUseId: p.tool_use_id,
+        toolName: p.tool_name,
+        decisionReasonType: p.decision_reason_type,
+        decisionReason: p.decision_reason,
+        message: p.message,
+        truncatedFields: p.truncated_fields,
+        droppedFields: p.dropped_fields
       }
     }
     case 'tool_result': {
@@ -2175,6 +2202,22 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
   const input_summary = requireString(payload, 'input_summary')
   const input = optionalStringMap(payload, 'input')
   return { conversation_id, turn_id, tool_use_id, name, input_summary, input }
+}
+
+/** Validate denial shape without interpreting source tokens or collapsing nullable reports. */
+function parseToolDeniedPayload(payload: unknown): ToolDeniedPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed tool_denied payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    turn_id: requireString(payload, 'turn_id'),
+    tool_use_id: requireString(payload, 'tool_use_id'),
+    tool_name: requireString(payload, 'tool_name'),
+    decision_reason_type: requireString(payload, 'decision_reason_type'),
+    decision_reason: requireString(payload, 'decision_reason'),
+    message: requireString(payload, 'message'),
+    truncated_fields: requireStringArrayOrNull(payload, 'truncated_fields'),
+    dropped_fields: requireStringArrayOrNull(payload, 'dropped_fields')
+  }
 }
 
 /**
@@ -3512,6 +3555,16 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'tool-use', toolUse, ts: envelope.ts }
+    }
+    case 'tool_denied': {
+      const toolDenied = parseToolDeniedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'tool_denied',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'tool-denied', toolDenied, ts: envelope.ts }
     }
     case 'tool_result': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a non-boolean

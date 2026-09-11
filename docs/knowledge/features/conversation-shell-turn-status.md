@@ -436,14 +436,18 @@ whenever the turn is actually still streaming text.
 one is actually open**, closing the operator's remaining complaint that `WORKING_COPY` read identically
 for a 40 ms file read and a four-minute build. This doesn't reopen the lie #215 avoided, because it isn't
 derived from `phase` at all — it's a direct, independent read of `items` (`openToolName`): a `toolCall`
-item (`threadTimeline.ts:42-50`) carries `name` and starts `result: null`, filled in place when the
-correlated `toolResult` arrives, so "a tool is open right now" and "which one, if more than one" (the
+item carries `name` and starts `result: null`, filled in place when the
+correlated `toolResult` arrives. The scan requires both `result === null` and no explicit `denial`,
+so "a tool is open right now" and "which one, if more than one" (the
 last such item in array order — `items` is append-only, `fillResult` fills in place without reordering)
 are both facts already sitting in the store, not an inference over `phase`. `openToolName(items)` is
 computed alongside `workingIndicatorState` at the same call site and passed as the indicator's second,
 required `toolName: string | null` prop; when it is non-null it replaces the phase-derived copy with
 `` `Running ${name}…` `` (`toolWorkingCopy`) rather than sitting beside it, and reverts to the generic copy
-the moment the tool's `toolResult` fills the item — no further `turn_state` needed. Renders through a
+the moment no eligible tool remains — a result or an explicit
+[denial](conversation-shell-tool-rows.md#permission-denied-tool-call-row) retires a call from
+the scan immediately, without another `turn_state`. Denial leaves the turn's working state
+and priority rules intact. Renders through a
 `.tool-row__summary`-style one-line-ellipsis bound (not `.tool-row__name`'s never-truncates one — see
 [#649 codebase notes](../codebase/649.md)) so a long tool name never wraps to a second line or moves the
 composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s own `max-width: min(680px,

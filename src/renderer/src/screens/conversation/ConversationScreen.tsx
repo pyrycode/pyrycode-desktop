@@ -1507,6 +1507,31 @@ function TimelineRow({
 const TOOL_ROW_CHEVRON_PATH =
   'M3.8393 3.58178C4.03385 3.804 4.03385 4.16489 3.8393 4.38711L0.850973 7.80045C0.656421 8.02267 0.340467 8.02267 0.145915 7.80045C-0.048638 7.57822 -0.048638 7.21733 0.145915 6.99511L2.78249 3.98356L0.147471 0.972C-0.0470815 0.749778 -0.0470815 0.388889 0.147471 0.166667C0.342024 -0.0555556 0.657977 -0.0555556 0.85253 0.166667L3.84086 3.58L3.8393 3.58178Z'
 
+// Treat source tokens as an open set, with only client-owned attribution reaching chrome.
+function denialAttribution(source: string): string {
+  switch (source) {
+    case 'classifier':
+      return 'Denied by the auto classifier'
+    case 'rule':
+      return 'Denied by a permission rule'
+    case 'mode':
+      return 'Denied by the permission mode'
+    case 'asyncAgent':
+      return 'Denied by an async agent'
+    default:
+      return 'Denied by the permission gate'
+  }
+}
+
+// Keep denial prose inert, bounded and free of terminal escapes; tabs/newlines remain text.
+function denialDisplayText(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
+    .slice(0, 4096)
+}
+
 export function ToolRow({
   item,
   defaultExpanded = false
@@ -1514,16 +1539,19 @@ export function ToolRow({
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
 }): JSX.Element {
-  const { result } = item
+  const { result, denial } = item
+  const expandable = result !== null || denial !== undefined
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const rowClass = result
-    ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
-    : 'tool-row'
-  // The one derived value behind both new markup facts — the wrapper modifier and the body element.
-  // Non-null iff `expanded && result !== null`, so AC3 (a pending row ignores the flag entirely) is
-  // structural rather than two conditions that could drift apart. Carrying the narrowed ToolResult
-  // rather than a boolean is what lets both readers below use it without re-checking for null.
-  const body = expanded ? result : null
+  const rowClass =
+    denial !== undefined
+      ? 'tool-row tool-row--resolved tool-row--denied'
+      : result
+        ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
+        : 'tool-row'
+  const body = expanded && expandable
+  const resultText = denial !== undefined
+    ? denialDisplayText(result?.resultSummary ?? denial.message)
+    : result?.resultSummary ?? ''
   // #780: the shell call's command, or null for every other tool and for a shell call carrying none.
   // A `const` rather than an inline call because it is consumed TWICE below — by the guard and by the
   // child — which is exactly the reason `chipRuns` is one. The field list stays inline for the
@@ -1573,23 +1601,9 @@ export function ToolRow({
             what keeps this row working against a pre-pyrycode#1678 daemon. */}
         {runs.subject !== null && <span className="tool-row__summary">{runs.subject}</span>}
       </span>
-      {/* Gated on the SAME `result` binding that already drives rowClass, the chip fork and `body` —
-          never a second predicate, never `expanded`, never a new `hasResult` const. Whether a row is
-          worth opening is a fact about the result, so one condition forks all four and "a pending row
-          draws no chevron" is structural rather than a fourth condition that can drift.
-
-          THE WHOLE GROUP IS GATED, not just the chevron. An always-rendered empty .tool-row__right
-          would still take one side of the chip's 12px gap and move a pending row's trailing edge away
-          from the resolved row's — the "a resolving row does not shift" property #722 shipped and
-          pinned with three chip-width equalities in e2e/tool-row-toggle.spec.ts.
-
-          The gate lives inside this one shared fragment, which both branches keep consuming: the
-          <div> branch below IS `result === null`, so the group is unreachable from it by construction
-          rather than by a second check.
-
-          THE CHEVRON IS THE GROUP'S LAST CHILD. #856 inserts the result count BEFORE it. */}
-      {result !== null && (
+      {expandable && (
         <span className="tool-row__right">
+          {denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
           {/* #856: the daemon's précis of what the call returned — "265 lines", "110 of 1676 lines".
               A <span> and never Figma's <p>: a resolved chip is a real <button>, which admits phrasing
               content only, so flow content in here is invalid HTML and a React DOM-nesting warning.
@@ -1614,11 +1628,8 @@ export function ToolRow({
 
               NO GAP FALLS WHERE THIS ISN'T, for free: .tool-row__right's gap lands only BETWEEN two
               children, so not rendering the element IS AC2 — no modifier class, no pending variant.
-              #854's "the whole group, not just the chevron" argument one level down again.
-
-              And no second predicate: the whole group is already gated on `result`, so a pending row has
-              no group to put a count in and the question does not arise there. */}
-          {result.resultDetail !== undefined && result.resultDetail !== '' && (
+              #854's "the whole group, not just the chevron" argument one level down again. */}
+          {result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
@@ -1653,13 +1664,7 @@ export function ToolRow({
   return (
     // tool-row--expanded is appended LAST so the collapsed prefix stays byte-stable.
     <div className={body ? `${rowClass} tool-row--expanded` : rowClass}>
-      {result ? (
-        // Gated on `result`, NOT on `expanded` — the same condition rowClass already reads, rather
-        // than a second predicate that could drift. A pending row must be non-activatable regardless
-        // of what `defaultExpanded` says, and `body` above already makes its body structurally
-        // unreachable; the chip fork is the same kind of structural fact. Not a disabled <button>
-        // either: that is still a control in the accessibility tree and would change the pending
-        // markup, where forking leaves the <div> branch below literally untouched.
+      {expandable ? (
         <button
           type="button"
           className="tool-row__chip tool-row__chip--toggle"
@@ -1682,7 +1687,7 @@ export function ToolRow({
         // wrapper around the two headline spans and change the collapsed markup. A container rather
         // than a lone text node because #706 landed its per-input-field list in here, above the
         // result, and #780 put a shell call's command block at the head of the same column.
-        <div className={`tool-row__body${body.isError ? ' tool-row__body--error' : ''}`}>
+        <div className={`tool-row__body${result?.isError && denial === undefined ? ' tool-row__body--error' : ''}`}>
           {/* #780: a shell call's command, as code, leading the body. The SAME two elements and the
               same two classes a message's fenced code block uses (AssistantMarkdown.tsx's `pre`
               override) — the chrome lives entirely in conversation.css keyed on those classes, so a
@@ -1742,7 +1747,13 @@ export function ToolRow({
               <pre className="tool-row__input-value">{value}</pre>
             </div>
           ))}
-          {body.resultSummary === '' ? (
+          {denial !== undefined && (
+            <p className="tool-row__denial">
+              {denialAttribution(denial.decisionReasonType)}
+              {denial.decisionReason !== '' ? `: ${denialDisplayText(denial.decisionReason)}` : ''}
+            </p>
+          )}
+          {resultText === '' ? (
             // `=== ''` exactly — never `.trim()`, which would relabel whitespace-only output (real
             // output the daemon sent) as absent, and never a falsy check, which would read as if
             // `undefined` were reachable on a `string` field.
@@ -1754,7 +1765,7 @@ export function ToolRow({
             // trace, an aligned table) where column position IS the information, so it keeps its exact
             // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated on
             // .code-block__body in conversation.css, not the reflowing code-block side.
-            <pre className="tool-row__result">{body.resultSummary}</pre>
+            <pre className="tool-row__result">{resultText}</pre>
           )}
         </div>
       )}
@@ -2455,7 +2466,7 @@ export function workingIndicatorStateWithLocalSend(
 export function openToolName(items: readonly ThreadItem[]): string | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]
-    if (item.kind === 'toolCall' && item.result === null) return item.name
+    if (item.kind === 'toolCall' && item.result === null && item.denial === undefined) return item.name
   }
   return null
 }

@@ -133,6 +133,7 @@ export function translateModalEvent(
     case 'turnEnd':
     case 'turnState':
     case 'toolUse':
+    case 'toolDenied':
     case 'toolResult':
     case 'conversationsReceived':
     case 'conversationCreated':

@@ -6113,3 +6113,27 @@
   color: var(--color-on-surface-variant);
   cursor: not-allowed;
 }
+
+/* A permission report uses muted ink rather than the failure accent. */
+.tool-row--denied .tool-row__name,
+.tool-row--denied .tool-row__summary,
+.tool-row__denied-tag,
+.tool-row__denial {
+  color: var(--color-on-surface-variant);
+}
+
+.tool-row__denied-tag {
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+.tool-row__denial {
+  margin: 0;
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

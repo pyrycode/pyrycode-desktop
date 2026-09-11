@@ -89,6 +89,7 @@ export type EnvelopeType =
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
+  | 'tool_denied'
   | 'queue_state'
   // The first of the three `interactive`-gated background-task frames (#564). Announces work claude
   // left running past the turn that spawned it — the frame that separates a genuine finish from a
@@ -3192,4 +3193,17 @@ export interface QrPayload {
   relay: string
   token: string
   server_static_pubkey: string
+}
+
+/** Explicit permission denial; open source tokens and nullable reports mirror the daemon. */
+export interface ToolDeniedPayload {
+  conversation_id: string
+  turn_id: string
+  tool_use_id: string
+  tool_name: string
+  decision_reason_type: string
+  decision_reason: string
+  message: string
+  truncated_fields: string[] | null
+  dropped_fields: string[] | null
 }

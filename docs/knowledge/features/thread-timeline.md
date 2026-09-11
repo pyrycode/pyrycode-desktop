@@ -7,29 +7,10 @@ event-stream render vertical builds on. Introduced **alongside**
 retired to dead-but-tested residue, and this model — via [timelineStore](conversation-timeline-store.md) —
 is now the conversation's single thread surface.
 
-The vertical this feeds decomposed along the transport → store → render seams the [screen snapshot
-fetch](screen-snapshot-fetch.md) vertical (#180 → #187/#188) proved: [#199](../codebase/199.md)
-(shipped) built the wire types, transport decode, and `DaemonEvent` arms (`assistantDelta`/`turnEnd`)
-this module's `ThreadEvent` union is the eventual target of; [#202](../codebase/202.md) (shipped)
-added the [Zustand store + the `DaemonEvent → ThreadEvent` bridge](conversation-timeline-store.md)
-over `reduceTimeline`; [#203](../codebase/203.md) (shipped) renders the streamed text — the
-blank-thread-critical slice that gates #179 (advertising the `interactive` capability). [#214](../codebase/214.md)
-(shipped) wired the `turn_state` transport → bridge chain, giving `selectPhase` its first real source
-(no render yet — the thinking indicator is a still-open sibling slice). [#217](../codebase/217.md)
-(shipped) wired the `tool_use` transport → bridge chain, giving `reduceTimeline`'s pre-existing
-`toolUse` arm its first real feed — a `toolCall` `ThreadItem` now lands on `selectItems` in arrival
-order (no render yet — that is the sibling slice #218). [#229](../codebase/229.md) (shipped) wired the
-`tool_result` transport → bridge chain, the vertical's last transport slice — giving `reduceTimeline`'s
-pre-existing `toolResult` arm its first real feed, resolving the correlated `toolCall`'s `result` in
-place via `fillResult` (no render yet — that was the sibling slice [#230](../codebase/230.md)).
-[#230](../codebase/230.md) (shipped) rendered that filled `result` — the `toolCall` chip resolves in
-place (pending dimming lifts, `result.isError` selects a success/error border treatment via a new
-`--color-error` token) — the vertical's last render slice. [#245](../codebase/245.md) (shipped) added a
-fourth `ThreadItem` kind, `userText`, dormant with a placeholder render arm. [#179](../codebase/179.md)
-(shipped) flipped the `interactive` capability — every arm above now carries live daemon traffic in
-production — and wired `userText`'s producer (the composer's optimistic echo, retargeted from
-`sessionStore`) and real render row, retiring the coarse `MessageThread` in the same commit. The
-vertical is complete.
+Live structured events arrive through the [daemon connection](daemon-connection.md) and
+[store bridge](conversation-timeline-store.md), then render in the
+[conversation shell](conversation-shell.md). The original transport/store/render build-out is
+recorded in [Thread timeline — history](thread-timeline-history.md).
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -52,11 +33,19 @@ no singleton, no React hook here; that render-integration layer is #202/#203's.
 type TurnPhase = 'thinking' | 'responding' | 'idle'
 type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
 interface ToolResult { isError: boolean; resultSummary: string; resultDetail?: string }
+interface ToolDenial {
+  toolName: string
+  decisionReasonType: string
+  decisionReason: string
+  message: string
+  truncatedFields: readonly string[] | null
+  droppedFields: readonly string[] | null
+}
 interface MessageAttachment { attachmentId: string; filename: string }
 
 type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
-  | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null }
+  | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
@@ -64,6 +53,7 @@ type ThreadItem =
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
   | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
+  | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
@@ -219,6 +209,24 @@ key or a React key — rather than restating it. See [Conversation shell — con
 modals § Queued rows folded into the
 thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 
+### Permission-denial correlation
+
+A `tool_denied` frame attaches `ToolDenial` independently of `ToolResult`
+([#1238](https://github.com/pyrycode/pyrycode-desktop/issues/1238)). Encoding denial as
+an error-result flag would lose reports recovered after the result was already sent.
+Live delivery requires an explicit nonempty conversation id; within that conversation,
+the reducer matches nonempty `turnId` and `toolUseId` exactly. A marker with no matching
+existing call is discarded, with no orphan buffer. Repeated markers return the same state
+reference and retain the first report, even if a duplicate carries different prose.
+
+For an existing call, denial-before-result and result-before-denial retain both records.
+The result remains complete in state; display bounds belong to the
+[tool row](conversation-shell-tool-rows.md#permission-denied-tool-call-row).
+The denial retains tool name, source token, reason, rejection message and both reports,
+including the distinction between `null`, `[]` and populated arrays. Empty reasons and
+unknown source tokens do not establish classifier provenance. Denial changes only the
+item: phase, stall, retry, compaction, local-send and thinking-token state are unchanged.
+
 ### The reducer
 
 `reduceTimeline(state, event): TimelineState` is pure and exported — no mutation, fresh state,
@@ -229,7 +237,8 @@ thread](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-th
 |---|---|
 | `assistantDelta` | tail-check coalesce: same-`turnId` tail `assistantText` → replace with concatenated text, keeping the **tail's own** `createdAt` ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013), so a coalesced bubble stays dated by its first delta); otherwise append fresh, carrying the event's `createdAt`. `seq` carried, not consulted — arrival order is authoritative. |
 | `toolUse` | append a fresh `toolCall` with `result: null` |
-| `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
+| `toolDenied` | attach the first denial to the exact turn/tool match; empty keys, unmatched calls and duplicates return the same state reference. Preserve the result and every scalar. |
+| `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place, preserving any denial. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
 | `turnState` | set `phase`; same reference if unchanged (no-churn); clears `thinkingTokens` to `null` when `event.state !== 'thinking'` (the widened guard below lets a repeat `turn_state{idle}` through when a reading is still held, rather than early-outing and leaving it stale) — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase`; clears `thinkingTokens` to `null` — the think this reading measured is over even though `phase` itself resets separately on the daemon's own `turn_state: idle` — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
 | `thinkingProgress` | assign `thinkingTokens: event.estimatedTokens` verbatim (same reference on a verbatim repeat — the wire has no dedup and re-fires as the count climbs); `items`/`phase`/every other scalar untouched — [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) |
@@ -335,10 +344,10 @@ with the `attachments` field documented above (§ Types).
 - **`seq` is not consulted.** It's carried on `assistantDelta` for wire fidelity and a possible
   future monotonicity guard, but the reducer trusts arrival order — no reordering has been
   observed from the ordered Noise/WS transport.
-- **Single active conversation.** `conversation_id` is dropped from `ThreadEvent`, mirroring
-  `sessionStore`'s single-conversation assumption (ADR 0004). [#199](../codebase/199.md) already
-  drops it at the `DaemonEvent` construction step (`daemonConnection.ts`), one layer below this
-  module — #202's bridge inherits an event that has no `conversation_id` to further scope.
+- **Conversation routing precedes reduction.** `ThreadEvent` is conversation-id-free;
+  the [keyed holder](conversation-timeline-holder.md) owns separate timelines and the
+  bridge selects the destination. A live denial with an empty conversation id is ignored,
+  never assigned to whichever conversation happens to be open.
 - **No stable per-item `id`.** `turnId` alone isn't unique (a tool call can split one turn into
   two `assistantText` items) — [#203](../codebase/203.md) resolved the React-key question at
   render time by keying on array index instead: the list is append-only with tail-mutation and never

@@ -88,6 +88,17 @@ export type HistoryTimelineEvent =
       input?: Readonly<Record<string, string>>
     }
   | {
+      type: 'toolDenied'
+      turnId: string
+      toolUseId: string
+      toolName: string
+      decisionReasonType: string
+      decisionReason: string
+      message: string
+      truncatedFields: readonly string[] | null
+      droppedFields: readonly string[] | null
+    }
+  | {
       type: 'toolResult'
       turnId: string
       toolUseId: string
@@ -770,6 +781,18 @@ type BaseDaemonEvent =
   // DOM sink. Untrusted daemon display text under the same plain-text-NEVER-HTML constraint as
   // `resultSummary` — never parsed back into a number, never an attribute, a URL, a filename, a cache
   // key, or a log line.
+  | {
+      type: 'toolDenied'
+      conversationId: string
+      turnId: string
+      toolUseId: string
+      toolName: string
+      decisionReasonType: string
+      decisionReason: string
+      message: string
+      truncatedFields: readonly string[] | null
+      droppedFields: readonly string[] | null
+    }
   | {
       type: 'toolResult'
       conversationId: string

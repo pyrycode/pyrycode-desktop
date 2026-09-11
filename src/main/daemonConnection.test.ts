@@ -6,6 +6,7 @@ import {
   type DaemonConnection,
   type DaemonConnectionDeps
 } from './daemonConnection'
+import type { EnvelopeType } from '../shared/wire/types'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
 import type {
   DaemonEvent,
@@ -1799,9 +1800,31 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
 })
 
 describe('createDaemonConnection — compacting stream (#495)', () => {
+  it('carries outcomes and boundary counts through IPC, rejecting malformed frames without leaking prose', async () => {
+    const { log, records } = captureLog()
+    const { sink, drivers } = await connected(log)
+    const before = emitted(sink).length
+    const push = (type: EnvelopeType, payload: unknown) => drivers[0].emit({ type: 'message',
+      plaintext: encodeEnvelope({ id: 1, type, ts: FIXED_TS, payload }) })
+    push('compacting', { conversation_id: 'private-chat', active: false,
+      compact_result: 'future-result', compact_error: 'private-error', extra: 'must-not-cross' })
+    push('compaction_boundary', { conversation_id: 'private-chat', trigger: 'private-trigger',
+      pre_tokens: 0, post_tokens: null, extra: 'must-not-cross' })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'compacting', conversationId: 'private-chat', active: false,
+        compactResult: 'future-result', compactError: 'private-error', daemonTs: FIXED_TS },
+      { type: 'compactionBoundary', conversationId: 'private-chat', trigger: 'private-trigger', preTokens: 0, postTokens: null }
+    ])
+    const after = emitted(sink).length
+    push('compacting', { conversation_id: 'private-chat', active: false, compact_error: {} })
+    push('compaction_boundary', { conversation_id: 'private-chat', trigger: null })
+    expect(emitted(sink)).toHaveLength(after)
+    expect(records.some(record => record.event === 'inbound-decoded' && record.code === 'compaction_boundary')).toBe(true)
+    expect(JSON.stringify(records)).not.toMatch(/private-|future-result|must-not-cross/)
+  })
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
-  async function connected(): Promise<ReturnType<typeof build>> {
-    const ctx = build()
+  async function connected(diagnosticLog?: DiagnosticLog): Promise<ReturnType<typeof build>> {
+    const ctx = build({ diagnosticLog })
     ctx.connection.start()
     await tick()
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
@@ -1858,7 +1881,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     ])
   })
 
-  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+  it('emits only modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1872,7 +1895,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(Object.keys(events[0]).sort()).toEqual(['active', 'conversationId', 'daemonTs', 'type'])
+    expect(Object.keys(events[0]).sort()).toEqual(['active', 'compactError', 'compactResult', 'conversationId', 'daemonTs', 'type'])
     expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 

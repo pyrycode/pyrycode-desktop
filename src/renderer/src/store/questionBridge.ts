@@ -164,6 +164,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'apiRetry':
+    case 'compactionBoundary':
     case 'compacting':
     case 'unrecognizedMessage':
     case 'backgroundTaskStarted':

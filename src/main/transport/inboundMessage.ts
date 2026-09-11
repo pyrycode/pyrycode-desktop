@@ -34,6 +34,7 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  CompactionBoundaryPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
   BackgroundTask,
@@ -386,16 +387,9 @@ interface FrameTimestamp {
  * and NOT deduped: N frames narrow to N values. Ships dormant — the render slice (#493) is the first
  * consumer.
  *
- * The `compacting` kind (#495) carries the decoded CompactingPayload — the PTY-derived status peer of
- * `stall` / `api-retry` the daemon fans out to interactive clients while claude auto-compacts the
- * conversation. BANNER-ONLY: the wire carries no progress at all, so there is no counter to carry — the
- * consumer carries the edge (`active`) onward, and `conversation_id` with it, by name as `conversationId`
- * (#742), because per-conversation compaction is daemon state: the sidebar must show a chat is busy
- * compacting while the operator looks at a different one (#674). The fail-closed defence here is two
- * required fields —
- * one string and one BOOLEAN (whose `false` is the explicit falling edge, a value not an absence, so
- * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
- * dormant — the render slice (#496) is the first consumer.
+ * The `compacting` kind carries status plus optional outcome strings. A separate
+ * `compaction-boundary` kind supplies delayed trigger/count metadata. Required fields fail closed;
+ * unusable counts degrade to absence, and diagnostics never include any decoded values.
  *
  * The `model-announced` kind (#587) carries the decoded ModelAnnouncedPayload — claude's own report of
  * the model it resolved for the turn, off its `system` / `init` line, fanned out to interactive clients.
@@ -716,6 +710,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
+  | { kind: 'compaction-boundary'; boundary: CompactionBoundaryPayload }
   | { kind: 'session-facts'; sessionFacts: SessionFactsPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
@@ -1459,7 +1454,7 @@ export type DecodedHistoryEvent =
     }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  | { type: 'compacting'; active: boolean }
+  | { type: 'compacting'; active: boolean; compactResult?: string; compactError?: string }
   | {
       type: 'unrecognizedMessage'
       site: WireUnrecognizedSite
@@ -1608,7 +1603,7 @@ function decodeHistoryEvent(
     }
     case 'compacting': {
       const p = parseCompactingPayload(payload)
-      return { type: 'compacting', active: p.active }
+      return { type: 'compacting', active: p.active, compactResult: p.compact_result, compactError: p.compact_error }
     }
     case 'unrecognized_message': {
       const p = parseUnrecognizedMessagePayload(payload)
@@ -1785,27 +1780,31 @@ function parseApiRetryPayload(payload: unknown): ApiRetryPayload {
   return { conversation_id, active, current, total }
 }
 
-/**
- * Narrow an opaque payload into a CompactingPayload (#495). Fail-closed like parseApiRetryPayload,
- * scaled down to the frame's TWO fields — and both map onto an existing helper, so nothing new is
- * invented here. `requireBoolean` gives the explicit falling edge for free (its check is on the TYPE, so
- * a literal `false` passes while `0` / `'true'` / `null` fail). The frame is BANNER-ONLY — the wire
- * carries no counter or percentage — so unlike parseApiRetryPayload there is no numeric field at all,
- * and the range-check question does not arise.
- *
- * Any missing / mistyped field throws WireDecodeError (never a partial value); the frame-level
- * MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the oversized case. Returns a fresh two-field
- * literal, so unknown server-added keys (e.g. a spurious `turn_id`) are tolerated (forward-compat) but
- * NOT copied through — which also makes it prototype-pollution-safe. Its messages name the failure
- * CATEGORY only, never interpolating a value (a `conversation_id` is conversation-correlating).
- */
+/** Validate known fields and discard extras; raw outcome strings are never display copy. */
 function parseCompactingPayload(payload: unknown): CompactingPayload {
-  if (!isRecord(payload)) {
-    throw new WireDecodeError('malformed compacting payload')
+  if (!isRecord(payload)) throw new WireDecodeError('malformed compacting payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    active: requireBoolean(payload, 'active'),
+    compact_result: optionalString(payload, 'compact_result'),
+    compact_error: optionalString(payload, 'compact_error')
   }
-  const conversation_id = requireString(payload, 'conversation_id')
-  const active = requireBoolean(payload, 'active')
-  return { conversation_id, active }
+}
+
+/** Invalid counts degrade to absence, never to zero or rejection of the whole divider. */
+function compactionCount(value: unknown): number | null | undefined {
+  if (value === null) return null
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function parseCompactionBoundaryPayload(payload: unknown): CompactionBoundaryPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed compaction boundary payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    trigger: requireString(payload, 'trigger'),
+    pre_tokens: compactionCount(payload.pre_tokens),
+    post_tokens: compactionCount(payload.post_tokens)
+  }
 }
 
 /**
@@ -3456,6 +3455,12 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'api-retry', apiRetry, ts: envelope.ts }
+    }
+    case 'compaction_boundary': {
+      const boundary = parseCompactionBoundaryPayload(envelope.payload)
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'compaction_boundary',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'compaction-boundary', boundary }
     }
     case 'compacting': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-boolean `active`, a non-string

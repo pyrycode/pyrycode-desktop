@@ -250,12 +250,11 @@ export function translateTimelineEvent(
         total: event.total
       }
     case 'compacting':
-      // #496: the compaction arm (#495 decodes it, this slice gives it a consumer). The DaemonEvent
-      // carries `conversationId` (#742) beside the one render field; the ThreadEvent this returns does
-      // not, so the id STOPS here — a filter + fresh literal (arm selection), never a pass-through of
-      // the DaemonEvent object. Both edges translate verbatim — deciding what `active: false` means is
-      // reduceTimeline's job, not the bridge's — the translator normalizes nothing.
-      return { type: 'compacting', active: event.active }
+      return { type: 'compacting', active: event.active,
+        compactResult: event.compactResult, compactError: event.compactError }
+    case 'compactionBoundary':
+      return { type: 'compactionBoundary', trigger: event.trigger,
+        preTokens: event.preTokens, postTokens: event.postTokens }
     case 'thinkingProgress':
       // #1314: the thinking-token reading (#1312 decodes it, #1313 carried it here, this slice gives it
       // a consumer). The DaemonEvent carries `conversationId` beside the one render field; the
@@ -573,6 +572,7 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'stallDetected':
     case 'apiRetry':
     case 'compacting':
+    case 'compactionBoundary':
     case 'unrecognizedMessage':
     case 'thinkingProgress':
       // Ten of the twelve owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /

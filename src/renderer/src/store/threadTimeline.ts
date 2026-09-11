@@ -88,6 +88,7 @@ export interface ToolResult {
  * carried beside `items`, not a row in the timeline (ADR 0008).
  */
 export type ThreadItem =
+  | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
   | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
   // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
   // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
@@ -296,13 +297,10 @@ export type ThreadEvent =
   // edge into the state's presence-or-absence. Two integers and a bool, no string field: AC1 ("no
   // daemon-supplied string is ever rendered") stays true by construction, as with `stallDetected`.
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  // #496: the daemon's compaction edge (#495 decodes it; #742 widened that daemon event with a
-  // `conversationId` the bridge drops) — a filter + fresh copy (the `apiRetry` discipline), not a
-  // remap. The EVENT carries `active` (true rising, false the explicit falling one); the reducer is the
-  // single place that translates that edge into state. BANNER-ONLY: the wire streams no compaction
-  // progress, so there is no counter here and none may be invented (the one delta from `apiRetry`). One
-  // bool, no string field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
-  | { type: 'compacting'; active: boolean }
+  // The reducer classifies optional outcomes only on a genuine falling edge. Raw strings never
+  // become row copy; a later boundary supplies display counts and the exact manual-trigger flag.
+  | { type: 'compacting'; active: boolean; compactResult?: string; compactError?: string }
+  | { type: 'compactionBoundary'; trigger: string; preTokens?: number | null; postTokens?: number | null }
   // The parser-gap arm. #784 widened the DaemonEvent with a `conversationId` the bridge drops. Field-for-field
   // identical to the `unrecognizedMessage` ThreadItem, so the bridge is a filter + fresh copy, not a remap.
   | {
@@ -375,6 +373,8 @@ export interface ApiRetryStatus {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Reference identity survives intervening content, echo removal and history prepend. */
+  pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }>
   refusalOffer?: {
     report: Extract<ModelRefusalEvent, { type: 'modelRefusalFallback' }>
     changeId?: string
@@ -543,6 +543,11 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
   let next = reduceTimelineContent(state, event)
+  // Content reducers reconstruct their fields. Preserve the association except at its own edges/reset.
+  if (event.type !== 'compacting' && event.type !== 'compactionBoundary' && event.type !== 'reset' &&
+      next.pendingCompaction !== state.pendingCompaction) {
+    next = { ...next, pendingCompaction: state.pendingCompaction }
+  }
   const refusalOffer = reduceRefusalOffer(state.refusalOffer, event)
   if (next.refusalOffer !== refusalOffer) next = { ...next, refusalOffer }
   let latestTurnEnd = state.latestTurnEnd
@@ -947,26 +952,27 @@ function reduceTimelineContent(state: TimelineState, event: ThreadEvent): Timeli
         thinkingTokens: state.thinkingTokens
       }
     }
-    case 'compacting':
-      // #496: the two-edged compaction status — set from the rising edge, cleared ONLY by the falling one
-      // (turn activity must NOT clear it; see the two deliberately un-widened guards above). The state IS
-      // the event's payload, so both edges collapse into one expression: an edge that changes nothing —
-      // a verbatim repeat of EITHER edge, the wire has no dedup — returns the SAME state reference, so
-      // the status never stacks, duplicates, or flickers (AC3). `items`/`phase` are untouched on every
-      // path: compaction is transient chrome, and it neither opens, closes, nor alters a turn (AC5).
-      // `stalled` and `apiRetry` are independent daemon facts, carried through unchanged, and #650's
-      // `localSendPending` joins them for the same reason it does on the stall arm.
-      return state.compacting === event.active
-        ? state
-        : {
-            items: state.items,
-            phase: state.phase,
-            stalled: state.stalled,
-            apiRetry: state.apiRetry,
-            compacting: event.active,
-            localSendPending: state.localSendPending,
-            thinkingTokens: state.thinkingTokens
-          }
+    case 'compacting': {
+      if (state.compacting === event.active) return state
+      if (event.active) return { ...state, compacting: true, pendingCompaction: undefined }
+      const item: Extract<ThreadItem, { kind: 'compactionBoundary' }> = {
+        kind: 'compactionBoundary',
+        failed: event.compactResult === 'failed' || (event.compactError !== undefined && event.compactError !== ''),
+        manual: false
+      }
+      return { ...state, compacting: false, items: [...state.items, item],
+        pendingCompaction: item.failed ? undefined : item }
+    }
+    case 'compactionBoundary': {
+      const item: Extract<ThreadItem, { kind: 'compactionBoundary' }> = {
+        kind: 'compactionBoundary', failed: false, manual: event.trigger === 'manual',
+        preTokens: event.preTokens, postTokens: event.postTokens
+      }
+      const pending = state.pendingCompaction
+      const index = pending === undefined ? -1 : state.items.indexOf(pending)
+      const items = index < 0 ? [...state.items, item] : state.items.map((held, i) => i === index ? item : held)
+      return { ...state, items, pendingCompaction: undefined }
+    }
     case 'thinkingProgress':
       // #1314: the latest thinking-token reading. The state IS the event's payload, so there is one
       // expression and no edge to translate — the closest arm in shape to `compacting` directly above, and

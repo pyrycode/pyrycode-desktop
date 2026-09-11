@@ -129,6 +129,7 @@ import {
   selectBatchSelections
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
+import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 import {
   RenameConversationDialogView,
@@ -1316,6 +1317,14 @@ function TimelineRow({
       const text = stoppedTurnText(item)
       return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
     }
+    case 'compactionBoundary':
+      return (
+        <div className={`session-delimiter compaction-delimiter${item.failed ? ' compaction-delimiter--failed' : ''}`}>
+          <div className="session-delimiter__rule" aria-hidden="true" />
+          <p className="session-delimiter__title">{compactionBoundaryTitle(item)}</p>
+          <div className="session-delimiter__rule" aria-hidden="true" />
+        </div>
+      )
     case 'sessionBoundary':
       // #286, redrawn #690: the session-boundary delimiter (Figma node 119-3843) — one 16px row, rule /
       // centred label / rule, marking where a /clear, an idle eviction, or a workspace change started a

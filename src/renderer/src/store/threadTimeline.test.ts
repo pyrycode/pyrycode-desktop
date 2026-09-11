@@ -847,10 +847,11 @@ describe('reduceTimeline — compaction status (#496)', () => {
     }
   })
 
-  it('leaves items untouched by reference across a full rising→falling cycle (AC5)', () => {
-    const state = run([compacting(true), compacting(false)])
-    expect(state.items).toBe(initialTimelineState.items)
-    expect(state.items).toEqual([])
+  it('retains a divider only when a full rising→falling cycle completes', () => {
+    const active = run([compacting(true)])
+    expect(active.items).toBe(initialTimelineState.items)
+    expect(reduceTimeline(active, compacting(false)).items)
+      .toEqual([{ kind: 'compactionBoundary', failed: false, manual: false }])
   })
 })
 

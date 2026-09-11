@@ -13,8 +13,9 @@ Live structured events arrive through the [daemon connection](daemon-connection.
 recorded in [Thread timeline — history](thread-timeline-history.md).
 
 Introduced in [#121](../codebase/121.md). Lives at
-`src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
-transport, no React, no wire types. See [ADR 0008](../decisions/0008-thread-timeline-model.md) for
+`src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC operations, preload bridge,
+transport or React. Refusal records reuse the shared `ModelRefusalEvent` type through
+a type-only import. See [ADR 0008](../decisions/0008-thread-timeline-model.md) for
 the full rationale and normative reducer contract.
 
 ## Reference map
@@ -30,6 +31,9 @@ integration belongs to the [timeline store](conversation-timeline-store.md).
 Stopped-turn metadata remains on retained boundary rows; the separate
 [latest live stop](thread-timeline-internals.md#stopped-turn-state) supplies transient
 composer recovery without letting older history restore it.
+Refusal reports use retained `modelRefusal` rows and a separate live
+[refusal offer](conversation-timeline-store.md#refusal-offer-lifetime), whose lifetime
+extends across ordinary turns and conversation navigation.
 
 ## Configuration and usage
 

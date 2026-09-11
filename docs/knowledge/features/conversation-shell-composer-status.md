@@ -47,7 +47,7 @@ compaction superseded the label (per #493/#496) while the raw phase reading (`is
 turning regardless, and the held height was what made that read as intentional rather than broken.
 [**#967**](https://github.com/pyrycode/pyrycode-desktop/issues/967) **closed that state as a side effect
 of folding retry, compacting and stall into the label's own union** (see [Thinking / working
-indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
 below) rather than by coupling the two gates: the icon still turns on the raw `isRunning`, and whenever
 that holds the label is now non-null in every case (retrying, compacting, stalled, or thinking/working),
 so the icon can no longer turn beside nothing. The converse is still reachable and still intended: a
@@ -122,7 +122,7 @@ their bubble treatments, and their mutual precedence rule — none of that was r
 what reopened it: those three views, their mount site, their bubbles, and seven CSS rules are gone, and
 the precedence they used to hold via separate DOM adjacency now lives entirely inside
 `workingIndicatorState`'s four-way order — see [Thinking / working
-indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
+indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)
 above for the retirement and the new order.
 
 One second-order consequence that predates #967 and is unaffected by it: `.conversation__thinking` no
@@ -361,7 +361,7 @@ per #167's original rationale.
 ## Stopped-turn recovery
 
 `ComposerErrorSlotControl` reads the open conversation's `timeline.latestTurnEnd`.
-Only a stop that passes [the boundary formatter](conversation-shell-turn-status.md#stopped-turn-records)
+Only a stop that passes [the boundary formatter](conversation-shell-timeline-render.md#stopped-turn-records)
 can offer recovery. `terminalReason: 'prompt_too_long'` shows “Context too long.
 Compact or reset the session.” with Compact. Otherwise `billing_error` shows
 “Claude reported a billing error. Check Claude billing on this server.” and
@@ -377,9 +377,9 @@ availability does not. The click also rechecks the open conversation id, and
 `sendText` retains its connection/conversation guards. A command never clears the
 typed draft. Reset session remains the Actions-menu `/clear` action.
 
-Recovery has priority after re-pair and connection errors, before model-settings
-rejection and usage notices; it is visible only while connected. The next local
-submitted message or daemon turn activity clears recovery while preserving the
+Recovery has priority after re-pair and connection errors, before refusal recovery,
+model-settings rejection and usage notices; it is visible only while connected. The
+next local submitted message or daemon turn activity clears recovery while preserving the
 boundary; the stopped turn's trailing idle does **not** clear it. Session boundaries,
 reset and reconnect also clear the reading. A timeline reset or eviction drops the
 retained rows too. [The reducer lifecycle](thread-timeline-internals.md#stopped-turn-state)
@@ -392,6 +392,30 @@ shape only, so omitting the status-action variant leaves native button styling.
 See [browser evidence](e2e-harness.md#stopped-turn-evidence) for draft preservation,
 availability, slot priority and the 800px layout check.
 
+## Refusal Switch back
+
+`ComposerErrorSlotControl` reads only the active conversation's live refusal offer.
+The latest fallback qualifies only with exact `scope: 'session'` and nonempty original
+and fallback identifiers. Local/unknown scopes and no-fallback records create no
+offer; history cannot create or revive one. The button requires a connected state
+and an addressable session id (neither `null` nor `''`).
+
+Switch back uses `changeSetting`, the same path as [ComposerModelMenu](composer-model-menu.md),
+with the original identifier unchanged. It preserves the draft and sends one
+`setSessionSettings` command, with no `/model` chat message. The handler rechecks
+the active conversation, exact offer object, connection, session id and pending-model
+guards at click time. The button stays visible but disabled while the offer has a
+`changeId` or the settings store has a pending model write.
+
+A correlated rejection retains the offer and shows “Could not change the model —
+try again.” beside the retry button. Retry clears that feedback; confirmation retires
+the matching offer while retaining its [thread row](conversation-shell-turn-status.md#model-refusal-records).
+Navigation clears the settings-write store, so pending/rejected presentation also
+reads the offer's conversation-owned `changeId` and `rejected` flag. This keeps a
+held write disabled across A → B → A and preserves rejection received while away.
+See [offer lifetime and regression coverage](conversation-timeline-store.md#refusal-offer-lifetime)
+for retirement and stale-reply rules. Styling reuses `button-small button-small--error`.
+
 ## Model settings rejection
 
 `ComposerErrorSlotControl` reads `useRunSettingsWriteStore(selectError)`. When the last
@@ -402,8 +426,8 @@ composer and while the [questionnaire's model footer](composer-model-menu.md#ava
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
 The single-occupant priority is repair button → connection-error chip → stopped-turn
-recovery → model rejection → usage notice. Recovery and both notices require
-`connected`; disconnected and connecting states hide them.
+recovery → refusal Switch back (with any rejection feedback) → model rejection → usage notice.
+Recovery and both notices require `connected`; disconnected and connecting states hide them.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -414,7 +438,8 @@ no timer or question-specific reset. Any new settings dispatch clears the stored
 writes but preserves the error, so it can reappear once connected. A confirmation does
 not clear a standing error, and an unmatched rejection changes nothing. A later correlated
 rejection replaces the stored field; non-model errors do not use this status message.
-Closing the question or the model menu does not clear it.
+Closing the question or the model menu does not clear it. Refusal recovery also retains
+its own rejection across navigation, as described above.
 
 Static slot tests cover connection priority. The fake question-answer drive holds the
 settings response, checks rollback on rejection, verifies that rejection outranks an
@@ -424,7 +449,8 @@ original question remains answerable.
 ## The usage-limit notice, the slot's third occupant (#1321)
 
 Draws [the usage-limit store](usage-limit-store.md)'s per-conversation reading in the trailing slot,
-below the actionable-error button, connection-error chip, stopped-turn recovery and model rejection in precedence.
+below the actionable-error button, connection-error chip, stopped-turn recovery,
+refusal Switch back and model rejection in precedence.
 It remains the slot's lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
 subprocess trust boundary; this slice is where the "no DOM sink" constraint that store inherited is
 **discharged** rather than passed on further.
@@ -479,7 +505,7 @@ the visible text is already the accessible name.
 **`ComposerErrorSlot` grows from three arms to four, and the order is the whole of the one-occupant
 rule:** `shouldOfferRepair(status)` → the button; `status.type === 'error'` → the chip (the discriminant
 now asked explicitly here, where it used to be left to the chip's own guard, so the notice's arm cannot be
-reached while either existing occupant could claim the slot); `status.type === 'connected'` → `recovery ?? notice`;
+reached while either existing occupant could claim the slot); `status.type === 'connected'` → `recovery ?? refusal ?? notice`;
 otherwise `null`. The `connected` gate is deliberately **stricter** than "no error live" — while
 disconnected or connecting, [the banner](#composer-error-chip-797) is already up saying so, and a quota
 claim beside it would contradict it, so the notice is suppressed on both of those arms too, not only on

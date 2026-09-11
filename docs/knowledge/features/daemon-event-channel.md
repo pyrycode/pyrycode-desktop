@@ -169,6 +169,16 @@ Named-field forwarding preserves false and empty strings; test absence with
 display reports, consumed by the [timeline](thread-timeline-internals.md#stopped-turn-state),
 never command text, attributes, URLs or logs.
 
+### Model-refusal metadata
+
+`ModelRefusalEvent` discriminates `modelRefusalFallback` (with `fallbackModel` and
+open-string `scope`) from `modelRefusalNoFallback`. Both carry `originalModel`,
+`refusalCategory`, `banner`, and nullable string-array `truncatedFields`/`droppedFields`.
+Live `DaemonEvent` adds `conversationId` and optional `daemonTs`; `HistoryTimelineEvent`
+uses the common shape without per-entry conversation identity. See [routing and lifetime](conversation-timeline-store.md#refusal-records-and-routing).
+Validated shape does not confer authority on Claude's prose: rendering bounds and
+escapes it, category remains inert, and no refusal frame changes model-label authority.
+
 ## Configuration and usage
 
 - **Import from `src/main` / `src/preload`** by **relative path**: `import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'`. These sides have **no `@shared` alias** (it exists only in `tsconfig.web.json` / the renderer vite block); `@shared/ipc/events` fails the node typecheck and the main/preload build there.

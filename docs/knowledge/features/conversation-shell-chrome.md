@@ -375,7 +375,7 @@ The desktop design (Figma `102:4`) stacks the message area straight onto the inp
 between the thread and the composer is empty — nothing is drawn there. Two mobile-era controls used to
 mount in that region and both are retired: the run-configuration trigger row, `StatusRow` (#177, which
 hosted the two-dot indicator just above), and the background-task trigger, `BackgroundTaskTrigger`
-(#581, the clock icon — see [Background-task panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
+(#581, the clock icon — see [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
 Both overlays they opened — `StatusSheet` and `BackgroundTaskPanel` — stay: the sheet is still the
 only surface for the model/effort/YOLO writes until #683 lands and the only home of the log-data
 download (#72), and the panel is unchanged pending #580's drawing of its final form and trigger.

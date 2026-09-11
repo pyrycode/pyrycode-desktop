@@ -37,7 +37,7 @@ correct rather than incidental.
 
 **[#967](https://github.com/pyrycode/pyrycode-desktop/issues/967) folded the stall block into the
 composer status row too** (see [Conversation shell — turn status § Retired by
-\#967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)),
+\#967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)),
 which took the criterion's subject away a second time — the same swap #796 made, for the same reason,
 now needed again. The criterion moved onto the queued backlog (`.conversation__queued`, since deleted —
 see below), a region of dimmed rows large enough to shrink the viewport by tens of pixels (116px measured

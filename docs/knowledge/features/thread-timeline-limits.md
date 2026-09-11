@@ -58,7 +58,7 @@ Part of [Thread timeline](thread-timeline.md).
 - **`requireNumber` proves only `typeof value === 'number'`** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — NaN, `Infinity` and negatives all decode and cross the contextBridge
   intact (ADR 0002 drift forbids a range check at the decode boundary), so this module carries the value
   unvalidated by design. The render-side `thinkingLabel` formatter is the actual boundary — see
-  [Conversation shell § Thinking / working indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
+  [Conversation shell § Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
 - **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
   the first, [#531](../codebase/531.md) the second, [#652](../codebase/652.md) the third.** A
   conversation switch clears the timeline via `activateConversation`, gated on the active conversation's

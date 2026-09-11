@@ -61,9 +61,21 @@ absence; empty strings provide no display detail.
 Do not infer a clean finish from `outcome: 'success'`: it can accompany
 `is_error: true`, including context overflow. Error categories are Claude's reports,
 not verified account findings. The [event channel](daemon-event-channel.md#stopped-turn-metadata)
-carries these fields to the [stopped-record formatter](conversation-shell-turn-status.md#stopped-turn-records),
+carries these fields to the [stopped-record formatter](conversation-shell-timeline-render.md#stopped-turn-records),
 which owns control removal and escaped text rendering. Decode diagnostics retain
 only their existing static type, byte count and hash, never report values.
+
+### Required model-refusal reports
+
+`parseModelRefusalNoFallbackPayload` validates the common fields of both refusal
+variants; `parseModelRefusalFallbackPayload` adds the required fallback model and
+scope. Live and history decoding share these parsers. Unlike optional stopped-turn
+metadata, every refusal field is required: missing/mistyped strings or nullable
+string-array reports reject the payload. Empty strings and unknown scope/category
+values are valid; report arrays preserve order and wire-key vocabulary.
+See [the contract and routing](conversation-timeline-store.md#refusal-records-and-routing).
+Display bounds belong to the [row](conversation-shell-turn-status.md#model-refusal-records),
+so decoding never truncates the identifier Switch back must send unchanged.
 
 ## Security properties
 

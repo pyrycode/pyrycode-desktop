@@ -273,7 +273,11 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - **`window.pyry` is assumed present.** In the Electron renderer the preload runs before the window script, so `window.pyry` is always defined when `App` mounts. If a future test renders `<App />` in jsdom without the preload, the effect throws — stub `window.pyry` or inject the bridge at that point (no such test exists yet).
 - **No backfill dedupe.** `messagesReceived` dispatches unconditionally; a re-delivered backfill batch with repeated `message_id`s would double-append (inherited from [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)). Owned by whichever ticket wires reconnect. This bridge faithfully translates whatever the channel delivers.
 - **Translation cannot fail on well-typed input** — it is a total mapping over a sealed union; the `assertNever` arm is unreachable at runtime for a valid `DaemonEvent` and exists solely as the compile-time totality guard.
-- **A future `DaemonEvent` member still forces a touch-up here, `null`-returning or not.** [#168](../codebase/168.md) confirmed this module is the *only* exhaustive `DaemonEvent` consumer in the renderer — `App.tsx`/`PairingScreen.tsx` just call the hook, and `sessionStore.ts`'s own `SessionAction` exhaustiveness is untouched by events that map to `null`. Any ticket adding a `DaemonEvent` member should expect exactly this file to need a new `case`, whether or not the new event drives store state.
+- **A future `DaemonEvent` member forces explicit handling in four exhaustive bridges:**
+  `daemonEventBridge`, `timelineBridge`, `modalBridge` and `questionBridge`.
+  Both model-refusal variants belong to the [timeline](conversation-timeline-store.md#refusal-records-and-routing);
+  the other three return `null`. An ignored event needs no invented `SessionAction`,
+  and leaves session/model-label authority unchanged.
 
 ## Related
 

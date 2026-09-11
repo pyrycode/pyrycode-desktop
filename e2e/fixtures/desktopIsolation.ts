@@ -1,4 +1,5 @@
-import { expect, _electron as electron, type ElectronApplication, type TestInfo } from '@playwright/test'
+import { expect, type ElectronApplication, type TestInfo } from '@playwright/test'
+import { electron } from './electronLaunch'
 import type { ChildProcess } from 'node:child_process'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 

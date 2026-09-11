@@ -353,11 +353,39 @@ button replacing a bare de-emphasised text button) — accepted because the cons
 recoverable (re-pair by scanning a QR) and a confirm step on an already-terminal state is pure friction,
 per #167's original rationale.
 
+## Model settings rejection
+
+`ComposerErrorSlotControl` reads `useRunSettingsWriteStore(selectError)`. When the last
+correlated settings rejection is for `model`, it supplies “Could not change the model —
+try again.” as the slot's `notice`, replacing any usage notice (#1252). The message is
+fixed client copy in a `role="alert"` element. It is available both with the ordinary
+composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
+is visible; rejection leaves the question answerable and rolls back the optimistic label.
+
+The single-occupant priority is repair button → connection-error chip → model rejection
+→ usage notice. Both notices require `connected`; disconnected and connecting states hide
+them. `.composer-status__error--settings` retains the error treatment but uses
+`flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
+800px minimum window width.
+
+Clearing follows the existing [settings write lifecycle](session-settings-send.md), with
+no timer or question-specific reset. Any new settings dispatch clears the stored error;
+`conversationSwitched` clears it with the other write state. Reconnect clears pending
+writes but preserves the error, so it can reappear once connected. A confirmation does
+not clear a standing error, and an unmatched rejection changes nothing. A later correlated
+rejection replaces the stored field; non-model errors do not use this status message.
+Closing the question or the model menu does not clear it.
+
+Static slot tests cover connection priority. The fake question-answer drive holds the
+settings response, checks rollback on rejection, verifies that rejection outranks an
+existing usage notice, and checks that a fresh dispatch restores that notice while the
+original question remains answerable.
+
 ## The usage-limit notice, the slot's third occupant (#1321)
 
 Draws [the usage-limit store](usage-limit-store.md)'s per-conversation reading in the trailing slot,
-below the actionable-error button and the connection-error chip in precedence — the slot's third occupant
-and its lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
+below the actionable-error button, connection-error chip and model rejection in precedence.
+It remains the slot's lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
 subprocess trust boundary; this slice is where the "no DOM sink" constraint that store inherited is
 **discharged** rather than passed on further.
 
@@ -417,7 +445,8 @@ disconnected or connecting, [the banner](#composer-error-chip-797) is already up
 claim beside it would contradict it, so the notice is suppressed on both of those arms too, not only on
 `error`. `notice` reaches the slot as a `JSX.Element | null` prop rather than the reading itself — the
 slot stays a view that knows a position and its occupants' priority, and knows nothing about a usage
-window.
+window. The container now chooses the model rejection above before falling back to the
+usage notice; the slot's connection gating is unchanged.
 
 **`ComposerErrorSlotControl`** gains two more narrow-slice reads, on the container that already owns this
 slot rather than a fourth container mounted beside it: `useActiveConversationStore(selectActiveConversation)`
@@ -502,4 +531,3 @@ Security review PASS (builder self-review), with the one retracted-and-corrected
 under its own heading in the ticket's architecture spec rather than silently edited away. See
 [#1321](https://github.com/pyrycode/pyrycode-desktop/issues/1321) and its
 [architecture spec](../../specs/architecture/1321-usage-limit-in-status-row.md).
-

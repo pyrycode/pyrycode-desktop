@@ -178,6 +178,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'historyPageReceived':
     case 'historyRequestFailed':
     case 'thinkingProgress':
+    case 'toolProgress':
     case 'rateLimited':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume

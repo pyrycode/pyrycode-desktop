@@ -307,6 +307,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // what keeps them out of it.
       return null
     case 'thinkingProgress':
+    case 'toolProgress':
       // No session-store action (#1313): the reading of how much claude thought belongs to the #1314
       // render slice, not the session store — which holds connection status and messages and has no
       // thinking state at all. PERMANENTLY a no-op rather than dormant, on the `questionShown`

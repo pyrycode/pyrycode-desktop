@@ -162,6 +162,7 @@ export function translateModalEvent(
     case 'questionShown':
     case 'questionDismissed':
     case 'thinkingProgress':
+    case 'toolProgress':
     case 'rateLimited':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /

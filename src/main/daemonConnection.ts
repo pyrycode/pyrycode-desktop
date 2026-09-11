@@ -1558,6 +1558,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversationId: inbound.modelAnnounced.conversation_id
             })
             return
+          case 'tool-progress':
+            emitDaemonEvent(sink, {
+              type: 'toolProgress',
+              conversationId: inbound.toolProgress.conversation_id,
+              turnId: inbound.toolProgress.turn_id,
+              toolUseId: inbound.toolProgress.tool_use_id,
+              elapsedSeconds: inbound.toolProgress.elapsed_seconds
+            })
+            return
           case 'thinking-progress':
             // The thinking-token data path (#1313, decoded at #1312). Emit a fresh literal carrying
             // the reading and the routing key, copied BY NAME from the already-decoded,

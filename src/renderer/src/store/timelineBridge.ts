@@ -119,6 +119,11 @@ export function translateTimelineEvent(
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
+    case 'toolProgress':
+      return {
+        type: 'toolProgress', turnId: event.turnId,
+        toolUseId: event.toolUseId, elapsedSeconds: event.elapsedSeconds
+      }
     case 'assistantDelta':
       // #1013: the assistant bubble's creation time. `now?.()` expresses "absent clock ⇒ no stamp" without
       // a branch, and the field is assigned unconditionally (the `input` / `resultDetail` discipline). The
@@ -542,6 +547,8 @@ export function translateTimelineEvent(
  */
 export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
+    case 'toolProgress':
+      return event.conversationId
     case 'toolDenied':
       return event.conversationId === '' ? null : event.conversationId
     case 'assistantDelta':

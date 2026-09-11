@@ -904,6 +904,26 @@ export function Timeline({
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
   const projection = groupToolRows(rows.map((row) => row.item))
+  const hiddenRows = new Set(projection.filter((group) =>
+    group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
+  ).map((group) => group.index))
+  // Hidden descendants stay mounted; joins follow the rows that actually draw. Turn boundaries
+  // render nothing in TimelineRow, while other non-tool rows and indentation changes end a stack.
+  const visible = projection.filter((group) =>
+    !hiddenRows.has(group.index) && rows[group.index]?.item.kind !== 'turnBoundary'
+  )
+  const joins = new Map(visible.map((group, index) => {
+    const previous = visible[index - 1]
+    const next = visible[index + 1]
+    const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
+    const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
+    return [group.index, [
+      above?.kind === 'toolCall' && 'tool-group-row--joined-above',
+      below?.kind === 'toolCall' && 'tool-group-row--joined-below',
+      above?.kind === 'toolCall' && above.denial === undefined && above.result?.isError && 'tool-group-row--error-above',
+      below?.kind === 'toolCall' && below.denial === undefined && below.result?.isError && 'tool-group-row--error-below'
+    ].filter(Boolean).join(' ')]
+  }))
   if (rows.length === 0) return <EmptyThread />
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
@@ -911,7 +931,7 @@ export function Timeline({
         const row = rows[group.index]
         if (!row) return null
         const key = firstRowKey + group.index
-        const hidden = group.ancestors.some((index) => !expandedTools.has(firstRowKey + index))
+        const hidden = hiddenRows.has(group.index)
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued}
@@ -939,7 +959,7 @@ export function Timeline({
         // descendants mounted so their own result expansion survives an outer collapse.
         return (
           <div key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-            className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+            className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
             {content}
           </div>
         )

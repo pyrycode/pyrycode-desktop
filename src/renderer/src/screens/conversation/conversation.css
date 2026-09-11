@@ -1956,18 +1956,9 @@
    box treatment lives on .tool-row itself now, so joining two rows is a rule on the row rather than a rule on
    the row plus a correction on the chip with an expanded body hanging between two borders.
 
-   TWO SELECTORS CARRY ALL OF IT, and each names one half of a join: `.tool-row + .tool-row` is the LOWER row
-   of a join, `.tool-row:has(+ .tool-row)` the UPPER one. A row matching neither — a lone row, or a row beside
-   a bubble — is byte-identical to what ships above, which is what makes "a row standing alone is unchanged"
-   true by reading rather than by argument. Both are (0,1,1)/(0,2,0) against the base rule's (0,1,0), so they
-   win on specificity and their placement here is NOT load-bearing the way .tool-row--error's is.
-
-   THE MARKUP DOES NOT CHANGE. Every tool row is already a direct child of .conversation__thread's flex column
-   (Timeline maps items straight into it and TimelineRow's toolCall arm returns ToolRow with no wrapper), so
-   the adjacent-sibling selectors reach exactly the internal joins of a run and nothing else — nothing is
-   grouped, wrapped or re-parented, and a run interrupted by a message bubble stops being a run for free. A
-   `turnBoundary` between two calls does NOT interrupt one, because that arm renders as null and emits no
-   element: a run is DOM adjacency, and two tool rows either side of a closed turn still read as consecutive.
+   Direct sibling selectors cover unwrapped rows. Timeline supplies matching wrapper modifiers for
+   visible neighbours at the same indentation, skipping hidden descendants and undrawn turn boundaries.
+   Each selector targets one side of a join; a visible non-tool row or a depth change ends the stack.
 
    THE MARGIN. gap cannot be varied per pair, so the join is a negative top margin on the lower row: the
    column's gap and the item's margin both apply, so the pair's effective separation is 12 + (-13) = -1px and
@@ -2015,23 +2006,27 @@
    e2e/tool-row-toggle.spec.ts drives a run of four resolving pending/resolved/failed/resolved, which is the
    arrangement that reaches every join case at once; the lone-row readings stay in e2e/thread-shadow.spec.ts
    and e2e/thread-scroll-pin.spec.ts, which each drive exactly one row and so form no run. */
-.tool-row + .tool-row {
+.tool-row + .tool-row,
+.tool-group-row--joined-above > .tool-row {
   margin-top: calc(-1 * var(--space-3) - 1px);
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
 
-.tool-row:has(+ .tool-row) {
+.tool-row:has(+ .tool-row),
+.tool-group-row--joined-below > .tool-row {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   box-shadow: none;
 }
 
-.tool-row--error + .tool-row {
+.tool-row--error + .tool-row,
+.tool-group-row--error-above > .tool-row {
   border-top-color: var(--color-error);
 }
 
-.tool-row:has(+ .tool-row--error) {
+.tool-row:has(+ .tool-row--error),
+.tool-group-row--error-below > .tool-row {
   border-bottom-color: var(--color-error);
 }
 
@@ -6140,6 +6135,13 @@
 
 .tool-group-row {
   flex: 0 0 auto;
+}
+
+/* Keep the join margin on the tool row, within a non-collapsing wrapper. Hidden wrappers retain
+   the browser's display:none so collapsed descendants consume no thread gap or height. */
+.tool-group-row:not([hidden]) {
+  display: flex;
+  flex-direction: column;
 }
 
 /* Display grouping uses absolute depth so deeply nested agents stay within the chat pane. */

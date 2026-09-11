@@ -87,3 +87,77 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
   await expect(row('new-descendant')).toBeVisible()
   await page.screenshot({ path: '/tmp/1239-tool-groups.png' })
 })
+
+test('visible tool rows keep joined borders across collapsed descendants', async ({ launchPairedApp }) => {
+  const { page, daemon } = await launchPairedApp()
+  for (const [id, parent, name] of [
+    ['a', undefined, 'Agent'], ['a1', 'a', 'Read'], ['a2', 'a', 'Read'],
+    ['b', undefined, 'Task'], ['b1', 'b', 'Read'], ['c', undefined, 'Read']
+  ] as const) {
+    daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
+    if (id === 'b1') daemon.pushFrame(frame('turn_end', {
+      conversation_id: SEEDED_ROW.id, turn_id: 'groups-turn', stop_reason: 'end_turn'
+    }))
+  }
+  for (const id of ['a1', 'a2', 'b', 'c']) daemon.pushFrame(frame('tool_result', {
+    ...payload(id), is_error: id === 'a2' || id === 'b', result_summary: `result of ${id}`
+  }))
+  const row = (id: string) => page.locator('.tool-row').filter({
+    has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
+  })
+  await expect(row('c')).toHaveClass(/tool-row--resolved/)
+
+  const expectStacks = async (stacks: string[][]) => {
+    await expect(page.locator('.tool-row__summary:visible')).toHaveText(stacks.flat())
+    const readings = await page.locator('.tool-row:visible').evaluateAll((elements) => elements.map((element) => {
+      const css = getComputedStyle(element)
+      const box = element.getBoundingClientRect()
+      const theme = getComputedStyle(document.documentElement)
+      return {
+        top: box.top, bottom: box.bottom, margin: parseFloat(css.marginTop),
+        corners: [css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius],
+        shadow: css.boxShadow, topColor: css.borderTopColor, bottomColor: css.borderBottomColor,
+        sideColor: css.borderLeftColor, failed: element.classList.contains('tool-row--error'),
+        radius: theme.getPropertyValue('--radius-xs').trim()
+      }
+    }))
+    let offset = 0
+    for (const stack of stacks) {
+      const members = readings.slice(offset, offset + stack.length)
+      for (const [index, current] of members.entries()) {
+        const previous = members[index - 1]
+        const next = members[index + 1]
+        expect(current.corners).toEqual([
+          previous ? '0px' : current.radius, previous ? '0px' : current.radius,
+          next ? '0px' : current.radius, next ? '0px' : current.radius
+        ])
+        expect(current.topColor).toBe(previous?.failed ? previous.sideColor : current.sideColor)
+        expect(current.bottomColor).toBe(next?.failed ? next.sideColor : current.sideColor)
+        if (next) expect(current.shadow).toBe('none')
+        else expect(current.shadow).not.toBe('none')
+        if (previous) {
+          expect(Math.abs(current.top - previous.bottom + 1), `${stack[index]} join`).toBeLessThanOrEqual(0.5)
+          expect(current.margin).toBeLessThan(0)
+        } else {
+          expect(current.margin).toBe(0)
+          const priorStack = readings[offset - 1]
+          if (priorStack) expect(current.top - priorStack.bottom).toBeGreaterThan(0)
+        }
+      }
+      offset += stack.length
+    }
+  }
+
+  await expectStacks([['a', 'b', 'c']])
+  await row('a').locator('.tool-row__chip').click()
+  await expectStacks([['a'], ['a1', 'a2'], ['b', 'c']])
+  await row('a1').locator('.tool-row__chip').click()
+  await expect(row('a1').locator('.tool-row__result')).toBeVisible()
+  await expectStacks([['a'], ['a1', 'a2'], ['b', 'c']])
+  await row('a').locator('.tool-row__chip').click()
+  await expectStacks([['a', 'b', 'c']])
+  await row('b').locator('.tool-row__chip').click()
+  await expectStacks([['a', 'b'], ['b1'], ['c']])
+  await row('b').locator('.tool-row__chip').click()
+  await expectStacks([['a', 'b', 'c']])
+})

@@ -46,6 +46,26 @@ hex/rgb/px literal. Was dormant until [#179](../codebase/179.md) flipped `intera
 frames arrived while it was off, the same posture as `Timeline`/`ThinkingIndicator`); now live. See
 [#218 codebase notes](../codebase/218.md) for the full design and patterns established.
 
+### Live elapsed reading
+
+A pending call with `elapsedSeconds` displays the daemon's latest reading at the
+right of its header, using `tool-row__right` and `tool-row__count`. A pending leaf
+remains noninteractive, with no chevron; a grouped parent keeps its existing toggle
+and child count. Result or denial removes the elapsed text.
+
+Both the header and [working label](conversation-shell-turn-status.md#tool-elapsed-reading)
+use `formatToolElapsed`: absolute values below 60 render as seconds (`12s`), larger
+values as minutes and two-digit seconds (`65` → `1m 05s`). Zero renders as `0s`,
+and negatives retain their sign (`-65` → `-1m 05s`). Before the first reading,
+neither surface adds elapsed text. Heartbeats arrive approximately every 30 seconds,
+so a shorter call may never show a reading; the client runs no elapsed timer.
+
+`e2e/tool-progress.spec.ts` proves delivery with separate 30/60/90-second frames.
+It checks the initial absence, advances the renderer clock 35 seconds without a
+frame to prove the value stays fixed, and positively observes the resolved row
+before checking elapsed-text removal. Static-render tests alone cannot prove this
+mounted delivery or absence of timer-driven updates.
+
 ## Resolved tool-call row (#230)
 
 The render half of the `toolResult`-fills-`toolCall` correlation (the transport half,
@@ -169,7 +189,7 @@ design, testing strategy, and patterns established.
 
 ## Permission-denied tool-call row
 
-An explicit [timeline denial](thread-timeline.md#permission-denial-correlation) immediately
+An explicit [timeline denial](thread-timeline-internals.md#permission-denial-correlation) immediately
 adds a literal **Denied** header tag and makes the row expandable, even before a result
 arrives. `tool-row--denied` takes precedence over error styling on both wrapper and body;
 the name, subject, tag and attribution use muted `--color-on-surface-variant` ink.

@@ -63,6 +63,29 @@ timestamp, so a reused timestamp can suppress the historical result being tested
 The replay unit test and `e2e/tool-groups.spec.ts` verify that attribution survives
 history and that a replayed result actually fills its call.
 
+## Live tool progress
+
+`tool_progress` reports the latest elapsed seconds for an existing `tool_use` call.
+The decoder requires `conversation_id`, `turn_id` and `tool_use_id` strings plus a
+finite integer `elapsed_seconds`; zero and negative readings are valid. Unknown
+fields are discarded, and diagnostics contain only the static event code, frame
+length and hash. `daemonConnection` copies all four values by name into the
+camel-case `toolProgress` IPC arm. Session, modal and question bridges ignore it.
+
+`timelineTargetFor` routes by the frame's conversation; `translateTimelineEvent`
+carries turn id, call id and seconds to the [reducer](thread-timeline-internals.md#the-reducer).
+The wire call id already identifies the original call: do not substitute Claude's
+synthetic heartbeat id or the tool's grouping parent. Progress replaces only a
+matching pending, non-denied call's reading. Result or denial sets that reading to
+`undefined`; late progress cannot restore it. No row or lifecycle transition is
+created, and there is no history replay, persistence or locally inferred reading.
+An absent conversation is a [holder no-op](conversation-timeline-holder.md#how-it-works).
+
+The reducer tests in `src/renderer/src/store/toolProgress.test.ts` cover conversation,
+turn and call isolation, signed/decreasing readings, unchanged lifecycle state,
+completion and late frames. The [tool-row documentation](conversation-shell-tool-rows.md#live-elapsed-reading)
+describes the two visible consumers and the browser proof.
+
 ## Configuration and usage
 
 - **`useTimelineBridge(getOpenConversationId)` mounts in `App.tsx`**, right after `useDaemonEventBridge()`
@@ -184,7 +207,7 @@ history and that a replayed result actually fills its call.
 - **A prepend keys off the conversation's origin, not the head of the held array**
   ([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260), fixing what [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)
   shipped). `ConversationScreen` originally keyed timeline rows by array index (see [Thread timeline §
-  Edge cases](thread-timeline.md#edge-cases-and-limitations)) on the premise that the list never inserts
+  Edge cases](thread-timeline-limits.md#edge-cases-and-limitations)) on the premise that the list never inserts
   mid-list — true of `reduceTimeline`'s own array, false of a page landing at the head via
   `prependHistoryFor`. Under an index key, prepending N rows made React match key 0 to key 0, so every
   already-drawn row was updated in place with a *different* item's content instead of N new nodes
@@ -240,7 +263,7 @@ history and that a replayed result actually fills its call.
   `subscribeTimeline` byte-identical. Spec: `docs/specs/architecture/785-open-conversation-timeline-arms.md`.
 - [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the `now?: () => number` clock
   parameter on `translateTimelineEvent`/`subscribeTimeline`, and `useTimelineBridge`'s `Date.now` wiring:
-  implementation summary above. See [Thread timeline § Types](thread-timeline.md#types) for the full
+  implementation summary above. See [Thread timeline § Types](thread-timeline-internals.md#types) for the full
   `createdAt` contract this seam feeds.
 - [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
   `reduceTimeline` model this store wraps verbatim.

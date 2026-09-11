@@ -187,7 +187,7 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   neither this event's shape nor this channel needed a change to widen. It is still none of the
   three things this arm's construction already rules out — a token, a key, or a raw frame — because it
   is a client-minted correlation id read for strict string equality only downstream; see [Thread
-  timeline § Types](thread-timeline.md#types) for the field's own contract.
+  timeline § Types](thread-timeline-internals.md#types) for the field's own contract.
 - **`sessionTransition{newSessionId}`**, shipped [#254](../codebase/254.md), also maps to *no*
   `SessionAction`, consumed instead by the [session-id store](session-id-store.md)'s holder
   ([#259](../codebase/259.md)). Originally a **content-minimised** shape over the **five**-field wire

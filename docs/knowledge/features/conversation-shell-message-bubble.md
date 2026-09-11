@@ -75,7 +75,7 @@ the assistant row carries none, so the base rule's `flex-start` is already right
 **`min-height: var(--text-body-small-line)` is load-bearing, not decorative.** The row holds two
 children: `bubble__meta-time` and the copy control. #970 split into a data slice
 ([#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — gives the `assistantText`/`userText`
-[timeline items](thread-timeline.md#types) an optional `createdAt`) and a render slice
+[timeline items](thread-timeline-internals.md#types) an optional `createdAt`) and a render slice
 ([#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014) — formats it into this slot), both
 shipped. An empty inline element generates no line box, so without the `min-height` the row would collapse
 to the glyph's 12px height rather than the drawn 16px whenever `createdAt` is absent — see below.
@@ -410,7 +410,7 @@ alongside the sections that describe what each spec proves.
   design, the clipboard-permission open question and its resolution, and the security review.
 - [#970](https://github.com/pyrycode/pyrycode-desktop/issues/970) — the parent ticket this meta row's
   timestamp slot was reserved for; split into [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013)
-  (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline.md#types) an optional
+  (shipped — gives `assistantText`/`userText` [timeline items](thread-timeline-internals.md#types) an optional
   `createdAt`, no visible change) and [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
   (shipped — `messageTime.ts` and the render slot, covered in full above), both blocked on this ticket.
 - [Conversation shell — message bubble attachment slots](conversation-shell-message-bubble-attachments.md) —

@@ -58,7 +58,7 @@ shipping pyrycode#2092: against an older daemon the `queue_state` frame carries 
 drop correlates with nothing, and the echo-gone assertion is the one that reddens — check the binary
 before the diff if it's this line. See [Dequeue message
 envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
-timeline](thread-timeline.md#types) for the client-side mechanism; the fake-tier twin is
+timeline](thread-timeline-internals.md#types) for the client-side mechanism; the fake-tier twin is
 `e2e/queued-backlog-interrupt.spec.ts`, updated in the same PR, whose fixture literals had to gain
 `message_id` by hand since nothing typechecks `e2e/`.
 

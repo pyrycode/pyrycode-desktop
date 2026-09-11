@@ -68,7 +68,7 @@ absent clock means no stamp, the same rule [conversation timeline store](convers
 that builds a `ComposerSendDeps` literal and now includes `now: Date.now` — is not compile-enforced; a
 forgotten `now` there would silently ship unstamped echoes. `composerSend.test.ts` pins the wired
 behavior with its own spec instead of relying on the type system. See [Thread timeline §
-Types](thread-timeline.md#types) for the full field-pair contract and why the clock rides the event
+Types](thread-timeline-internals.md#types) for the full field-pair contract and why the clock rides the event
 rather than a `reduceTimeline` parameter.
 
 **`message_id` is minted once and used twice — the wire command and the echo**
@@ -82,7 +82,7 @@ mid-turn (`QueuedItem.message_id`, pyrycode#2092) — so a later cancel
 again. It is recorded even when the send threw, unlike `attachments` below: that field is a claim about
 what the daemon was handed, so a frame that never went must claim nothing, while the id is this window's
 own name for its own message and would need to survive a retry regardless. See [Thread timeline §
-Types](thread-timeline.md#types) for the full field-pair contract.
+Types](thread-timeline-internals.md#types) for the full field-pair contract.
 
 `submitMessage` contract:
 
@@ -427,7 +427,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   whitespace-only and null-conversation guards, alongside the echo it stamps, so a refused submit performs
   neither the wire send nor the clock read. `now` omitted entirely (as every pre-#1013 test literal is)
   produces an echo whose `createdAt` is `undefined` — a legal item, not a defect; [#1014](https://github.com/pyrycode/pyrycode-desktop/issues/1014)
-  draws it as the [thread timeline](thread-timeline.md#edge-cases-and-limitations) meta row's empty slot.
+  draws it as the [thread timeline](thread-timeline-limits.md#edge-cases-and-limitations) meta row's empty slot.
 - **A submit refused by `submitMessage`'s two early `false` returns takes no attachments either**
   ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039)) — `deps.takeAttachments?.()` sits at
   the same guarded position as `now`, so a refused submit neither sends nor drains the pending set; the
@@ -445,7 +445,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   `ComposerSendDeps`, covered in full above (§ 10). Producer: [Composer attach § Pending
   attachments](composer-attach-pending.md#pending-attachments-1039)'s `drainPendingAttachments`, bound to
   `takePendingAttachments` on `useAttachmentUpload`. Consumer: [Thread
-  timeline](thread-timeline.md#types)'s `userText.attachments` field.
+  timeline](thread-timeline-internals.md#types)'s `userText.attachments` field.
 - [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055) — reworked #1039's take into a
   `PendingAttachmentTake` (set + `rollback`), moved the read above the guarded send, and named the taken
   ids on the outbound frame as `SendMessagePayload.attachment_ids` (§10) — the leg that makes an attached
@@ -456,7 +456,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
   [#1215](https://github.com/pyrycode/pyrycode-desktop/pull/1215)) — retains the minted `message_id` on
   the echo as `ThreadEvent.userText.messageId`, covered in full above. Consumer:
   [dequeue message envelope](dequeue-message-envelope.md)'s `dropQueuedMessage`, which correlates a drop
-  against it via [thread timeline](thread-timeline.md#types)'s `dropUserText` arm. Full design:
+  against it via [thread timeline](thread-timeline-internals.md#types)'s `dropUserText` arm. Full design:
   `docs/specs/architecture/1213-drop-queued-message-removes-echo.md`.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the **main/transport half** this drives: the `sendMessage` command becomes an encrypted `send_message` envelope on the live Noise relay session. Together #65 + #66 are the two halves of sending a message.
 - [Session store](session-store.md) / [#2](../codebase/2.md) — hosts the `messageSent` action and the `appendUnique` dedupe (added #27) this relies on; #66 closes its "No optimistic send" limitation.
@@ -474,5 +474,5 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072) — added the sibling `shouldInterruptOnKeyDown` predicate (§7) and its two bindings; see [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the second binding and the ordering argument against the screen's other Escape claimants.
 - [Conversation shell § Composer error chip](conversation-shell-composer-status.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
-- [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the optional `now` clock on `ComposerSendDeps`, implementation summary above. [Thread timeline § Types](thread-timeline.md#types) has the full `createdAt` contract; [conversation timeline store](conversation-timeline-store.md) has the mirror wiring for the assistant-side echo.
+- [#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) — the optional `now` clock on `ComposerSendDeps`, implementation summary above. [Thread timeline § Types](thread-timeline-internals.md#types) has the full `createdAt` contract; [conversation timeline store](conversation-timeline-store.md) has the mirror wiring for the assistant-side echo.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the send button this page describes is one component with two variants: `ComposerSendButton` renders send at idle and the stop affordance (that page's subject) while a turn is running. `Composer` is the one render site for both.

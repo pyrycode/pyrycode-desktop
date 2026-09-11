@@ -110,7 +110,7 @@ copying `daemonTs: inbound.ts` by name onto its existing fresh literal — never
 no envelope behind it and gains nothing; `messageReceived` stays unstamped too, since the daemon pushes
 no live `message` frame on the interactive lane for the operator's own message (its duplicate is the
 optimistic echo `removeUserEcho` dedups on `messageId` — see [Thread timeline §
-Types](thread-timeline.md#types)).
+Types](thread-timeline-internals.md#types)).
 
 The **same two reasons** `StampedDaemonEvent` took this shape apply again: the field stays optional, so
 the 33 test files building bare `DaemonEvent` literals as bridge inputs keep compiling, and it resolves

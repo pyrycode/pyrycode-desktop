@@ -15,7 +15,7 @@ The first thing in this app that associates an attachment with a message. Nothin
 [the outcome line](composer-attach.md) needed to change when this landed — but the composer now also
 *remembers* which uploads have completed since the operator last pressed send, so
 [`submitMessage`](composer-send.md) can record them on the message's own timeline item. See [Thread
-timeline § Types](thread-timeline.md#types) for `MessageAttachment` and the `userText` item/event fields
+timeline § Types](thread-timeline-internals.md#types) for `MessageAttachment` and the `userText` item/event fields
 this feeds. Since [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055), the same ids also
 name the message's attachments on the outbound `send_message` frame — display was the whole of it before;
 now it is also how claude learns which files to read.
@@ -514,7 +514,7 @@ children with no raw-markup sink.
   progress, the copy module, and the CSS shared across the whole family.
 - [Composer send § 10](composer-send.md#10-attachments-named-on-the-outbound-frame---takeattachments-1039-reworked-by-1055) —
   the read site for the take.
-- [Thread timeline § Types](thread-timeline.md#types) — `MessageAttachment` and the `userText` fields the
+- [Thread timeline § Types](thread-timeline-internals.md#types) — `MessageAttachment` and the `userText` fields the
   taken set feeds.
 - [Conversation shell — message bubble § The attachment file
   row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) (#815) — the other

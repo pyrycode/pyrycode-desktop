@@ -55,6 +55,16 @@ export interface MessageAttachment {
   filename: string
 }
 
+/** Denial is independent of the actual result and never authorizes another attempt. */
+export interface ToolDenial {
+  toolName: string
+  decisionReasonType: string
+  decisionReason: string
+  message: string
+  truncatedFields: readonly string[] | null
+  droppedFields: readonly string[] | null
+}
+
 /** The filled-in half of a `toolCall`, correlated to it by `toolUseId`. */
 export interface ToolResult {
   isError: boolean
@@ -105,6 +115,7 @@ export type ThreadItem =
       input?: Readonly<Record<string, string>>
       // Starts null on the `toolUse`; filled in place when the correlated `toolResult` arrives.
       result: ToolResult | null
+      denial?: ToolDenial
     }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
@@ -213,6 +224,7 @@ export type ThreadEvent =
       inputSummary: string
       input?: Readonly<Record<string, string>>
     }
+  | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
   // #773: `resultDetail` is the daemon's précis of the call's structured outcome. Absent means the wire
   // omitted it (a pre-pyrycode#2024 daemon), `''` means no count — the same thing upstream, carried
   // distinctly anyway. The reducer puts it on the item's `result` verbatim; every display decision,
@@ -550,6 +562,17 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
+    case 'toolDenied': {
+      if (event.turnId === '' || event.toolUseId === '') return state
+      const index = state.items.findIndex(
+        (item) => item.kind === 'toolCall' && item.turnId === event.turnId && item.toolUseId === event.toolUseId
+      )
+      const item = state.items[index]
+      if (!item || item.kind !== 'toolCall' || item.denial !== undefined) return state
+      const items = state.items.slice()
+      items[index] = { ...item, denial: event.denial }
+      return { ...state, items }
+    }
     case 'toolResult': {
       // #773: `resultDetail` is carried onto the result verbatim and unconditionally — never a
       // conditional spread, which would fold an empty detail into absence. The store owns no display

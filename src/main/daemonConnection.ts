@@ -1837,6 +1837,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               daemonTs: inbound.ts
             })
             return
+          case 'tool-denied': {
+            const p = inbound.toolDenied
+            emitDaemonEvent(sink, {
+              type: 'toolDenied',
+              conversationId: p.conversation_id,
+              turnId: p.turn_id,
+              toolUseId: p.tool_use_id,
+              toolName: p.tool_name,
+              decisionReasonType: p.decision_reason_type,
+              decisionReason: p.decision_reason,
+              message: p.message,
+              truncatedFields: p.truncated_fields,
+              droppedFields: p.dropped_fields,
+              daemonTs: inbound.ts
+            })
+            return
+          }
           case 'tool-result':
             // The tool-result data path (#229, widened by #766). snake→camel here, following the
             // tool-use idiom above: a fresh literal with the five named fields carrying the render fields

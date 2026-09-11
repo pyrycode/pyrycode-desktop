@@ -159,6 +159,21 @@ export function translateTimelineEvent(
         inputSummary: event.inputSummary,
         input: event.input
       }
+    case 'toolDenied':
+      if ('conversationId' in event && event.conversationId === '') return null
+      return {
+        type: 'toolDenied',
+        turnId: event.turnId,
+        toolUseId: event.toolUseId,
+        denial: {
+          toolName: event.toolName,
+          decisionReasonType: event.decisionReasonType,
+          decisionReason: event.decisionReason,
+          message: event.message,
+          truncatedFields: event.truncatedFields,
+          droppedFields: event.droppedFields
+        }
+      }
     case 'toolResult':
       // The tool-result arm (#229). The DaemonEvent carries `conversationId` (#766) beside the four render
       // fields; the ThreadEvent this returns does not, so the id STOPS here — a filter + fresh copy (arm
@@ -524,6 +539,8 @@ export function translateTimelineEvent(
  */
 export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
+    case 'toolDenied':
+      return event.conversationId === '' ? null : event.conversationId
     case 'assistantDelta':
     case 'turnEnd':
     case 'turnState':

@@ -75,3 +75,7 @@ None. Upstream confirms the four source spellings and report nullability.
 
 **Reviewer:** builder, self-review using `builder/security-review.md`
 **Date:** 2026-09-11
+
+## Revisions
+
+2026-09-11 — The plain-text bound also applies to an actual result displayed inside a denied row, not only its provisional rejection message. A focused failing test exposed that the inherited result display otherwise bypassed the denial sanitizer. The complete actual result remains in item state; ordinary tool-result presentation is unchanged.

@@ -17,13 +17,14 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
-import type { RelayLinkStatus } from '@shared/ipc/events'
-import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
+import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
+import { sessionStore, useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 // #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
 import { useTimelineStore } from '../../store/timelineStore'
 import {
+  conversationTimelineStore,
   useConversationTimelineStore,
   selectPrependedRowsFor,
   selectTimelineFor,
@@ -86,7 +87,9 @@ import {
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
-import { useRunSettingsWriteStore, selectError } from '../../store/runSettingsWriteStore'
+import { runSettingsWriteStore, useRunSettingsWriteStore, selectError } from '../../store/runSettingsWriteStore'
+import { sessionIdStore, useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
+import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
@@ -1307,6 +1310,8 @@ function TimelineRow({
       // "which rows are expanded" state shape into this slice. Collapsed is the only form the switch
       // produces.
       return <ToolRow item={item} />
+    case 'modelRefusal':
+      return <ModelRefusalRow refusal={item.refusal} />
     case 'turnBoundary': {
       const text = stoppedTurnText(item)
       return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
@@ -1406,6 +1411,30 @@ function TimelineRow({
       // .session-delimiter.
       return <UnrecognizedRow item={item} />
   }
+}
+
+/** Refusal content is bounded, escaped text; model identifiers remain unchanged in the store. */
+export function ModelRefusalRow({ refusal, defaultExpanded = false }: {
+  refusal: ModelRefusalEvent
+  defaultExpanded?: boolean
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const model = (value: string): string => value === '' ? 'unknown model' : value.slice(0, 256)
+  const title = refusal.type === 'modelRefusalFallback'
+    ? `Refused on ${model(refusal.originalModel)}, continued on ${model(refusal.fallbackModel)}`
+    : `Refused by ${model(refusal.originalModel)}`
+  const label = <span className="session-delimiter__title model-refusal__title">{title}</span>
+  return (
+    <div className="model-refusal">
+      {refusal.banner === '' ? label : (
+        <button type="button" className="model-refusal__toggle" aria-expanded={expanded}
+          onClick={() => setExpanded(value => !value)}>{label}</button>
+      )}
+      {expanded && refusal.banner !== '' && (
+        <p className="model-refusal__body"><span>Claude: </span>{refusal.banner.slice(0, 8192)}</p>
+      )}
+    </div>
+  )
 }
 
 // #218: the tool row (Figma node 16-28) — a compact chip, not a message bubble, so
@@ -3843,12 +3872,14 @@ export function ComposerErrorSlot({
   status,
   onRepair,
   notice,
-  recovery
+  recovery,
+  refusal
 }: {
   status: ConnectionStatus
   onRepair: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
+  refusal?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -3873,7 +3904,7 @@ export function ComposerErrorSlot({
   // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
   // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
   // rule that an optional prop is the silent-omission hole a type cannot catch.
-  return status.type === 'connected' ? recovery ?? notice : null
+  return status.type === 'connected' ? recovery ?? refusal ?? notice : null
 }
 
 // The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
@@ -3977,6 +4008,28 @@ function ComposerErrorSlotControl({
     onCommand('/compact')
   }
   const settingsError = useRunSettingsWriteStore(selectError)
+  const sessionId = useSessionIdStore(selectSessionId)
+  const writes = useRunSettingsWriteStore(s => s)
+  const offer = useConversationTimelineStore(s => open === null ? undefined : s.timelines.get(open.id)?.timeline.refusalOffer)
+  const modelPending = [...writes.pending.values()].some(change => change.field === 'model')
+  const switchBack = (): void => {
+    const currentId = activeConversationStore.getState().activeConversation?.id
+    const currentOffer = currentId === undefined ? undefined : conversationTimelineStore.getState().timelines.get(currentId)?.timeline.refusalOffer
+    const currentSession = sessionIdStore.getState().sessionId
+    const currentWrites = runSettingsWriteStore.getState()
+    if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer ||
+        sessionStore.getState().status.type !== 'connected' || !isAddressableSessionId(currentSession) ||
+        [...currentWrites.pending.values()].some(change => change.field === 'model')) return
+    changeSetting({ sessionId: currentSession, sendCommand: window.pyry.sendCommand,
+      dispatch: event => {
+        if (event.type === 'changeDispatched') {
+          conversationTimelineStore.getState().dispatchFor(currentId, { type: 'refusalWriteStarted', offer, changeId: event.changeId })
+          window.pyry.sendDiagnostic({ event: 'refusal-recovery', code: 'dispatched' })
+        }
+        currentWrites.dispatch(event)
+      }
+    }, { field: 'model', value: offer.report.originalModel })
+  }
 
   const handleRepair = (): void => {
     const open = selectActiveConversation(activeConversationStore.getState())
@@ -4022,6 +4075,17 @@ function ComposerErrorSlotControl({
           )}
         </div>
       )}
+      refusal={offer && isAddressableSessionId(sessionId) ? (
+        <div className="model-refusal-recovery">
+          {settingsError === 'model' && (
+            <div className="composer-status__error composer-status__error--settings" role="alert">
+              Could not change the model — try again.
+            </div>
+          )}
+          <button type="button" className="button-small button-small--error" disabled={modelPending}
+            onClick={switchBack}>Switch back</button>
+        </div>
+      ) : null}
       notice={
         settingsError === 'model' ? (
           <div className="composer-status__error composer-status__error--settings" role="alert">

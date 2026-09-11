@@ -33,6 +33,18 @@ import type {
   SessionPromptStatus
 } from '../wire/types'
 
+/** Validated shape, untrusted content: render only as bounded text, never attributes or logs. */
+export type ModelRefusalEvent = {
+  originalModel: string
+  refusalCategory: string
+  banner: string
+  truncatedFields: readonly string[] | null
+  droppedFields: readonly string[] | null
+} & (
+  | { type: 'modelRefusalFallback'; fallbackModel: string; scope: string }
+  | { type: 'modelRefusalNoFallback' }
+)
+
 /**
  * A stored history entry's payload, decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) —
  * one arm per type the timeline draws, plus the operator's own `message`, which appears only in history
@@ -76,6 +88,7 @@ import type {
  * daemon); an empty map and `''` are different facts and are never collapsed into it.
  */
 export type HistoryTimelineEvent =
+  | ModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'turnState'; state: WireTurnState }
@@ -251,6 +264,7 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | (ModelRefusalEvent & { conversationId: string })
   | { type: 'connecting' }
   | { type: 'connected'; ack: HelloAckPayload }
   | { type: 'disconnected' }

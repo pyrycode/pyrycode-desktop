@@ -1860,6 +1860,36 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               daemonTs: inbound.ts
             })
             return
+          case 'model-refusal-fallback': {
+            const p = inbound.refusal
+            emitDaemonEvent(sink, {
+              type: 'modelRefusalFallback',
+              conversationId: p.conversation_id,
+              originalModel: p.original_model,
+              fallbackModel: p.fallback_model,
+              scope: p.scope,
+              refusalCategory: p.refusal_category,
+              banner: p.banner,
+              truncatedFields: p.truncated_fields,
+              droppedFields: p.dropped_fields,
+              daemonTs: inbound.ts
+            })
+            return
+          }
+          case 'model-refusal-no-fallback': {
+            const p = inbound.refusal
+            emitDaemonEvent(sink, {
+              type: 'modelRefusalNoFallback',
+              conversationId: p.conversation_id,
+              originalModel: p.original_model,
+              refusalCategory: p.refusal_category,
+              banner: p.banner,
+              truncatedFields: p.truncated_fields,
+              droppedFields: p.dropped_fields,
+              daemonTs: inbound.ts
+            })
+            return
+          }
           case 'tool-denied': {
             const p = inbound.toolDenied
             emitDaemonEvent(sink, {

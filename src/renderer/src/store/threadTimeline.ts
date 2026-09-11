@@ -1,3 +1,5 @@
+import type { ModelRefusalEvent } from '@shared/ipc/events'
+
 // The conversation timeline: a heterogeneous, ordered list of turn content (streamed
 // assistant text, tool calls with their results, turn boundaries) plus the coarse
 // conversation-level phase. Pure renderer state — no IPC, no preload bridge, no transport,
@@ -86,6 +88,7 @@ export interface ToolResult {
  * carried beside `items`, not a row in the timeline (ADR 0008).
  */
 export type ThreadItem =
+  | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
   // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
   // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
   // `assistantDelta` IPC arm names four fields fail-closed and does not forward it; the two agree to within
@@ -197,6 +200,13 @@ export type ThreadItem =
  * snake_case wire events into these. Field names mirror the wire so that bridge is a thin rename.
  */
 export type ThreadEvent =
+  | { type: 'modelRefusal'; refusal: ModelRefusalEvent; live: boolean }
+  | { type: 'refusalWriteStarted'; offer: NonNullable<TimelineState['refusalOffer']>; changeId: string }
+  | { type: 'refusalWriteSettled'; changeId: string; confirmed: boolean }
+  | { type: 'refusalModelSelected'; changeId: string }
+  | { type: 'refusalModelAnnounced'; model: string }
+  | { type: 'refusalSessionReplaced' }
+  | { type: 'refusalWriteAbandoned' }
   // `seq` is carried for wire fidelity (and a future monotonicity guard) but not consulted —
   // arrival order is authoritative, per ADR 0004's caller-owns-ordering stance.
   //
@@ -365,6 +375,7 @@ export interface ApiRetryStatus {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  refusalOffer?: { report: Extract<ModelRefusalEvent, { type: 'modelRefusalFallback' }>; changeId?: string }
   /** Latest live turn end; history replay returns rows only and cannot restore this reading. */
   latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>
   items: readonly ThreadItem[]
@@ -527,7 +538,9 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
-  const next = reduceTimelineContent(state, event)
+  let next = reduceTimelineContent(state, event)
+  const refusalOffer = reduceRefusalOffer(state.refusalOffer, event)
+  if (next.refusalOffer !== refusalOffer) next = { ...next, refusalOffer }
   let latestTurnEnd = state.latestTurnEnd
   switch (event.type) {
     case 'turnEnd':
@@ -547,8 +560,39 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
   return next.latestTurnEnd === latestTurnEnd ? next : { ...next, latestTurnEnd }
 }
 
+function reduceRefusalOffer(
+  offer: TimelineState['refusalOffer'], event: ThreadEvent
+): TimelineState['refusalOffer'] {
+  switch (event.type) {
+    case 'modelRefusal':
+      if (!event.live || event.refusal.type !== 'modelRefusalFallback') return offer
+      return event.refusal.scope === 'session' && event.refusal.originalModel !== '' && event.refusal.fallbackModel !== ''
+        ? { report: event.refusal } : undefined
+    case 'refusalWriteStarted':
+      return offer === event.offer ? { ...offer, changeId: event.changeId } : offer
+    case 'refusalWriteSettled':
+      if (offer?.changeId !== event.changeId) return offer
+      return event.confirmed ? undefined : { report: offer.report }
+    case 'refusalModelSelected':
+      return offer?.changeId === event.changeId ? offer : undefined
+    case 'refusalModelAnnounced':
+      return event.model !== '' && event.model !== offer?.report.fallbackModel ? undefined : offer
+    case 'refusalSessionReplaced': case 'reset':
+      return undefined
+    case 'refusalWriteAbandoned':
+      return offer?.changeId === undefined ? offer : { report: offer.report }
+    default:
+      return offer
+  }
+}
+
 function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
+    case 'modelRefusal':
+      return { ...state, items: [...state.items, { kind: 'modelRefusal', refusal: event.refusal }] }
+    case 'refusalWriteStarted': case 'refusalWriteSettled': case 'refusalModelSelected':
+    case 'refusalModelAnnounced': case 'refusalSessionReplaced': case 'refusalWriteAbandoned':
+      return state
     case 'assistantDelta':
       // Turn activity — clears a live stall (AC2). Already returns a fresh `items`, so just carry
       // `stalled: false`.

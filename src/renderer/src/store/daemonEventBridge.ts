@@ -86,6 +86,8 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'turnEnd':
     case 'turnState':
     case 'toolUse':
+    case 'modelRefusalFallback':
+    case 'modelRefusalNoFallback':
     case 'toolDenied':
     case 'toolResult':
       // No session-store action: the renderer timeline bridge (#202), not the session store, consumes

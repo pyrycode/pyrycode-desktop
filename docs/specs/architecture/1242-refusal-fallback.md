@@ -95,3 +95,7 @@ No documentation-only acceptance criterion or named documentation edit is presen
 
 **Reviewer:** builder, self-review using `builder/security-review.md`.
 **Date:** 2026-09-11
+
+## Revisions
+
+2026-09-11: Implementation uses 11 production TypeScript files plus the existing stylesheet; no new store or required consumer migration was needed. The design remains unchanged. Electron verification caught the native disclosure button inheriting Arial despite its child using the separator text class; binding the button's font family to `--font-sans` restored the reference typography. All 2,066 touched-scope unit tests, the build and three focused fake-transport scenarios passed. The 800px screenshots were compared against the approved styling references; no visual deviation remains.

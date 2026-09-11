@@ -143,6 +143,8 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'turnEnd':
     case 'turnState':
     case 'toolUse':
+    case 'modelRefusalFallback':
+    case 'modelRefusalNoFallback':
     case 'toolDenied':
     case 'toolResult':
     case 'conversationsReceived':

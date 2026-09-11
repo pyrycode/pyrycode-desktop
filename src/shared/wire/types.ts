@@ -91,6 +91,8 @@ export type EnvelopeType =
   | 'tool_progress'
   | 'tool_result'
   | 'tool_denied'
+  | 'model_refusal_fallback'
+  | 'model_refusal_no_fallback'
   | 'queue_state'
   // The first of the three `interactive`-gated background-task frames (#564). Announces work claude
   // left running past the turn that spawned it — the frame that separates a genuine finish from a
@@ -3230,4 +3232,19 @@ export interface ToolDeniedPayload {
   message: string
   truncated_fields: string[] | null
   dropped_fields: string[] | null
+}
+
+/** Claude-authored refusal prose. Required reports retain wire-key order and null. */
+export interface ModelRefusalNoFallbackPayload {
+  conversation_id: string
+  original_model: string
+  refusal_category: string
+  banner: string
+  truncated_fields: readonly string[] | null
+  dropped_fields: readonly string[] | null
+}
+
+export interface ModelRefusalFallbackPayload extends ModelRefusalNoFallbackPayload {
+  fallback_model: string
+  scope: string
 }

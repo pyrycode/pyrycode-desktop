@@ -1616,6 +1616,13 @@
   white-space: nowrap;
 }
 
+/* Settings rejection is a sentence; let it wrap within the status row at the minimum window width. */
+.composer-status__error--settings {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+}
+
 /* The chip's assistive-technology marking (AC4): present for a screen reader, absent from the visual
    design. Hidden TEXT rather than an aria-label — see ComposerErrorChip's comment; an aria-label on a
    role="generic" element is dropped by the browser. The standard visually-hidden recipe, using clip-path

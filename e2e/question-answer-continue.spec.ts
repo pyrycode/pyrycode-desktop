@@ -5,7 +5,8 @@ import type {
   QuestionAnswerEntry,
   QuestionAnswerPayload,
   QuestionShownPayload,
-  WireQuestion
+  WireQuestion,
+  SetSessionSettingsPayload
 } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the question panel's CONTINUE (#922) — the panel's last inert control, and the
@@ -121,10 +122,21 @@ type CapturedAnswer = {
  *  buildReplyFrames replaces the fixture default entirely — while `question_answer` is additionally
  *  recorded on the way past. The daemon answers with nothing on this tier: the real one consumes the batch
  *  and broadcasts `question_dismissed`, which this spec does not need, since the clear is local. */
-function capturingAnswerFake(captured: CapturedAnswer[]): (inbound: Uint8Array) => Uint8Array[] {
+function capturingAnswerFake(captured: CapturedAnswer[], settings: { id: number; payload: SetSessionSettingsPayload }[], types: string[]): (inbound: Uint8Array) => Uint8Array[] {
   const conversations = conversationStateFake()
   return (inbound) => {
     const env = decodeEnvelope(inbound)
+    types.push(env.type)
+    if (env.type === 'request_session_settings') {
+      return [frame('session_settings', {
+        session_id: 'question-session', model: 'sonnet', effort: 'low', yolo: false,
+        permission_mode: 'default', used_tokens: 0, window_tokens: 200000
+      }, env.id)]
+    }
+    if (env.type === 'set_session_settings') {
+      settings.push({ id: env.id, payload: env.payload as SetSessionSettingsPayload })
+      return []
+    }
     if (env.type === 'question_answer') {
       // The cast is on the app's OWN trusted outbound (the fixture posture). Three fields are read, and
       // `answer_token` is deliberately not among them.
@@ -140,12 +152,23 @@ function capturingAnswerFake(captured: CapturedAnswer[]): (inbound: Uint8Array) 
   }
 }
 
+function frame(type: string, payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({ id: REPLY_ENVELOPE_ID, type, ts: FIXED_TS, payload, in_reply_to: inReplyTo })
+}
+
+const MODELS = ['sonnet', 'opus', 'haiku'].map((value) => ({
+  value, display_name: value, resolved_model: `claude-${value}-5`,
+  effort_levels: ['low', 'high'], supports_auto_mode: true, truncated_fields: null
+}))
+
 test('question panel: Continue waits for a complete batch, then sends every answer and clears', async ({
   launchPairedApp
 }) => {
   const captured: CapturedAnswer[] = []
-  const { page, daemon } = await launchPairedApp({
-    buildReplyFrames: capturingAnswerFake(captured)
+  const settings: { id: number; payload: SetSessionSettingsPayload }[] = []
+  const types: string[] = []
+  const { page, daemon, app } = await launchPairedApp({
+    buildReplyFrames: capturingAnswerFake(captured, settings, types)
   })
 
   const panel = page.locator('.question-panel')
@@ -162,6 +185,8 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   const otherField = panel.getByRole('textbox', { name: OTHER_PLACEHOLDER })
   const otherTick = panel.locator('.question-panel__other-control')
 
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
+  daemon.pushFrame(frame('model_list', { conversation_id: CONVERSATION_ID, models: MODELS, dropped_models: 0 }))
   await composer.fill(DRAFT)
   daemon.pushFrame(questionShownFrame())
   await expect(panel).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
@@ -211,6 +236,67 @@ test('question panel: Continue waits for a complete batch, then sends every answ
   await optionRow('Tabs').click()
   await otherField.fill(OTHER_TYPED)
   await otherTick.click()
+
+  // Model changes preserve the active middle question and every in-progress answer.
+  const footer = page.locator('.composer__footer:visible')
+  const model = footer.locator('.composer__model-label')
+  await expect(footer.getByRole('button')).toHaveCount(1)
+  await expect(composer).toBeHidden()
+  const beforeTypes = types.length
+  await footer.getByRole('button', { name: 'Sonnet', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Opus', exact: true }).click()
+  await expect.poll(() => settings.length).toBe(1)
+  expect(settings[0].payload).toEqual({ session_id: 'question-session', model: 'opus' })
+  await expect(model).toHaveText('Opus')
+  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
+  await expect(otherField).toHaveValue(OTHER_TYPED)
+  await expect(otherTick.locator('input')).toBeChecked()
+  expect(captured).toHaveLength(0)
+  expect(types.slice(beforeTypes).filter((type) =>
+    ['send_message', 'question_answer', 'question_refused'].includes(type))).toEqual([])
+  daemon.pushFrame(frame('session_settings_updated', { session_id: 'question-session' }, settings[0].id))
+
+  // Keyboard access and a correlated rejection use the same settings lifecycle.
+  const trigger = footer.getByRole('button', { name: 'Opus', exact: true })
+  await trailing.focus()
+  await page.keyboard.press('Tab')
+  await expect(trigger).toBeFocused()
+  await page.keyboard.press('Enter')
+  const haiku = page.getByRole('menuitem', { name: 'Haiku', exact: true })
+  await page.keyboard.press('ArrowDown')
+  await expect(haiku).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => settings.length).toBe(2)
+  expect(settings[1].payload).toEqual({ session_id: 'question-session', model: 'haiku' })
+  await expect(model).toHaveText('Haiku')
+  daemon.pushFrame(frame('rate_limited', {
+    conversation_id: CONVERSATION_ID, status: 'allowed_warning', limit_type: 'seven_day', resets_at: 4102444800, truncated_fields: null
+  }))
+  daemon.pushFrame(frame('error', {}, settings[1].id))
+  const error = page.locator('.composer-status').getByRole('alert')
+  await expect(model).toHaveText('Opus')
+  await expect(error).toHaveText('Could not change the model — try again.')
+  await expect(page.locator('.composer-status__usage')).toHaveCount(0)
+  await expect.poll(() => page.locator('.composer-status').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
+  await expect(otherField).toHaveValue(OTHER_TYPED)
+  await expect(panel.locator('.question-panel__question')).toHaveText(QUESTIONS[1].question)
+  const box = await footer.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(800)
+  await page.screenshot({ path: '/tmp/1252-question-model-footer.png' })
+
+  // A fresh model dispatch clears the error and reveals the held usage notice.
+  await trigger.click()
+  await page.getByRole('menuitem', { name: 'Sonnet', exact: true }).click()
+  await expect.poll(() => settings.length).toBe(3)
+  await expect(error).toHaveCount(0)
+  await expect(page.locator('.composer-status__usage')).toBeVisible()
+  daemon.pushFrame(frame('session_settings_updated', { session_id: 'question-session' }, settings[2].id))
+
+  expect(settings[2].payload).toEqual({ session_id: 'question-session', model: 'sonnet' })
+  expect(types.slice(beforeTypes).filter((type) =>
+    ['send_message', 'question_answer', 'question_refused'].includes(type))).toEqual([])
 
   // AC1's second half — available the moment every question holds a value.
   await tab('Timing').click()

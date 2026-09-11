@@ -52,3 +52,15 @@ Pending for the documentation stage: update `docs/knowledge/features/composer-mo
 ## Open questions
 
 None in the product contract. Live daemon capability and executed/pass counts remain verification evidence to obtain during implementation.
+
+## Verification evidence
+
+- Read the merged daemon source: `Pool.deliverSettingsInBand` invokes `Runner.SetModel`, `streamRunner.SetModel` delegates to the stream supervisor, and `streamsup.Runner.SetModel` writes the control request without a user turn.
+- The new footer assertion failed before implementation. Scoped Vitest passes (362 tests); the focused fake question-answer drive passes, including held response, keyboard selection, rejection, answer payload and draft preservation.
+- Compared `/tmp/1252-question-model-footer.png` at 800px against the Figma questionnaire and model reference: the existing panel and model control retain their drawing and the new footer fits beneath it.
+- `npm run e2e:real:gate -- e2e/real-claude-question-answer.spec.ts` built successfully but executed **0**, passed **0**, skipped **1** because neither supported credential environment variable was set. The gate correctly exited nonzero. Live acceptance and the resolved model record remain blocked pending an operator run with credentials.
+- A standalone strict TypeScript check of the e2e files reported no diagnostics in the changed specs; it remains blocked by existing fixture environment typing and noise module declarations outside that standalone command's configuration. The normal application build passes.
+
+## Revisions
+
+- The live spec records the model on a short ensuing user turn after proving the original answer's continuation. Reading the daemon's `Parser.emitModelAnnounced` and its in-band model gate showed that model announcements come from `system/init`; the control request itself creates no turn or intermediate init. Waiting for a new announcement from the parked question's continuation would therefore test the wrong lifecycle. The label policy remains unchanged.

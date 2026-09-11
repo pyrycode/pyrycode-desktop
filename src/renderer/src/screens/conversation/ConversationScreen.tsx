@@ -80,6 +80,7 @@ import {
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
+import { useRunSettingsWriteStore, selectError } from '../../store/runSettingsWriteStore'
 import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
@@ -3495,6 +3496,11 @@ export function ComposerSlot({
           rebuild the leaf, which re-seeds its state to the first question. Same-nonce RE-DELIVERY keeps
           this key unchanged by design — see the clamp in QuestionPanelSlot, which is what covers it. */}
       {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+      {batch && (
+        <div className="composer__footer">
+          <ComposerModelMenu conversationId={conversationId} />
+        </div>
+      )}
       <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
     </>
   )
@@ -3884,6 +3890,7 @@ function ComposerErrorSlotControl({
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
+  const settingsError = useRunSettingsWriteStore(selectError)
 
   const handleRepair = (): void => {
     const open = selectActiveConversation(activeConversationStore.getState())
@@ -3920,7 +3927,15 @@ function ComposerErrorSlotControl({
     <ComposerErrorSlot
       status={status}
       onRepair={handleRepair}
-      notice={<ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />}
+      notice={
+        settingsError === 'model' ? (
+          <div className="composer-status__error composer-status__error--settings" role="alert">
+            Could not change the model — try again.
+          </div>
+        ) : (
+          <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
+        )
+      }
     />
   )
 }

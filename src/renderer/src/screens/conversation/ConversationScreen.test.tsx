@@ -61,6 +61,7 @@ import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
 import { runConfigStore } from '../../store/runConfigStore'
+import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -5161,5 +5162,37 @@ describe('the unrecognized-message timeline row', () => {
     const cut: ThreadItem = { ...ITEM, truncated: true }
     const markup = renderToStaticMarkup(<Timeline items={[cut]} />)
     expect(markup).not.toContain(UNRECOGNIZED_TRUNCATED_COPY)
+  })
+})
+
+
+describe('model rejection in the mounted status row', () => {
+  const copy = 'Could not change the model — try again.'
+  const connected: ConnectionStatus = {
+    type: 'connected',
+    ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
+  }
+
+  it.each([
+    [connected, true, null],
+    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, COMPOSER_ERROR_CHIP_COPY],
+    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_REPAIR_BUTTON_COPY],
+    [{ type: 'disconnected' }, false, null]
+  ] as const)('arbitrates connection priority for %j', (status, visible, higherPriorityCopy) => {
+    const session = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
+      ...sessionStore.getInitialState(), status
+    })
+    const settings = vi.spyOn(runSettingsWriteStore, 'getInitialState').mockReturnValue({
+      ...runSettingsWriteStore.getInitialState(), error: 'model'
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup.includes(copy)).toBe(visible)
+      if (visible) expect(markup).toContain('composer-status__error--settings" role="alert"')
+      if (higherPriorityCopy !== null) expect(markup).toContain(higherPriorityCopy)
+    } finally {
+      settings.mockRestore()
+      session.mockRestore()
+    }
   })
 })

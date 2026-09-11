@@ -158,6 +158,17 @@ Three pieces, three layers:
 
 `src/shared/ipc/` is the new IPC-contract module, mirroring how `src/shared/wire/` is the wire module. #18 creates one file in it; #17 later adds its command file (recommended: a sibling `commands.ts` with its own `COMMAND_CHANNEL`, so the two tickets never edit the same file).
 
+### Stopped-turn metadata
+
+Both `DaemonEvent.turnEnd` and `HistoryTimelineEvent.turnEnd` carry optional
+`outcome?: string`, `isError?: boolean`, `terminalReason?: string` and
+`errorCategory?: string`. The [wire parser](inbound-message-decode.md#optional-stopped-turn-reports)
+checks types and the 256-byte UTF-8 string bound before either lane crosses IPC.
+Named-field forwarding preserves false and empty strings; test absence with
+`=== undefined`, not property presence or truthiness. These open strings are
+display reports, consumed by the [timeline](thread-timeline-internals.md#stopped-turn-state),
+never command text, attributes, URLs or logs.
+
 ## Configuration and usage
 
 - **Import from `src/main` / `src/preload`** by **relative path**: `import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'`. These sides have **no `@shared` alias** (it exists only in `tsconfig.web.json` / the renderer vite block); `@shared/ipc/events` fails the node typecheck and the main/preload build there.

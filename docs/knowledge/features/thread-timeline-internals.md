@@ -23,7 +23,8 @@ interface MessageAttachment { attachmentId: string; filename: string }
 type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; parentToolUseId?: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null; denial?: ToolDenial; elapsedSeconds?: number }
-  | { kind: 'turnBoundary'; turnId: string; stopReason: string }
+  | { kind: 'turnBoundary'; turnId: string; stopReason: string
+      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
@@ -34,7 +35,8 @@ type ThreadEvent =
   | { type: 'toolProgress'; turnId: string; toolUseId: string; elapsedSeconds: number }
   | { type: 'toolResult'; turnId: string; toolUseId: string; parentToolUseId?: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string
+      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
@@ -45,7 +47,7 @@ type ThreadEvent =
   | { type: 'dropUserText'; messageId: string }
   | { type: 'thinkingProgress'; estimatedTokens: number }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }> }
 interface ApiRetryStatus { current: number; total: number }
 ```
 
@@ -206,14 +208,41 @@ The result remains complete in state; display bounds belong to the
 [tool row](conversation-shell-tool-rows.md#permission-denied-tool-call-row).
 The denial retains tool name, source token, reason, rejection message and both reports,
 including the distinction between `null`, `[]` and populated arrays. Empty reasons and
-unknown source tokens do not establish classifier provenance. Denial changes only the
-item: phase, stall, retry, compaction, local-send and thinking-token state are unchanged.
+unknown source tokens do not establish classifier provenance. Denial preserves phase,
+stall, retry, compaction, local-send and thinking-token state; as daemon activity it
+also clears `latestTurnEnd` under the lifecycle below.
+
+### Stopped-turn state
+
+`turnEnd` copies optional `outcome`, `isError`, `terminalReason` and `errorCategory`
+onto the retained `turnBoundary` without interpretation. Live and history use the
+same translation and reducer, preserving false, empty strings and undefined values
+from the [wire parser](inbound-message-decode.md#optional-stopped-turn-reports).
+The [formatter](conversation-shell-turn-status.md#stopped-turn-records) decides whether
+that record draws; the boundary still closes the streaming cursor when undrawn.
+
+`latestTurnEnd` is separate, transient state for [composer recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
+A non-cancelled `turnEnd` sets it only when `isError === true` or `outcome` is nonempty
+and differs from `success`; any other end clears it. Local `userText`, a non-idle
+`turnState`, `assistantDelta`, `toolUse`, `toolResult`, `toolProgress`, `toolDenied`
+and `thinkingProgress` clear it, as do `sessionBoundary`, `reset` and `reconnected`.
+A trailing idle preserves it. Retry, compaction and stall reports do not clear it.
+Clearing this reading leaves the boundary in `items` unless the event itself resets
+the timeline.
+
+`reduceHistoryPage` folds into scratch state and returns **only items**.
+`prependHistoryFor` therefore cannot restore or replace live recovery, even for an
+absent conversation. Holding the reading in each conversation's existing timeline
+also makes eviction and conversation clears remove it with that slice.
 
 ### The reducer
 
-`reduceTimeline(state, event): TimelineState` is pure and exported — no mutation, fresh state,
-`switch` on `event.type` with an `assertNever` default — the same discipline as `sessionStore`'s
-`reduceSession`:
+`reduceTimeline(state, event): TimelineState` is pure and exported. It runs the exhaustive
+`reduceTimelineContent` fold below, then applies `latestTurnEnd`'s lifecycle above.
+The table describes the content fold: a same-reference result or an unchanged scalar
+there can still accompany clearing `latestTurnEnd`. If that reading is unchanged too,
+the wrapper returns the content fold's exact state reference, preserving legacy no-op
+identity on reconnect.
 
 | event | effect |
 |---|---|
@@ -230,7 +259,7 @@ item: phase, stall, retry, compaction, local-send and thinking-token state are u
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 | `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
-| `reset` | returns `initialTimelineState` — all seven fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
+| `reset` | returns `initialTimelineState`, with no `latestTurnEnd`, by reference; a second reset is a no-op — [#528](../codebase/528.md) |
 | `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false`, `thinkingTokens`→`null` via a hand-written six-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all six (including `phase === 'idle'`) are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md), widened for `thinkingTokens` by [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) since a reading held across a reconnect would report the depth of a think that finished on the other side of the disconnect |
 | `dropUserText` | remove the **first** `userText` item whose `messageId` strictly equals `event.messageId` (`removeUserEcho`, below); same `items` reference on no match. The **only** arm that removes an item — everything else appends or coalesces. Every chrome scalar, `localSendPending` included, is carried through unchanged; not a second `userText` producer and not its inverse — see § Edge cases — [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) |
 
@@ -267,7 +296,8 @@ orphan/duplicate guard does **not** widen, since a tool result is not one of thi
 edges and must stay the same-reference no-op it already is.
 `initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false, localSendPending: false, thinkingTokens: null }`;
 pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, `selectCompacting`,
-`selectLocalSendPending`, `selectThinkingTokens` are the only read surface.
+`selectLocalSendPending`, `selectThinkingTokens` read these fields. Recovery reads
+`latestTurnEnd` directly from the open conversation's held timeline.
 
 ### Internal helpers (unexported)
 

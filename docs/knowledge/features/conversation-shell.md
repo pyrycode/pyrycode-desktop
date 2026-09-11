@@ -68,7 +68,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 
 - [Chrome and controls](conversation-shell-chrome.md) — The screen's structure and the persistent controls around the thread: layout, theme, the back, unpair and re-pair controls, and the connection surfaces in the header.
 - [Workspace and run configuration](conversation-shell-workspace-and-run-config.md) — Choosing where a session runs and how it is configured: the workspace chip and picker, the run configuration sheet and its sections, and the log data section.
-- [Turn status surfaces](conversation-shell-turn-status.md) — What the screen shows while a turn is running: the timeline render, the thinking indicator, the background-task panel, and the retry, compacting and stall indicators.
+- [Turn status surfaces](conversation-shell-turn-status.md) — The timeline render, retained stopped-turn records, the thinking indicator, background tasks, and retry, compacting and stall status. Stopped turns can also supply [composer recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 - [Composer](conversation-shell-composer.md) — The composer's own surfaces: its status row, error chip and footer row. The options panel is large enough to have its own document.
 - [Composer options panel](conversation-shell-composer-options.md) — The composer's options panel: its resting appearance, placement, keyboard driving, and the live wiring behind each control.
 - [Tool rows](conversation-shell-tool-rows.md) — How a tool call is painted from the moment it appears to the moment its result can be read: the pending and resolved rows, the expandable result, the collapsed headline and the input field list.

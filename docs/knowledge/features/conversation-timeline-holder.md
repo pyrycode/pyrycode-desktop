@@ -1,7 +1,7 @@
 # Conversation timeline holder
 
 The renderer's held copy of **every** conversation's whole timeline — the ordered `items`, `phase`, and
-the four chrome scalars a [thread timeline](thread-timeline.md) carries — keyed by `conversationId`
+the transient state a [thread timeline](thread-timeline.md) carries — keyed by `conversationId`
 rather than scoped to whichever conversation is open, so leaving a chat and coming back does not throw
 its thread away. Bounded at ten and evicted least-recently-**viewed**, the one deliberate divergence from
 both of its keyed precedents.
@@ -33,9 +33,10 @@ first-write order. #758 remains the reader cutover, now depending on this rather
 
 ## What it does
 
-Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`, and all four chrome
-scalars (`stalled`, `apiRetry`, `compacting`, `localSendPending`) — [thread timeline](thread-timeline.md)'s
-existing shape, imported unchanged, with no wrapper entry type. A key **absent** from the map means
+Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
+`stalled`, `apiRetry`, `compacting`, `localSendPending`, `thinkingTokens` and optional
+`latestTurnEnd`. The `ConversationSlice` wrapper also holds history-request state,
+the prepend count and live/history join keys. A key **absent** from the map means
 "nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
 **present, empty** slice ("observed; nothing in the thread yet"). `selectTimelineFor` preserves that
 distinction rather than collapsing it, the same three-way reading [background-task roster
@@ -50,10 +51,10 @@ exactly the thread the operator stepped away from.
 ## How it works
 
 - **Shape:** the house four-part store (`zustand/vanilla` DI factory → app-wide singleton → `useStore`
-  hook → selector factory bound to one id), field-for-field the same shape as [conversation activity
+  hook → selector factory bound to one id), following [conversation activity
   store](conversation-activity-store.md) and [background-task roster
-  store](background-task-roster-store.md). State is `{ timelines: ReadonlyMap<string, TimelineState> }`.
-- **Four named write paths, not a reducer over a keyed action union** — a fold, a view-stamp and two
+  store](background-task-roster-store.md). State is `{ timelines: ReadonlyMap<string, ConversationSlice> }`.
+- **Core write paths use named methods, not a keyed action union** — a fold, a view-stamp and two
   clears are independent operations, so a discriminated-union action set would be ceremony without
   benefit, and a generic `write(id, key, value)` would reintroduce a stringly-typed key beside the one
   hostile string this store exists to contain:
@@ -128,8 +129,8 @@ exactly the thread the operator stepped away from.
   tail. Every survivor in both rebuilds is copied **by reference**, so a write for one conversation leaves
   every other conversation's slice `Object.is`-identical to what it held before — a component watching a
   different conversation does not re-render.
-- **Read path:** `selectTimelineFor(conversationId)` is the only read surface — a selector *factory*, not
-  a whole-map selector. Returns `s.timelines.get(conversationId) ?? null`. `null` is a stable reference,
+- **Timeline read path:** `selectTimelineFor(conversationId)` is a selector *factory*, not
+  a whole-map selector. Returns `s.timelines.get(conversationId)?.timeline ?? null`. `null` is a stable reference,
   so no `EMPTY_*` constant is hoisted and no fresh object is built per call. There is deliberately no
   `selectAllTimelines` and no re-export of `selectItems`/`selectPhase`/the chrome selectors — a caller
   branches on `null`, then applies the existing `threadTimeline` selectors to the slice it got back.
@@ -154,6 +155,19 @@ exactly the thread the operator stepped away from.
   content-free rule keeps both out. A read miss and an eviction are both silent by design, not swallowed
   errors. Nothing is persisted, and must not be — a `localStorage` write here would carry conversation
   content across the pairing boundary #757 exists to enforce.
+
+### Stopped records and history isolation
+
+Each slice holds its own [latest live stop](thread-timeline-internals.md#stopped-turn-state).
+Activity in conversation B cannot clear A's recovery or move A's boundary into B.
+The composer reads only the open id's `timeline.latestTurnEnd`; switching views
+does not itself end another conversation's recovery lifecycle.
+
+`reduceHistoryPage` returns rows from a scratch fold. `prependHistoryFor` changes
+the held items while preserving live state, or seeds an absent timeline with those
+items and no recovery. Thus replay can draw an old stopped record without reviving
+its composer guidance. Eviction and conversation/pairing clears remove both the
+boundary and transient reading with their slice.
 
 ## Configuration and usage
 
@@ -200,10 +214,9 @@ exactly the thread the operator stepped away from.
 
 ## Edge cases and limitations
 
-- **No history backfill.** The timeline's only production writers are the live stream and the composer's
-  optimistic echo (`activateConversation.ts`) — this store adds no fetch. An evicted slice is simply gone:
-  reopening that conversation shows an empty thread that fills from the next live event, exactly the way
-  every conversation switch behaves today.
+- **History backfills rows only.** Reopening an evicted conversation can request history
+  through the [opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259).
+  An old stopped boundary can return; its live recovery reading cannot.
 - **Bounds slice count, not slice bytes.** `MAX_RETAINED_TIMELINES` caps how many conversations' threads
   are retained at once; it does not cap the size of any one thread. A hostile daemon inside an already-
   paired session can still grow one thread without limit via `assistantDelta` — today's flat
@@ -212,8 +225,7 @@ exactly the thread the operator stepped away from.
   `reduceTimeline`, not to this store.
 - **Ten is a stated, not a derived, number.** The operator's ask is about switching between a handful of
   chats; raising the constant later is a one-literal edit (it is exported specifically so tests assert
-  against the name). If ten proves too small in practice given the no-backfill rule above, the fix is a
-  backfill ticket, not a bigger constant.
+  against the name). History can refill an evicted thread without raising this retention bound.
 - **Duplicates, not shares, state with [conversation activity store](conversation-activity-store.md).**
   That store already holds `stalled`/`apiRetrying`/`compacting` per conversation; this store's slices hold
   their own copies of the same three facts as part of the full `TimelineState`. Decided, not pending — the

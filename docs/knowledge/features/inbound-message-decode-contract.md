@@ -83,7 +83,17 @@ Historical: two more required numeric fields joined `ScreenSnapshotPayload` afte
 absence — the same discipline the bundle `seq`/`total` had already established, and every later
 numeric field (`current`/`total` on `api_retry`, `dropped_tasks`) still follows.
 
-**Extended a fourth time by [#199](../codebase/199.md), additively.** `assistant_delta` → `{ kind: 'assistant-delta', delta: AssistantDeltaPayload }` via `parseAssistantDeltaPayload`, and `turn_end` → `{ kind: 'turn-end', turnEnd: TurnEndPayload }` via `parseTurnEndPayload` — both built on the existing `isRecord`/`requireString`/`requireNumber` helpers verbatim, no new helper needed (neither payload has a boolean). `AssistantDeltaPayload{conversation_id, turn_id, seq, text}` (`seq: 0` and `text: ''` decode as real values, never absences — same type-not-truthiness discipline as `yolo`) and `TurnEndPayload{conversation_id, turn_id, stop_reason}` are both four-or-fewer required strings/numbers, no `omitempty`. These are the two v2 interactive-stream events (pyrycode #607, `protocol-mobile.md`) that will replace the coarse `message` fan-out once [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips the `interactive` capability on — until then this decode path sits Strangler-Fig alongside the coarse path, receiving nothing. **Unlike every kind above, the consumer arm carries the decoded `text` onward rather than minimising it** — see § The consumer arm and [thread timeline](thread-timeline.md) for why this is a deliberate divergence, not a lapse.
+`assistant_delta` and `turn_end` decode through `parseAssistantDeltaPayload` and
+`parseTurnEndPayload`. The former requires `conversation_id`, `turn_id`, `seq` and
+`text`; zero sequence and empty text remain values. The latter requires string
+`conversation_id`, `turn_id` and `stop_reason`, and preserves optional `outcome`,
+`is_error`, `terminal_reason` and `error_category` under the
+[stopped-turn compatibility contract](inbound-message-decode.md#optional-stopped-turn-reports).
+Wrong-typed or overlong optional reports are omitted without rejecting the boundary;
+required-field validation is unchanged. `decodeHistoryEvent` reuses the same parser
+and maps the report fields to camelCase, matching live IPC delivery. Both kinds feed
+the live [thread timeline](thread-timeline.md); assistant text and stopped-turn
+reports deliberately cross IPC as display content, never as diagnostic values.
 
 **Extended a fifth time by [#139](../codebase/139.md), additively.** `conversations` → `{ kind:
 'conversations', conversations: ConversationSummary[] }` via `parseConversationsPayload` +

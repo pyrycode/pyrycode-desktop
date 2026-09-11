@@ -154,7 +154,12 @@ case 'message': {
         type: 'turnEnd',
         turnId: inbound.turnEnd.turn_id,
         stopReason: inbound.turnEnd.stop_reason,
-        conversationId: inbound.turnEnd.conversation_id
+        outcome: inbound.turnEnd.outcome,
+        isError: inbound.turnEnd.is_error,
+        terminalReason: inbound.turnEnd.terminal_reason,
+        errorCategory: inbound.turnEnd.error_category,
+        conversationId: inbound.turnEnd.conversation_id,
+        daemonTs: inbound.ts
       })
       return
     case 'conversations':

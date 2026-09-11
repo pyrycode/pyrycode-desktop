@@ -24,7 +24,8 @@ export type DaemonEvent =
   | { type: 'runConfigReceived'; sessionId: string; model: string; effort: string; yolo: boolean
       ; used_tokens: number; window_tokens: number }
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string; conversationId: string
+      ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
   | { type: 'turnState'; state: WireTurnState }
   | { type: 'stallDetected' }
@@ -40,7 +41,7 @@ export type DaemonEvent =
       ; occurredAt: string; workspaceCwd: string | null }
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
   | { type: 'sessionSettingsRejected'; changeId: string }
-  | { type: 'historyPageReceived'; conversationId: string; entries: readonly HistoryEntry[]
+  | { type: 'historyPageReceived'; conversationId: string; entries: readonly HistoryTimelineEntry[]
       ; cursor: string; atStart: boolean }
   | { type: 'historyRequestFailed'; conversationId: string; reason: HistoryRequestFailure
       ; retryable: boolean }
@@ -52,6 +53,13 @@ its position between the debug-bundle members and `assistantDelta`) had already 
 `snapshotReceived` as the run-config sheet's data source. See [the per-member
 history](daemon-event-channel-sealed-union-history.md) for what the two removed members carried while
 they existed.
+
+`HistoryTimelineEntry.event` uses `HistoryTimelineEvent`; its `turnEnd` member
+carries the same optional stopped-turn fields as the live member, without a
+per-entry `conversationId`. The enclosing page supplies the request-correlated id.
+See [stopped-turn metadata](daemon-event-channel.md#stopped-turn-metadata) for the
+absence, byte-bound and display-only contract. Live `turnEnd` also carries the
+existing optional `daemonTs` envelope stamp for the history/live join.
 
 ## 2. Per-member history
 

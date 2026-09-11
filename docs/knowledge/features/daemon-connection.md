@@ -42,6 +42,18 @@ owns correlation and the [tool row](conversation-shell-tool-rows.md#permission-d
 owns display. Successful decode diagnostics contain only the static event code, frame
 byte count and hash, never denial prose.
 
+### Stopped-turn delivery
+
+The live `turn-end` arm copies `outcome`, `is_error`, `terminal_reason` and
+`error_category` by name to `outcome`, `isError`, `terminalReason` and `errorCategory`
+on `turnEnd`, alongside `turnId`, `stopReason`, `conversationId` and `daemonTs`.
+It preserves `undefined`, empty strings and `false`; it does not classify a stop
+or turn it into a connection failure. The [shared live/history parser](inbound-message-decode.md#optional-stopped-turn-reports)
+owns compatibility and byte bounds. History carries the same camel-case metadata
+inside `historyPageReceived.entries`, under the existing request-correlated
+conversation id. The [timeline bridge](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets)
+forwards the four fields into the retained boundary. Report values never enter logs.
+
 ### Public surface
 
 Split out to [Daemon connection — methods](daemon-connection-methods.md) 2026-09-06 to keep this

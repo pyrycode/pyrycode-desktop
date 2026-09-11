@@ -35,8 +35,8 @@ Teardown must run on **every** exit path — success, test failure, and a failur
 
 `npm test` (vitest) must stay fast and headless-safe and must never collect the Playwright specs; the Playwright runner must never collect the `src/` unit files. Both directions are enforced structurally:
 
-- **Playwright → only `e2e/`:** `testDir: './e2e'` in `playwright.config.ts`.
-- **vitest → only `src/`:** `include: ['src/**/*.{test,spec}.{ts,tsx}']` in `vitest.config.ts`. vitest's `include` **replaces** the default glob (it is not additive), so vitest never walks `e2e/`. Every existing `*.test.ts(x)` lives under `src/`, so none is dropped.
+- **Playwright:** `testDir: './e2e'` and `testMatch: '**/*.spec.ts'` in `playwright.config.ts`.
+- **Vitest:** `include: ['src/**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.test.ts']` in `vitest.config.ts`. Within `e2e/`, the suffix separates pure fixture unit tests from browser specs. `fakeDaemonSetup.test.ts`, for example, runs a local HTTP server without launching Electron.
 
 ### Desktop isolation (default-tier launches)
 
@@ -82,6 +82,41 @@ reasoning, the departures from the first draft, and what this fixture deliberate
 `attachLaunchFate` attaches the report **unconditionally**, whenever it is non-empty — not gated on the test's status. It originally returned early unless `sink.status` was in `{failed, timedOut, interrupted}`, and [#1202](https://github.com/pyrycode/pyrycode-desktop/issues/1202) found that gate is why the diagnostic didn't fire on the one red it was built for: both drain sites call `attachLaunchFate` from a *fixture epilogue*, where the test's status is not yet final. `TestInfoImpl.status` stays `'passed'` until Playwright calls `_failWithError`, and that can happen later than the epilogue in two ways this tier hits — a teardown that drains after `launchPairedApp`'s (a fixture set up before it tears down after it), and `WorkerMain.unhandledError` routing an `uncaughtException`/`unhandledRejection` to the still-open current test, which is the shape of a bare `socket hang up` with no in-spec stack frame on a worker that owns two fake sockets. Deferring the attach into a fixture that drains last would beat the first mechanism and still lose to the second, so the fix removes the status read rather than relocating it: `LaunchFateSink` narrowed from `Pick<TestInfo, 'status' | 'attach'>` to `Pick<TestInfo, 'attach'>`, so restoring the gate is a visible type edit, not a one-line condition slipped back in. The kept early return is for an empty report (no launches, no teardown failures), not for status.
 
 Suppression on a green run did not disappear, it moved to where it was always actually enforced: Playwright's terminal reporter (`reporter: 'list'`) prints an attachment's body only from `formatFailure`, reached only for a result that carries errors, so a passing test's attachment exists in its result but is never printed — the `text/plain` content type (name not underscore-prefixed, truncated at 300 chars) is what makes it inline-readable when it is. Measured, not assumed: a green run leaves one *empty* `test-results/` directory per test that actually attaches (`TestInfo.attach` calls `outputPath()`, which `mkdirSync`s it), and Playwright wipes `test-results/` at the start of every run, so this is per-run litter with no growth. `e2e/launch-fate.spec.ts` drives the real `testInfo` throughout rather than the `recordingSink` double it used to use — that double supplied a constant `status`, substituting exactly the seam that turned out to be broken, so every one of its assertions could pass while a real red carried nothing.
+
+### Pre-Electron fake-daemon setup failures
+
+`launchPairedApp` awaits its fake-daemon connections before `launchIsolatedApp`.
+A dial failure can therefore leave no launch-fate attachment: Electron does not
+exist yet. `startFakeDaemonForTest` in `e2e/fixtures/fakeDaemonSetup.ts` translates
+the exact `ws` error `Unexpected server response: 404` into the static message
+`Fake daemon setup failed before Electron launch: HTTP 404`. Other failures use
+`Fake daemon setup failed before Electron launch`. No caught error, cause, URL,
+headers, options or payload enter the replacement diagnostic.
+
+The helper does not retry; errors still fail the test, and existing teardown drains
+the forwarder. `fakeDaemonSetup.test.ts` drives a real local HTTP 404, checks
+success pass-through and verifies arbitrary-error redaction. This proves the
+setup-stage classification, not the cause of the intermittent 404 seen in the
+host-edit drive; that original responder remains unidentified.
+
+### Stopped-turn evidence
+
+`e2e/stopped-turn.spec.ts` drives max-turn, context-overflow and API-error reports
+through fake transport and the real decoder. It checks retained boundary rows,
+conversation isolation, trailing-idle recovery retention, clearing on Compact
+submission and daemon activity, disabled Compact, `/compact` dispatch without
+draft loss, and billing/auth guidance. The priority scenario injects connection
+failures at the typed IPC boundary and checks re-pair/error precedence over
+recovery, and recovery over usage. At 800px it measures status/thread containment
+and verifies long stop labels stay on one line with truncation.
+
+The decoder unit tests cover live/history compatibility and UTF-8 bounds; the
+renderer/reducer tests cover wording, cancellation, escaping, tool-stack joins and
+history rows without recovery. Together these prove Desktop rendering and existing
+command dispatch. They do not prove successful compaction by a live Claude.
+Reported API categories have synthesized upstream contract evidence, not live
+captures establishing the account's state. See [stopped records](conversation-shell-turn-status.md#stopped-turn-records)
+and [recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 
 ## Configuration and usage
 

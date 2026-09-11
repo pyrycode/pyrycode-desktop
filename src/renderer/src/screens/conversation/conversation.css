@@ -6137,3 +6137,15 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.tool-group-row {
+  flex: 0 0 auto;
+}
+
+/* Display grouping uses absolute depth so deeply nested agents stay within the chat pane. */
+.tool-group-row--depth-1 {
+  margin-inline-start: var(--space-4);
+}
+.tool-group-row--depth-2 {
+  margin-inline-start: calc(var(--space-4) * 2);
+}

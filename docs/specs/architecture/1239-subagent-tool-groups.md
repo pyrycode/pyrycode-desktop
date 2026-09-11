@@ -72,3 +72,9 @@ No explicit documentation requirement in the ticket. Feature documentation belon
 
 **Reviewer:** builder self-review per `builder/security-review.md`
 **Date:** 2026-09-11
+
+
+## Revisions
+
+- 2026-09-11: Expansion is controlled by `Timeline` for every tool row, not just groups. This preserves an expanded leaf when history supplies its first child. The timeline is keyed by conversation so expansion cannot leak to unrelated calls in a different conversation. Pending expanded groups show their descendants without an empty result body.
+- 2026-09-11: `DecodedHistoryEvent` is a separate internal type in the already-planned decoder file and also carries attribution. The file count is eight TypeScript production files plus the existing CSS file; total written work remains below 800 lines. Unit history proof is split across decoder and renderer projects to respect their TypeScript boundaries.

@@ -155,6 +155,7 @@ export function translateTimelineEvent(
         type: 'toolUse',
         turnId: event.turnId,
         toolUseId: event.toolUseId,
+        parentToolUseId: event.parentToolUseId,
         name: event.name,
         inputSummary: event.inputSummary,
         input: event.input
@@ -192,6 +193,7 @@ export function translateTimelineEvent(
         type: 'toolResult',
         turnId: event.turnId,
         toolUseId: event.toolUseId,
+        parentToolUseId: event.parentToolUseId,
         isError: event.isError,
         resultSummary: event.resultSummary,
         resultDetail: event.resultDetail

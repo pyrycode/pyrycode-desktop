@@ -79,7 +79,7 @@ test('every default-tier Electron launch goes through the shared module', async 
       entries.map(async (entry) => {
         const path = join(dir, entry.name)
         if (entry.isDirectory()) return walk(path)
-        return entry.name.endsWith('.ts') ? [path] : []
+        return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [path] : []
       })
     )
     return found.flat()

@@ -199,6 +199,18 @@ snake_case `permission_mode` — the value crosses **verbatim**, no allowlist, n
 no mapping onto the `yolo` bit (see [session settings send](session-settings-send.md) for why an allowlist
 here would be a false boundary).
 
+### Refusal recovery across navigation
+
+`RunSettingsWriteData` also mounts `subscribeRefusalRecovery`, which observes new
+model-write intents and live daemon lifetime events. It updates the existing
+conversation timeline's [refusal offer](conversation-timeline-store.md#refusal-offer-lifetime).
+Switch back records that offer's correlation before dispatching the ordinary
+settings change, so the observer can distinguish recovery from a later manual pick.
+Replies match retained offers even after `conversationSwitched` clears this store.
+Pending/rejection presentation therefore also reads the conversation-owned offer;
+this store's empty pending map is insufficient to enable another recovery write.
+Both observer subscriptions are cleaned up with the app-level effect.
+
 ### Remembering the confirmed level (#1169)
 
 `runSettingsWriteBridge.ts` folds one more thing into the same event as it dispatches: an effort confirm
@@ -250,7 +262,7 @@ A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at Ap
 sheet-scoped. A confirm/reject reply can arrive **after** the Run config sheet closes, so the listener
 must outlive the sheet; a sheet-scoped subscription would strand the pending marker. That same rationale
 now covers the `reconnected` clear ([#539](../codebase/539.md)) for free — the edge fires whether or not
-the sheet is open. Since #1169, one
+the sheet is open. Since #1169, the settings-folding effect is
 `useEffect(() => subscribeRunSettingsWrite(window.pyry.onDaemonEvent, e => foldWriteEvent({ getPending: () => runSettingsWriteStore.getState().pending, dispatch: runSettingsWriteStore.getState().dispatch, rememberEffort: lastEffortStore.getState().setLastEffort }, e)), [])`
 — every reply still reaches the store exactly as before; the one addition is the fold above. `getState()`
 is read **per event**, never captured at subscription, because this listener is app-lifetime: a `pending`

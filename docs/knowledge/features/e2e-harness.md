@@ -115,7 +115,7 @@ renderer/reducer tests cover wording, cancellation, escaping, tool-stack joins a
 history rows without recovery. Together these prove Desktop rendering and existing
 command dispatch. They do not prove successful compaction by a live Claude.
 Reported API categories have synthesized upstream contract evidence, not live
-captures establishing the account's state. See [stopped records](conversation-shell-turn-status.md#stopped-turn-records)
+captures establishing the account's state. See [stopped records](conversation-shell-timeline-render.md#stopped-turn-records)
 and [recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 
 ## Configuration and usage

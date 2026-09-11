@@ -54,6 +54,15 @@ inside `historyPageReceived.entries`, under the existing request-correlated
 conversation id. The [timeline bridge](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets)
 forwards the four fields into the retained boundary. Report values never enter logs.
 
+### Refusal delivery
+
+The `model-refusal-fallback` and `model-refusal-no-fallback` arms copy validated
+payload fields into `modelRefusalFallback`/`modelRefusalNoFallback` IPC, including
+`conversationId` and envelope `daemonTs`. They emit no turn or settings change.
+History uses the same [required-field parsers](inbound-message-decode.md#required-model-refusal-reports)
+under the page's request-correlated identity. The [timeline](conversation-timeline-store.md#refusal-records-and-routing)
+owns retention and recovery; successful decode logs only type, byte count and hash.
+
 ### Public surface
 
 Split out to [Daemon connection — methods](daemon-connection-methods.md) 2026-09-06 to keep this

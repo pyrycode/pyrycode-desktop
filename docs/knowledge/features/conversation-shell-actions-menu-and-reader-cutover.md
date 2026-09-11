@@ -378,7 +378,7 @@ const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
 substituting a sentinel: `null` in → the module-level `selectNothingHeld` (`(): null => null`, a stable
 identity, no map lookup at all); an id in → `selectTimelineFor(id)`. **This is deliberately not
 `selectTimelineFor(openConversationId ?? '')`** — [Background-task
-panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)'s idiom, safe
+panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)'s idiom, safe
 there and not here: `''` is an ordinary key in the holder (`dispatchFor` mints a slice for whatever
 `conversation_id` the daemon asserts, `''` included), so a hostile or buggy daemon emitting one frame
 with an empty `conversation_id` would plant a slice the sentinel spelling would then render as the open

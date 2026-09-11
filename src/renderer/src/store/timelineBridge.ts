@@ -119,6 +119,17 @@ export function translateTimelineEvent(
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
+    case 'modelRefusalFallback':
+    case 'modelRefusalNoFallback': {
+      const live = 'conversationId' in event && typeof event.conversationId === 'string'
+      if (live && event.conversationId === '') return null
+      const common = { originalModel: event.originalModel, refusalCategory: event.refusalCategory,
+        banner: event.banner, truncatedFields: event.truncatedFields, droppedFields: event.droppedFields }
+      const refusal = event.type === 'modelRefusalFallback'
+        ? { ...common, type: event.type, fallbackModel: event.fallbackModel, scope: event.scope }
+        : { ...common, type: event.type }
+      return { type: 'modelRefusal', refusal, live }
+    }
     case 'toolProgress':
       return {
         type: 'toolProgress', turnId: event.turnId,
@@ -550,6 +561,8 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
     case 'toolProgress':
       return event.conversationId
+    case 'modelRefusalFallback':
+    case 'modelRefusalNoFallback':
     case 'toolDenied':
       return event.conversationId === '' ? null : event.conversationId
     case 'assistantDelta':

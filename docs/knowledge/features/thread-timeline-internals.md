@@ -71,7 +71,7 @@ to make "true by construction." **`localSendPending` ([#650](../codebase/650.md)
 scalar** — set by the `userText` arm (the composer's own accept signal, no separate event) and cleared
 only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
 what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
-Thinking / working indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
+Thinking / working indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967),
 not restated here.
 
 **`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314), decoded at
@@ -218,7 +218,7 @@ also clears `latestTurnEnd` under the lifecycle below.
 onto the retained `turnBoundary` without interpretation. Live and history use the
 same translation and reducer, preserving false, empty strings and undefined values
 from the [wire parser](inbound-message-decode.md#optional-stopped-turn-reports).
-The [formatter](conversation-shell-turn-status.md#stopped-turn-records) decides whether
+The [formatter](conversation-shell-timeline-render.md#stopped-turn-records) decides whether
 that record draws; the boundary still closes the streaming cursor when undrawn.
 
 `latestTurnEnd` is separate, transient state for [composer recovery](conversation-shell-composer-status.md#stopped-turn-recovery).

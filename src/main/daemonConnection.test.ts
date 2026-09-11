@@ -9788,3 +9788,28 @@ describe('createDaemonConnection — the envelope ts on the timeline-bearing emi
     expect(events[0]).not.toHaveProperty('daemonTs')
   })
 })
+
+describe('refusal forwarding', () => {
+  it.each(['model_refusal_fallback', 'model_refusal_no_fallback'] as const)('forwards %s fields and drops malformed payloads without events or payload logs', async type => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const payload = { conversation_id: 'other-conversation', original_model: 'original', banner: 'private refusal prose',
+      refusal_category: 'future', truncated_fields: ['banner'], dropped_fields: null,
+      ...(type === 'model_refusal_fallback' ? { fallback_model: 'fallback', scope: 'future' } : {}) }
+    const count = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 1, type, ts: FIXED_TS, payload }) })
+    expect(emitted(sink).slice(count)).toEqual([{
+      type: type === 'model_refusal_fallback' ? 'modelRefusalFallback' : 'modelRefusalNoFallback',
+      conversationId: 'other-conversation', originalModel: 'original', banner: 'private refusal prose',
+      refusalCategory: 'future', truncatedFields: ['banner'], droppedFields: null, daemonTs: FIXED_TS,
+      ...(type === 'model_refusal_fallback' ? { fallbackModel: 'fallback', scope: 'future' } : {})
+    }])
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 2, type, ts: FIXED_TS, payload: { ...payload, original_model: 42 } }) })
+    expect(emitted(sink)).toHaveLength(count + 1)
+    expect(JSON.stringify(records)).not.toContain('private refusal prose')
+    connection.stop()
+  })
+})

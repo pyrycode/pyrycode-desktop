@@ -149,7 +149,7 @@ and a failed row is always `--resolved` too (`tool-row--error` layers only on to
 so a dimmed row and a red border are never the same element.
 
 **A run follows visible neighbours.** Legacy, clean-success and cancelled `turnBoundary`
-items draw nothing and do not break a tool stack. A [stopped-turn record](conversation-shell-turn-status.md#stopped-turn-records)
+items draw nothing and do not break a tool stack. A [stopped-turn record](conversation-shell-timeline-render.md#stopped-turn-records)
 or `sessionBoundary` draws an element and ends the stack. With grouped tool wrappers,
 the [join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins)
 must include that visible stop as well: rendering the label while skipping every

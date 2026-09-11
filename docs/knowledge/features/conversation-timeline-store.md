@@ -26,7 +26,7 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 ## What it does
 
-Turns the ten owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
+Turns owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
 `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
@@ -35,7 +35,8 @@ slice — orthogonal to `sessionStore` and `runConfigStore`. The ninth arm, `con
 ([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
 that clears the timeline's transient chrome on a fresh handshake. `localSendPending`
 ([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
-event the composer dispatches directly (see below), the store's one non-bridge write source.
+event the composer dispatches directly (see below). Refusal recovery also dispatches
+client-owned write-lifetime events into the retained conversation slice.
 
 ## Tool parent attribution
 
@@ -86,6 +87,68 @@ turn and call isolation, signed/decreasing readings, unchanged lifecycle state,
 completion and late frames. The [tool-row documentation](conversation-shell-tool-rows.md#live-elapsed-reading)
 describes the two visible consumers and the browser proof.
 
+## Refusal records and routing
+
+`model_refusal_fallback` and `model_refusal_no_fallback` share required string fields
+`conversation_id`, `original_model`, `refusal_category` and `banner`, plus required
+`truncated_fields`/`dropped_fields` string arrays or `null`. Fallback additionally
+requires string `fallback_model` and `scope`. The shared live/history parsers accept
+empty and unknown strings and preserve report nulls, array order and wire-key names;
+missing or mistyped required fields fail decoding without payload diagnostics.
+
+Main copies these fields into the discriminated `ModelRefusalEvent` IPC shape.
+Live events carry `conversationId` and envelope `daemonTs`; history takes identity
+from the request-correlated page. `translateTimelineEvent` constructs the same
+`modelRefusal` item in both lanes, marking only live input eligible for recovery.
+Empty live conversation ids are dropped, never assigned to the open conversation.
+The session, modal and question bridges explicitly ignore both variants.
+
+The existing [history/live join](conversation-timeline-store-internals.md#the-historylive-join-1225)
+uses event type and timestamp, with no refusal-specific deduplication. History folds
+return rows only; `prependHistoryFor` cannot create, revive or cancel a live offer.
+Appending either refusal preserves phase, local-send state, activity indicators,
+stopped-turn recovery and model-label authority. The frames contain no turn/request/
+message identity with which to retract partial text. See [row display](conversation-shell-turn-status.md#model-refusal-records).
+
+## Refusal-offer lifetime
+
+`TimelineState.refusalOffer` is separate from retained rows. It holds the fallback
+report, optional client-minted `changeId`, and optional client-owned `rejected` flag.
+Each [retained conversation slice](conversation-timeline-holder.md) owns its offer;
+ordinary turns and navigation preserve it.
+
+| Event | Effect on the offer |
+| --- | --- |
+| Live fallback | Replaces the previous offer; exact session scope with two nonempty model ids creates one, otherwise clears it. |
+| No-fallback or history record | Creates no offer and leaves any existing offer unchanged. |
+| Switch back starts | Requires the exact held offer object; records its correlation and clears rejection before settings dispatch/send. |
+| Matching confirmation | Retires the offer. |
+| Matching rejection | Removes the correlation, retains the report and sets `rejected: true` for retry. |
+| Later manual model selection | Retires the offer; the recovery write's own matching correlation is exempt. |
+| Later model announcement | Retires only for a nonempty model different from the offered fallback. |
+| Attributed session transition or timeline reset | Retires the offer. |
+| Reconnect (`connected`) | Abandons outstanding recovery correlations across retained slices, keeping their reports available for retry. |
+
+`subscribeRefusalRecovery` lives in `runSettingsWriteBridge.ts`, mounted by
+`RunSettingsWriteData` for app lifetime with cleanup of both subscriptions. It
+observes new model-write intents and live announcements/transitions, never held
+model snapshots or history. Older readings therefore cannot cancel a fresh offer.
+Settings replies search retained slices by exact correlation rather than the open
+conversation id; a late reply from an earlier attempt cannot settle a newer offer.
+Offer retirement leaves rows intact; timeline reset or holder eviction drops rows too.
+
+Navigation's `clearRunConfig` dispatches `conversationSwitched`, erasing the general
+settings store's pending writes and error while the conversation timeline survives.
+Recovery presentation must read the retained correlation and rejection flag as well
+as the settings store. Merely changing the open-id getter in a bridge test misses
+this reset and can pass while duplicate recovery writes remain possible.
+[`store/modelRefusal.test.ts`](../../../src/renderer/src/store/modelRefusal.test.ts)
+dispatches the actual reset; static renders inject an empty settings store. The
+[fake-transport scenarios](../../../e2e/model-refusal.spec.ts) hold a reply across
+A → B → A, reject both after returning and while away, then retry and confirm.
+They also cover conversation isolation, action retirement and slot priority.
+This proves Desktop dispatch and UI behavior, without requiring a live Claude refusal.
+
 ## Configuration and usage
 
 - **`useTimelineBridge(getOpenConversationId)` mounts in `App.tsx`**, right after `useDaemonEventBridge()`
@@ -109,8 +172,9 @@ describes the two visible consumers and the browser proof.
   selectCompacting, selectLocalSendPending } from '@renderer/store/timelineStore'` and
   `import { useTimelineBridge } from '@renderer/store/timelineBridge'`. `ConversationScreen` still imports
   `useTimelineStore` alone, for the composer's `dispatch` write.
-- No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
-  transport (single active conversation); the bridge translates and dispatches unconditionally.
+- Live conversation-owned events route through `timelineTargetFor` into the keyed
+  holder; the legacy flat store remains dual-written. Refusal recovery reads and
+  updates the retained keyed slice, never the flat slot.
 - **`connected` → `reconnected` needed no reader wiring** ([#538](../codebase/538.md)) — it drove the
   same `selectStalled`/`selectApiRetry`/`selectCompacting`/`selectPhase` selectors
   [#317](../codebase/317.md)/[#493](../codebase/493.md)/[#496](../codebase/496.md)/[#215](../codebase/215.md)
@@ -127,7 +191,7 @@ describes the two visible consumers and the browser proof.
   than restated. `localSendPending` now reaches that same function as one of the six
   [keyed-holder](conversation-timeline-holder.md) fields the container destructures. See
   [Conversation shell § Thinking / working
-  indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
+  indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967).
 - **`useHistoryPageBridge()` mounts in `App.tsx`** ([#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)),
   beside `useQuestionBridge()` rather than replacing it — the first rework pass on this ticket landed a
   hunk that deleted the neighbouring call while keeping its now-unused-looking import, which compiled and

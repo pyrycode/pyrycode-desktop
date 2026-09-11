@@ -53,7 +53,7 @@ right of its header, using `tool-row__right` and `tool-row__count`. A pending le
 remains noninteractive, with no chevron; a grouped parent keeps its existing toggle
 and child count. Result or denial removes the elapsed text.
 
-Both the header and [working label](conversation-shell-turn-status.md#tool-elapsed-reading)
+Both the header and [working label](conversation-shell-working-indicator.md#tool-elapsed-reading)
 use `formatToolElapsed`: absolute values below 60 render as seconds (`12s`), larger
 values as minutes and two-digit seconds (`65` → `1m 05s`). Zero renders as `0s`,
 and negatives retain their sign (`-65` → `-1m 05s`). Before the first reading,

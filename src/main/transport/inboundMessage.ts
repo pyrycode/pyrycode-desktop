@@ -54,6 +54,8 @@ import type {
   ToolProgressPayload,
   ToolResultPayload,
   ToolDeniedPayload,
+  ModelRefusalFallbackPayload,
+  ModelRefusalNoFallbackPayload,
   QueuedItem,
   QueueStatePayload,
   ConversationSummary,
@@ -737,6 +739,8 @@ export type InboundDaemonMessage =
   | ({ kind: 'tool-use'; toolUse: ToolUsePayload } & FrameTimestamp)
   | ({ kind: 'tool-result'; toolResult: ToolResultPayload } & FrameTimestamp)
   | ({ kind: 'tool-denied'; toolDenied: ToolDeniedPayload } & FrameTimestamp)
+  | ({ kind: 'model-refusal-fallback'; refusal: ModelRefusalFallbackPayload } & FrameTimestamp)
+  | ({ kind: 'model-refusal-no-fallback'; refusal: ModelRefusalNoFallbackPayload } & FrameTimestamp)
   | { kind: 'queue-state'; queueState: QueueStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
@@ -1370,6 +1374,17 @@ export interface DecodedHistoryEntry {
   event: DecodedHistoryEvent
 }
 
+type DecodedModelRefusalEvent = {
+  originalModel: string
+  refusalCategory: string
+  banner: string
+  truncatedFields: readonly string[] | null
+  droppedFields: readonly string[] | null
+} & (
+  | { type: 'modelRefusalFallback'; fallbackModel: string; scope: string }
+  | { type: 'modelRefusalNoFallback' }
+)
+
 /**
  * A stored entry's payload decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) — one arm
  * per type the timeline draws, which is the set of non-null arms in the renderer's
@@ -1402,6 +1417,7 @@ export interface DecodedHistoryEntry {
  * facts — the contract their live arms already state.
  */
 export type DecodedHistoryEvent =
+  | DecodedModelRefusalEvent
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { type: 'turnState'; state: WireTurnState }
@@ -1531,6 +1547,17 @@ function decodeHistoryEvent(
         // no fields for this call.
         input: p.input
       }
+    }
+    case 'model_refusal_fallback': {
+      const p = parseModelRefusalFallbackPayload(payload)
+      return { type: 'modelRefusalFallback', originalModel: p.original_model, refusalCategory: p.refusal_category,
+        banner: p.banner, truncatedFields: p.truncated_fields, droppedFields: p.dropped_fields,
+        fallbackModel: p.fallback_model, scope: p.scope }
+    }
+    case 'model_refusal_no_fallback': {
+      const p = parseModelRefusalNoFallbackPayload(payload)
+      return { type: 'modelRefusalNoFallback', originalModel: p.original_model, refusalCategory: p.refusal_category,
+        banner: p.banner, truncatedFields: p.truncated_fields, droppedFields: p.dropped_fields }
     }
     case 'tool_denied': {
       const p = parseToolDeniedPayload(payload)
@@ -2241,6 +2268,28 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
   const input_summary = requireString(payload, 'input_summary')
   const input = optionalStringMap(payload, 'input')
   return { conversation_id, turn_id, tool_use_id, parent_tool_use_id, name, input_summary, input }
+}
+
+/** Both refusal variants share required fields; validation never interprets Claude's prose. */
+function parseModelRefusalNoFallbackPayload(payload: unknown): ModelRefusalNoFallbackPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed model refusal payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    original_model: requireString(payload, 'original_model'),
+    refusal_category: requireString(payload, 'refusal_category'),
+    banner: requireString(payload, 'banner'),
+    truncated_fields: requireStringArrayOrNull(payload, 'truncated_fields'),
+    dropped_fields: requireStringArrayOrNull(payload, 'dropped_fields')
+  }
+}
+
+function parseModelRefusalFallbackPayload(payload: unknown): ModelRefusalFallbackPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed model refusal payload')
+  return {
+    ...parseModelRefusalNoFallbackPayload(payload),
+    fallback_model: requireString(payload, 'fallback_model'),
+    scope: requireString(payload, 'scope')
+  }
 }
 
 /** Validate denial shape without interpreting source tokens or collapsing nullable reports. */
@@ -3615,6 +3664,18 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'tool-use', toolUse, ts: envelope.ts }
+    }
+    case 'model_refusal_fallback': {
+      const refusal = parseModelRefusalFallbackPayload(envelope.payload)
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'model_refusal_fallback',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'model-refusal-fallback', refusal, ts: envelope.ts }
+    }
+    case 'model_refusal_no_fallback': {
+      const refusal = parseModelRefusalNoFallbackPayload(envelope.payload)
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'model_refusal_no_fallback',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'model-refusal-no-fallback', refusal, ts: envelope.ts }
     }
     case 'tool_denied': {
       const toolDenied = parseToolDeniedPayload(envelope.payload)

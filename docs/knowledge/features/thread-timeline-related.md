@@ -62,6 +62,6 @@ Part of [Thread timeline](thread-timeline.md).
   [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) (this module's `thinkingProgress` arm
   and `thinkingTokens` scalar) — covered in full above (§ Types, § The reducer, § Edge cases). Render
   consumer: [Conversation shell § Thinking / working
-  indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)'s
+  indicator](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)'s
   `thinkingLabel`. Full design and the security review of the unbounded daemon integer:
   `docs/specs/architecture/1314-thinking-token-estimate-status-row.md`.

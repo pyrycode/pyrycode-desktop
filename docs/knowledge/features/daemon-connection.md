@@ -29,6 +29,19 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
 - **`stop()`** tears the driver down idempotently and **suppresses** the clean-stop `terminal` (the window is going away on quit, so there is nothing to report).
 - **On the driver's `relay-link-up`/`relay-link-down{code}`** ([#328](../codebase/328.md)), it emits a `relayLinkChanged{status}` event carrying the relay-**socket** leg — distinct from the combined session status above. This is the single point that classifies the relay-controlled raw close `code` into the closed `RelayLinkStatus` enum (`connected`/`offline`/`daemon-absent`, `4404` → `daemon-absent`); the code itself never crosses IPC. Ships **dormant** (see the driver-event mapping table below).
 
+### Tool-denial delivery
+
+`tool_denied` uses one payload parser for live frames and stored history. All seven
+string fields are required, with empty strings valid; `truncated_fields` and
+`dropped_fields` each require a string array or `null`. Missing or mistyped fields
+fail decoding. Null, empty arrays and unknown report names retain their original meaning.
+The live `tool-denied` arm copies the nine named fields to camel-case `toolDenied` IPC
+and carries the envelope timestamp as `daemonTs`; it does not infer attribution or
+merge a denial into a result. The [timeline](thread-timeline.md#permission-denial-correlation)
+owns correlation and the [tool row](conversation-shell-tool-rows.md#permission-denied-tool-call-row)
+owns display. Successful decode diagnostics contain only the static event code, frame
+byte count and hash, never denial prose.
+
 ### Public surface
 
 Split out to [Daemon connection — methods](daemon-connection-methods.md) 2026-09-06 to keep this

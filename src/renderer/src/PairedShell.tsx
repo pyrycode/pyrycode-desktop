@@ -33,6 +33,7 @@ import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
 import { historyAskDeps, requestOpeningHistory } from './store/historyPageBridge'
 import { activeConversationStore } from './store/activeConversationStore'
+import { sessionFactsStore } from './store/sessionFactsStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
@@ -191,6 +192,7 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
+  clearSessionFacts: () => sessionFactsStore.getState().clearSessionFacts(),
   // #955: every conversation's published slash-command menu, dropped as one. It reaches its store
   // DIRECTLY, the `clearAllLastRead` shape below, and for the same reason — there is no sampling or
   // gating branch to keep in one tested place, because the store method takes nothing at all.

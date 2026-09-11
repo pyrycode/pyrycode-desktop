@@ -13,6 +13,7 @@ import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
+import { SessionFactsData } from './store/sessionFactsBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
 import { ConversationActivityData } from './store/conversationActivityBridge'
 import { SlashCommandListData } from './store/slashCommandListBridge'
@@ -301,6 +302,7 @@ function App(): JSX.Element {
       <RelayLinkData />
       <BackgroundTaskRosterData />
       <AnnouncedModelData />
+      <SessionFactsData />
       <ConversationActivityData />
       <RunConfigLiveData />
       <SlashCommandListData />

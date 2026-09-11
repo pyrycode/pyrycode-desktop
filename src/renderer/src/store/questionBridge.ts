@@ -167,6 +167,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'backgroundTaskStarted':
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
+    case 'sessionFacts': // Informational only; the session-facts bridge owns retention.
     case 'modelAnnounced':
     case 'runConfigReceived':
     case 'modalShown':

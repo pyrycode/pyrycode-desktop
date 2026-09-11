@@ -800,6 +800,14 @@ export interface CompactingPayload {
  *
  * See #587 (this decode) and #588 (the store).
  */
+// Untrusted informational report; strings are open values, never permission controls.
+export interface SessionFactsPayload {
+  conversation_id: string
+  claude_code_version: string
+  permission_mode: string
+  truncated_fields: string[] | null
+}
+
 export interface ModelAnnouncedPayload {
   conversation_id: string
   model: string

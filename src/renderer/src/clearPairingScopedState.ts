@@ -159,6 +159,7 @@ export interface ClearPairingScopedStateDeps {
   clearActiveConversation: () => void
   clearSessionId: () => void
   clearAnnouncedModel: () => void
+  clearSessionFacts: () => void
   clearAllSlashCommandLists: () => void
   clearAllModelLists: () => void
   clearAllConversations: () => void
@@ -391,6 +392,7 @@ export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void
   deps.clearActiveConversation()
   deps.clearSessionId()
   deps.clearAnnouncedModel()
+  deps.clearSessionFacts()
   // Beside the announced model, the other clear of untrusted daemon-relayed text, and the only one that
   // reaches WORKSPACE-authored strings. Nullary like the two whole-map clears around it, so no
   // daemon-supplied conversation id can steer which workspace's verbs survive the boundary. Position is

@@ -1907,6 +1907,18 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     return ctx
   }
 
+  it('delivers complete session facts once without turn events and drops malformed reports', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const payload = { conversation_id: 'a', claude_code_version: '', permission_mode: 'futureMode', truncated_fields: ['permission_mode'] }
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 3, type: 'session_facts', ts: FIXED_TS, payload }) })
+    expect(emitted(sink).slice(before)).toEqual([{
+      type: 'sessionFacts', conversationId: 'a', claudeCodeVersion: '', permissionMode: 'futureMode', truncatedFields: ['permission_mode']
+    }])
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 4, type: 'session_facts', ts: FIXED_TS, payload: { ...payload, permission_mode: null } }) })
+    expect(emitted(sink).slice(before)).toHaveLength(1)
+  })
+
   it('decodes a model_announced into exactly one modelAnnounced event (conversation_id carried)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length

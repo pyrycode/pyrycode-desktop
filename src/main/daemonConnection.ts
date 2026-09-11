@@ -1519,6 +1519,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               daemonTs: inbound.ts
             })
             return
+          case 'session-facts':
+            emitDaemonEvent(sink, {
+              type: 'sessionFacts',
+              conversationId: inbound.sessionFacts.conversation_id,
+              claudeCodeVersion: inbound.sessionFacts.claude_code_version,
+              permissionMode: inbound.sessionFacts.permission_mode,
+              truncatedFields: inbound.sessionFacts.truncated_fields
+            })
+            return
           case 'model-announced':
             // The announced-model data path (#587, #714). Emit a fresh literal carrying the identifier, the
             // cut report and the routing key, copied BY NAME from the already-decoded, already-validated

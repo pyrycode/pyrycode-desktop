@@ -39,6 +39,7 @@ import type {
   BackgroundTask,
   BackgroundTaskRosterPayload,
   ModelAnnouncedPayload,
+  SessionFactsPayload,
   ThinkingProgressPayload,
   RateLimitedPayload,
   UnrecognizedMessagePayload,
@@ -712,6 +713,7 @@ export type InboundDaemonMessage =
   | ({ kind: 'stall'; stall: StallPayload } & FrameTimestamp)
   | ({ kind: 'api-retry'; apiRetry: ApiRetryPayload } & FrameTimestamp)
   | ({ kind: 'compacting'; compacting: CompactingPayload } & FrameTimestamp)
+  | { kind: 'session-facts'; sessionFacts: SessionFactsPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
@@ -1975,6 +1977,16 @@ function parseUnrecognizedMessagePayload(payload: unknown): UnrecognizedMessageP
     throw new WireDecodeError('missing required field: site')
   }
   return { conversation_id, site, message_type, raw, truncated }
+}
+
+function parseSessionFactsPayload(payload: unknown): SessionFactsPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed session_facts payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    claude_code_version: requireString(payload, 'claude_code_version'),
+    permission_mode: requireString(payload, 'permission_mode'),
+    truncated_fields: requireStringArrayOrNull(payload, 'truncated_fields')
+  }
 }
 
 /**
@@ -3387,6 +3399,16 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'compacting', compacting, ts: envelope.ts }
+    }
+    case 'session_facts': {
+      const sessionFacts = parseSessionFactsPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'session_facts',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'session-facts', sessionFacts }
     }
     case 'model_announced': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string `model`, a non-boolean

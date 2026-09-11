@@ -6151,3 +6151,14 @@
 .tool-group-row--depth-2 {
   margin-inline-start: calc(var(--space-4) * 2);
 }
+
+/* Session claims wrap as inert text; the cut marker remains visible outside the value. */
+.channel-info__session-value {
+  overflow-wrap: anywhere;
+}
+
+.channel-info__session-truncated {
+  display: block;
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+}

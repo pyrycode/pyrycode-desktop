@@ -1,3 +1,4 @@
+import { createSessionFactsStore } from './store/sessionFactsStore'
 import { describe, it, expect, vi } from 'vitest'
 import {
   clearPairingScopedState,
@@ -98,6 +99,7 @@ function spyDeps(): {
   clearAllTimelines: ReturnType<typeof vi.fn>
   clearActiveConversation: ReturnType<typeof vi.fn>
   clearSessionId: ReturnType<typeof vi.fn>
+  clearSessionFacts: ReturnType<typeof vi.fn>
   clearAnnouncedModel: ReturnType<typeof vi.fn>
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
   clearAllModelLists: ReturnType<typeof vi.fn>
@@ -114,6 +116,7 @@ function spyDeps(): {
   const clearAllTimelines = vi.fn()
   const clearActiveConversation = vi.fn()
   const clearSessionId = vi.fn()
+  const clearSessionFacts = vi.fn()
   const clearAnnouncedModel = vi.fn()
   const clearAllSlashCommandLists = vi.fn()
   const clearAllModelLists = vi.fn()
@@ -132,6 +135,7 @@ function spyDeps(): {
       clearActiveConversation,
       clearSessionId,
       clearAnnouncedModel,
+      clearSessionFacts,
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
@@ -148,6 +152,7 @@ function spyDeps(): {
     clearActiveConversation,
     clearSessionId,
     clearAnnouncedModel,
+    clearSessionFacts,
     clearAllSlashCommandLists,
     clearAllModelLists,
     clearAllConversations,
@@ -190,6 +195,7 @@ describe('clearPairingScopedState', () => {
       clearActiveConversation,
       clearSessionId,
       clearAnnouncedModel,
+      clearSessionFacts,
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
@@ -213,6 +219,8 @@ describe('clearPairingScopedState', () => {
     expect(clearAllTimelines).toHaveBeenCalledWith()
     expect(clearActiveConversation).toHaveBeenCalledTimes(1)
     expect(clearSessionId).toHaveBeenCalledTimes(1)
+    expect(clearSessionFacts).toHaveBeenCalledTimes(1)
+    expect(clearSessionFacts).toHaveBeenCalledWith()
     expect(clearAnnouncedModel).toHaveBeenCalledTimes(1)
     expect(clearAllSlashCommandLists).toHaveBeenCalledTimes(1)
     // #955, the same nullary property as the two whole-map clears around it: the published menus are
@@ -299,6 +307,7 @@ describe('clearPairingScopedState', () => {
       'clearAllTimelines',
       'clearAllUsageLimits',
       'clearAnnouncedModel',
+      'clearSessionFacts',
       'clearSessionId',
       'dispatchModal',
       'dispatchSession',
@@ -994,6 +1003,7 @@ function realDeps(
     clearActiveConversation: () => active.getState().clearActiveConversation(),
     clearSessionId: () => sessionId.getState().clearSessionId(),
     clearAnnouncedModel: () => announcedModel.getState().clearAnnouncedModel(),
+    clearSessionFacts: () => {},
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     clearAllConversations: () => conversations.getState().clearAllConversations(),
@@ -1006,3 +1016,11 @@ function realDeps(
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }
 }
+
+it('pairing cleanup clears retained session facts through its dependency', () => {
+  const store = createSessionFactsStore()
+  store.getState().setSessionFacts({ conversationId: 'a', claudeCodeVersion: 'preview', permissionMode: 'future', truncatedFields: [] })
+  const { deps } = spyDeps()
+  clearPairingScopedState({ ...deps, clearSessionFacts: store.getState().clearSessionFacts })
+  expect(store.getState().facts.size).toBe(0)
+})

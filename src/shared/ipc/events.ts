@@ -511,6 +511,14 @@ type BaseDaemonEvent =
   // brings no dedup, coalescing, timer or per-id memo with it. Ships dormant: all three exhaustive bridges
   // no-op it until #588 — the compacting-was-a-no-op-until-#496 precedent.
   | { type: 'modelAnnounced'; model: string; truncated: boolean; conversationId: string }
+  | {
+      // Shape-validated claims only; never authority for permissions or turn state.
+      type: 'sessionFacts'
+      conversationId: string
+      claudeCodeVersion: string
+      permissionMode: string
+      truncatedFields: string[] | null
+    }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

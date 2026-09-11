@@ -1,3 +1,4 @@
+import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
 import {
   useEffect,
   useLayoutEffect,
@@ -2622,7 +2623,8 @@ export function ChannelInfoSheetView({
   deleteConfirmPending,
   onDeleteConfirm,
   onDeleteCancel,
-  systemPromptSection
+  systemPromptSection,
+  sessionFacts = null
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
@@ -2646,6 +2648,7 @@ export function ChannelInfoSheetView({
   // form, so this view stays pure (props in, markup out) while the section reads two stores of its own.
   // The container supplies it ONLY in the `conversation !== null` branch, exactly like the three action
   // callbacks above, so the list-opened graceful-empty case grows no editor.
+  sessionFacts?: ReturnType<ReturnType<typeof selectSessionFactsFor>>
   systemPromptSection?: ReactNode
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
@@ -2705,6 +2708,28 @@ export function ChannelInfoSheetView({
           )}
           {/* #1078: the System prompt section — between the About detail and the Actions, per the
               ticket. It brings its own section header, so the slot needs none here. */}
+          {conversation !== null && (
+            <>
+              <p className="status-sheet__section-header">Session</p>
+              {[
+                { field: 'claude_code_version', label: 'Claude version', value: sessionFacts?.claudeCodeVersion },
+                { field: 'permission_mode', label: 'Reported permission mode', value: sessionFacts?.permissionMode }
+              ].map(({ field, label, value }) => {
+                // Bound code points, keeping surrogate pairs intact; claims never drive controls.
+                const characters = Array.from(value ?? '')
+                const truncated = characters.length > 256 || sessionFacts?.truncatedFields?.includes(field)
+                return (
+                  <div className="channel-info__row" key={field}>
+                    <span className="channel-info__row-label">{label}</span>
+                    <span className="channel-info__row-value channel-info__session-value">
+                      <span>{characters.slice(0, 256).join('') || 'Not reported'}</span>
+                      {truncated && <span className="channel-info__session-truncated">Truncated</span>}
+                    </span>
+                  </div>
+                )
+              })}
+            </>
+          )}
           {systemPromptSection}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
           {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366) then
@@ -2807,6 +2832,7 @@ function ChannelInfoSheet({
   // is the controlled field, seeded from the conversation's displayed title on open. Both reset for free
   // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
+  const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
   // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
@@ -2826,6 +2852,7 @@ function ChannelInfoSheet({
     <>
       <ChannelInfoSheetView
         conversation={conversation}
+        sessionFacts={sessionFacts}
         now={now}
         onClose={onClose}
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button

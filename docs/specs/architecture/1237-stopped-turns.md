@@ -155,3 +155,9 @@ test reports, with only client-owned messages exposed. No new application IPC,
 storage, credentials, network policy, crypto, timer, or subscription is introduced.
 The test HTTP server closes in teardown. Total planned written work remains below
 800 lines; production-file count and the approved floor exception are unchanged.
+
+Validation: the real HTTP test first failed with the dispatcher's exact raw 404
+wording, then passed with the static stage diagnostic. All 31 scoped unit tests,
+the build, host-edit (one test), and stopped-turn (two tests) passed after the
+fixture change. This identifies the failing layer; it does not reproduce the
+spontaneous 404 or establish why the original loopback dial received that status.

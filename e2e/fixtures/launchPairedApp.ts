@@ -11,7 +11,8 @@ import {
   startFakeRelayForwarder,
   type FakeRelayForwarder
 } from '../../src/main/transport/fakeRelayForwarder'
-import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
+import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
+import { startFakeDaemonForTest } from './fakeDaemonSetup'
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -298,7 +299,7 @@ export const test = base.extend<PairedAppFixtures>({
       ): Promise<PairedServerHandle> => {
         const forwarder = await startFakeRelayForwarder()
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
-        const daemon = await startFakeDaemon({
+        const daemon = await startFakeDaemonForTest({
           url: forwarder.url,
           buildReply: () => seedConversationsFrame(),
           ...serverOptions

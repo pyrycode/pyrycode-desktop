@@ -365,7 +365,7 @@ pairing ends (unpair only, since #1141 — pairing another server adds a server 
   field this store carries verbatim (§ What it does), and used it to correlate a drop against the
   sending window's own timeline echo — see [Dequeue message
   envelope](dequeue-message-envelope.md#configuration-and-usage) and [Thread
-  timeline](thread-timeline.md#types). This store's own read/write surface is unchanged.
+  timeline](thread-timeline-internals.md#types). This store's own read/write surface is unchanged.
 - [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) — deleted `QueuedBacklog` and its
   `.conversation__queued` region and folded this store's held `queued` array directly into `Timeline`'s
   rows via the pure `foldQueuedRows`, using `message_id` for the same correlation #1213 used for the

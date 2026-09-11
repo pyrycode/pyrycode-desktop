@@ -37,7 +37,7 @@ string fields are required, with empty strings valid; `truncated_fields` and
 fail decoding. Null, empty arrays and unknown report names retain their original meaning.
 The live `tool-denied` arm copies the nine named fields to camel-case `toolDenied` IPC
 and carries the envelope timestamp as `daemonTs`; it does not infer attribution or
-merge a denial into a result. The [timeline](thread-timeline.md#permission-denial-correlation)
+merge a denial into a result. The [timeline](thread-timeline-internals.md#permission-denial-correlation)
 owns correlation and the [tool row](conversation-shell-tool-rows.md#permission-denied-tool-call-row)
 owns display. Successful decode diagnostics contain only the static event code, frame
 byte count and hash, never denial prose.

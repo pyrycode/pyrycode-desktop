@@ -88,6 +88,7 @@ export type EnvelopeType =
   | 'unrecognized_message'
   | 'session_transition'
   | 'tool_use'
+  | 'tool_progress'
   | 'tool_result'
   | 'tool_denied'
   | 'queue_state'
@@ -1270,6 +1271,14 @@ export interface SessionTransitionPayload {
   reason: WireSessionTransitionReason
   occurred_at: string
   workspace_cwd: string | null
+}
+
+/** Live reading for an existing call; mirrors the upstream ToolProgressPayload. */
+export interface ToolProgressPayload {
+  conversation_id: string
+  turn_id: string
+  tool_use_id: string
+  elapsed_seconds: number
 }
 
 /**

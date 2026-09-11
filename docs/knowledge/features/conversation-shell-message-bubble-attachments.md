@@ -12,7 +12,7 @@ sections together outgrew the size cap `npm run check:docs` enforces; the parent
 A settled, non-image attachment on a sent message draws as `.bubble__file`: an outlined document glyph
 (45×60, inline `<svg>`, its extension overlaid across the lower half) and the filename beside it, 12px
 apart and both vertically centred. Figma `File field` 132:4605, inside the bubble at 121:3860. `#1039`
-supplied the record this reads (`MessageAttachment[]` on a `userText` [timeline item](thread-timeline.md#types));
+supplied the record this reads (`MessageAttachment[]` on a `userText` [timeline item](thread-timeline-internals.md#types));
 until that ticket landed there was no name to draw.
 
 **User-arm only, and structurally so — not a scope choice.** The drawing is an *assistant* bubble, but

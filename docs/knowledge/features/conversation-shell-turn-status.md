@@ -233,7 +233,8 @@ now empty, and their copy is a wider `state` union on this one view instead:
 └── ComposerStatusArea         isRunning={isTurnRunning(phase)}
     └── ThinkingIndicator      state={workingIndicatorStateWithLocalSend(
                                          { phase, apiRetry, compacting, stalled }, localSendPending)}
-                                toolName={openToolName(items)}
+                                toolName={openTool?.name ?? null}
+                                toolElapsedSeconds={openTool?.elapsedSeconds}
                                 retry={apiRetry}
                                 thinkingTokens={thinkingTokens}
 ```
@@ -460,6 +461,17 @@ timeline already shows that call as a permanently pending, dimmed row (#230), so
 what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
 at the current turn's `turnBoundary`.
 
+### Tool elapsed reading
+
+The container selects one `openToolCall(items)` for both name and elapsed reading;
+`openToolName` remains a wrapper over that same lookup. The scan chooses the latest
+pending, non-denied call. When its tool label is active (thinking or working), the
+optional `toolElapsedSeconds` appends the [shared elapsed format](conversation-shell-tool-rows.md#live-elapsed-reading)
+after a space: `Running Bash… 1m 05s`. The whole label remains one ellipsizing text
+run. An absent reading keeps the previous copy; retrying, compacting, stalled and
+hidden states retain their existing behavior regardless of the elapsed prop.
+Name and seconds must come from the same call, especially with overlapping tools.
+
 ### Retired by #967: `ApiRetryIndicator` (#493), `CompactingIndicator` (#496), `StallIndicator` (#317)
 
 Through #796 these three still floated as loose, independently-mounted, null-at-rest bubble blocks
@@ -523,7 +535,7 @@ row. Two comparisons, one `Math.round`, one interpolation — no `repeat`, `Arra
 bounded by the reading, which is the concrete failure mode a right-aligned formatter written as
 `padStart(estimate)` would open (gigabytes allocated from a daemon claim); the plan's security review
 carried this forward as a Phase B ban rather than a one-time check. See [Thread timeline § Edge
-cases](thread-timeline.md#edge-cases-and-limitations) for the `thinkingTokens` scalar this label reads and
+cases](thread-timeline-limits.md#edge-cases-and-limitations) for the `thinkingTokens` scalar this label reads and
 its own non-monotonic contract.
 
 **The stall keeps reading as a problem, but as a colour modifier instead of a bubble role.**

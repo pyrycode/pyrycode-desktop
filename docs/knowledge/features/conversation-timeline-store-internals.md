@@ -161,7 +161,7 @@ rising/falling branch split needed.
 translation it feeds is unlike either: `apiRetry`/`compacting` fold an edge into a presence
 (`reduceTimeline` decides what `active` means), while this frame carries no edge at all — the state
 literally *is* the payload, so `reduceTimeline`'s `thinkingProgress` arm assigns rather than branches. See
-[Thread timeline § The reducer](thread-timeline.md#the-reducer) for the `thinkingTokens` scalar's three
+[Thread timeline § The reducer](thread-timeline-internals.md#the-reducer) for the `thinkingTokens` scalar's three
 clearing edges, none of which live in this bridge. Between #1313 and #1314 it sat dormantly in the `null`
 fall-through group below, the member of that group a reader was most likely to want owned here.
 

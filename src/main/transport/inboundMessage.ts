@@ -51,6 +51,7 @@ import type {
   HistoryEntry,
   HistoryPagePayload,
   ToolUsePayload,
+  ToolProgressPayload,
   ToolResultPayload,
   ToolDeniedPayload,
   QueuedItem,
@@ -716,6 +717,7 @@ export type InboundDaemonMessage =
   | { kind: 'session-facts'; sessionFacts: SessionFactsPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }
+  | { kind: 'tool-progress'; toolProgress: ToolProgressPayload }
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
@@ -2064,6 +2066,18 @@ function parseThinkingProgressPayload(payload: unknown): ThinkingProgressPayload
   const estimated_tokens = requireNumber(payload, 'estimated_tokens')
   const estimated_tokens_delta = requireNumber(payload, 'estimated_tokens_delta')
   return { conversation_id, estimated_tokens, estimated_tokens_delta }
+}
+
+function parseToolProgressPayload(payload: unknown): ToolProgressPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed tool_progress payload')
+  const conversation_id = requireString(payload, 'conversation_id')
+  const turn_id = requireString(payload, 'turn_id')
+  const tool_use_id = requireString(payload, 'tool_use_id')
+  const elapsed_seconds = requireNumber(payload, 'elapsed_seconds')
+  if (!Number.isInteger(elapsed_seconds)) {
+    throw new WireDecodeError('invalid tool_progress elapsed_seconds')
+  }
+  return { conversation_id, turn_id, tool_use_id, elapsed_seconds }
 }
 
 /**
@@ -3448,6 +3462,16 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'thinking-progress', thinkingProgress }
+    }
+    case 'tool_progress': {
+      const toolProgress = parseToolProgressPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'tool_progress',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'tool-progress', toolProgress }
     }
     case 'rate_limited': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a JSON-string

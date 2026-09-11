@@ -1493,6 +1493,13 @@ type BaseDaemonEvent =
   // Ships dormant — all four exhaustive bridges no-op it until #1314, the
   // compacting-was-a-no-op-until-#496 precedent.
   | { type: 'thinkingProgress'; estimatedTokens: number; conversationId: string }
+  | {
+      type: 'toolProgress'
+      conversationId: string
+      turnId: string
+      toolUseId: string
+      elapsedSeconds: number
+    }
   // The usage-limit arm (#1319) — the daemon's report that claude's usage-limit window is in a state
   // other than the one measured-benign one, decoded at #1318 and carried here.
   //

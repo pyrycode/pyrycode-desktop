@@ -121,7 +121,7 @@ detail: [#300 codebase notes](../codebase/300.md).
   snapshot-replace path. #1213 does not transfer that ruling to the *echo*: the echo is this window's
   own optimistic write (`submitMessage` posted it before any daemon acknowledgement), so undoing it at
   the click is symmetric rather than a new claim — see [thread timeline § Edge
-  cases](thread-timeline.md#edge-cases-and-limitations) for the reasoning and its bounded cost (a drop
+  cases](thread-timeline-limits.md#edge-cases-and-limitations) for the reasoning and its bounded cost (a drop
   the daemon silently no-ops, e.g. an out-of-range `queued_msg_id`, leaves the echo removed locally
   until the next snapshot re-draws the queued row — display-only, and strictly better than the
   permanent delivered-looking lie it replaces).

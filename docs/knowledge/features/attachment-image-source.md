@@ -1,6 +1,6 @@
 # Attachment image source (bytes → displayable URL)
 
-The renderer-side path from a `MessageAttachment` record ([Thread timeline](thread-timeline.md#types))
+The renderer-side path from a `MessageAttachment` record ([Thread timeline](thread-timeline-internals.md#types))
 to a `blob:` URL an `<img>` can point at. Nothing is drawn here and no `<img>` is written — the
 thumbnail is [#1045](https://github.com/pyrycode/pyrycode-desktop/issues/1045), and so is deciding
 *what* is worth drawing; this module has no opinion about imageness.

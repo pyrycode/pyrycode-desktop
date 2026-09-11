@@ -556,6 +556,8 @@ export function createConversationTimelineStore(
       set((s) => {
         const held = s.timelines.get(conversationId)
         if (held === undefined) {
+          // A live reading can only update a retained call; it cannot create or evict a slice.
+          if (event.type === 'toolProgress') return s
           // #1225 — the SLICE is created unconditionally (the invariant above), the KEY is not. The fold
           // is taken into a local so this branch asks the same question the update branch below asks: an
           // event whose fold against `initialTimelineState` changed nothing drew nothing, and a key for

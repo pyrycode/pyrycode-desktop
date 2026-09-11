@@ -210,7 +210,7 @@ composition root for the assistant side: it passes `Date.now` (referenced, not c
 `subscribeTimeline`'s third argument, read once per translated event inside the listener — so each
 assistant bubble is stamped at *its own* arrival, not at subscribe time — and outside the effect's
 dependency array, since `Date.now` is a module-level intrinsic whose identity never changes. See [Thread
-timeline § Types](thread-timeline.md#types) for the full field-pair contract and the "why not a reducer
+timeline § Types](thread-timeline-internals.md#types) for the full field-pair contract and the "why not a reducer
 parameter" arithmetic; [composer send](composer-send.md) has the mirror wiring for the user echo.
 
 [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) draws a served history page — #1222's
@@ -323,7 +323,7 @@ already-drawn row's key is unchanged and React inserts N new nodes at the head �
 anchoring's measurement correct. The queued tail's `q`-prefixed keys are a separate namespace and cannot
 collide with a negative numeric key. See [Edge cases and
 limitations](conversation-timeline-store.md#edge-cases-and-limitations) on the parent page for the current
-state of this fix, and [Thread timeline § Edge cases](thread-timeline.md#edge-cases-and-limitations) for
+state of this fix, and [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations) for
 why the original premise still holds for the reducer's own array.
 
 [#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225) is the last slice of the #1088 family:

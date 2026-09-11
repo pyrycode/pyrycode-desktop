@@ -255,6 +255,7 @@ export function ConversationScreen({
   //                      record below: that record decides WHICH of the five labels the slot shows, and
   //                      the reading changes none of that — it only extends the text of one of them.
   const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens } = thread
+  const openTool = openToolCall(items)
   // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
   // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
   // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
@@ -461,7 +462,8 @@ export function ConversationScreen({
             { phase, apiRetry, compacting, stalled },
             localSendPending
           )}
-          toolName={openToolName(items)}
+          toolName={openTool?.name ?? null}
+          toolElapsedSeconds={openTool?.elapsedSeconds}
           retry={apiRetry}
           thinkingTokens={thinkingTokens}
         />
@@ -1566,6 +1568,7 @@ export function ToolRow({
   expansion?: { expanded: boolean; onToggle: () => void }
 }): JSX.Element {
   const { result, denial } = item
+  const elapsed = result === null && denial === undefined ? item.elapsedSeconds : undefined
   const expandable = group !== undefined || result !== null || denial !== undefined
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
@@ -1628,8 +1631,9 @@ export function ToolRow({
             what keeps this row working against a pre-pyrycode#1678 daemon. */}
         {runs.subject !== null && <span className="tool-row__summary">{runs.subject}</span>}
       </span>
-      {expandable && (
+      {(expandable || elapsed !== undefined) && (
         <span className="tool-row__right">
+          {elapsed !== undefined && <span className="tool-row__count">{formatToolElapsed(elapsed)}</span>}
           {denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
           {/* #856: the daemon's précis of what the call returned — "265 lines", "110 of 1676 lines".
               A <span> and never Figma's <p>: a resolved chip is a real <button>, which admits phrasing
@@ -1677,7 +1681,7 @@ export function ToolRow({
               appearing below is the visible half. If a turning chevron is ever wanted it is a one-rule
               follow-up keyed on the .tool-row--expanded class that already ships, so NO --expanded
               variant class here and no reading of `expanded` to pick a glyph. */}
-          <svg
+          {expandable && <svg
             className="tool-row__chevron"
             viewBox="0 0 4 8"
             width="4"
@@ -1686,7 +1690,7 @@ export function ToolRow({
             aria-hidden="true"
           >
             <path d={TOOL_ROW_CHEVRON_PATH} />
-          </svg>
+          </svg>}
         </span>
       )}
     </>
@@ -2222,12 +2226,14 @@ export function ThinkingIndicator({
   state,
   toolName,
   retry,
-  thinkingTokens
+  thinkingTokens,
+  toolElapsedSeconds
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
   retry: ApiRetryStatus | null
   thinkingTokens: number | null
+  toolElapsedSeconds?: number
 }): JSX.Element | null {
   if (state === null) return null
   // The tool name belongs to the working/thinking state alone (#967, AC1). ONE const drives both the label
@@ -2244,7 +2250,9 @@ export function ThinkingIndicator({
   const labelClass = `conversation__thinking composer-status__label${
     toolLabel !== null ? ' composer-status__label--tool' : ''
   }${state === 'stalled' ? ' composer-status__label--stalled' : ''}`
-  const label = toolLabel ?? statusRowCopy(state, retry, thinkingTokens)
+  const label = toolLabel !== null
+    ? `${toolLabel}${toolElapsedSeconds === undefined ? '' : ` ${formatToolElapsed(toolElapsedSeconds)}`}`
+    : statusRowCopy(state, retry, thinkingTokens)
   return <span className={labelClass}>{label}</span>
 }
 
@@ -2494,11 +2502,23 @@ export function workingIndicatorStateWithLocalSend(
 // contradicting it. If the operator observes a wrong name after an interrupt, the cheap fix is to stop the
 // scan at the first `turnBoundary`, scoping it to the current turn — one extra condition in this loop.
 export function openToolName(items: readonly ThreadItem[]): string | null {
+  return openToolCall(items)?.name ?? null
+}
+
+function openToolCall(items: readonly ThreadItem[]): Extract<ThreadItem, { kind: 'toolCall' }> | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]
-    if (item.kind === 'toolCall' && item.result === null && item.denial === undefined) return item.name
+    if (item.kind === 'toolCall' && item.result === null && item.denial === undefined) return item
   }
   return null
+}
+
+function formatToolElapsed(seconds: number): string {
+  const absolute = Math.abs(seconds)
+  const sign = seconds < 0 ? '-' : ''
+  return absolute < 60
+    ? `${sign}${absolute}s`
+    : `${sign}${Math.floor(absolute / 60)}m ${String(absolute % 60).padStart(2, '0')}s`
 }
 
 // #307: whether a turn is currently running. This is the one subtle thing in the ticket: the gate is

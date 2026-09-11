@@ -3,7 +3,7 @@
 Split from [Thread timeline](thread-timeline.md) on 2026-09-04 to stay under the size cap. This is the
 per-ticket changelog of every arm, scalar and field the model has grown; the current shape (types, reducer
 contract, edge cases) stays on the parent page. Nothing here changes what's true today — read
-[Thread timeline § How it works](thread-timeline.md#how-it-works) for that.
+[Thread timeline § How it works](thread-timeline-internals.md#how-it-works) for that.
 
 ## Configuration and usage
 
@@ -89,7 +89,7 @@ Nothing imports this module yet.
   fresh, field-identical literal, since both sides were nullary at the time); `ConversationScreen.tsx`
   gained `StallIndicator`, `Timeline`/`ThinkingIndicator`'s twin. Unlike every prior extension, this
   one touches an **existing** scalar's clearing logic rather than only adding a new arm — see
-  [Thread timeline § Edge cases](thread-timeline.md#edge-cases-and-limitations) for the widened no-op
+  [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations) for the widened no-op
   guards. [#732](../codebase/732.md) later widened `DaemonEvent.stallDetected` with `conversationId`;
   the bridge now filters it out rather than arm-selecting a field-identical literal, and
   `ThreadEvent.stallDetected` alone stays nullary.
@@ -101,14 +101,14 @@ Nothing imports this module yet.
   `shouldShowThinking(ThreadStatus)` predicate that narrows `ThinkingIndicator`'s gate whenever a retry
   is live — closing the mutual-exclusion question #317 deferred. Like #317, this touches every existing
   arm's carry-through, but with the **clearing rule inverted** — see
-  [Thread timeline § Edge cases](thread-timeline.md#edge-cases-and-limitations).
+  [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations).
 - **[#496](../codebase/496.md) (shipped)** added the `compacting: boolean` scalar and the `compacting`
   arm — the render consumer of [#495](../codebase/495.md)'s dormant, non-nullary `DaemonEvent`.
   `timelineBridge.ts` moved `compacting` from its inverse-filter `null` group to a ninth owned arm
   (field-for-field, like `apiRetry`); `ConversationScreen.tsx` gained `CompactingIndicator` (also
   `StallIndicator`'s twin) and a second `shouldShowThinking` clause, extending the seam #493 built by
   name for this ticket — one field, one clause, no new gate. `apiRetry`'s clearing-rule inversion, minus
-  the counter — see [Thread timeline § Edge cases](thread-timeline.md#edge-cases-and-limitations).
+  the counter — see [Thread timeline § Edge cases](thread-timeline-limits.md#edge-cases-and-limitations).
 - **[#528](../codebase/528.md) (shipped)** added the nullary `reset` arm — the first `ThreadEvent`
   that is neither daemon- nor user-content-derived, a renderer-lifecycle control event ported
   verbatim from [`sessionStore`'s `reset` (#166)](../codebase/166.md). `reduceTimeline`'s new arm
@@ -275,5 +275,5 @@ Nothing imports this module yet.
   eventually draws as thread chrome through this bridge or through a subscriber of its own is
   [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320)'s call, not this module's. No change
   to this module's own types, reducer or edge cases — see [Thread timeline § How it
-  works](thread-timeline.md#how-it-works) for the current, unaffected contract. Full design and security
+  works](thread-timeline-internals.md#how-it-works) for the current, unaffected contract. Full design and security
   review: `docs/specs/architecture/1319-rate-limited-ipc-carry.md`.

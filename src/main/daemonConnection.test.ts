@@ -2035,6 +2035,32 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
   })
 })
 
+describe('createDaemonConnection — tool progress', () => {
+  it('delivers every signed reading through IPC and drops malformed progress', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    for (const seconds of [30, 0, -65]) {
+      const before = emitted(sink).length
+      drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+        id: 1, type: 'tool_progress', ts: FIXED_TS,
+        payload: { conversation_id: 'c1', turn_id: 't1', tool_use_id: 'u1', elapsed_seconds: seconds }
+      }) })
+      expect(emitted(sink).slice(before)).toEqual([{
+        type: 'toolProgress', conversationId: 'c1', turnId: 't1', toolUseId: 'u1', elapsedSeconds: seconds
+      }])
+    }
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 1, type: 'tool_progress', ts: FIXED_TS,
+      payload: { conversation_id: 'c1', turn_id: 't1', tool_use_id: 'u1', elapsed_seconds: '30' }
+    }) })
+    expect(emitted(sink)).toHaveLength(before)
+    connection.stop()
+  })
+})
+
 describe('createDaemonConnection — thinking_progress stream (#1313)', () => {
   /** The daemon's canonical fixture (testdata/thinking_progress.json). */
   const PROGRESS = {

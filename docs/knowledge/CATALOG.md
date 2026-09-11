@@ -1280,3 +1280,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
 ## Architecture
 
 _None yet._
+
+- [Thread timeline — how it works](features/thread-timeline-internals.md) — Types, correlation and reducer behavior.
+
+- [Thread timeline — edge cases and limitations](features/thread-timeline-limits.md) — State invariants and rendering constraints.
+
+- [Thread timeline — related](features/thread-timeline-related.md) — Related features and historical references.

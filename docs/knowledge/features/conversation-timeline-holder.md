@@ -59,7 +59,10 @@ exactly the thread the operator stepped away from.
   hostile string this store exists to contain:
   - `dispatchFor(conversationId, event)` — folds one `ThreadEvent` into that id's slice via the existing
     `reduceTimeline`, creating the slice from `initialTimelineState` when the key is absent (even when the
-    fold against that seed is itself a no-op — a fold for a never-opened id must create, not drop). A
+    fold against that seed is itself a no-op). The exception is `toolProgress`: an absent key
+    returns the original store state. A heartbeat can only update a retained call; creating
+    an empty slice could otherwise evict a retained conversation without adding a row.
+    See [live tool progress](conversation-timeline-store.md#live-tool-progress). A
     reduce that changes nothing on an already-held key returns the state object itself, so zustand's
     `Object.is` short-circuit fires and no subscriber wakes.
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a

@@ -117,6 +117,7 @@ export type ThreadItem =
       // Starts null on the `toolUse`; filled in place when the correlated `toolResult` arrives.
       result: ToolResult | null
       denial?: ToolDenial
+      elapsedSeconds?: number
     }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
@@ -227,6 +228,7 @@ export type ThreadEvent =
       input?: Readonly<Record<string, string>>
     }
   | { type: 'toolDenied'; turnId: string; toolUseId: string; denial: ToolDenial }
+  | { type: 'toolProgress'; turnId: string; toolUseId: string; elapsedSeconds: number }
   // #773: `resultDetail` is the daemon's précis of the call's structured outcome. Absent means the wire
   // omitted it (a pre-pyrycode#2024 daemon), `''` means no count — the same thing upstream, carried
   // distinctly anyway. The reducer puts it on the item's `result` verbatim; every display decision,
@@ -478,7 +480,7 @@ function fillResult(
     // type-checks as a valid ThreadItem with no cast. `filled` fills only the first match.
     if (!filled && item.kind === 'toolCall' && item.toolUseId === toolUseId && item.result === null) {
       filled = true
-      return { ...item, result, parentToolUseId: item.parentToolUseId ?? parentToolUseId }
+      return { ...item, result, elapsedSeconds: undefined, parentToolUseId: item.parentToolUseId ?? parentToolUseId }
     }
     return item
   })
@@ -567,6 +569,17 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         localSendPending: state.localSendPending,
         thinkingTokens: state.thinkingTokens
       }
+    case 'toolProgress': {
+      const index = state.items.findIndex((item) =>
+        item.kind === 'toolCall' && item.turnId === event.turnId &&
+        item.toolUseId === event.toolUseId && item.result === null && item.denial === undefined
+      )
+      const item = state.items[index]
+      if (!item || item.kind !== 'toolCall' || item.elapsedSeconds === event.elapsedSeconds) return state
+      const items = state.items.slice()
+      items[index] = { ...item, elapsedSeconds: event.elapsedSeconds }
+      return { ...state, items }
+    }
     case 'toolDenied': {
       if (event.turnId === '' || event.toolUseId === '') return state
       const index = state.items.findIndex(
@@ -575,7 +588,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       const item = state.items[index]
       if (!item || item.kind !== 'toolCall' || item.denial !== undefined) return state
       const items = state.items.slice()
-      items[index] = { ...item, denial: event.denial }
+      items[index] = { ...item, denial: event.denial, elapsedSeconds: undefined }
       return { ...state, items }
     }
     case 'toolResult': {

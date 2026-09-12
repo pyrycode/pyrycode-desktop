@@ -21,39 +21,43 @@ describe('RenameConversationDialogView', () => {
     const markup = renderView('kitchenclaw refactor')
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
-    expect(markup).toContain('aria-labelledby="rename-conversation-title"')
-    expect(markup).toContain('id="rename-conversation-title"')
+    const titleId = markup.match(/aria-labelledby="([^"]+)"/)?.[1]
+    expect(titleId).toBeTruthy()
+    expect(markup).toContain(`id="${titleId}"`)
+    expect(markup).toContain('class="modal"')
+    expect(markup).toContain('--modal-width:640px')
+    expect(markup).toContain('aria-label="Close dialog"')
     expect(markup).toContain('Rename')
   })
 
-  it('renders the Name field prefilled with the injected current name (AC1)', () => {
+  it('renders the Channel name field prefilled with the injected current name (AC1)', () => {
     const markup = renderView('kitchenclaw refactor')
-    expect(markup).toContain('Name')
+    expect(markup).toContain('Channel name:')
     expect(markup).toContain('value="kitchenclaw refactor"')
   })
 
-  it('renders Cancel and Save actions (AC2)', () => {
+  it('renders Cancel and OK actions (AC2)', () => {
     const markup = renderView('a name')
-    expect(markup).toContain('rename-conversation__cancel')
-    expect(markup).toContain('rename-conversation__save')
+    expect(markup).toContain('modal__action--cancel')
+    expect(markup).toContain('modal__action--confirm')
     expect(markup).toContain('>Cancel</button>')
-    expect(markup).toContain('>Save</button>')
+    expect(markup).toContain('>OK</button>')
   })
 
-  it('disables Save when the name is empty (AC2)', () => {
+  it('disables OK when the name is empty (AC2)', () => {
     const markup = renderView('')
-    // Assert on the Save button specifically — the class marker followed by `disabled` before its `>`.
-    expect(markup).toMatch(/rename-conversation__save"[^>]*disabled/)
+    // Assert on the OK button specifically — the class marker followed by `disabled` before its `>`.
+    expect(markup).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
-  it('disables Save when the name is whitespace-only (AC2)', () => {
+  it('disables OK when the name is whitespace-only (AC2)', () => {
     const markup = renderView('   ')
-    expect(markup).toMatch(/rename-conversation__save"[^>]*disabled/)
+    expect(markup).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
-  it('enables Save once a non-blank name is entered (AC2)', () => {
+  it('enables OK once a non-blank name is entered (AC2)', () => {
     const markup = renderView('a name')
-    expect(markup).not.toMatch(/rename-conversation__save"[^>]*disabled/)
+    expect(markup).not.toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
   it('renders the prefilled name as inert attribute text, never live markup (AC5)', () => {

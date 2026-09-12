@@ -3,9 +3,9 @@
 [`Modal`](../../../src/renderer/src/components/Modal.tsx) supplies the shared panel,
 header, content slot and footer for desktop dialogs. It imports its own stylesheet
 and close SVG; the renderer entry loads the shared theme tokens. The presentation
-has no application consumer yet. [Edit host](edit-host-dialog.md) and
-[Add workspace](add-workspace-dialog.md) adopt it separately in
-[#1348](https://github.com/pyrycode/pyrycode-desktop/issues/1348) and
+is used by [Edit host](edit-host-dialog.md), which supplies a 646px preferred
+width and its existing save and dismissal callbacks.
+[Add workspace](add-workspace-dialog.md) adoption is tracked separately in
 [#1346](https://github.com/pyrycode/pyrycode-desktop/issues/1346).
 
 ## Props and caller ownership
@@ -65,6 +65,24 @@ described in [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.
 The shared tokens include `--text-body-large-weight-emphasized: 500` for its actions
 and `--shadow-elevation-5` for its two-layer shadow.
 
+## Close asset delivery
+
+`electron.vite.config.ts` disables asset inlining only for
+`src/renderer/src/assets/modal-close.svg`. The callback returns the default decision
+for every other asset. The unchanged SVG is emitted as an app-local file with a
+hashed name, retaining the existing import and decorative image markup.
+
+The renderer image policy allows self and blob images, but excludes data URLs.
+The first Edit host adoption exposed Vite's default embedding of this small SVG as
+a data URL. The close button still worked and static markup checks passed, while
+the built window showed a broken image. The fix preserves the security policy and
+the exact design asset. Do not relax that policy to accommodate asset packaging.
+
+`e2e/sidebar-host-edit.spec.ts` verifies the image actually decodes in the built app
+by requiring a natural width of 28. Its failure before the fix and pass afterwards
+establish the regression. Isolated captures that inline assets use a different
+image policy and cannot prove this delivery path.
+
 ## Verification boundaries
 
 [`Modal.test.tsx`](../../../src/renderer/src/components/Modal.test.tsx) checks supplied
@@ -78,3 +96,8 @@ viewport after the grid fix. This establishes visible layout without proving tha
 off-screen controls can be reached. Adoption coverage must exercise callbacks,
 keyboard operation, focus/Escape/backdrop policy and scrolling to those controls in
 the fake-transport browser tier. See [development verification](development-verification.md#what-each-test-tier-proves).
+
+Edit host adoption supplies the interactive evidence in its fake-transport spec:
+keyboard opening and dismissal, preserved Escape/backdrop behaviour, independent
+exits during a held save, retry, wrapping and scrolling to off-screen controls.
+Its normal and constrained built-app captures also show the decoded close icon.

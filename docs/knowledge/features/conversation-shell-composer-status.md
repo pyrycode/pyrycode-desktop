@@ -368,7 +368,7 @@ availability does not. The click also rechecks the open conversation id, and
 typed draft. Reset session remains the Actions-menu `/clear` action.
 
 Recovery has priority after re-pair and connection errors, before refusal recovery,
-model-settings rejection and usage notices; it is visible only while connected. The
+model-settings rejection, Claude reports and usage notices; it is visible only while connected. The
 next local submitted message or daemon turn activity clears recovery while preserving the
 boundary; the stopped turn's trailing idle does **not** clear it. Session boundaries,
 reset and reconnect also clear the reading. A timeline reset or eviction drops the
@@ -410,14 +410,15 @@ for retirement and stale-reply rules. Styling reuses `button-small button-small-
 
 `ComposerErrorSlotControl` reads `useRunSettingsWriteStore(selectError)`. When the last
 correlated settings rejection is for `model`, it supplies “Could not change the model —
-try again.” as the slot's `notice`, replacing any usage notice (#1252). The message is
+try again.” as the slot's `notice`, above Claude reports and usage notices (#1252). The message is
 fixed client copy in a `role="alert"` element. It is available both with the ordinary
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
 The single-occupant priority is repair button → connection-error chip → stopped-turn
-recovery → refusal Switch back (with any rejection feedback) → model rejection → usage notice.
-Recovery and both notices require `connected`; disconnected and connecting states hide them.
+recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
+stopping report → usage notice. Recovery and notices require `connected`;
+disconnected and connecting states hide them without clearing held reports.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -436,11 +437,35 @@ settings response, checks rollback on rejection, verifies that rejection outrank
 existing usage notice, and checks that a fresh dispatch restores that notice while the
 original question remains answerable.
 
+## Claude stopping reports
+
+`ComposerErrorSlotControl` selects the open conversation's `timeline.stoppingBanner`.
+The latest `stops_turn: true` report occupies the connected-only slot at the priority
+above, regardless of level; even `info`, hidden in the timeline, appears here.
+Higher-priority messages hide the report without retiring it.
+
+`ComposerBannerReport` reuses the error treatment with `role="status"` and the shared
+`Claude:` plain-text formatter. Terminal escapes/non-layout controls are removed;
+line breaks and tabs survive, markup and URLs stay inert, and `…` is appended only
+when the producer reports truncation. No second text cap applies. Its shrinkable
+`pre-wrap`/`overflow-wrap: anywhere` styling lets the row grow at the 800px minimum.
+
+The next accepted typed or slash send inserts an optimistic user row and clears
+only this transient report. Empty/blocked attempts, daemon activity, trailing idle,
+reconnect and navigation preserve it; reset, clear or eviction drops it with the
+timeline. See [routing and lifetime](conversation-timeline-store.md#claude-banner-routing-and-lifetime).
+The flag changes no turn or permission state and triggers no action.
+
+Claude's shipped producer subtype is `informational`, distinct from the payload
+level. The multiline `/cost` example in `e2e/banner-reports.spec.ts` is synthetic
+client coverage; it does not establish a `local_command_output` or `notification`
+producer.
+
 ## The usage-limit notice, the slot's third occupant (#1321)
 
 Draws [the usage-limit store](usage-limit-store.md)'s per-conversation reading in the trailing slot,
 below the actionable-error button, connection-error chip, stopped-turn recovery,
-refusal Switch back and model rejection in precedence.
+refusal Switch back, model rejection and Claude stopping reports in precedence.
 It remains the slot's lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
 subprocess trust boundary; this slice is where the "no DOM sink" constraint that store inherited is
 **discharged** rather than passed on further.
@@ -501,8 +526,8 @@ disconnected or connecting, [the banner](#composer-error-chip-797) is already up
 claim beside it would contradict it, so the notice is suppressed on both of those arms too, not only on
 `error`. `notice` reaches the slot as a `JSX.Element | null` prop rather than the reading itself — the
 slot stays a view that knows a position and its occupants' priority, and knows nothing about a usage
-window. The container now chooses the model rejection above before falling back to the
-usage notice; the slot's connection gating is unchanged.
+window. The container chooses model rejection, then a Claude stopping report, then
+the usage notice; the slot's connection gating is unchanged.
 
 **`ComposerErrorSlotControl`** gains two more narrow-slice reads, on the container that already owns this
 slot rather than a fourth container mounted beside it: `useActiveConversationStore(selectActiveConversation)`

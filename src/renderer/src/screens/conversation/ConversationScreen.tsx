@@ -1307,6 +1307,12 @@ function TimelineRow({
       // "which rows are expanded" state shape into this slice. Collapsed is the only form the switch
       // produces.
       return <ToolRow item={item} />
+    case 'banner':
+      return item.level === 'info' ? null : (
+        <p className={item.level === 'warning'
+          ? 'session-delimiter__title claude-banner claude-banner--warning'
+          : 'session-delimiter__title claude-banner'}>{bannerDisplayText(item)}</p>
+      )
     case 'modelRefusal':
       return <ModelRefusalRow refusal={item.refusal} />
     case 'turnBoundary': {
@@ -1636,6 +1642,23 @@ function denialDisplayText(text: string): string {
     .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
     .slice(0, 4096)
+}
+
+// Presentation only: keep the retained payload intact and leave truncation to the producer.
+function bannerDisplayText(report: { text: string; truncated: boolean }): string {
+  const text = report.text
+    .replace(/(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c|$)/g, '')
+    .replace(/(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c|$)/g, '')
+    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)/g, '')
+    .replace(/\x1b[ -/]*[0-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
+  return `Claude: ${text}${report.truncated ? '…' : ''}`
+}
+
+export function ComposerBannerReport({ report }: {
+  report: { text: string; truncated: boolean }
+}): JSX.Element {
+  return <div className="composer-status__error composer-status__banner" role="status">{bannerDisplayText(report)}</div>
 }
 
 export function ToolRow({
@@ -3963,6 +3986,9 @@ function ComposerErrorSlotControl({
   const latest = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
   )
+  const stoppingBanner = useConversationTimelineStore((s) =>
+    open === null ? undefined : s.timelines.get(open.id)?.timeline.stoppingBanner
+  )
   const menu = useSlashCommandListStore((s) => open === null ? null : selectSlashCommandListFor(open.id)(s))
   const unavailable = markUnavailableActions(COMPOSER_ACTIONS, menu)
     .find((action) => action.id === '/compact')?.unavailable === true
@@ -4050,7 +4076,8 @@ function ComposerErrorSlotControl({
             Could not change the model — try again.
           </div>
         ) : (
-          <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
+          stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> :
+            <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
         )
       }
     />

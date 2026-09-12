@@ -83,6 +83,7 @@ export type EnvelopeType =
   | 'api_retry'
   | 'compacting'
   | 'compaction_boundary'
+  | 'banner'
   // v2-only daemon→client diagnostic — the daemon's stream parser met claude output it has no
   // mapping for. Not a claude sub-state like its neighbours above: it reports a gap in the
   // DAEMON's own mapping. SSOT pyrycode `internal/protocol` UnrecognizedMessagePayload.
@@ -3213,6 +3214,15 @@ export interface QrPayload {
   relay: string
   token: string
   server_static_pubkey: string
+}
+
+/** Claude-authored report; bounds/truncation are producer-owned, stops_turn is not an instruction. */
+export interface BannerPayload {
+  conversation_id: string
+  level: string
+  text: string
+  stops_turn: boolean
+  truncated: boolean
 }
 
 /** Explicit permission denial; open source tokens and nullable reports mirror the daemon. */

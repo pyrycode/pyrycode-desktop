@@ -56,8 +56,11 @@ Keep an opening absence check when it proves that a later observation is new.
 
 A width assertion must distinguish the before and after layouts.
 A test that passes at both widths cannot prove that resizing changed anything.
-The paired-app fixture opens its seeded conversation by clicking its row.
-Use a second conversation when a test needs a resting, unopened row.
+`launchPairedApp` initially clicks an unfiltered `.channel-list__row-open` locator,
+so seed exactly one conversation for that step. For off-screen routing or a resting,
+unopened row, push the second conversation after launch returns. Seeding both in the
+initial reply fails before the feature is exercised; see
+[`banner-reports.spec.ts`](../../../e2e/banner-reports.spec.ts).
 
 Optimistic state can disappear in the same frame when the fake immediately replies.
 Hold the fake response, assert the optimistic state, then send the correlated reply.

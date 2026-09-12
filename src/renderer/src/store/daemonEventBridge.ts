@@ -177,6 +177,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // because the assertNever guard below makes a new arm a compile error (the
       // stallDetected-was-a-no-op-until-#317 precedent).
       return null
+    case 'banner':
     case 'compactionBoundary':
     case 'compacting':
       // No session-store action: the render slice (#496, not yet built) surfaces the compaction banner,

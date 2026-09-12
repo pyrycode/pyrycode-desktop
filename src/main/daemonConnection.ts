@@ -1529,6 +1529,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               daemonTs: inbound.ts
             })
             return
+          case 'banner':
+            emitDaemonEvent(sink, {
+              type: 'banner',
+              conversationId: inbound.banner.conversation_id,
+              level: inbound.banner.level,
+              text: inbound.banner.text,
+              stopsTurn: inbound.banner.stops_turn,
+              truncated: inbound.banner.truncated
+            })
+            return
           case 'compaction-boundary':
             emitDaemonEvent(sink, {
               type: 'compactionBoundary',

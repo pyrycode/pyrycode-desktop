@@ -8,12 +8,11 @@ the store and its bridges are what every render slice below reads and paints —
 source of truth" [#203](../codebase/203.md)'s spec called for.
 
 Introduced in [#202](../codebase/202.md), built directly on [#121](../codebase/121.md) (the pure
-[thread timeline](thread-timeline.md) model, shipped). Grew ten owned `DaemonEvent` arms, ten
-`TimelineState` scalars/write paths, and — since [#1223](../codebase/1223.md) — a second, keyed axis (the
-[keyed holder](conversation-timeline-holder.md)) plus a **fifth** independent channel subscriber,
-`historyPageBridge.ts`, that draws a served history page and, since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)/[#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260),
-asks for one — first on opening a conversation, then again each time the operator scrolls back to its
-top, until the daemon reports the start of the log. The full ticket-by-ticket account of how each piece
+[thread timeline](thread-timeline.md) model, shipped). The
+[keyed holder](conversation-timeline-holder.md) retains stream content and status
+readings per conversation. `historyPageBridge.ts` draws served history pages and
+asks for them — first on opening a conversation, then each time the operator scrolls
+back to its top, until the daemon reports the start of the log. The account of how each piece
 arrived is in [Conversation timeline store — history](conversation-timeline-store-history.md); this page
 covers what's true today.
 
@@ -30,11 +29,11 @@ Turns owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `Timeline
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
 `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
-onset, an `api_retry` edge, a `compacting` edge or `compaction_boundary` metadata)
+onset, an `api_retry` edge, a `compacting` edge, `compaction_boundary` metadata or a `banner` report)
 re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
-and `runConfigStore`. The ninth arm, `connected`→`reconnected`
+and `runConfigStore`. The `connected`→`reconnected` arm
 ([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
-that clears the timeline's transient chrome on a fresh handshake. `localSendPending`
+that clears activity chrome on a fresh handshake while preserving held banner reports. `localSendPending`
 ([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
 event the composer dispatches directly (see below). Refusal recovery also dispatches
 client-owned write-lifetime events into the retained conversation slice.
@@ -62,6 +61,67 @@ events, including reconnect; `prependHistoryFor` preserves it with the held item
 [`store/compaction.test.ts`](../../../src/renderer/src/store/compaction.test.ts)
 pins both index-shifting cases, association consumption and supersession, failure
 preservation, conversation isolation and reconnect without a false completion.
+
+## Claude banner routing and lifetime
+
+The [banner protocol](https://github.com/pyrycode/pyrycode/blob/main/docs/protocol-mobile.md#banner)
+requires five fields: string `conversation_id`, `level` and `text`, and boolean
+`stops_turn` and `truncated`. The decoder rejects missing/mistyped fields and copies
+only named fields; unknown/empty levels and empty text remain valid. Main delivers
+the values through typed IPC as `conversationId`, `level`, `text`, `stopsTurn` and
+`truncated`, with content-free diagnostics. The session, modal and question bridges
+ignore this report.
+
+`timelineTargetFor` and `translateTimelineEvent` drop an empty conversation id;
+neither infers a target from the open conversation. A nonempty id routes to its own
+[retained slice](conversation-timeline-holder.md), including before that conversation
+has been opened, while another is open, or with no turn running. The frame has no
+`turn_id`. Each arrival appends one `banner` item in arrival order, including identical
+reports; there is no content deduplication, history mapping or timestamp join key.
+
+Exact `info` stays in state but `TimelineRow` draws nothing for it. Every other level draws
+full-width, left-aligned multiline text using the session-boundary label's small
+typography and shadow. Exact `warning` uses the warning token; `notice`, `suggestion`
+and unknown/empty levels use the muted on-surface-variant token. Classes come from
+fixed client choices, never a raw level.
+
+Both the row and [composer report](conversation-shell-composer-status.md#claude-stopping-reports)
+start with `Claude:` and render React text children. The shared `bannerDisplayText`
+formatter removes terminal escapes and non-layout controls while preserving line
+breaks and tabs; Markdown, HTML and URLs stay inert. Prose reaches no attributes or
+logs. Both surfaces wrap long text at the 800px window minimum. The formatter appends
+one `…` iff `truncated` is true, leaving the retained payload unchanged. Do not reuse
+`denialDisplayText` unchanged: its additional text-length cap would contradict
+banner's producer-owned truncation contract.
+
+`TimelineState.stoppingBanner` holds the latest `stopsTurn: true` report regardless
+of level, including hidden `info`. Its lifetime differs from stopped-turn recovery:
+
+| Event | Stopping report | Retained banner items |
+| --- | --- | --- |
+| Stopping banner | Replaces the held report. | Appends one item. |
+| Non-stopping banner | Preserves it. | Appends one item. |
+| Accepted local typed/slash send (`userText`) | Clears it. | Preserves them. |
+| Empty or blocked send attempt | Preserves it. | Preserves them. |
+| Daemon activity, trailing idle, session boundary, reconnect, navigation or history prepend | Preserves it. | Preserves them. |
+| Timeline reset, holder clear or eviction | Drops it. | Drops them. |
+
+Acceptance means inserting the optimistic user row through
+[composer send](composer-send.md), not receiving a daemon acknowledgement. The
+reducer wrapper preserves the report across other content reducers, even when they
+reconstruct state. `stopsTurn` only controls display: it never interrupts, retries,
+changes permission or mutates turn lifecycle. Reports share the existing in-memory
+timeline lifetime; they are not persisted across app restarts or recovered from history.
+
+The shipped daemon producer maps Claude's `informational` subtype, including a
+captured hook-block reason. That subtype is distinct from the payload's open `level`.
+There is no shipped `local_command_output` or `notification` mapping.
+[`e2e/banner-reports.spec.ts`](../../../e2e/banner-reports.spec.ts) uses synthetic
+multiline `/cost` output to prove client rendering and truncation, not live command
+delivery. Its hook scenario crosses decoding, IPC and the mounted bridge, then waits
+for the optimistic echo and captured send before asserting that only the status
+cleared. Focused `banner.test.ts`/`banner.test.tsx` files cover wire narrowing,
+routing, lifetime and inert rendering. See the [architecture spec](../../specs/architecture/1341-claude-banner-reports.md).
 
 ## Tool parent attribution
 

@@ -1,4 +1,8 @@
 import { useEffect, useReducer, useRef, type ReactNode } from 'react'
+import { sessionStore } from '../../store/sessionStore'
+import { relayLinkStore } from '../../store/relayLinkStore'
+import { loadServerInfo } from '../../store/serverInfoLoader'
+import { serverInfoStore } from '../../store/serverInfoStore'
 import { Modal } from '../../components/Modal'
 import './pairing.css'
 import {
@@ -6,6 +10,7 @@ import {
   pairingReducer,
   runSubmit,
   runConfirm,
+  createPairingVerification,
   groupFingerprint,
   type PairingBridge,
   type PairingState
@@ -80,6 +85,7 @@ export interface PairingViewProps {
   onSubmit: () => void
   onConfirm: () => void
   onCancel: () => void
+  onRetry?: () => void
 }
 
 /**
@@ -119,9 +125,35 @@ export function PairingView(props: PairingViewProps): JSX.Element {
           onCancel={onCancel}
         />
       )}
+      {(state.phase === 'verifying' || state.phase === 'verification-failed') && <>
+        <h1 className="pairing__title">Verify connection</h1>
+        <VerificationFeedback state={state} />
+        <div className="pairing__actions">
+          <button type="button" className="pairing__button" onClick={onCancel}>Cancel</button>
+          {canRetry(state) && <button type="button" className="pairing__button" onClick={props.onRetry}>Retry</button>}
+        </div>
+      </>}
       {state.phase === 'paired' && <p className="pairing__success">Paired ✓</p>}
     </div>
   )
+}
+
+function canRetry(state: PairingState): boolean {
+  return state.phase === 'verification-failed' &&
+    (state.reason === 'timeout' || state.reason === 'daemon-absent')
+}
+
+function VerificationFeedback({ state }: { state: PairingState }): JSX.Element | null {
+  if (state.phase === 'verifying') return <p className="pairing-modal__explanation" role="status">
+    Pairing saved. Waiting for the host to authenticate…
+  </p>
+  if (state.phase !== 'verification-failed') return null
+  const copy = state.reason === 'pairing-rejected'
+    ? 'Pairing rejected. The saved host is retained. Cancel, then pair manually with a fresh code.'
+    : state.reason === 'authentication-failed'
+      ? 'Host authentication failed. The saved host is retained. Cancel to return to the app.'
+      : 'The host is temporarily unavailable. The pairing is saved. Retry to wait again, or Cancel.'
+  return <p className="pairing-modal__error" role="alert">{copy}</p>
 }
 
 /** Native top-layer ownership keeps the invoking screen mounted but inert. */
@@ -131,6 +163,7 @@ function PairingModal(props: PairingViewProps): JSX.Element {
   const cancelRef = useRef(onCancel)
   cancelRef.current = onCancel
   const busy = state.phase === 'submitting' || state.phase === 'confirming'
+  const postSave = state.phase === 'verifying' || state.phase === 'verification-failed'
   const busyRef = useRef(busy)
   busyRef.current = busy
   useEffect(() => {
@@ -182,10 +215,12 @@ function PairingModal(props: PairingViewProps): JSX.Element {
       onCancel={event => { event.preventDefault(); cancel() }}>
       <Modal title="Pair" width={640} onClose={cancel}
         cancelAction={{ label: 'Cancel', disabled: busy, onClick: cancel }}
-        confirmAction={{ label: 'Pair', disabled: busy || state.phase === 'paired' ||
+        confirmAction={{ label: postSave ? (canRetry(state) ? 'Retry' : state.phase === 'verifying' ? 'Waiting…' : 'Pair') : 'Pair',
+          disabled: busy || (postSave && !canRetry(state)) || state.phase === 'paired' ||
           (editing && state.paste.trim() === ''),
-          onClick: editing ? props.onSubmit : props.onConfirm }}>
+          onClick: postSave ? () => props.onRetry?.() : editing ? props.onSubmit : props.onConfirm }}>
         {props.context}
+        {postSave && <VerificationFeedback state={state} />}
         {editing && <>
           <div className="pairing-modal__field">
             <span aria-hidden="true">Pairing code</span>
@@ -501,27 +536,28 @@ export interface PairingScreenProps {
   presentation?: 'page' | 'modal'
   context?: ReactNode
   bridge?: PairingBridge // default: window.pyry (structurally assignable)
-  onPaired?: () => void // fired once on successful confirm — the future navigation seam
+  onPaired?: () => void // fired once after the saved host authenticates
   onCancel?: () => void // fired on cancel — the future dismiss/navigation seam
 }
 
 /**
  * Owns reducer state and one-shot IPC calls. Synchronous busy guards prevent
- * re-entry; stale submits are ignored, while authorized save completion still
- * reaches the shell's generation-checked refresh callback after unmount.
+ * re-entry. Authorized saves refresh host information even after unmount; only a
+ * live verification controller may reach authenticated completion navigation.
  */
 export function PairingScreen({ bridge, onPaired, onCancel, presentation, context }: PairingScreenProps = {}): JSX.Element {
   const target: PairingBridge = bridge ?? window.pyry
   const [state, dispatch] = useReducer(pairingReducer, initialPairingState)
 
   const busyRef = useRef(false)
+  const verification = useRef<ReturnType<typeof createPairingVerification> | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false }
+    return () => { mounted.current = false; verification.current?.cancel() }
   }, [])
   const diagnostic = (code: string): void => {
-    if (presentation === 'modal') window.pyry.sendDiagnostic({ event: 'pairing-modal', code })
+    window.pyry.sendDiagnostic({ event: presentation === 'modal' ? 'pairing-modal' : 'pairing-verification', code })
   }
 
   const handlePasteChange = (paste: string): void => dispatch({ type: 'paste-changed', paste })
@@ -550,17 +586,34 @@ export function PairingScreen({ bridge, onPaired, onCancel, presentation, contex
     busyRef.current = true
     diagnostic('confirming')
     const label = state.label // captured before the await, as handleSubmit does with the paste
+    verification.current?.cancel()
+    const wait = createPairingVerification(sessionStore, relayLinkStore, event => {
+      if (!mounted.current || verification.current !== wait) return
+      diagnostic(event.type === 'verification-failed' ? event.reason : 'authenticated')
+      dispatch(event)
+      if (event.type === 'authenticated') onPaired?.()
+    })
+    verification.current = wait
     dispatch({ type: 'confirm' })
     void runConfirm(target, label).then((event) => {
       busyRef.current = false
-      diagnostic(event.type === 'confirm-failed' ? event.reason : 'paired')
-      if (mounted.current) dispatch(event)
-      if (event.type === 'confirm-succeeded') onPaired?.()
+      if (event.type === 'confirm-succeeded') {
+        // Authorized persistence can outlive the view; refresh without navigating.
+        void loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers)
+      }
+      if (!mounted.current || verification.current !== wait) return
+      diagnostic(event.type === 'confirm-failed' ? event.reason : 'verifying')
+      dispatch(event)
+      if (event.type === 'confirm-succeeded') wait.saved(event.serverId)
+      else wait.cancel()
     })
   }
 
   const handleCancel = (): void => {
     if (busyRef.current) return
+    verification.current?.cancel()
+    verification.current = null
+    diagnostic('cancelled')
     dispatch({ type: 'cancel' })
     onCancel?.()
   }
@@ -575,6 +628,12 @@ export function PairingScreen({ bridge, onPaired, onCancel, presentation, contex
       onSubmit={handleSubmit}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onRetry={() => {
+        if (!canRetry(state)) return
+        diagnostic('retry')
+        dispatch({ type: 'retry' })
+        verification.current?.retry()
+      }}
     />
   )
 }

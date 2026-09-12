@@ -145,6 +145,8 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
+  /** Return at Welcome so mounted pairing tests can control authentication delivery. */
+  skipPairing?: boolean
   /** Reuse this exact `--user-data-dir` (typically a prior launch's `userDataDir`) instead of minting a
    *  fresh throwaway. The persisted pairing blob in the dir boots the app straight to the ChannelList, so
    *  the fixture skips the pairing drive and returns at the list (no row click, no Send-enabled wait —
@@ -375,6 +377,7 @@ export const test = base.extend<PairedAppFixtures>({
       //
       // `control.hostLabel` is undefined for every caller but #834's spec, and the arrival step's third
       // parameter is optional — so the default drive is byte-identical to what it was.
+      if (control.skipPairing) return { page, app, daemon, forwarder, userDataDir, servers }
       await pairFromUnpairedLaunch(page, pairingPayloadFor(first, DUMMY_TOKEN), control.hostLabel)
 
       // #140: the paired route enters at the ChannelList — drive the one real list→thread step by

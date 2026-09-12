@@ -142,7 +142,7 @@ describe('registerPairingHandler', () => {
     const listener = listenerOf(target)
 
     await listener({}, { type: 'submit', paste: 'good' })
-    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(confirm).toHaveBeenCalledTimes(1)
 
     // Consume-on-confirm: the second confirm sees nothing pending, the spy stays at one call.
@@ -164,7 +164,7 @@ describe('registerPairingHandler', () => {
 
     await listener({}, { type: 'submit', paste: 'first' })
     await listener({}, { type: 'submit', paste: 'second' })
-    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true, serverId: PAYLOAD.server })
 
     expect(confirmB).toHaveBeenCalledTimes(1)
     expect(confirmA).not.toHaveBeenCalled() // the superseded record is unpersistable
@@ -219,7 +219,7 @@ describe('registerPairingHandler', () => {
     await listener({}, { type: 'submit', paste: 'good' })
     expect(onPaired).not.toHaveBeenCalled() // submit alone does not trigger a connect
 
-    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(onPaired).toHaveBeenCalledTimes(1)
     expect(onPaired).toHaveBeenCalledWith() // a bare signal — no record field crosses (AC5)
   })
@@ -249,7 +249,7 @@ describe('registerPairingHandler', () => {
     const listener = listenerOf(target)
 
     await listener({}, { type: 'submit', paste: 'good' })
-    await expect(listener({}, { type: 'confirm' })).resolves.toEqual({ ok: true })
+    await expect(listener({}, { type: 'confirm' })).resolves.toEqual({ ok: true, serverId: PAYLOAD.server })
   })
 
   it('never returns the token or server key in any response (AC4)', async () => {
@@ -267,7 +267,6 @@ describe('registerPairingHandler', () => {
       const serialized = JSON.stringify(res)
       expect(serialized).not.toContain(SECRET_TOKEN)
       expect(serialized).not.toContain(SECRET_KEY)
-      expect(serialized).not.toContain(PAYLOAD.server)
       expect(serialized).not.toContain(PAYLOAD.relay)
     }
   })
@@ -311,7 +310,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
 
     await listener({}, { type: 'submit', paste: 'good' })
 
-    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(hostLabel.saveFor).toHaveBeenCalledTimes(1)
     // The id is the `server` off the payload the submit parsed — the same object `prepare` froze —
     // so the label is stored under exactly the record this confirm persisted.
@@ -379,7 +378,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
 
     await listener({}, { type: 'submit', paste: 'good' })
 
-    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(hostLabel.saveFor).not.toHaveBeenCalled()
   })
 
@@ -388,7 +387,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
 
     await listener({}, { type: 'submit', paste: 'good' })
 
-    expect(await listener({}, { type: 'confirm', label: '' })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm', label: '' })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(hostLabel.saveFor).toHaveBeenCalledWith(PAYLOAD.server, '')
   })
 
@@ -407,7 +406,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
 
     // The rejection leaves the prepared pairing intact: a malformed request must not burn a
     // fingerprint the operator already verified, so retrying with a valid label still works.
-    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true })
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(confirm).toHaveBeenCalledTimes(1)
     warn.mockRestore()
   })
@@ -464,7 +463,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     await listener({}, { type: 'submit', paste: 'good' })
 
     // The response reports on the RECORD, which persisted. A lost nickname is not a failed pairing.
-    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true })
+    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true, serverId: PAYLOAD.server })
     expect(hostLabel.saveFor).toHaveBeenCalledTimes(1)
     expect(onPaired).toHaveBeenCalledTimes(1)
   })
@@ -498,7 +497,7 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
     const listener = listenerOf(target)
 
     await listener({}, { type: 'submit', paste: 'good' })
-    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true })
+    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true, serverId: PAYLOAD.server })
   })
 
   it('never logs on the label path — not on success, not on a failed save (AC4)', async () => {
@@ -536,4 +535,24 @@ describe('registerPairingHandler — host label on confirm (#823)', () => {
       expect(JSON.stringify(res)).not.toContain(LABEL)
     }
   })
+})
+
+
+it('returns the saved identity even when a newer submit arrives during persistence', async () => {
+  const target = fakeTarget()
+  let release!: () => void
+  const confirm = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+  const parse = vi.fn()
+    .mockReturnValueOnce({ ok: true, payload: { ...PAYLOAD, server: 'first' } })
+    .mockReturnValueOnce({ ok: true, payload: { ...PAYLOAD, server: 'newer' } })
+  registerPairingHandler(target, {
+    parse, confirmation: confirmationOf(() => ({ ok: true, fingerprint: 'aa', confirm }))
+  })
+  const listener = listenerOf(target)
+  await listener({}, { type: 'submit', paste: 'first-code' })
+  const saving = listener({}, { type: 'confirm' })
+  expect(confirm).toHaveBeenCalledTimes(1)
+  await listener({}, { type: 'submit', paste: 'newer-code' })
+  release()
+  expect(await saving).toEqual({ ok: true, serverId: 'first' })
 })

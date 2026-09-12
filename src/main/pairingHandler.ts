@@ -6,10 +6,8 @@
 // nothing Electron-specific is imported here — the target is injected structurally, so it unit-tests
 // with a fake, exactly as CommandSource did.
 //
-// Because a reply channel now exists, the "only the fingerprint or a value-free reason crosses back"
-// invariant (AC4) is load-bearing at exactly this seam: this module reads only the validated
-// `request`, holds only the opaque `confirm` closure (#53's frozen snapshot holds the record/token/
-// key, never a field this module returns), and maps every outcome to the value-free shared vocabulary.
+// Replies contain only the display fingerprint, confirmed host identity or classified failure.
+// The opaque confirmation closure retains the credentials; none are returned to the renderer.
 import {
   PAIRING_CHANNEL,
   isPairingRequest,
@@ -153,7 +151,7 @@ export function registerPairingHandler(
       // handler registered without it (every existing caller) is unaffected. A failed persist takes
       // the catch below instead, so this never fires on failure (AC4).
       onPaired?.()
-      return { ok: true }
+      return { ok: true, serverId: prepared.serverId }
     } catch {
       // confirm()'s only throw source is store.save (e.g. EncryptionUnavailableError), whose message
       // may carry a filesystem path — caught and mapped to a value-free reason, never echoed/logged.

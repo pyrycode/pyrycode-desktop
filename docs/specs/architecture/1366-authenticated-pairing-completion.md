@@ -70,3 +70,9 @@ Pending for the documentation stage: update `docs/knowledge/features/pairing-inp
 - Logs and UI: fixed classified codes and escaped client-owned copy only; no daemon error text, secrets or identity logged.
 - Concurrency: subscribe before confirmation; settle once; dispose on cancel/unmount; late persistence refresh is separate from navigation. Failure is sticky until user action.
 - Threat alignment: compromised relay cannot mint main-stamped authenticated status; daemon identity cannot select a different host. Restart reuse remains owned by #1364; daemon code selection remains outside this ticket.
+
+## Revisions
+
+- Implementation uses four production files: saved-host refresh lives in `PairingScreen`, preserving `PairedShell` unchanged. Actual main authentication failures include `handshake-read-failed`, `malformed-hello-ack` and `transport-decrypt-failed`; these map to fixed authentication-failure feedback.
+- Mounted tests add `LaunchControl.skipPairing` in the existing e2e fixture to stop at Welcome. Authentication delivery is held after the real save and Noise handshake, so tests can drive timing without weakening production transport. Retry ignores an already-held daemon-absence category until a new link transition or its deadline.
+- A failing overdue-timer test demonstrated that a delayed callback could accept authentication beyond 30 seconds. The controller checks its absolute deadline on every observation as well as scheduling the timer.

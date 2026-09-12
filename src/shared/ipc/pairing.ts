@@ -7,9 +7,8 @@
 // ipcRenderer.invoke / ipcMain.handle); the main-process handler is #54's pairingHandler.ts.
 //
 // The producer is the UNTRUSTED renderer (as with commands), so this ships isPairingRequest — the
-// runtime guard the main handler applies at the renderer→main boundary. AC4 ("only the fingerprint
-// or a value-free reason crosses back") is enforced BY CONSTRUCTION: no response arm has a field
-// that could hold the token or server_static_pubkey, so the handler cannot serialize a secret back.
+// runtime guard the main handler applies at the renderer→main boundary. Responses expose only
+// the fingerprint, saved host identity and classified errors; never credentials or a saved record.
 //
 // Imports nothing from src/main (layering: shared is loaded by preload and renderer and must not
 // pull main-only code). Relative imports only — src/main and src/preload have no @shared alias.
@@ -79,8 +78,8 @@ export type PairingSubmitResponse =
   | { ok: true; fingerprint: string }
   | { ok: false; reason: PairingErrorReason }
 
-/** The confirm response: success carries nothing, failure a value-free reason. */
-export type PairingConfirmResponse = { ok: true } | { ok: false; reason: PairingErrorReason }
+/** Successful persistence identifies the saved host; authentication is a separate event. */
+export type PairingConfirmResponse = { ok: true; serverId: string } | { ok: false; reason: PairingErrorReason }
 
 /**
  * Runtime type guard for the untrusted renderer→main boundary, mirroring isRendererCommand. True

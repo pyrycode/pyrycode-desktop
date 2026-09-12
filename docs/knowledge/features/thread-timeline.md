@@ -38,6 +38,12 @@ Compaction completions retain `compactionBoundary` rows; a separate pending row
 reference lets [delayed metadata](conversation-timeline-store.md#what-it-does)
 enrich the original position across intervening content and history prepend.
 
+[Protected local chat history](chat-history.md#snapshot-contract) defines a shared
+durable contract for these display rows, separately from running state, pending
+permissions and recovery offers. Its service is available; renderer recording is
+not yet wired. The [exact contract test](chat-history.md#testing) lives in the
+renderer test project so the shared/main project never imports this implementation.
+
 ## Configuration and usage
 
 The full ticket-by-ticket build-out — every arm, scalar and field this model has grown, transport slice

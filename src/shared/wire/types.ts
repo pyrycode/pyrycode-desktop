@@ -82,6 +82,7 @@ export type EnvelopeType =
   | 'stall'
   | 'api_retry'
   | 'compacting'
+  | 'compaction_boundary'
   // v2-only daemon→client diagnostic — the daemon's stream parser met claude output it has no
   // mapping for. Not a claude sub-state like its neighbours above: it reports a gap in the
   // DAEMON's own mapping. SSOT pyrycode `internal/protocol` UnrecognizedMessagePayload.
@@ -739,27 +740,20 @@ export interface ApiRetryPayload {
   total: number
 }
 
-/**
- * Inbound `compacting` event (daemon → client). Mirrors the daemon's CompactingPayload field-for-field
- * (pyrycode #1074; detector upstream tui-driver #298), whose two fields are always present (no
- * `omitempty`). A PTY-derived status peer of StallPayload / ApiRetryPayload, fanned out ONLY to
- * `interactive`-capable clients: claude is auto-compacting the conversation and goes silent on the
- * content channel for tens of seconds, which without this frame reads as a frozen thinking state.
- *
- * BANNER-ONLY. tui-driver streams no compaction progress, so beyond the conversation id and the edge
- * bool there is nothing to carry: no counter, no percentage, no elapsed time. The deliberate contrast
- * with ApiRetryPayload, which does carry `current` / `total`. Do not invent one client-side — a progress
- * field would be a wire change with a matching daemon peer (ADR 0002), not a client invention.
- *
- * NOT ONSET-ONLY — the contrast with `stall`. `active: true` is compaction starting, `active: false` the
- * explicit falling edge (compaction finished), so the client clears the indicator on that frame rather
- * than deriving a self-clear from turn activity. Like `stall` it is conversation-level, so there is no
- * `turn_id`, and receiving it never opens, closes, or alters a turn. See #495 (this decode) and #496
- * (the render).
- */
+/** Compaction status and optional outcomes from the daemon; older daemons omit outcomes. */
 export interface CompactingPayload {
   conversation_id: string
   active: boolean
+  compact_result?: string
+  compact_error?: string
+}
+
+/** Delayed display metadata from the daemon. Missing/null counts differ from zero. */
+export interface CompactionBoundaryPayload {
+  conversation_id: string
+  trigger: string
+  pre_tokens?: number | null
+  post_tokens?: number | null
 }
 
 /**

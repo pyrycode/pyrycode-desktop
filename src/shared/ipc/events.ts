@@ -130,7 +130,7 @@ export type HistoryTimelineEvent =
     }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  | { type: 'compacting'; active: boolean }
+  | { type: 'compacting'; active: boolean; compactResult?: string; compactError?: string }
   | {
       type: 'unrecognizedMessage'
       site: WireUnrecognizedSite
@@ -435,33 +435,11 @@ type BaseDaemonEvent =
   // type-checks but does not range-check. Ships dormant: all three exhaustive bridges no-op it until
   // #493 — the stallDetected-was-a-no-op-until-#317 precedent.
   | { type: 'apiRetry'; active: boolean; current: number; total: number; conversationId: string }
-  // The compaction-status arm (#495, widened by #742) — claude is auto-compacting the conversation. Like
-  // apiRetry it carries the edge (`active` — true is compaction starting, false the explicit falling
-  // edge), but BANNER-ONLY: the wire streams no compaction progress, so there is no counter to carry and
-  // #496 must not invent one. It carries `conversationId` alongside the edge — the frame's
-  // `conversation_id`, copied BY NAME at the emit from an already-validated payload (the decode stays
-  // fail-closed: a missing or non-string id fails the whole line). It crosses for the reason turnState's,
-  // stallDetected's and apiRetry's do — the "turn-stream item, or daemon state?" test — and
-  // per-conversation compaction is daemon state: the sidebar must show a chat is busy compacting while the
-  // operator looks at a different one (#674). REQUIRED, never optional: an optional routing key invites
-  // `?? activeConversation` fallbacks, which is the misattribution this work exists to remove.
-  //
-  // This arm's safety argument used to rest on the ABSENCE of a string. That argument is REPLACED, not
-  // softened: it now rests on the NATURE of the string, the same one its three status neighbours above
-  // already make. The id is a daemon-asserted ROUTING KEY, not rendered text — none of the untrusted-text
-  // warnings on `model` / `description` / `raw` attach to it. It is never markup, a filename, a cache key,
-  // a lookup path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by
-  // construction, and the decode-side compacting log is pinned content-free independently). It STOPS at
-  // the renderer timeline bridge (#202), which rebuilds a fresh ThreadEvent from named fields and omits
-  // it; ThreadEvent keeps its one bool, and the consumers that key off the id are #674 — where an unknown
-  // id must be an explicit no-match, never a fallback onto the open conversation. No token, key, or raw
-  // frame.
-  //
-  // NOT onset-only and NOT deduped: the transport holds no state, so a consumer sees exactly one event per
-  // daemon frame (including a verbatim repeat), and #496 is idempotent on the repeat — and the added field
-  // brings no dedup, coalescing, timer or per-id memo with it. Ships dormant: all three exhaustive bridges
-  // no-op it until #496 — the apiRetry-was-a-no-op-until-#493 precedent.
-  | { type: 'compacting'; active: boolean; conversationId: string }
+  // Conversation-scoped status and delayed boundary metadata. Outcomes and trigger are open
+  // daemon strings, classified by the timeline rather than displayed or logged. The id routes
+  // only to its own held conversation and is dropped by translateTimelineEvent.
+  | { type: 'compacting'; active: boolean; conversationId: string; compactResult?: string; compactError?: string }
+  | { type: 'compactionBoundary'; conversationId: string; trigger: string; preTokens?: number | null; postTokens?: number | null }
   // The announced-model arm (#587) — what claude named as the model it resolved for the turn, off its
   // `system` / `init` line. Neither a claude sub-state like its three status neighbours above nor a
   // daemon mapping gap like unrecognizedMessage: an IDENTITY report, answering what the spawn argument

@@ -27,6 +27,7 @@ type ThreadItem =
       ; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string }
   | { kind: 'userText'; text: string; createdAt?: number; messageId?: string; attachments?: readonly MessageAttachment[] }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
+  | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
 
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; createdAt?: number }
@@ -41,13 +42,14 @@ type ThreadEvent =
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  | { type: 'compacting'; active: boolean }
+  | { type: 'compacting'; active: boolean; compactResult?: string; compactError?: string }
+  | { type: 'compactionBoundary'; trigger: string; preTokens?: number | null; postTokens?: number | null }
   | { type: 'reset' }
   | { type: 'reconnected' }
   | { type: 'dropUserText'; messageId: string }
   | { type: 'thinkingProgress'; estimatedTokens: number }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }> }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean; localSendPending: boolean; thinkingTokens: number | null; latestTurnEnd?: Extract<ThreadEvent, { type: 'turnEnd' }>; pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }> }
 interface ApiRetryStatus { current: number; total: number }
 ```
 
@@ -65,9 +67,11 @@ live `{ current, total }` attempt counter, `null` means no retry in flight. Unli
 other arm — the deliberate inverse of `stalled`'s clearing rule. **`compacting` ([#496](../codebase/496.md))
 is a fourth such scalar**, back to a plain flag like `stalled` — but with `apiRetry`'s inverted clearing
 rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit falling edge, so it clears
-only on that edge and survives turn activity. It stays `boolean` rather than `apiRetry`'s `| null`
-record because the wire carries no counter to discard on clear — there is nothing for a `| null` shape
-to make "true by construction." **`localSendPending` ([#650](../codebase/650.md)) is a fifth such
+on that edge or a reconnect/reset and survives turn activity. It stays `boolean`:
+completion outcomes and delayed counts belong to retained `compactionBoundary` rows,
+with `pendingCompaction` identifying the row awaiting metadata. See
+[compaction lifetime](conversation-timeline-store.md#what-it-does).
+**`localSendPending` ([#650](../codebase/650.md)) is a fifth such
 scalar** — set by the `userText` arm (the composer's own accept signal, no separate event) and cleared
 only by the daemon's own turn-activity edge; its full rationale, the working-indicator consumer, and
 what a `dropUserText` removal (below) deliberately leaves it as live in [Conversation shell §
@@ -238,7 +242,8 @@ also makes eviction and conversation clears remove it with that slice.
 ### The reducer
 
 `reduceTimeline(state, event): TimelineState` is pure and exported. It runs the exhaustive
-`reduceTimelineContent` fold below, then applies `latestTurnEnd`'s lifecycle above.
+`reduceTimelineContent` fold below, preserves `pendingCompaction` across unrelated
+events, then applies refusal-offer and `latestTurnEnd` lifecycles.
 The table describes the content fold: a same-reference result or an unchanged scalar
 there can still accompany clearing `latestTurnEnd`. If that reading is unchanged too,
 the wrapper returns the content fold's exact state reference, preserving legacy no-op
@@ -258,8 +263,9 @@ identity on reconnect.
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
-| `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
-| `reset` | returns `initialTimelineState`, with no `latestTurnEnd`, by reference; a second reset is a no-op — [#528](../codebase/528.md) |
+| `compacting` | Same active value → same reference. Rising edge sets `compacting` and clears the pending association. Falling edge appends a classified `compactionBoundary`, clears liveness, and makes only a non-failed row pending. Other status fields stay unchanged. |
+| `compactionBoundary` | Replaces the pending row by reference identity, or appends a standalone row when none matches; consumes the association. Stores counts and `manual: trigger === 'manual'`, never raw trigger text. Status fields stay unchanged. |
+| `reset` | returns `initialTimelineState`, with no `latestTurnEnd`, refusal offer or pending compaction, by reference; a second reset is a no-op — [#528](../codebase/528.md) |
 | `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false`, `thinkingTokens`→`null` via a hand-written six-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all six (including `phase === 'idle'`) are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md), widened for `thinkingTokens` by [#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314) since a reading held across a reconnect would report the depth of a think that finished on the other side of the disconnect |
 | `dropUserText` | remove the **first** `userText` item whose `messageId` strictly equals `event.messageId` (`removeUserEcho`, below); same `items` reference on no match. The **only** arm that removes an item — everything else appends or coalesces. Every chrome scalar, `localSendPending` included, is carried through unchanged; not a second `userText` producer and not its inverse — see § Edge cases — [#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) |
 
@@ -278,10 +284,10 @@ edge, never on turn activity. The two `&& !state.stalled` guards above deliberat
 matching `&& apiRetry === null`-style clause; doing so would silently clear a live retry on ordinary
 turn activity.
 **`compacting` ([#496](../codebase/496.md)) is a fifth, independent axis, the same inverted-clearing
-shape as `apiRetry`**: every other arm carries it through unchanged, and the two `&& !state.stalled`
-guards do not gain a compaction term either — `compacting` clears only on its own explicit falling
-edge. Unlike `apiRetry`, there's no counter to carry, so the arm collapses to a single
-same-reference-or-fresh-state ternary rather than a two-branch rising/falling split.
+shape as `apiRetry`**: turn activity carries it through unchanged. Its own falling
+edge also appends a retained divider; reconnect clears the flag directly without
+synthesizing that edge. Rows and pending metadata survive reconnect. See
+[association rules and retention limits](conversation-timeline-store.md#what-it-does).
 **`thinkingTokens` ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) is a sixth,
 independent axis with a clearing rule that matches neither of the two shapes above** — not
 `stalled`'s self-clear-on-turn-activity (every content arm carries it through unchanged: `stalled` is

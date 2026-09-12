@@ -30,13 +30,38 @@ Turns owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `Timeline
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
 `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
-onset, an `api_retry` edge, a `compacting` edge) re-renders only components selecting a timeline
-slice — orthogonal to `sessionStore` and `runConfigStore`. The ninth arm, `connected`→`reconnected`
+onset, an `api_retry` edge, a `compacting` edge or `compaction_boundary` metadata)
+re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
+and `runConfigStore`. The ninth arm, `connected`→`reconnected`
 ([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
 that clears the timeline's transient chrome on a fresh handshake. `localSendPending`
 ([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
 event the composer dispatches directly (see below). Refusal recovery also dispatches
 client-owned write-lifetime events into the retained conversation slice.
+
+An observed `compacting: true` → `false` transition appends one permanent
+`compactionBoundary` row in the addressed conversation. Repeated false frames add
+nothing; successive compactions retain separate rows. `compact_result === 'failed'`
+or any nonempty `compact_error` classifies a failure, including whitespace-only
+errors. Missing outcomes and unknown result strings keep the generic label unless
+an error is present. Raw outcome strings are discarded when constructing the row.
+
+`TimelineState.pendingCompaction` holds the latest non-failed completion awaiting
+metadata. A later `compaction_boundary` for that conversation replaces the referenced
+row in place, even after intervening content. A new rising edge supersedes the
+association; consuming a boundary or resetting the timeline clears it. Without a
+matching pending row, a boundary appends its own divider. Failed rows never become
+pending, so later success metadata cannot rewrite a failure. The bridge routes both
+frames by their own conversation id, including while another conversation is open.
+See [divider labels and styling](conversation-shell-session-and-channel-info.md#compaction-dividers).
+
+The pending association uses row identity rather than an array index: history
+prepend and removal of an earlier optimistic echo can shift indices without
+changing the held row. The reducer wrapper preserves this reference across other
+events, including reconnect; `prependHistoryFor` preserves it with the held items.
+[`store/compaction.test.ts`](../../../src/renderer/src/store/compaction.test.ts)
+pins both index-shifting cases, association consumption and supersession, failure
+preservation, conversation isolation and reconnect without a false completion.
 
 ## Tool parent attribution
 
@@ -234,11 +259,17 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   clearing it — a retry stays shown across intervening `assistantDelta`/`toolUse`/`toolResult`/
   `turnState` events, and clears only on its own falling edge. Copying `stalled`'s guard-widening
   pattern here would silently swallow a live retry on the next stream event.
-- **`compacting` follows the same inversion as `apiRetry`, a plain `boolean` rather than a `| null`
-  record ([#496](../codebase/496.md)).** The wire's `compacting` frame also carries an explicit falling
-  edge, so it too survives turn activity and clears only on its own signal — the two `&& !state.stalled`
-  guards did not gain a compaction term either. Unlike `apiRetry` there is no counter to discard on
-  clear, so the state is a bare liveness flag, not a status record.
+- **Compaction liveness and retained completion are separate.** The `compacting`
+  boolean survives turn activity and clears on its falling edge, reconnect or reset.
+  A reconnect clears status directly, never by dispatching a synthetic false frame,
+  so it cannot manufacture a completed divider. Received rows and any pending
+  metadata association survive scrolling, navigation and reconnect while the
+  [keyed holder](conversation-timeline-holder.md) retains that conversation.
+- **Permanent means the lifetime of the held timeline.** A timeline reset, holder
+  clear or eviction drops its dividers and pending association; they are not persisted
+  across app restarts. This feature does not recover missed offline events or replay
+  `compaction_boundary` from history. History's existing `compacting` decoder carries
+  outcomes, but prepending its reduced rows does not create a live pending association.
 - **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot
   recover a lost falling edge — it can only reconcile forward** ([#538](../codebase/538.md)). The daemon
   re-asserts only the outstanding modal (#877) and the queued backlog (#878) on connect, never

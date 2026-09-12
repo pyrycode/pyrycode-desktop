@@ -28,7 +28,7 @@ speculative observer here would defend an unobserved need.
 ```ts
 translateTimelineEvent(event: DaemonEvent | HistoryTimelineEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
-// (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538) / messageReceived->
+// (#317) / apiRetry (#493) / compacting / compactionBoundary / connected->reconnected (#538) / messageReceived->
 // userText (#1223) / thinkingProgress (#1314), each rebuilt as a fresh named-field literal (never `return event`, never a spread
 // — for stallDetected and connected->reconnected, both sides are nullary, so the "literal" is
 // arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
@@ -148,11 +148,11 @@ translates an **edge into a presence**: the event always carries `active`, but t
 field left over to leak a stale counter. [#737](../codebase/737.md) later widened `DaemonEvent.apiRetry`
 with `conversationId`, the same routing-key widening `stallDetected` got from #732 above; the bridge
 case is now a filter, not a plain copy, and `ThreadEvent.apiRetry` is the side that stays four-field.
-`compacting` ([#496](../codebase/496.md)) is `apiRetry`'s structural twin minus the counter — also
-filter-and-copy (`active` only), but the state holds a plain `boolean` rather than `Status | null`, since
-there's no counter to discard on the falling edge. The reducer arm collapses to a single
-`state.compacting === event.active ? state : {…}` ternary — the edge *is* the state, with no
-rising/falling branch split needed.
+`compacting` copies `active`, `compactResult` and `compactError`; `compactionBoundary`
+copies `trigger`, `preTokens` and `postTokens`. Both omit the conversation id from the
+`ThreadEvent`; live routing uses the original event's id. The reducer owns edge detection,
+failure classification and [delayed metadata association](conversation-timeline-store.md#what-it-does);
+the bridge neither synthesizes completion on reconnect nor correlates by row index.
 
 `thinkingProgress` ([#1313](https://github.com/pyrycode/pyrycode-desktop/issues/1313), decoded at
 [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)) is now an owned arm, claimed by

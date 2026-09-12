@@ -2629,6 +2629,10 @@
    than the label's box — the label has no fill either, so a box-shadow here would be the row's rectangle
    in miniature. text-shadow has no spread slot, which is why the token writes none (the design's is 0,
    the default); the lengths and the colour are the hairlines' and the bubbles', unchanged. */
+.compaction-delimiter--failed .session-delimiter__title {
+  color: var(--color-error);
+}
+
 .session-delimiter__title {
   min-width: 0;
   margin: 0;

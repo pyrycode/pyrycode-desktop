@@ -373,7 +373,7 @@ and only then calls listeners, so a read inside one always sees the value just w
 The write itself is an **assignment of the sampled count, never an increment** — a fact about the
 `threadTimeline` reducer, not a preference. A continuing `assistantDelta` coalesces into the tail bubble
 and leaves `items.length` unchanged, `toolResult` fills a held row in place, and `turnState` /
-`stallDetected` / `apiRetry` / `compacting` / `reconnected` never touch `items` at all — a counter bumped
+`stallDetected` / `apiRetry` / `reconnected` never touch `items` at all — a counter bumped
 on arrival would be wrong on most arms. The common case (an unchanged count) re-records an identical
 mark and `recordLastRead`'s own `===` guard hands back the state object, so zustand's `Object.is`
 short-circuit fires and nothing downstream wakes.

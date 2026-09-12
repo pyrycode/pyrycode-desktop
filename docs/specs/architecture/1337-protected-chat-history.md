@@ -79,3 +79,7 @@ Pending for the documentation stage: no explicit documentation requirement/path/
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-12
+
+## Revisions
+
+- 2026-09-12: The build showed that importing `ThreadItem` in a shared test crosses the composite Node project's file boundary. Move only the structural compatibility proof to `src/renderer/src/store/chatHistoryContract.test.ts`, which the web project owns. Production layering and the record contract are unchanged.

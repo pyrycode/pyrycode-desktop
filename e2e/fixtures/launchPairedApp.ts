@@ -301,7 +301,9 @@ export const test = base.extend<PairedAppFixtures>({
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
         const daemon = await startFakeDaemonForTest({
           url: forwarder.url,
-          buildReply: () => seedConversationsFrame(),
+          buildReply: () => seedConversationsFrame(
+            serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
+          ),
           ...serverOptions
         })
         teardown.push({ step: steps.daemon, run: () => daemon.close() })
@@ -408,38 +410,11 @@ export const test = base.extend<PairedAppFixtures>({
         // first pairing's session put in place, so the first server's row is still standing here.
         await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
 
-        // Land the second server's row — and, in doing so, gate on its handshake.
-        //
-        // The app asks the second daemon NOTHING. `ConversationListData` sends the bare
-        // `{ type: 'requestConversations' }` with no `serverId`, and `createServerRouter`'s absent-id
-        // branch resolves only through `soleConnection()`, which is null once the registry holds more
-        // than one entry — so with two servers paired that command refuses `ambiguous-server` and puts
-        // no frame on any wire. Every other renderer command is bare in the same way today; the window's
-        // senders acquire a per-server surface to name in #1070/#1085, one at a time. So the second
-        // server's rows arrive as a server-initiated PUSH rather than as a reply, which is faithful
-        // rather than a shortcut: `daemonConnection`'s inbound `conversations` arm dispatches on the
-        // inner frame's `type` with no correlation-id match, so an unsolicited `conversations` envelope
-        // lands exactly like a solicited one, stamped with the server it came from.
-        //
-        // The push doubles as the connected gate, the way the row click above is the first server's.
-        // `pushFrame` is a documented no-op outside the daemon's `transport` state and `whenSettled()`
-        // resolves only on a first REPLY (which this daemon will never receive), so neither the daemon
-        // nor the app exposes a "server 2 connected" signal today. (The sidebar's two dots became a
-        // per-server read in #1199, but they report the FIRST paired server, so they still say nothing
-        // about server 2's handshake — which is what this poll is waiting on.) Hence the poll: before the handshake
-        // splits the push is inert and the count stays at one; the first push after it lands the row.
-        // Re-pushing is harmless — `setConversations` replaces that server's whole slot — so this
-        // converges rather than accumulating. The polled value is a small integer, so a timeout reports
-        // a count and never a payload, a key or a URL.
-        await expect
-          .poll(
-            async () => {
-              second.daemon.pushFrame(seedConversationsFrame(SECOND_SEEDED_ROW))
-              return page.locator('.channel-list__row-open').count()
-            },
-            { timeout: HANDSHAKE_TIMEOUT_MS }
-          )
-          .toBe(2)
+        // The addressed connection request must earn this row from the second transport.
+        // No unsolicited seed push: a missing request now fails the fixture's connected gate.
+        await expect(page.locator('.channel-list__row-open')).toHaveCount(2, {
+          timeout: HANDSHAKE_TIMEOUT_MS
+        })
       }
 
       return { page, app, daemon, forwarder, userDataDir, servers }

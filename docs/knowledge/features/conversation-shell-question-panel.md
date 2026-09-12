@@ -170,11 +170,10 @@ would put untrusted text into an attribute, the ban `questionBatchStore.ts` stat
 derived from `header`, `question`, or the nonce `questionBatchId` either, which this slice never reads. The
 title row draws every question's header as a tab — see § Header tabs below — using the already-shipped
 `PyryMark` at `width={14} height={16}`, the composer status row's call verbatim, beside them. Cancel and
-Continue are both `<button type="button">`; Cancel is never greyed, since the panel occupies the
-composer's slot and there is nothing to disable there. Through #916 neither carried an `onClick` either; since
+Continue are both `<button type="button">`; Cancel is disabled while its host is unavailable. Through #916 neither carried an `onClick` either; since
 [#921](question-panel-cancel-refusal.md) Cancel sends, and since
-[#922](question-panel-continue-answer.md) Continue does too — and is the one control on this panel that
-can be `disabled`, while short an answer on the last question. See that document for the gate.
+[#922](question-panel-continue-answer.md) Continue does too. Final Continue requires both a complete
+answer and host availability; local navigation and editing remain usable. See the response sections below.
 
 **Colours came from the Figma variables on node `347:6913`, never the generated fallbacks** (which print
 the light scheme, per `tokens.css`'s standing warning): Tertiary, On Background, Primary Container,
@@ -546,6 +545,12 @@ directly.
 
 ## Cancel refuses the batch (#921)
 
+Cancel sends a refusal, so it shares the [permission response availability gate](conversation-shell-permission-modal.md#selection-and-confirmation):
+only the batch conversation's unique stamped owner reporting `connected` permits it. Missing or
+ambiguous ownership and missing/non-connected status disable Cancel; another connected host cannot
+enable it. `QuestionPanelSlot` rereads ownership/status before `refuseQuestionBatch`, so a blocked
+gesture sends no command and clears neither the batch nor its picks.
+
 Split out to [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) on 2026-09-02
 to keep this document under the size cap. Through #916 the Actions row's Cancel button was inert chrome;
 that document covers `questionResolution.ts`'s `refuseQuestionBatch`, the picks-first optimistic clear, the
@@ -554,9 +559,17 @@ and the security review.
 
 ## Continue answers the batch (#922)
 
+`responseAvailable` is separate from answer completeness (`canAnswer`). Final Continue requires both;
+Next, Previous, tabs, picks and Other editing stay local and usable offline. Disconnect retains the
+batch, picks, active question, messages and composer draft. Reconnect keeps the bridge's reset and
+daemon re-delivery semantics, with no automatic submission; a re-delivered batch needs explicit picks
+and Continue. The handler rereads current host availability before `answerQuestionBatch`.
+See [offline verification](conversation-shell-permission-modal.md#verification) for renderer-command
+observation and the distinction between disconnect retention and chat-switch remounts.
+
 Split out to [Question panel — Continue answers the batch](question-panel-continue-answer.md) on
 2026-09-02, the same move made for Cancel above. Through #916 the trailing button's Continue role carried
 no handler at all. That document covers `resolveQuestionAnswers` (the one function that is both the
-availability gate and the payload builder), `answerQuestionBatch`, the picks store's new
+completeness gate and the payload builder), `answerQuestionBatch`, the picks store's new
 `selectBatchSelections` read, the `canAnswer`/`onAnswer` props and the conjunction that keeps the button's
 Next role from ever being gated on completeness, the `:disabled` CSS treatment, and the security review.

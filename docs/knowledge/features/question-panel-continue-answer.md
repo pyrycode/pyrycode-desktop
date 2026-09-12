@@ -11,7 +11,7 @@ Continue and carried no handler at all — the row's last inert control. #919 la
 wire type, #920 the command that mints its `answer_token` main-side, #921 the local optimistic clear this
 slice reuses. This slice gives Continue its handler: it assembles what the operator picked into that
 frame's `answers` array, sends it, and keeps itself unavailable until every question in the batch holds a
-value.
+value and its owning host is connected. See [host availability and reconnect](conversation-shell-question-panel.md#continue-answers-the-batch-922).
 
 **The gate is the operator-facing feature, not a nicety.** Upstream's `answerVerdict`
 (`cmd/pyry/modal_resolve_v2.go`) rejects an answer whose entry count is not exactly the parked question
@@ -34,10 +34,10 @@ export function resolveQuestionAnswers(
 ): QuestionAnswerEntry[] | null
 ```
 
-Deciding whether the batch may be sent and building what is sent are the same computation: a batch with a
+Deciding whether the batch is complete and building what is sent are the same computation: a batch with a
 gap has no entry to emit for that question, so the button's availability and the frame's contents cannot
 disagree, and a "which is it?" bug is not expressible. The container calls this once per render and feeds
-both the gate and the send from the one result.
+both the completeness gate and the send from the one result. Host availability is checked separately.
 
 Iterates the **questions**, never the selections — a picks map can hold an entry for a position a
 shortened re-delivery removed, and one phantom entry would break the daemon's exact-count check on an
@@ -148,13 +148,13 @@ the one call site. The trailing button stays the **one element** [step controls]
 conversation-shell-question-panel.md#step-controls-916) already established; only its attributes vary:
 
 ```
-disabled={isLastQuestion && !canAnswer}
+disabled={isLastQuestion && (!canAnswer || !responseAvailable)}
 onClick={isLastQuestion ? onAnswer : () => onQuestionSelected(activeIndex + 1)}
 ```
 
 **The gate is a conjunction, and the second conjunct is what keeps the panel from deadlocking.** Continue
-is unavailable only in its Continue role *and* only while the batch is short an answer. Gating on
-`!canAnswer` alone would disable the same element in its Next role on any incomplete batch, stranding the
+is unavailable in its Continue role while the batch is short an answer or its host is unavailable. Gating on
+`!canAnswer || !responseAvailable` without the role check would disable Next, stranding the
 operator on question 1 with no way to reach question 2 to answer it — so the batch could never become
 complete. Stepping is never gated on what has been picked, and neither is Previous; only this one
 attribute, on this one role, varies with completeness. `canAnswer` is a prop rather than something derived
@@ -167,22 +167,28 @@ computed inline in the render (no `useMemo` — a pure pass over one batch's que
 would need a key derived from the picks):
 
 ```ts
+responseAvailable={responseAvailable}
 canAnswer={answers !== null}
-onAnswer={() =>
+onAnswer={() => {
+  if (!canRespondToPromptNow(batch.conversationId)) return
   answerQuestionBatch(batch.questionBatchId, answers, {
     sendCommand: window.pyry.sendCommand,
     dispatchPicks: dispatch,
     dispatchBatch: questionBatchStore.getState().dispatch
   })
-}
+}}
 ```
+
+`responseAvailable` comes from `usePromptResponseAvailability(batch.conversationId)`. The handler's
+fresh store read immediately precedes the synchronous helper; an unavailable response emits no
+command and clears no picks or batch, even if the rendered availability is stale.
 
 `window.pyry` is dereferenced only inside the click closure, the queued backlog's own drop-closure
 (`ConversationScreen`'s `onDrop` bind, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009))
 / `Composer.handleSubmit` discipline — never during render, so the container's smoke render still touches no
 bridge.
 
-## CSS — the one unavailable state this panel draws
+## CSS — unavailable response controls
 
 **The design draws no unavailable state for Continue** — a static frame cannot express one that depends on
 what the operator has picked — so the treatment is this ticket's own rather than a design read. The house
@@ -204,8 +210,9 @@ The convention's substance is unchanged (token pair, no opacity literal, no geom
 only which token pair applies is decided by the button's own enabled fill rather than assumed from the
 two precedents.
 
-Only the Continue **role** is ever gated — the same element reading Next is never `disabled`, or an
+Only the Continue **role** of the trailing button is gated — the same element reading Next is never `disabled`, or an
 incomplete batch could not be stepped through to complete it.
+Cancel also requires host availability and uses muted text and border tokens, preserving its outline.
 
 ## Testing strategy
 

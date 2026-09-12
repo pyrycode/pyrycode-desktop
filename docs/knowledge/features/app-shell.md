@@ -75,6 +75,7 @@ The pairing branch now passes both `onPaired` and `onCancel` — see [Why `onCan
 
 ```ts
 function App(): JSX.Element {
+  useChatHistoryWriter()
   useDaemonEventBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
@@ -98,9 +99,9 @@ function App(): JSX.Element {
 }
 ```
 
-The container owns three things and nothing else:
+The container owns app-lifetime subscriptions, route state and launch routing:
 
-1. **The daemon bridge, unchanged.** `useDaemonEventBridge()` stays the unconditional first line — see [Where the daemon bridge lives](#where-the-daemon-bridge-lives).
+1. **App-lifetime observers.** `useChatHistoryWriter()` mounts before the daemon bridges; all remain unconditional above route selection — see [Where the daemon bridge lives](#where-the-daemon-bridge-lives).
 2. **Route state** — one `useState<AppRoute>('pending')` (ephemeral shell-local UI state → `useState`, not the store; [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)).
 3. **The launch effect** — a single `[]`-deps mount effect that reads `pairingStatus()` once and sets the route via `routeForStatus`, or fails safe to `welcome` on rejection ([#662](../codebase/662.md); was `pairing` before). This catch arm is the one non-paired path that bypasses `routeForStatus` entirely, so it's spelled out rather than inferred, and it stays deliberately **silent** — no `console.error`/`console.warn` — because a rejection from the pairing-status invoke can carry a userData path or internal state, and the renderer console is readable by anything that can open DevTools (flagged and re-checked at #662's code review). `onPaired` (the whole of AC4 in #80) flips the route to `conversation`, unmounting the pairing screen and mounting the conversation screen with no restart. `onUnpaired` ([#166](../codebase/166.md)) is its exact reverse: a successful unpair flips back to `pairing` — **not** `welcome`, a deliberate, pinned exception (see [What it does](#what-it-does)). `onPairRequested` and `onPairingCancelled` ([#662](../codebase/662.md)) are the two new user-action arrows: welcome's CTA into `pairing`, and pairing's Cancel back to `welcome`, never to `conversation`. None of the four handlers does any clearing itself — `onPaired` only navigates (the pairing IPC handler already persisted), and `onUnpaired` only navigates too (the [unpair channel](unpair-channel.md)'s `clear()` and the [session store](session-store.md)'s `reset` both complete in `runUnpair` *before* `onUnpaired` is called), so the launch-status invariant "conversation only when paired" still holds if the user relaunches immediately after either flip.
 
@@ -143,6 +144,14 @@ While `pairingStatus()` is unresolved the route is `pending` and `AppView` rende
 ### Where the daemon bridge lives
 
 `useDaemonEventBridge()` is called **unconditionally**, above the route branch — not moved inside the conversation branch. It is an app-lifetime subscription (subscribe on mount, unsubscribe on unmount, already StrictMode-safe). Keeping it app-level means one stable listener for the whole session, with no subscribe/unsubscribe churn as the route flips pairing→conversation — and it is already mounted before `onPaired` fires, so when connect-on-pair ([#82](https://github.com/pyrycode/pyrycode-desktop/issues/82)) later starts the connection at pair time, no early daemon event can be missed in the gap between the pair completing and the conversation screen mounting. While on the pairing screen no connection is running yet, so the [session store](session-store.md) simply sits idle — harmless.
+
+`useChatHistoryWriter()` shares this app lifetime, observing received list/timeline
+updates across chat and host switches. Its store subscriptions do not depend on
+the selected route or connection state. Normal close/quit stops and drains the
+writer before teardown; hook cleanup removes its subscriptions and flush listener.
+See [local recording](chat-history.md#received-state-admission-and-ownership) and
+[close/quit flushing](chat-history.md#window-close-and-app-quit). These effects need
+the Electron recording tests; static `AppView` renders cannot prove they mounted.
 
 ### Why `onCancel` now navigates
 

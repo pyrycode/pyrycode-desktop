@@ -142,9 +142,10 @@ Since #1068, every event carries `serverId: string | null` — the id of the pai
 or `null` where no paired record was in hand when the emitter was bound. This rides beside the union
 (`StampedDaemonEvent = DaemonEvent & { serverId }`) rather than inside it, so the 42 arms below are
 unchanged; see [Emit and subscribe](daemon-event-channel-plumbing.md) for `bindServerOrigin` and the
-full design. It is a no-op for every bridge today — nothing keys state on it yet — laid down for a
-future per-server connection registry (#1084) that needs a way to tell two live connections' events
-apart.
+full design. The production registry binds each connection to its saved host.
+The [chat-history observer](chat-history.md#received-state-admission-and-ownership)
+captures this origin during synchronous store updates so buffered content cannot
+move to whichever host is active when its save runs.
 
 ## How it works
 

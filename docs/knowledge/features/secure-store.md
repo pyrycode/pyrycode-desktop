@@ -105,7 +105,10 @@ The production `dir` is `join(app.getPath('userData'), 'secrets')`, passed in by
   store.delete(name) ─────► delete(name) ─► unlink (ENOENT = no-op)
 ```
 
-Nothing in this flow reaches IPC, the preload, the renderer, or a `BrowserWindow`. Plaintext exists only transiently in main-process memory between the seam boundary and the caller; ciphertext is all that is ever persisted.
+The primitive exposes no IPC, preload or `BrowserWindow` capability. Its consumer
+controls any typed display data returned to the renderer, such as
+[saved chat snapshots](chat-history.md#api); credentials and raw storage bytes stay
+in main. Ciphertext is all that is ever persisted.
 
 ## Security properties
 
@@ -114,7 +117,7 @@ This module *is* the secret-at-rest boundary — its correctness properties are 
 - **Plaintext never on disk / fail-closed** — the availability check gates before any write; `setUsePlainTextEncryption(true)` is forbidden; the Linux `basic_text` obfuscation backend is treated as unavailable.
 - **Path traversal closed structurally** — base64url encoding, not validation.
 - **Authenticated decryption** — `safeStorage` is AEAD under the OS keychain; a tampered/foreign blob throws rather than yielding attacker-chosen plaintext, and the core propagates the throw.
-- **Zero renderer/IPC surface** — no `contextBridge`, `ipcMain`, `BrowserWindow`, or preload change; a renderer compromise gains no path to the store.
+- **No generic renderer/IPC surface** — no `contextBridge`, `ipcMain` or `BrowserWindow` in the primitive. Consumer handlers validate their own fixed operations; the renderer cannot name arbitrary blobs or paths.
 - **Log-free by construction** — no `console.*` anywhere; secrets are opaque `Uint8Array` locals, never named fields of a logged struct (avoiding the KitchenClaw `GatewaySettings` `toString` leak by design).
 
 ## Edge cases and limitations
@@ -124,7 +127,7 @@ This module *is* the secret-at-rest boundary — its correctness properties are 
 - **Decrypt failure** — propagates; recovery policy (re-pair vs hard error) is a **consumer** decision, deliberately not baked into the blind primitive.
 - **Stale `.tmp` on hard kill** — inert (ignored by `read`, which only opens `fileFor(name)`); an optional startup sweep is deferred to a consumer ticket.
 - **Backup/sync capture** — ciphertext is keychain-bound and useless without the machine keychain; portable per-OS backup-exclusion is out of scope.
-- **Not wired yet** — nothing constructs a live store; `src/main/index.ts` is untouched. Composition-root wiring lands with the first consumer (#43/#44).
+- **Shared production instance** — `src/main/index.ts` constructs one secure store and injects it into consumers, including the protected chat-history service. That service owns collection validation and ordering above this byte-storage primitive.
 
 ## Related
 

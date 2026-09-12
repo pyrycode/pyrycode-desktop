@@ -84,9 +84,9 @@ instead means:
 `WithOrigin` is written as a **distributive** conditional rather than the plainer `DaemonEvent &
 ServerOrigin` so the result is a genuine 43-arm union of stamped members — `.type` narrowing and
 `Extract<…>` behave for consumers exactly as they do on the bare union. `null` is a present value, never
-an absent property: it means "no paired record was in hand when the emitter was bound," which is the
-value on every event in production today (the one connection is constructed at launch before any record
-is read, and outlives a re-pair). `serverId` is a non-secret routing id but is still subject to the
+an absent property: it means "no paired record was in hand when the emitter was bound."
+The production connection registry binds each saved host's identity to its own
+connection; window-local events can still carry `null`. `serverId` is a non-secret routing id but is still subject to the
 plain-text-only rule every daemon-adjacent string on this channel carries — never a raw-markup sink,
 never an attribute or a URL, never a filename or a lookup path (a `Map`, not a bare object, if a
 consumer ever indexes by it).
@@ -134,7 +134,11 @@ join](conversation-timeline-store-internals.md#the-historylive-join-1225) for th
 
 ```ts
 onDaemonEvent: (listener: (event: StampedDaemonEvent) => void): (() => void) => {
-  const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => listener(event)
+  const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => {
+    const previous = historyReceipt
+    historyReceipt = { type: event.type, serverId: event.serverId }
+    try { listener(event) } finally { historyReceipt = previous }
+  }
   ipcRenderer.on(DAEMON_EVENT_CHANNEL, handler)
   return () => ipcRenderer.removeListener(DAEMON_EVENT_CHANNEL, handler)
 }
@@ -150,6 +154,15 @@ onDaemonEvent: (listener: (event: StampedDaemonEvent) => void): (() => void) => 
   would otherwise be readable only through a cast. It cascades into nothing: a bridge whose listener
   still takes the bare `DaemonEvent` is accepted by contravariance, so all 27 renderer subscribers and
   their tests compile unchanged and each ignores the field until it needs it.
+
+`historyReceipt` is preload-local and normally `null`.
+`window.pyry.chatHistoryReceipt()` exposes only the current event type and stamped
+host during a subscriber's synchronous call. The [chat-history writer](chat-history.md#received-state-admission-and-ownership)
+reads it from store notifications while the existing bridges fold the event.
+Restoring the prior context in `finally` prevents a thrown or nested listener from
+leaving stale origin attached to later updates. A deferred save must capture its
+content and origin before the listener returns; the active host is not evidence
+of who supplied a held row. Raw `IpcRendererEvent` objects never cross this seam.
 
 ## Data flow
 

@@ -179,8 +179,12 @@ constructor**, `requestNewWorkspaceChat`, one level up from #1178's: an operator
 an existing group's own `cwd`, and a top-level `serverId` that is *required* rather than optional — the
 host row's Add-workspace dialog always knows which machine's plus was clicked, and main refuses an unnamed
 `createConversation` as ambiguous once more than one server is paired (#1120). Its payload is
-`requestNewConversation`'s byte for byte; only the routing key differs, which is why it is a third sibling
-rather than a widened parameter on either existing helper.
+`requestNewConversation`'s byte for byte. `requestNewConversation` and `requestNewChannel`
+now also accept an optional explicit `serverId`; sidebar callers always supply their retained
+host after a live connectivity check. Omitting it preserves main's single-host fallback.
+`requestNewWorkspaceChat` still requires the host and trims operator-entered paths, while
+the sidebar helpers preserve daemon-reported `cwd` verbatim. See
+[sidebar availability](channel-list.md#the-container--pure-view-channellisttsx).
 [#515](../codebase/515.md)
 later added a second, independent consumer on the same event: the [conversation list
 store](conversation-list-store.md)'s `subscribeConversations` now also re-requests the list on
@@ -190,8 +194,8 @@ subscriptions are separate and side-effect-disjoint (nav vs. re-list), so they n
 ## Data flow
 
 ```
-new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand, defaultCwd)
-  → sendCommand({type:'createConversation', payload:{is_promoted,name,cwd:defaultCwd}})
+new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand, defaultCwd, serverId)
+  → sendCommand({serverId, type:'createConversation', payload:{is_promoted,name,cwd:defaultCwd}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
   → authenticated connection check → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage
     unavailable/build/send failure → host-stamped conversationCreateRejected

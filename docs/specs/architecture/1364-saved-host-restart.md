@@ -128,3 +128,22 @@ and gate-floor update to the dispatcher.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-12
+
+## Revisions
+
+### 2026-09-12 — bounded outage proof and pending live evidence
+
+The existing routing relay retains one server-leg registration for its lifetime,
+so adding real-daemon stop/start controls would also require changing that relay's
+lifecycle. Keep this ticket's relay stable instead: the secondary fake peer's
+existing `dropClientLeg` proves automatic recovery from a network drop, followed
+by a classified rejection and complete secondary-peer shutdown. The real daemon
+remains running throughout both desktop restarts. No daemon-fixture controls or
+production code changes are made. Absent real-daemon recovery is not claimed.
+
+The fixture lifecycle test failed with `current.relaunch is not a function` before
+implementation and passed afterward (two focused tests). That is fixture RED/GREEN,
+not a reproduction of the reported product failure. Real-tier discovery adds one
+test, bringing this branch to 19 tests in 19 files. Actual OS-encrypted real-daemon
+authentication and the reported cause remain unresolved until the dispatcher runs
+the new spec. A speculative production fix is intentionally not selected.

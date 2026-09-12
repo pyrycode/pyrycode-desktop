@@ -64,7 +64,7 @@ ticket adds one new file that reads both selectors' outputs and nothing else.
 
 - **A present but empty slice with no mark reads as unread.** Falls out of branch 2 running ahead of branch
   3. It is reachable: `dispatchFor` creates a slice on an absent key unconditionally, including for arms
-  that never touch `items` (`turnState`, `stallDetected`, `apiRetry`, `compacting`, `reconnected`), so a
+  that never touch `items` (`turnState`, `stallDetected`, `apiRetry`, `reconnected`), so a
   turn running in a conversation the operator has never opened mints an empty slice with no mark — reading
   that as unread is the honest answer, since a slice minted without a row is still evidence of activity in
   a conversation this client has never read.

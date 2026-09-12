@@ -34,6 +34,9 @@ composer recovery without letting older history restore it.
 Refusal reports use retained `modelRefusal` rows and a separate live
 [refusal offer](conversation-timeline-store.md#refusal-offer-lifetime), whose lifetime
 extends across ordinary turns and conversation navigation.
+Compaction completions retain `compactionBoundary` rows; a separate pending row
+reference lets [delayed metadata](conversation-timeline-store.md#what-it-does)
+enrich the original position across intervening content and history prepend.
 
 ## Configuration and usage
 

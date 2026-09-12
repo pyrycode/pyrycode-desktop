@@ -44,10 +44,10 @@ Part of [Thread timeline](thread-timeline.md).
   "retrying, count unknown" state — a **present** `ApiRetryStatus` with both fields zero, not `null`.
   The falling edge discards any counter it carries; the state's `| null` shape makes that true by
   construction rather than a convention to maintain.
-- **`compacting` clears only on its own explicit falling edge — turn activity never clears it**
-  ([#496](../codebase/496.md)), `apiRetry`'s clearing inversion again. Unlike `apiRetry`, the wire
-  carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
-  `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
+- **Compaction status survives turn activity.** Its falling edge clears the boolean
+  and retains a divider; reconnect clears status directly without creating one.
+  Delayed count metadata belongs to the row, not the liveness flag. See
+  [compaction association and lifetime](conversation-timeline-store.md#what-it-does).
 - **`thinkingTokens` is a reading, never a value to compare against a maximum** ([#1314](https://github.com/pyrycode/pyrycode-desktop/issues/1314)) — the daemon's own docs call it "approximate progress for
   spinners/pills, not the authoritative billed output_tokens", and it restarts near zero at every
   inference-request boundary (observed four times inside one committed single-turn capture). A monotonic

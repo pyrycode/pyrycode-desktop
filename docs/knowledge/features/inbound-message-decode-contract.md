@@ -24,7 +24,8 @@ export type InboundDaemonMessage =
   | { kind: 'turn-state'; turnState: TurnStatePayload }         // #214, additive
   | { kind: 'stall'; stall: StallPayload }                      // #315, additive
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }            // #492, additive — NOT nullary
-  | { kind: 'compacting'; compacting: CompactingPayload }       // #495, additive — banner-only
+  | { kind: 'compacting'; compacting: CompactingPayload; ts: string }
+  | { kind: 'compaction-boundary'; boundary: CompactionBoundaryPayload }
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }    // #1318, additive — a usage-limit window report, `status`/`limit_type` OPEN strings, `resets_at` unvalidated, no FrameTimestamp, ships dormant
@@ -46,7 +47,7 @@ export type InboundDaemonMessage =
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
-//                            `api_retry`/`compacting`/`model_announced`/`tool_use`/`modal_shown`/
+//                            `api_retry`/`compacting`/`compaction_boundary`/`model_announced`/`tool_use`/`modal_shown`/
 //                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
 //                            `session_settings_updated`/`background_task_started`/
 //                            `background_task_updated`/`background_task_roster`/`question_shown`/
@@ -60,6 +61,19 @@ export function parseInboundMessage(
   diagnosticLog?: DiagnosticLog       // #130 — optional injected content-free logger; absent ⇒ silent
 ): InboundDaemonMessage | null
 ```
+
+**Compaction reports.** `CompactingPayload` requires string `conversation_id` and
+boolean `active`, with optional open-string `compact_result` and `compact_error`.
+`parseCompactingPayload` serves live and history decoding: absent outcomes support
+older daemons, empty/unknown strings survive, and present non-strings reject the
+payload. `CompactionBoundaryPayload` requires string `conversation_id` and `trigger`;
+empty and unknown triggers are valid. Each optional nullable token count must be a
+non-negative safe integer to survive as a number. Invalid counts become `undefined`
+without dropping the boundary; null stays null and zero stays zero. Unknown fields
+are discarded, and diagnostics contain only static type, byte count and hash.
+The new boundary is live-only; history retains its existing compacting arm.
+See [timeline association](conversation-timeline-store.md#what-it-does) and
+[count display](conversation-shell-session-and-channel-info.md#compaction-dividers).
 
 **Extended by [#116](../codebase/116.md), additively.** The `message` / `message_chunk` recognition and narrowing described below are unchanged byte-for-byte. Three more kinds are now recognized *before* the `default` (unmodeled) branch: `debug_bundle_chunk` → `{ kind: 'bundle-chunk', seq, data }` (base64-decoded via the codec's **strict** `base64StdDecode` right at this boundary, so the [reassembler](debug-bundle-reassembly.md) downstream stays byte-pure), `debug_bundle_done` → `{ kind: 'bundle-done', total }`, and `error` → `{ kind: 'daemon-error' }` (content-free — no `ErrorPayload` field is narrowed). A new `requireNumber` helper sits beside `requireString` for the two numeric fields (`seq`/`total`). Modeling `error` is a deliberate, generally-applicable change: it moves from silently-dropped `inbound-unmodeled` to a modeled, content-free `inbound-decoded(code: 'error')` for **every** `error` frame, bundle-related or not — see the diagnostic-logging table below.
 

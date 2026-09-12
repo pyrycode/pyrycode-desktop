@@ -99,6 +99,19 @@ success pass-through and verifies arbitrary-error redaction. This proves the
 setup-stage classification, not the cause of the intermittent 404 seen in the
 host-edit drive; that original responder remains unidentified.
 
+### Reconnect delivery evidence
+
+A fresh handshake does not guarantee another `list_conversations` request. A fake
+that waits for that request before emitting its reconnect marker can leave a
+successful reconnect unobservable. Use the fake daemon's `reconnectResendFrames`
+to send a distinct frame after a new handshake, then wait for its rendered effect
+before asserting status cleanup or retained rows. In
+[`compaction-divider.spec.ts`](../../../e2e/compaction-divider.spec.ts),
+`forwarder.dropClientLeg()` forces the supervisor to reconnect; a resent assistant
+delta is the positive barrier before checking that the Compacting label is gone.
+A subsequent boundary also proves delivery of the preceding repeated false frame
+before the test checks the final divider count.
+
 ### Stopped-turn evidence
 
 `e2e/stopped-turn.spec.ts` drives max-turn, context-overflow and API-error reports

@@ -64,6 +64,40 @@ dims the shadow with it, the composite Figma renders), and `.session-delimiter__
 `text-shadow`, which shadows the glyphs and has no spread slot — the reason the token writes none.
 `e2e/thread-shadow.spec.ts` asserts `none` on the row and the value on all three parts.
 
+### Compaction dividers
+
+`TimelineRow` renders `compactionBoundary` with the same `.session-delimiter`
+hairlines, centred body-small label, spacing and painted-part shadows. It adds
+`.compaction-delimiter`, keeps both rules decorative, and has no `data-thread-role`.
+The [timeline store](conversation-timeline-store.md#what-it-does) owns insertion,
+delayed enrichment and retention; the view never infers completion from status.
+
+[`compactionBoundaryTitle`](../../../src/renderer/src/screens/conversation/compactionBoundaryViewModel.ts)
+starts with `Conversation compacted`. Until metadata arrives that generic label
+remains at the completion's original position. Two non-negative safe-integer counts
+add `, 180k → 40k tokens`: values below 1,000 are integers, and larger values use
+thousands rounded to one decimal with trailing `.0` removed (`999`, `1k`, `1.1k`).
+If either count is missing, null or unusable, the entire count phrase is omitted;
+zero remains a count (`0 → 0 tokens`). Only the exact trigger `manual` adds
+` by you`, after any count phrase. Auto, empty and unknown triggers add no suffix.
+
+Failures always read `Compaction failed`, with neither counts nor manual attribution.
+`.compaction-delimiter--failed` changes only the label to `--color-error`; the rules
+retain their existing styling. Rows hold classified failure/manual flags and counts,
+so raw result, trigger and error strings never enter the label or its attributes.
+These are reported outcomes and sizes, not an inference about Claude's memory.
+
+The [label tests](../../../src/renderer/src/screens/conversation/compactionBoundaryViewModel.test.tsx)
+pin rounding, zero versus absence, failure precedence and static markup.
+[`e2e/compaction-divider.spec.ts`](../../../e2e/compaction-divider.spec.ts) proves
+frame delivery to the rendered thread, delayed enrichment after an intervening row,
+manual/automatic/failure labels, standalone boundaries, successive compactions,
+conversation isolation and scroll/navigation/reconnect retention. It also measures
+equal rules and checks shadows, typography and error colour. Its
+[reconnect delivery barrier](e2e-harness.md#reconnect-delivery-evidence) is required
+before checking that transient status disappeared. These client behaviours need
+no live Claude run.
+
 ## Channel Info sheet (#365)
 
 Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new

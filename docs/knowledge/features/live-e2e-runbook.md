@@ -71,6 +71,27 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
+**#1371 (2026-09-12) — 19 tests executed, 19 passed, none failed or skipped.**
+The [dispatcher evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1371#issuecomment-5648697088)
+records branch `c318680328` against main `9304c4d46d`. The added
+`e2e/real-daemon-add-workspace.spec.ts` ran successfully at 21:07:28 UTC in 1.454s
+(retry 0), confirmed in the gate's per-test JSON log
+`2026-09-12T21-06-02-455Z_real-claude-gate_#1371.log`.
+
+This adds one real-tier test using `spawnClaude: false`: initially absent parent and
+nested destination paths must become directories, then a second chat must reuse the
+same destination device/inode. Both creates also require new active-chat identity and
+an authoritative workspace row. See [Add workspace testing](add-workspace-dialog.md#rendering-and-testing)
+for why an echoed folder or unchanged `Untitled` label cannot establish these results.
+The real spec submits an absolute path; two-host relative preview/send agreement is
+covered by the fake tier.
+
+The required daemon includes pyrycode#2378. Neither the linked gate evidence nor its
+JSON log records the daemon source revision, so that provenance remains an operator
+follow-up. The recorded configured floor is still **10**; raise
+`PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED` to **19** for this suite. This documentation records
+the executed pass, not completion of the daemon-revision or floor-adjustment handoffs.
+
 **#1266 (2026-09-08) — a spec-only flake fix, tier count unchanged at 16.** `real-claude-effort-default.spec.ts`'s read of the seeded chat's effort segments used to depend on the daemon's unsolicited, best-effort `model_list` push landing inside the 15 s round trip, because the drive's only ask for that chat's vocabulary went out *before* turn 1 — when the bootstrap session had no claude child yet to answer with one. A lost push presented as a stale-daemon timeout with no daemon fault behind it: the 2026-09-07 19:31 UTC red and the 20:01 UTC green were the same `pyry` binary. The fix re-clicks the already-open seeded row between turn 1's quiesce and the sheet open, which re-fires `requestModelList` through `activateConversation`'s changed-id-gated `requestConversationConfig` without disturbing the settled turn or the run configuration — a caused request, not a retry loop. See [composer-effort-menu.md](composer-effort-menu.md) for the mechanism and [PR #1280](https://github.com/pyrycode/pyrycode-desktop/pull/1280). **Nothing here changes `PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED`** — no spec was added or removed.
 
 **#1259 (2026-09-07) — the tier grows to 16 specs.** `e2e/real-daemon-history-on-open.spec.ts` is the

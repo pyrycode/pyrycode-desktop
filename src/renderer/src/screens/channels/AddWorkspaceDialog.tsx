@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { requestNewWorkspaceChat } from '../../store/conversationCreatedBridge'
 import { sessionStore, selectStatusFor, useSessionStore } from '../../store/sessionStore'
+import { Modal } from '../../components/Modal'
+import { selectHostLabelFor, useHostLabelStore } from '../../store/hostLabelStore'
 
 const WORKSPACE_CREATE_DEADLINE_MS = 30_000
 export type AddWorkspaceStatus = 'idle' | 'creating' | 'rejected' | 'disconnected' | 'timed-out'
@@ -10,28 +12,30 @@ const ADD_WORKSPACE_OFFLINE_COPY = 'Connect this host before starting a chat'
 const ADD_WORKSPACE_TIMEOUT_COPY =
   'Could not confirm completion within 30 seconds. The chat may still appear.'
 
-function isAbsolutePath(path: string): boolean {
-  return path.trim().startsWith('/')
+// Remote string resolution only; validation and canonicalisation belong to the selected daemon.
+function resolveWorkspacePath(path: string, workspaceRoot?: string): string {
+  const input = path.trim()
+  if (input === '' || input.startsWith('/')) return input
+  if (!workspaceRoot?.startsWith('/')) return ''
+  return workspaceRoot.replace(/\/+$/, '') + '/' + input
 }
 
-// The ticket retains this form and its existing styling; #1346 owns the Figma modal/path redesign.
-// Folder validation remains daemon-owned beyond the existing absolute-path admission rule.
 export function AddWorkspaceDialogView({
-  path,
-  status,
-  connected,
-  onPathChange,
-  onCancel,
-  onStart
+  path, workspaceRoot, hostLabel, status, connected, onPathChange, onCancel, onStart
 }: {
   path: string
+  workspaceRoot?: string
+  hostLabel: string
   status: AddWorkspaceStatus
   connected: boolean
   onPathChange: (next: string) => void
   onCancel: () => void
   onStart: () => void
 }): JSX.Element {
+  const previewId = useId()
   const busy = status === 'creating'
+  const destination = resolveWorkspacePath(path, workspaceRoot)
+  const locationUnavailable = path.trim() !== '' && destination === ''
   const error = status === 'timed-out'
     ? ADD_WORKSPACE_TIMEOUT_COPY
     : status === 'disconnected' || !connected
@@ -40,17 +44,19 @@ export function AddWorkspaceDialogView({
   return (
     <div className="add-workspace-overlay">
       <div className="add-workspace-overlay__scrim" aria-hidden="true" />
-      <div
-        className="add-workspace"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-workspace-title"
+      <Modal
+        title="Add workspace"
+        width={640}
+        onClose={onCancel}
+        cancelAction={{ label: 'Cancel', onClick: onCancel }}
+        confirmAction={{ label: 'OK', onClick: onStart, disabled: busy || !connected || destination === '' }}
       >
-        <h2 id="add-workspace-title" className="add-workspace__title">
-          Add workspace
-        </h2>
+        <p className="add-workspace__detail">
+          <span className="add-workspace__label">Host:</span>
+          <span>{hostLabel}</span>
+        </p>
         <label className="add-workspace__field">
-          <span className="add-workspace__label">Folder path on the host</span>
+          <span className="add-workspace__label">Workspace folder on the host (relative or absolute path):</span>
           <input
             type="text"
             className="add-workspace__input"
@@ -60,21 +66,15 @@ export function AddWorkspaceDialogView({
             autoFocus
           />
         </label>
+        <p className="add-workspace__detail">
+          <span id={previewId} className="add-workspace__label">Absolute path preview:</span>
+          <output className="add-workspace__preview" aria-labelledby={previewId}>{destination}</output>
+        </p>
+        {locationUnavailable && (
+          <p className="add-workspace__error" role="alert">Host workspace location is unavailable</p>
+        )}
         {error !== null && <p className="add-workspace__error" role="alert">{error}</p>}
-        <div className="add-workspace__actions">
-          <button type="button" className="add-workspace__cancel" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="add-workspace__start"
-            onClick={onStart}
-            disabled={busy || !connected || !isAbsolutePath(path)}
-          >
-            Start chat
-          </button>
-        </div>
-      </div>
+      </Modal>
     </div>
   )
 }
@@ -90,7 +90,13 @@ export function AddWorkspaceDialog({
 }): JSX.Element {
   const [path, setPath] = useState('')
   const [status, setStatus] = useState<AddWorkspaceStatus>('idle')
-  const connected = useSessionStore(selectStatusFor(serverId))?.type === 'connected'
+  const connection = useSessionStore(selectStatusFor(serverId))
+  const connected = connection?.type === 'connected'
+  const workspaceRoot = connection?.type === 'connected' ? connection.ack.workspace_root : undefined
+  const destination = resolveWorkspacePath(path, workspaceRoot)
+  const label = useHostLabelStore(selectHostLabelFor(serverId))
+  // Match the host row's display fallback without coupling this dialog to the parent screen.
+  const hostLabel = label.status === 'stored' && label.label.trim() !== '' ? label.label : 'Server'
   const statusRef = useRef(status)
   const submitted = useRef(false)
   const closed = useRef(false)
@@ -151,23 +157,28 @@ export function AddWorkspaceDialog({
   return (
     <AddWorkspaceDialogView
       path={path}
+      workspaceRoot={workspaceRoot}
+      hostLabel={hostLabel}
       status={status}
       connected={connected}
       onPathChange={setPath}
       onCancel={() => dismiss('cancelled')}
       onStart={() => {
-        if (closed.current || statusRef.current === 'creating' || !isAbsolutePath(path)) return
-        if (selectStatusFor(serverId)(sessionStore.getState())?.type !== 'connected') {
+        if (closed.current || statusRef.current === 'creating' || destination === '') return
+        const current = selectStatusFor(serverId)(sessionStore.getState())
+        if (current?.type !== 'connected') {
           settle('disconnected')
           return
         }
+        // Never send a newer greeting's destination before its preview has rendered.
+        if (resolveWorkspacePath(path, current.ack.workspace_root) !== destination) return
         submitted.current = true
         settle('creating')
         deadline.current = setTimeout(() => {
           if (!closed.current && statusRef.current === 'creating') settle('timed-out')
         }, WORKSPACE_CREATE_DEADLINE_MS)
         try {
-          requestNewWorkspaceChat(window.pyry.sendCommand, path, serverId)
+          requestNewWorkspaceChat(window.pyry.sendCommand, destination, serverId)
         } catch {
           // A local bridge failure has no safe error text to forward.
           settle('rejected')

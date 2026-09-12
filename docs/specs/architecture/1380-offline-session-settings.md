@@ -73,3 +73,15 @@ None.
 
 **Reviewer:** builder self-review using `builder/security-review.md`
 **Date:** 2026-09-13
+
+## Revisions
+
+### 2026-09-13 — verifier fixture correction
+
+The verifier found three `ConversationScreen` footer mount assertions that expected an
+operable permission menu without connected ownership. Seed their existing
+`stageOpenConnection` fixture and an addressable session ID when operability is intended, and exercise the full
+footer order and held labels with ownership absent as well. This changes only
+test prerequisites and coverage; the host gate and security design remain unchanged.
+Verify `ConversationScreen.test.tsx` and the build. The existing interaction proof
+is unchanged; full regression gates remain with the dispatcher.

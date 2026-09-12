@@ -3,7 +3,7 @@
 Split out of [Conversation shell — modals](conversation-shell-modals.md) on 2026-09-02 to keep that
 document under the size cap. Part of [Conversation shell](conversation-shell.md); see that document for
 what the screen does, its edge cases and its links. See [Permission
-modal](conversation-shell-permission-modal.md) for the other overlay this document used to hold.
+panel](conversation-shell-permission-modal.md) for the permission/trust variant in the same input area.
 
 The render vertical's frame slice, over the model and bridge documented in [Question-batch
 model](question-batch-model.md): `questionBatchStore` (#899) held the batches and `useQuestionBridge`
@@ -25,20 +25,56 @@ and `WireQuestion`'s docblock each name by hand. #916 puts the same jump on the 
 not screen-scoped, because a batch is raised against a conversation the operator may not have open, the
 same reasoning `ConversationActivityData` already carries in that file.
 
-**`ComposerSlot({ conversationId, phase, onMessageSent })`** (`ConversationScreen.tsx`, exported) replaces
-the screen's direct `<Composer/>` mount and is the batch store's first reader:
+## Composer placement
+
+**`ComposerSlot({ conversationId, phase, onMessageSent, statusArea })`** (`ConversationScreen.tsx`, exported)
+selects the open chat's questionnaire and permission presence. Permission takes precedence over a
+waiting questionnaire; either request type covers the normal composer. With `conversationId === null`,
+neither panel appears. Other chats' requests never cover this chat's input or force navigation.
+
+The panels render through `Composer`'s `beforeComposer` seam, after the status area. The questionnaire's
+model footer shares its wrapper so it is hidden along with the question during permission coverage:
 
 ```ts
 const batch = useQuestionBatchStore((s) =>
   conversationId === null ? undefined : selectBatchFor(conversationId)(s)
 )
+const hasPermission = useModalStore((s) =>
+  conversationId !== null && selectHasOutstandingFor(conversationId)(s)
+)
 return (
-  <>
-    {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
-    <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
-  </>
+  <Composer
+    phase={phase} onMessageSent={onMessageSent} covered={hasPermission || batch !== undefined}
+    beforeComposer={(sendText) => (
+      <>
+        {statusArea?.(sendText)}
+        <PermissionModal conversationId={conversationId} />
+        {batch && (
+          <div hidden={hasPermission}>
+            <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />
+            <div className="composer__footer">
+              <ComposerModelMenu conversationId={conversationId} />
+            </div>
+          </div>
+        )}
+      </>
+    )}
+  />
 )
 ```
+
+The wrapper stays mounted for a still-outstanding batch while permission is visible. Its picks and
+Other text remain in the picks store, and `QuestionPanelSlot` retains its local active question.
+After the last current-chat permission resolves, the questionnaire resumes at that question; if the
+batch has also ended, the composer returns with its typed draft. This temporary coverage does not
+extend state across chat switches: existing pane remounts still reset the active question and composer
+draft, while questionnaire picks survive in their separate store.
+
+The wrapper's native `hidden` removes the questionnaire, its Other field, navigation and model menu
+from layout, keyboard focus and the accessibility tree. It has no author `display` override, so the
+native rule suffices. Conditional unmounting would lose the active question; `aria-hidden` alone would
+leave invisible controls keyboard-active. Rejection feedback is outside this wrapper and never sets
+`covered`; see [Permission panel — Rejection surface](conversation-shell-permission-modal.md#rejection-surface-249).
 
 `conversationId` arrives as a prop off `activeConversation?.id ?? null` — the `BackgroundTaskPanel` idiom
 — so a batch arriving re-renders this leaf, never the whole screen. `selectBatchFor` is called inline with
@@ -102,7 +138,7 @@ silent disagreement between those two reads would render one question's rows aga
 **`Composer` gained a required `covered: boolean` prop**, rendering `<div className="composer"
 hidden={covered}>`. The native `hidden` attribute is the whole mechanism — one attribute that hides the
 subtree, drops it from the tab order and drops it from the accessibility tree, while leaving every element
-mounted, so the operator's half-typed draft (`Composer`'s own `useState`) survives the batch. A
+mounted, so the operator's half-typed draft (`Composer`'s own `useState`) survives either request type. A
 conditional render would discard the draft; `aria-hidden` alone would leave a focusable invisible textarea
 whose Enter still sends. `.composer__row` and `.composer__footer` are children of `.composer`, so the one
 attribute takes the send/stop control and the footer menus with it — there is no second element to hide
@@ -134,8 +170,8 @@ would put untrusted text into an attribute, the ban `questionBatchStore.ts` stat
 derived from `header`, `question`, or the nonce `questionBatchId` either, which this slice never reads. The
 title row draws every question's header as a tab — see § Header tabs below — using the already-shipped
 `PyryMark` at `width={14} height={16}`, the composer status row's call verbatim, beside them. Cancel and
-Continue are both `<button type="button">`; Cancel is never greyed, since the panel sits on top of the
-composer and there is nothing to disable there. Through #916 neither carried an `onClick` either; since
+Continue are both `<button type="button">`; Cancel is never greyed, since the panel occupies the
+composer's slot and there is nothing to disable there. Through #916 neither carried an `onClick` either; since
 [#921](question-panel-cancel-refusal.md) Cancel sends, and since
 [#922](question-panel-continue-answer.md) Continue does too — and is the one control on this panel that
 can be `disabled`, while short an answer on the last question. See that document for the gate.
@@ -458,6 +494,12 @@ reason above. State is read through `toBeChecked()` on the real controls *and* t
 child's count, so a store write that never rendered and a render that drew a state the store does not hold
 each fail a different half of the pair.
 
+`e2e/permission-modal-answer-paths.spec.ts` adds the temporary-coverage proof: permissions hide a
+partly answered questionnaire on its second question, then resolving them restores that question,
+both questions' Other text and the earlier pick. Remote batch dismissal restores the original draft.
+Role queries and keyboard input/tab checks prove the covered controls are inactive, which static
+markup and retained-value assertions alone cannot establish.
+
 **Security review: PASS** (#906 architect self-review, #907 and #912 builder self-review). #906's one
 finding — the design's own single-line clamp invites a `title` tooltip, claude-authored text in an
 attribute — was fixed before that plan closed and the ban extended to every derived `data-*`. #907 widened
@@ -518,4 +560,3 @@ no handler at all. That document covers `resolveQuestionAnswers` (the one functi
 availability gate and the payload builder), `answerQuestionBatch`, the picks store's new
 `selectBatchSelections` read, the `canAnswer`/`onAnswer` props and the conjunction that keeps the button's
 Next role from ever being gated on completeness, the `:disabled` CSS treatment, and the security review.
-

@@ -21,6 +21,16 @@ The classification the module *already computes* now also lands in the [#126 con
 
 # Modal-answer rejection correlation ([#248](../codebase/248.md))
 
+Permission lifecycle diagnostics use static event names only: `modal-shown`, `modal-dismissed`,
+`modal-answer-rejected`, `modal-answer-sent` and `modal-cancel-sent`. Answer/cancel failures emit
+`modal-answer-failed` / `modal-cancel-failed` with `code: 'unavailable'` for a null driver or
+`code: 'send-failed'` for a build/send exception. These records carry no IDs, answer tokens, labels,
+prompt text or caught error objects. The `daemonConnection.test.ts` capture checks the exact records
+for successful and throwing sends and asserts that private fixture content never appears in the log.
+A sent record reports the transport call returning; it is not evidence that the daemon accepted the
+answer. See the [permission panel](conversation-shell-permission-modal.md) for optimistic removal and
+subsequent rejection feedback.
+
 A small correlation state machine now lives here too, module-local alongside `nextEnvelopeId`/`reassembler`: `outstandingAnswers: string[]`, a FIFO of `modal_id`s whose `modal_answer` ([#236](../codebase/236.md)) is awaiting the daemon's reply. It exists because the daemon `error` reporting a rejection (an ungranted device; [#237](../codebase/237.md)'s optimistic clear) carries **no** `modal_id` (ADR 0009) — the only way to attribute it is the client's own memory of what it recently sent.
 
 - **Push** — `answerModal` appends the answered id *after* `driver.sendMessage` succeeds; a failed send records nothing.

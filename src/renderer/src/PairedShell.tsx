@@ -48,7 +48,7 @@ import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { systemPromptStore } from './store/systemPromptStore'
 import { systemPromptWriteStore } from './store/systemPromptWriteStore'
 import { sessionIdStore } from './store/sessionIdStore'
-import { sessionStore, useSessionStore, type ConnectionStatus, type StatusOrigin } from './store/sessionStore'
+import { sessionStore, useSessionStore } from './store/sessionStore'
 import { serverInfoStore, useServerInfoStore, selectServers } from './store/serverInfoStore'
 import { useHostLabelStore, selectHostLabelFor } from './store/hostLabelStore'
 import { loadServerInfo } from './store/serverInfoLoader'
@@ -266,18 +266,6 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
 
 const PAIRING_REJECTION_NOTICE = 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
 
-export function automaticRecoveryTarget(
-  servers: readonly { serverId: string }[],
-  statuses: ReadonlyMap<StatusOrigin, ConnectionStatus>
-): string | null {
-  const states = servers.map(server => statuses.get(server.serverId))
-  if (states.some(status => status === undefined || status.type === 'connecting' || status.type === 'connected')) return null
-  return servers.find(server => {
-    const status = statuses.get(server.serverId)
-    return status?.type === 'error' && status.error.code === 'pairing-rejected'
-  })?.serverId ?? null
-}
-
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
  * App. `list` and `thread` both show the #670 two-pane desktop shell: the Channel List sidebar (#141)
@@ -452,7 +440,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // RECORDED FROM `route` AT `openPairServer`, NOT PER ENTRY, which is what makes one rule cover both:
   // neither the Settings row nor either header plus has to know its own name — clicked from Settings the
   // route reads `settings`, clicked from a plus it reads `list` or `thread`. Host recovery captures
-  // that same route when it opens, including automatic recovery.
+  // that same route when the user opens it from the sidebar or composer.
   //
   // SEEDED `'settings'`, the shipped destination, so the never-opened-but-cancelled frame behaves exactly
   // as it did before this ticket. That frame is unreachable — `pairServerCancelled` is dispatched only by
@@ -460,7 +448,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // states which behaviour to preserve rather than being a fallback anything relies on.
   const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
   const [recoveryServerId, setRecoveryServerId] = useState<string | null>(null)
-  const recoveryConsumed = useRef(false)
   const pairingGeneration = useRef(0)
   const activePairingGeneration = pairingGeneration.current
   useEffect(() => () => { pairingGeneration.current += 1 }, [])
@@ -469,10 +456,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const recoveryLabel = useHostLabelStore(selectHostLabelFor(recoveryServerId))
   const recoveryStatus = recoveryServerId === null ? undefined : statuses.get(recoveryServerId)
   const leaveRecovery = (): void => {
-    // Ordinary navigation must not dismiss a recovery decision still waiting on other hosts.
-    if (recoveryServerId !== null) {
-      recoveryConsumed.current = !servers.some(server => statuses.get(server.serverId)?.type === 'connected')
-    }
     pairingGeneration.current += 1
     setRecoveryServerId(null)
   }
@@ -480,27 +463,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     if (!servers.some(server => server.serverId === serverId)) return
     if (route === 'pairServer' && recoveryServerId === serverId) return
     pairingGeneration.current += 1
-    recoveryConsumed.current = true
     if (route !== 'pairServer') setPairServerReturn(route)
     setRecoveryServerId(serverId)
     dispatch({ type: 'openPairServer' })
     window.pyry.sendDiagnostic({ event: 'pairing-recovery', code: 'opened' })
   }
-  useEffect(() => {
-    if (servers.some(server => statuses.get(server.serverId)?.type === 'connected')) {
-      recoveryConsumed.current = false
-      return
-    }
-    const target = automaticRecoveryTarget(servers, statuses)
-    if (target === null || recoveryConsumed.current) return
-    if (route !== 'list' && route !== 'thread') return
-    recoveryConsumed.current = true
-    pairingGeneration.current += 1
-    setPairServerReturn(route)
-    setRecoveryServerId(target)
-    dispatch({ type: 'openPairServer' })
-    window.pyry.sendDiagnostic({ event: 'pairing-recovery', code: 'automatic' })
-  }, [servers, statuses, route])
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
   // #530: recording now goes through activateConversation, which first clears the previous

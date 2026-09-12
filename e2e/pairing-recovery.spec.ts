@@ -29,7 +29,7 @@ async function fits(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport()
 }
 
-test('startup rejection before a list retains its host, cancels and re-pairs beside the sidebar', async ({
+test('startup rejection before a list waits for manual repair, cancels and re-pairs beside the sidebar', async ({
   launchPairedApp
 }, testInfo) => {
   let reject = false
@@ -49,12 +49,16 @@ test('startup rejection before a list retains its host, cancels and re-pairs bes
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 800, height: 800 })
     const recovery = page.getByRole('region', { name: 'Repair pairing', exact: true })
-    await expect(recovery).toBeVisible()
-    expect(rejectedFrames).toBeGreaterThan(0)
     await expect(page.locator('.channel-list__host')).toHaveCount(2)
     await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
     await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
+    expect(rejectedFrames).toBeGreaterThan(0)
     await expect(page.getByRole('img', { name: 'Relay Connected', exact: true })).toHaveCount(2)
+    await expect(recovery).toHaveCount(0)
+    await expect(page.locator('.pairing')).toHaveCount(0)
+    await expect(page.locator('.conversation')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+    await expect(recovery).toBeVisible()
     await expect(recovery.getByText(NOTICE, { exact: true })).toBeVisible()
     // A visible button alone misses a glyph blocked by the renderer's image policy.
     const glyphLoads = await page.locator('.channel-list__host-repair-icon').first().evaluate(async node => {
@@ -98,7 +102,7 @@ test('startup rejection before a list retains its host, cancels and re-pairs bes
   }
 })
 
-test('healthy host remains usable; last-host failure opens once and re-arms after recovery', async ({
+test('healthy host remains usable; last-host and repeated failures never navigate, even after re-pair', async ({
   launchPairedApp
 }, testInfo) => {
   let sends = 0
@@ -114,6 +118,7 @@ test('healthy host remains usable; last-host failure opens once and re-arms afte
       } })]
     }
   } })
+  await page.setViewportSize({ width: 1280, height: 800 })
   const [a, b] = servers
   a.daemon.pushFrame(rejection())
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
@@ -128,19 +133,30 @@ test('healthy host remains usable; last-host failure opens once and re-arms afte
   await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
   await page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true }).click()
   await expect(page.getByText('Repair pairing: Alpha', { exact: true })).toBeVisible()
+  await expect(page.getByText(NOTICE, { exact: true })).toBeVisible()
+  await expect(page.locator('.channel-list__host')).toHaveCount(4)
+  await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.locator('.conversation')).toBeVisible()
+  await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toBeVisible()
+  await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
+  await page.getByPlaceholder('Message…').fill('Keep the current draft')
   b.daemon.pushFrame(rejection())
-  await expect(page.getByText('Repair pairing: Alpha', { exact: true })).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath('failed-host-recovery.png') })
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(4)
+  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
+  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
+  await expect(page.locator('.channel-list__host--failed')).toHaveCount(4)
+  await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
+  await page.screenshot({ path: testInfo.outputPath('failed-host-thread-1280.png') })
   a.daemon.pushFrame(rejection())
   b.daemon.pushFrame(rejection())
   // A following visible frame is the barrier for the repeated failures.
   b.daemon.pushFrame(seedConversationsFrame({ ...SECOND_SEEDED_ROW, name: 'Failure barrier' }))
   await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Failure barrier' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
   await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(a))
@@ -150,9 +166,12 @@ test('healthy host remains usable; last-host failure opens once and re-arms afte
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
   await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
+  await expect(page.locator('.conversation')).toHaveCount(0)
   a.daemon.pushFrame(rejection())
-  // Upsert moves A last in saved order: B now owns the first rejection.
-  await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(4)
+  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.locator('.conversation')).toHaveCount(0)
+  await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await expect(page.locator('.settings__server-row-id')).toHaveText([b.serverId, a.serverId])
   await page.locator('.settings__back').click()
@@ -163,7 +182,7 @@ test('healthy host remains usable; last-host failure opens once and re-arms afte
 })
 
 for (const pendingState of ['connecting', 'unreported'] as const) {
-  test(`thread navigation while a host is ${pendingState} preserves the first automatic recovery`, async ({
+  test(`thread navigation while a host is ${pendingState} survives it settling offline and manual repair cancellation`, async ({
     launchPairedApp
   }) => {
     const { app, page, servers: [a, b] } = await launchPairedApp({}, {
@@ -200,17 +219,28 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     await expect(recovery).toHaveCount(0)
     await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
     await expect(page.locator('.conversation')).toBeVisible()
+    await page.getByPlaceholder('Message…').fill('Keep this thread')
     // B settles without ever reporting a successful connection to this renderer.
     await app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
       BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'disconnected', serverId })
     }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId })
+    a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Settled host barrier' }))
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Settled host barrier' })).toBeVisible()
+    await expect(page.getByRole('img', { name: 'Pyrycode Offline', exact: true })).toHaveCount(2)
+    await expect(recovery).toHaveCount(0)
+    await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep this thread')
+    await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
     await expect(page.getByText('Repair pairing: Alpha', { exact: true })).toBeVisible()
+    await expect(page.locator('.channel-list__host')).toHaveCount(4)
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Settled host barrier' })).toBeVisible()
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(page.locator('.conversation')).toBeVisible()
     a.daemon.pushFrame(rejection())
     a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Deferred failure barrier' }))
     await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Deferred failure barrier' })).toBeVisible()
     await expect(recovery).toHaveCount(0)
+    await expect(page.locator('.conversation')).toBeVisible()
+    await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toBeVisible()
   })
 }
 

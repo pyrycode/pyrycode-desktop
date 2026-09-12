@@ -16,16 +16,17 @@ Gives a fresh-install user a terminal-free way to pair the app with their daemon
 1. **Paste** the `pyry pair --print` payload into the field.
 2. **Submit** — the pasted payload crosses the bridge to main, which parses it, validates the relay against the allowlist, and derives the server-key fingerprint; the screen displays the **fingerprint** for review.
 3. **Review** — the user compares the displayed fingerprint byte-for-byte against what `pyry pair` printed / what the phone shows.
-4. **Confirm** — the pairing is persisted (in main, via `safeStorage`) only on explicit confirm; **Cancel** discards the paste without persisting.
+4. **Confirm** — explicit confirmation persists the pairing in main via `safeStorage`. Cancel before saving discards the paste.
+5. **Verify connection** — wait up to 30 seconds for fresh authentication of the saved host. Only authentication completes pairing; post-save Cancel retains the saved host.
 
-A typed validation error (malformed payload, disallowed relay, malformed key, expired pending, or persist failure) is surfaced **inline** and nothing is stored. The screen never receives or renders the `token` or `server_static_pubkey` — only the fingerprint (a hash) and a value-free error category cross the bridge.
+A typed validation error (malformed payload, disallowed relay, malformed key, expired pending, or persist failure) is surfaced **inline** and nothing is stored. The screen never receives or renders the `token` or `server_static_pubkey` — only the fingerprint (a hash), main-retained saved `serverId` and value-free error categories cross back over the bridge.
 
 **Where the screen mounts:** `App` uses the default page presentation for onboarding;
 Cancel returns to [Welcome](welcome-screen.md), and success enters the paired shell.
 `PairedShell` passes `presentation="modal"` for sidebar **Pair new host**, Settings
-**Pair another server**, and explicit host-row/composer repair. Idle cancellation
+**Pair another server**, and explicit host-row/composer repair. Cancellation before saving or during post-save verification
 returns to the invoking view with its selected conversation, draft and held history
-preserved. Success refreshes saved hosts and returns to the host list. Connection
+preserved. Saving refreshes saved hosts; authenticated completion returns to the host list. Connection
 failure alone never opens pairing.
 
 ## How it works
@@ -53,10 +54,12 @@ type PairingState =
   | { phase: 'submitting'; paste: string; label?: string }
   | { phase: 'reviewing';  paste: string; label?: string; fingerprint: string }
   | { phase: 'confirming'; paste: string; label?: string; fingerprint: string }
+  | { phase: 'verifying'; serverId: string }
+  | { phase: 'verification-failed'; serverId: string; reason: VerificationFailure }
   | { phase: 'paired' }
 ```
 
-`paste` is threaded through `editing → submitting → reviewing → confirming` so a confirm failure can return to `editing` with the paste intact for fresh submission and verification. It embeds the token, so it is the **only** field that transitively holds a secret — it never leaves this module except via the single `submitPairingPaste` call. `error` lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on `reviewing`/`confirming`. `paired` is terminal and carries **nothing** — no secret, no record.
+`paste` is threaded through `editing → submitting → reviewing → confirming` so a confirm failure can return to `editing` with the paste intact for fresh submission and verification. It embeds the token, so it is the **only** field that transitively holds a secret — it never leaves this module except via the single `submitPairingPaste` call. `error` lives only on `editing`; post-save failure uses a separate classified `reason`; `fingerprint` only on `reviewing`/`confirming`. `verifying` and `verification-failed` discard the paste, label and fingerprint, holding only the saved identity and, on failure, its category. `paired` is terminal and carries **nothing** — no secret, no record.
 
 `label` (#825) rides the same four phases as `paste`, for the same structural reason: it is typed on the paste phase but sent two phases later, on confirm, so it can't live in a component-local `useState` without splitting AC4 ("cancel discards the label with the paste") across two mechanisms. It is **optional**, not `label: string` defaulting to `''` — it mirrors `PairingRequest`'s own `label?: string` exactly, so state and the wire contract agree that "no label" is an absent key. This keeps the change zero-cascade (every existing `PairingState` literal in both test files still typechecks, and `toEqual` ignores an absent property), and it is safe because exactly one place — `hostLabelToSend`, below — decides whether a label exists at all. `label` is **not** a secret — it is the operator's display name for the host, bound for the [host-label store](host-label-store.md) — but like `paste` it survives `submit-failed`/`confirm-failed` so a retry doesn't make the operator retype it, and dies with the paste on `cancel` via `initialPairingState`.
 
@@ -70,7 +73,10 @@ type PairingState =
 | `submitting` | `submit-succeeded{fingerprint}` | `reviewing{paste, label, fingerprint}` |
 | `submitting` | `submit-failed{reason}` | `editing{paste, label, error: reason}` (paste and label preserved) |
 | `reviewing` | `confirm` | `confirming{paste, label, fingerprint}` |
-| `confirming` | `confirm-succeeded` | `paired` |
+| `confirming` | `confirm-succeeded{serverId}` | `verifying{serverId}` |
+| `verifying` | `authenticated` | `paired` |
+| `verifying` | `verification-failed{reason}` | `verification-failed{serverId, reason}` |
+| `verification-failed` with `timeout` / `daemon-absent` | `retry` | `verifying{serverId}` |
 | `confirming` | `confirm-failed{reason}` | `editing{paste, label, error: reason}` (paste and label preserved) |
 | any | `cancel` | `initialPairingState` (paste **and label discarded**) |
 | any other (phase, event) | — | `state` unchanged |
@@ -151,7 +157,7 @@ interface PairingBridge {
 }
 
 runSubmit(bridge, paste):        Promise<PairingEvent>   // ok → submit-succeeded{fingerprint}; !ok → submit-failed{reason}
-runConfirm(bridge, label?):      Promise<PairingEvent>   // ok → confirm-succeeded;             !ok → confirm-failed{reason}
+runConfirm(bridge, label?):      Promise<PairingEvent>   // ok → confirm-succeeded{serverId};   !ok → confirm-failed{reason}
 ```
 
 `confirmPairing` and `runConfirm` both widened by one optional argument in #825, backward-compatibly:
@@ -163,6 +169,38 @@ omits the key entirely (#823). Everything else about the total-function contract
 The two IPC calls are wrapped in pure async functions that map a typed response to the reducer event it produces — the tested seam that proves "submit invokes the IPC" and "confirm triggers persist" without a DOM. `PairingBridge` is the injected seam; **`window.pyry` is structurally assignable** to it (it has these two methods plus extras from #54), so the container defaults `bridge = window.pyry` and tests pass a `{ submitPairingPaste: vi.fn(), confirmPairing: vi.fn() }` fake. The preload methods resolve to a typed response for *every* domain outcome (they don't reject on a domain error) — that part maps outside any `try`.
 
 **Both runners are total functions ([#513](../codebase/513.md)): they never reject.** A `try` wraps only the bridge call itself (not the response mapping), and a bare `catch {}` — binding nothing — coerces an infrastructure-level rejection (handler absent or already unregistered on `will-quit`, an invoke racing registration, a non-serializable reply) or a synchronous throw into the phase's failure event with reason `malformed-request`, the same reason the handler's own guard produces. This mirrors `runUnpair` (`unpairAction.ts:53-59`). The mapping (`response.ok ? … : …`) stays outside the `try`, so a malformed response object is still a thrown contract violation, not a swallowed "try again". Before #513 a rejected invoke dispatched nothing and the reducer wedged in `submitting`/`confirming` — recoverable only by restart, since `busy` disables Cancel too (see State + concurrency model below).
+
+### Authentication observation
+
+`createPairingVerification` subscribes to the session and relay stores **before**
+`runConfirm` invokes the bridge, capturing the session status map as its baseline.
+On the successful response, `saved(serverId)` starts a 30-second wait and immediately
+inspects the current status. A connected status object must differ from that host's
+baseline entry. This depends on the [session store](session-store.md)'s immutable
+per-host status updates and main-stamped identity; `ack.server_id`, relay reachability,
+another connected host and a pre-confirmation connected status cannot complete pairing.
+Authentication already present when the save response is processed is therefore observed.
+Saving identical credentials may leave a healthy connection unchanged; it still needs
+fresh authentication. The observer adds no reconnect command.
+
+The deadline starts when successful confirmation is received, or when Retry starts.
+Every observation checks the absolute deadline before accepting authentication, as well
+as scheduling a timeout: an overdue timer callback alone can let a late event win.
+Disconnects and ordinary transport loss keep waiting within that bound.
+
+| Outcome | Feedback and actions |
+| --- | --- |
+| `daemon-absent` or `timeout` | Temporary unavailability; Retry or Cancel |
+| `pairing-rejected` | Explicit rejection; Cancel, then manually pair with a fresh code |
+| `handshake-read-failed`, `malformed-hello-ack`, `transport-decrypt-failed`, or `auth.*` | Authentication failure; Cancel |
+
+Failures remain visible even if the host subsequently connects. Retry observes the same
+saved host for another 30 seconds through the existing reconnect loop; it never submits,
+saves or generates credentials. It retains the original confirmation baseline, so a
+connection established while failure feedback was visible can satisfy Retry immediately.
+An already-held daemon-absence value is ignored on Retry until a non-absent link state
+is observed, then a new absence can fail the wait; otherwise the deadline still applies.
+All feedback and diagnostics use fixed client-owned categories, never daemon error text.
 
 ### Fingerprint formatter
 
@@ -181,7 +219,7 @@ The formatter below belongs to onboarding only.
   // className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}
   ```
 
-  In the default page presentation, `editing`/`submitting` render `EntryPage` — the full-window paste page ([#665](../codebase/665.md)) described below. `reviewing`/`confirming` render `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) — still the 420px `.pairing-card` dialog inherited from mobile's `19-54`, unchanged since #55. `paired` renders a success marker. This is what `renderToStaticMarkup` renders in tests, one call per phase.
+  In the default page presentation, `editing`/`submitting` render `EntryPage` — the full-window paste page ([#665](../codebase/665.md)) described below. `reviewing`/`confirming` render `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) — still the 420px `.pairing-card` dialog inherited from mobile's `19-54`, unchanged since #55. `verifying`/`verification-failed` reuse the card for connection feedback and Cancel, plus Retry for temporary unavailability. `paired` renders a success marker. This is what `renderToStaticMarkup` renders in tests, one call per phase.
 
   **`EntryPage`** ([#665](../codebase/665.md)) is a full-window page drawn from desktop's own Figma frame `103-2901` — a radial glow over `--color-surface`, the welcome screen's `--space-7`/`--space-8` frame padding, and a bottom-pinned CTA stack. It replaced the `EntryCard` dialog #55 shipped (card `<h1>`, instruction paragraph, controlled `<textarea>`, inline error row) with:
 
@@ -224,9 +262,9 @@ are connected to the correct host.” Repair context and the target's rejection
 explanation remain inside both steps.
 
 Focus starts in the code field, moves to Pair on verification, and returns to the
-code field on retry. Tab/Shift+Tab stay within enabled controls. Capture-phase Escape
+code field after a storage failure. Post-save Retry stays on connection verification. Tab/Shift+Tab stay within enabled controls. Capture-phase Escape
 handling prevents underlying document listeners from navigating. Cancel, header close
-and Escape share the idle cancellation path; none dismiss during submit or confirm.
+and Escape share cancellation before saving and during post-save pending/failure states; none dismiss during submit or confirm.
 Cleanup removes the listener, closes the dialog and restores focus to the invoker
 if it remains connected. Reopening mounts fresh local state.
 
@@ -240,7 +278,7 @@ colors and the display-small scale (36px/44px, emphasized weight 500).
 
 `pairing.css` keeps the in-app modal treatment separate from onboarding’s two existing treatments:
 
-- **`.pairing-card`** — the reviewing/confirming/paired phases: the original Figma `19-54` card (`surface-container-high` background, `--radius-lg` corners, `--space-6` padding, `max-width: 420px`), byte-for-byte what `.pairing` carried before #665 split it out.
+- **`.pairing-card`** — the reviewing/confirming/verifying/verification-failed/paired phases: the original Figma `19-54` card (`surface-container-high` background, `--radius-lg` corners, `--space-6` padding, `max-width: 420px`), byte-for-byte what `.pairing` carried before #665 split it out.
 - **`.pairing-page`** — the paste phase: desktop's own frame `103-2901`. `height: 100%` (rides the `html`/`body`/`#root` chain both mount sites leave bare), `--space-7`/`--space-8` frame padding, and a radial glow **derived from this frame's own Figma matrix, not copied from `welcome.css`** — the two frames' glows are close but not identical (48%×61% here vs. welcome's 48%×56%, same centre, purely vertical delta). The `.pairing-field*` block is the M3 filled field: a `::before` pseudo carries the 72% translucent fill at `opacity` (never a bare `rgba()`/`color-mix()` literal, per the house rule), and the field's row needs `position: relative` because the absolutely-positioned fill would otherwise paint above its non-positioned siblings.
 
 Both `.pairing` (the shared base — box model, colour, font) and the outside-bound contract described above stay constant across the split. Every color/type/spacing resolves to a `tokens.css` token; the file's header names the remaining bare-literal geometry explicitly (the 56/48/40/24px boxes, the 1px indicator, the glow percentages, the 0.72/0.55/0.38 opacities) — no new tokens were added for #665. The onboarding inline error still reuses `--color-tertiary` (the original choice; the modal uses `--color-error`). The `reuse` of the welcome frame is **token-level and visual only** — this codebase has no shared cross-screen CSS at all, so the page treatment is restated under its own class names rather than importing `welcome.css` or reaching for `.welcome__*`. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
@@ -254,15 +292,22 @@ The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-wi
   and, for the modal, install and clean up dialog keyboard/focus handling.
 - **In-flight re-entrancy:** a synchronous `busyRef` guards submit, confirm and cancel
   before React renders disabled controls. Phase guards reject out-of-phase actions.
-- **Unmount mid-call:** late submit results are ignored. Successful authorized confirmation
-  still calls the shell's saved-host refresh callback after unmount; the shell's
-  [generation guard](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
-  prevents that completion from navigating over a newer interaction.
+- **Separate persistence and navigation:** successful confirmation calls `loadServerInfo`
+  even after unmount, independently of the completion callback. Only a live controller's
+  `authenticated` event dispatches `paired` and calls `onPaired` once.
+- **Controller lifetime:** Cancel, unmount and replacement dispose both subscriptions and
+  the timer. The mounted flag and current-controller identity reject obsolete callbacks;
+  the shell's [generation guard](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
+  separately fences navigation. Failure stops the active wait; authenticated completion
+  disposes it. Late submit results are ignored.
+- **Post-save cancellation:** Cancel remains enabled while waiting or showing failure.
+  It discards local state without undoing persistence; modal close and Escape use the
+  same path. Existing hosts, selected conversation, drafts and history remain intact.
 
 ## Security posture
 
-- **No secret can reach the renderer — enforced by construction upstream (#54).** `PairingSubmitResponse` / `PairingConfirmResponse` have no `token` / `server_static_pubkey` / record field, so the screen has no code path that could obtain one. The only inbound values are `fingerprint` (a hash) and `reason` (a value-free category).
-- **The paste is the user's own input, handled as sensitive** because it embeds the token: transient reducer state only, single-use via one `submitPairingPaste` call, never logged / persisted / re-routed, cleared on `cancel` and on `paired`. The inline error uses only the value-free `reason`.
+- **No secret can reach the renderer — enforced by construction upstream (#54).** `PairingSubmitResponse` / `PairingConfirmResponse` have no `token` / `server_static_pubkey` / record field, so the screen has no code path that could obtain one. The only inbound values are `fingerprint` (a hash), main-retained `serverId` and `reason` (a value-free category).
+- **The paste is the user's own input, handled as sensitive** because it embeds the token: transient reducer state only, single-use via one `submitPairingPaste` call, never logged / persisted / re-routed, cleared on `cancel` and successful persistence, before authentication. The inline error uses only the value-free `reason`.
 - **The fingerprint compare is the trust anchor.** Display decoration is spatial only; never change case/order/characters or the human compare against pyrybox/the phone breaks.
 - The screen adds **no new IPC channel and no new preload API** (both exist from #54); it calls only the two typed methods, never `ipcRenderer`. Fingerprint and error copy render as escaped React text nodes (no `dangerouslySetInnerHTML`).
 
@@ -271,10 +316,18 @@ The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-wi
 - **Empty / whitespace-only paste** — Pair is `disabled` (deterministic guard against an empty submit).
 - **A failed confirm** cannot retry with Confirm — the main pending record is already consumed, so the screen returns to `editing` for a fresh submit (paste preserved).
 - **A rejected or throwing bridge invoke** (handler absent/unregistered, invoke racing registration, non-serializable reply) is coerced to `malformed-request` rather than left to wedge the screen in `submitting`/`confirming` with Cancel disabled ([#513](../codebase/513.md)).
-- **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
+- **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `authenticated` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
 - **Static renderer tests do not execute effects or clicks.** `PairingScreen.test.tsx`
   checks modal names, full fingerprint, disabled actions, alert markup and input hygiene;
-  controller tests cover the shared reducer/runners. `e2e/pairing-modal.spec.ts` proves
+  controller tests cover the shared reducer/runners and bounded observation, including an
+  overdue timer with a clock jump that does not execute the callback. Merely advancing
+  timers normally would miss that race. `e2e/pairing-authentication.spec.ts` holds selected
+  authentication delivery after real persistence and Noise handshake, covering onboarding,
+  add-host and repair, another connected host, sticky rejection/absence/timeout, Retry
+  with one save, cancellation/new interaction, stale same-host status and authentication
+  before the save response. Its onboarding read retries only Playwright's exact transient
+  “Execution context was destroyed” error within five seconds; mutations still fail.
+  `e2e/pairing-modal.spec.ts` proves
   focus containment/restoration, inert background, busy guards, retry, fresh reopening,
   late submit handling and reachable footer actions at 800×400. Sidebar/navigation and
   recovery specs cover entry points, draft preservation, save and late-confirm navigation.

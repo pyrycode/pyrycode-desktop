@@ -189,7 +189,7 @@ describe('PairingScreen', () => {
   it('renders its initial editing markup without throwing', () => {
     const bridge: PairingBridge = {
       submitPairingPaste: async () => ({ ok: true, fingerprint: 'aa:bb:cc:dd:ee:ff:11:22' }),
-      confirmPairing: async () => ({ ok: true })
+      confirmPairing: async () => ({ ok: true, serverId: 'selected' })
     }
     expect(() => renderToStaticMarkup(<PairingScreen bridge={bridge} />)).not.toThrow()
   })
@@ -232,5 +232,22 @@ describe('in-app modal presentation', () => {
       expect(markup).toMatch(/disabled="">Cancel<\/button>/)
       expect(markup).toMatch(/disabled="">Pair<\/button>/)
     }
+  })
+})
+
+
+describe('post-save feedback', () => {
+  it('keeps cancellation available while authentication is pending', () => {
+    const markup = renderView({ phase: 'verifying', serverId: 'selected' })
+    expect(markup).toContain('Waiting for the host to authenticate')
+    expect(markup).toContain('Cancel')
+    expect(markup).not.toContain('disabled')
+  })
+  it('offers Retry for temporary unavailability but never for rejection', () => {
+    expect(renderView({ phase: 'verification-failed', serverId: 'selected', reason: 'timeout' }))
+      .toContain('Retry')
+    const rejected = renderView({ phase: 'verification-failed', serverId: 'selected', reason: 'pairing-rejected' })
+    expect(rejected).toContain('pair manually with a fresh code')
+    expect(rejected).not.toContain('Retry')
   })
 })

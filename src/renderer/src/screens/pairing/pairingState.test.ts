@@ -1,3 +1,5 @@
+import { createSessionStore } from '../../store/sessionStore'
+import { createRelayLinkStore } from '../../store/relayLinkStore'
 import { describe, it, expect, vi } from 'vitest'
 import {
   initialPairingState,
@@ -5,6 +7,7 @@ import {
   runSubmit,
   runConfirm,
   groupFingerprint,
+  createPairingVerification,
   type PairingBridge,
   type PairingState
 } from './pairingState'
@@ -64,7 +67,7 @@ describe('pairingReducer', () => {
       paste: 'pyry://x',
       fingerprint: FINGERPRINT
     }
-    expect(pairingReducer(confirming, { type: 'confirm-succeeded' })).toEqual({ phase: 'paired' })
+    expect(pairingReducer(confirming, { type: 'confirm-succeeded', serverId: 'selected' })).toEqual({ phase: 'verifying', serverId: 'selected' })
   })
 
   it('confirming + confirm-failed → editing with the paste preserved (fresh submit needed)', () => {
@@ -263,7 +266,7 @@ describe('runConfirm', () => {
   it('calls confirmPairing once (confirm triggers persist)', async () => {
     const bridge: PairingBridge = {
       submitPairingPaste: vi.fn(),
-      confirmPairing: vi.fn().mockResolvedValue({ ok: true })
+      confirmPairing: vi.fn().mockResolvedValue({ ok: true, serverId: 'selected' })
     }
     await runConfirm(bridge)
     expect(bridge.confirmPairing).toHaveBeenCalledTimes(1)
@@ -272,9 +275,9 @@ describe('runConfirm', () => {
   it('maps an ok response to confirm-succeeded', async () => {
     const bridge: PairingBridge = {
       submitPairingPaste: vi.fn(),
-      confirmPairing: vi.fn().mockResolvedValue({ ok: true })
+      confirmPairing: vi.fn().mockResolvedValue({ ok: true, serverId: 'selected' })
     }
-    expect(await runConfirm(bridge)).toEqual({ type: 'confirm-succeeded' })
+    expect(await runConfirm(bridge)).toEqual({ type: 'confirm-succeeded', serverId: 'selected' })
   })
 
   it('maps a not-ok response to confirm-failed carrying the reason', async () => {
@@ -301,7 +304,7 @@ describe('runConfirm', () => {
   it('sends the label trimmed of surrounding whitespace', async () => {
     const bridge: PairingBridge = {
       submitPairingPaste: vi.fn(),
-      confirmPairing: vi.fn().mockResolvedValue({ ok: true })
+      confirmPairing: vi.fn().mockResolvedValue({ ok: true, serverId: 'selected' })
     }
     await runConfirm(bridge, '  Pyrybox  ')
     expect(bridge.confirmPairing).toHaveBeenCalledTimes(1)
@@ -321,7 +324,7 @@ describe('runConfirm', () => {
   ])('sends no label at all for %s', async (_name, label) => {
     const bridge: PairingBridge = {
       submitPairingPaste: vi.fn(),
-      confirmPairing: vi.fn().mockResolvedValue({ ok: true })
+      confirmPairing: vi.fn().mockResolvedValue({ ok: true, serverId: 'selected' })
     }
     await runConfirm(bridge, label)
     expect(bridge.confirmPairing).toHaveBeenCalledWith(undefined)
@@ -330,7 +333,7 @@ describe('runConfirm', () => {
   it('called with no second argument at all still passes undefined through', async () => {
     const bridge: PairingBridge = {
       submitPairingPaste: vi.fn(),
-      confirmPairing: vi.fn().mockResolvedValue({ ok: true })
+      confirmPairing: vi.fn().mockResolvedValue({ ok: true, serverId: 'selected' })
     }
     await runConfirm(bridge)
     expect(bridge.confirmPairing).toHaveBeenCalledWith(undefined)
@@ -346,4 +349,119 @@ describe('groupFingerprint', () => {
   it('round-trips: joining the groups on ":" reproduces the input byte-for-byte', () => {
     expect(groupFingerprint(FINGERPRINT).join(':')).toBe(FINGERPRINT)
   })
+})
+
+
+describe('authenticated verification', () => {
+  const ack = { protocol_version: 'v2', server_id: 'untrusted-other', session_id: 's', conn_id: 'c', capabilities: [] }
+  function setup() {
+    const sessions = createSessionStore()
+    const relay = createRelayLinkStore()
+    const report = vi.fn()
+    const connect = (serverId = 'selected') => sessions.getState().dispatch({ type: 'connected', serverId, ack })
+    return { sessions, relay, report, connect,
+      begin: () => createPairingVerification(sessions, relay, report) }
+  }
+
+  it('requires new authentication for the selected main-stamped host and settles once', () => {
+    const s = setup()
+    s.connect()
+    const wait = s.begin()
+    wait.saved('selected')
+    s.connect('other')
+    s.relay.getState().setRelayLinkStatus('connected', 'selected')
+    expect(s.report).not.toHaveBeenCalled()
+    s.connect()
+    s.connect()
+    expect(s.report.mock.calls).toEqual([[{ type: 'authenticated' }]])
+    wait.cancel()
+  })
+
+  it('captures authentication racing the confirmation response', () => {
+    const s = setup()
+    const wait = s.begin()
+    s.connect()
+    expect(s.report).not.toHaveBeenCalled()
+    wait.saved('selected')
+    expect(s.report.mock.calls).toEqual([[{ type: 'authenticated' }]])
+  })
+
+  it('bounds each wait to 30 seconds and keeps timeout visible until Retry', () => {
+    vi.useFakeTimers()
+    try {
+      const s = setup()
+      const wait = s.begin()
+      wait.saved('selected')
+      vi.advanceTimersByTime(29_999)
+      expect(s.report).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(s.report).toHaveBeenLastCalledWith({ type: 'verification-failed', reason: 'timeout' })
+      s.connect()
+      expect(s.report).toHaveBeenCalledTimes(1)
+      wait.retry()
+      expect(s.report).toHaveBeenLastCalledWith({ type: 'authenticated' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(['pairing-rejected', 'handshake-read-failed'])('keeps %s failure sticky', code => {
+    const s = setup()
+    const wait = s.begin()
+    wait.saved('selected')
+    s.sessions.getState().dispatch({ type: 'failed', serverId: 'selected',
+      error: { code, message: 'must not appear', retryable: false } })
+    expect(s.report).toHaveBeenLastCalledWith({ type: 'verification-failed',
+      reason: code === 'pairing-rejected' ? 'pairing-rejected' : 'authentication-failed' })
+    s.connect()
+    expect(s.report).toHaveBeenCalledTimes(1)
+    wait.cancel()
+  })
+
+  it('retries absence with a new bounded wait; cancel removes listeners and timers', () => {
+    vi.useFakeTimers()
+    try {
+      const s = setup()
+      const wait = s.begin()
+      wait.saved('selected')
+      s.relay.getState().setRelayLinkStatus('daemon-absent', 'selected')
+      expect(s.report).toHaveBeenLastCalledWith({ type: 'verification-failed', reason: 'daemon-absent' })
+      wait.retry()
+      expect(s.report).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(29_999)
+      expect(s.report).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1)
+      expect(s.report).toHaveBeenLastCalledWith({ type: 'verification-failed', reason: 'timeout' })
+      wait.retry()
+      wait.cancel()
+      s.connect()
+      vi.advanceTimersByTime(30_000)
+      expect(s.report).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('cancel before the save response invalidates late completion', () => {
+    const s = setup()
+    const wait = s.begin()
+    wait.cancel()
+    s.connect()
+    wait.saved('selected')
+    expect(s.report).not.toHaveBeenCalled()
+  })
+})
+
+
+it('does not accept authentication delivered after an overdue timer', () => {
+  vi.useFakeTimers()
+  try {
+    const sessions = createSessionStore()
+    const report = vi.fn()
+    const wait = createPairingVerification(sessions, createRelayLinkStore(), report)
+    wait.saved('selected')
+    vi.setSystemTime(Date.now() + 30_001)
+    sessions.getState().dispatch({ type: 'connected', serverId: 'selected',
+      ack: { protocol_version: 'v2', server_id: 'selected', conn_id: 'c', capabilities: [] } })
+    expect(report).toHaveBeenLastCalledWith({ type: 'verification-failed', reason: 'timeout' })
+    wait.cancel()
+  } finally { vi.useRealTimers() }
 })

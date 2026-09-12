@@ -1,5 +1,8 @@
+import type { StoreApi } from 'zustand/vanilla'
+import { selectStatusFor, type SessionStore } from '../../store/sessionStore'
+import { selectRelayLinkStatusFor, type RelayLinkStore } from '../../store/relayLinkStore'
 // The pairing screen's state machine, IPC effect-runners, and fingerprint formatter — all
-// pure and React-free, so they run in the `node` vitest environment with no DOM ceremony and
+// testable without a DOM, so they run in the `node` vitest environment with no DOM ceremony and
 // are the single tested seam for AC5 (paste→submit invokes the IPC; confirm triggers persist;
 // cancel discards; a validation error is surfaced). The React screen (PairingScreen.tsx) is
 // thin glue over these, mirroring the sessionStore (pure) / ConversationScreen (React) split.
@@ -7,8 +10,7 @@
 // Renderer-only: it consumes the existing typed pairing IPC channel (#54) through an injected
 // bridge and never touches a token, server key, socket, or raw byte — those live in the
 // background process (ADR 0002; CLAUDE.md "keep the transport out of the window"). The only
-// values that cross the bridge are the display `fingerprint` (a hash) and value-free
-// `PairingErrorReason` categories.
+// values returned by the bridge are the fingerprint, saved host identity and value-free errors.
 import type {
   PairingErrorReason,
   PairingSubmitResponse,
@@ -21,8 +23,8 @@ import type {
  * reviewing → confirming so a confirm failure can return to `editing` with the paste intact
  * for a one-click retry; it embeds the token, so it is the only field that transitively holds
  * a secret and never leaves this module except via the single submitPairingPaste call. `error`
- * lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on
- * reviewing/confirming. `paired` is terminal and carries nothing — no secret, no record.
+ * lives on `editing`; post-save states hold only the saved identity and classified failure.
+ * `paired` is terminal and carries no record.
  *
  * `label` (#825) rides the same four phases as `paste`, and for the same structural reason: it is
  * typed on the paste phase but sent two phases later, on confirm. It is NOT a secret — it is the
@@ -40,6 +42,8 @@ export type PairingState =
   | { phase: 'submitting'; paste: string; label?: string }
   | { phase: 'reviewing'; paste: string; label?: string; fingerprint: string }
   | { phase: 'confirming'; paste: string; label?: string; fingerprint: string }
+  | { phase: 'verifying'; serverId: string }
+  | { phase: 'verification-failed'; serverId: string; reason: VerificationFailure }
   | { phase: 'paired' }
 
 /**
@@ -53,7 +57,10 @@ export type PairingEvent =
   | { type: 'submit-succeeded'; fingerprint: string }
   | { type: 'submit-failed'; reason: PairingErrorReason }
   | { type: 'confirm' }
-  | { type: 'confirm-succeeded' }
+  | { type: 'confirm-succeeded'; serverId: string }
+  | { type: 'authenticated' }
+  | { type: 'verification-failed'; reason: VerificationFailure }
+  | { type: 'retry' }
   | { type: 'confirm-failed'; reason: PairingErrorReason }
   | { type: 'cancel' }
 
@@ -114,7 +121,15 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
           }
         : state
     case 'confirm-succeeded':
-      return state.phase === 'confirming' ? { phase: 'paired' } : state
+      return state.phase === 'confirming' ? { phase: 'verifying', serverId: event.serverId } : state
+    case 'authenticated':
+      return state.phase === 'verifying' ? { phase: 'paired' } : state
+    case 'verification-failed':
+      return state.phase === 'verifying' ? { ...state, phase: 'verification-failed', reason: event.reason } : state
+    case 'retry':
+      return state.phase === 'verification-failed' &&
+        (state.reason === 'timeout' || state.reason === 'daemon-absent')
+        ? { phase: 'verifying', serverId: state.serverId } : state
     case 'confirm-failed':
       return state.phase === 'confirming'
         ? { phase: 'editing', paste: state.paste, label: state.label, error: event.reason }
@@ -201,7 +216,7 @@ export async function runConfirm(bridge: PairingBridge, label?: string): Promise
   }
 
   return response.ok
-    ? { type: 'confirm-succeeded' }
+    ? { type: 'confirm-succeeded', serverId: response.serverId }
     : { type: 'confirm-failed', reason: response.reason }
 }
 
@@ -214,4 +229,78 @@ export async function runConfirm(bridge: PairingBridge, label?: string): Promise
  */
 export function groupFingerprint(fingerprint: string): string[] {
   return fingerprint.split(':')
+}
+
+
+type VerificationFailure = 'timeout' | 'daemon-absent' | 'pairing-rejected' | 'authentication-failed'
+
+/** Observe before confirm: a fresh host status can precede the save response. */
+export function createPairingVerification(
+  sessions: Pick<StoreApi<SessionStore>, 'getState' | 'subscribe'>,
+  relay: Pick<StoreApi<RelayLinkStore>, 'getState' | 'subscribe'>,
+  report: (event: PairingEvent) => void
+) {
+  const baseline = sessions.getState().statuses
+  let serverId: string | undefined
+  let active = false
+  let disposed = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let ignoredAbsence = false
+  let deadline = 0
+  const clearTimer = (): void => { clearTimeout(timer); timer = undefined }
+  const settle = (event: PairingEvent): void => {
+    if (!active || disposed) return
+    active = false
+    clearTimer()
+    if (event.type === 'authenticated') cancel()
+    report(event)
+  }
+  const inspect = (): void => {
+    if (!active || disposed || serverId === undefined) return
+    if (Date.now() >= deadline) {
+      settle({ type: 'verification-failed', reason: 'timeout' })
+      return
+    }
+    const status = selectStatusFor(serverId)(sessions.getState())
+    if (status !== baseline.get(serverId)) {
+      if (status?.type === 'connected') { settle({ type: 'authenticated' }); return }
+      if (status?.type === 'error') {
+        const code = status.error.code
+        if (code === 'pairing-rejected' || code === 'handshake-read-failed' ||
+          code === 'malformed-hello-ack' || code === 'transport-decrypt-failed' || code.startsWith('auth.')) {
+          settle({ type: 'verification-failed', reason:
+            code === 'pairing-rejected' ? 'pairing-rejected' : 'authentication-failed' })
+          return
+        }
+      }
+    }
+    const absent = selectRelayLinkStatusFor(serverId)(relay.getState()) === 'daemon-absent'
+    if (!absent) ignoredAbsence = false
+    if (absent && !ignoredAbsence) settle({ type: 'verification-failed', reason: 'daemon-absent' })
+  }
+  const stopSession = sessions.subscribe(inspect)
+  const stopRelay = relay.subscribe(inspect)
+  function cancel(): void {
+    disposed = true
+    active = false
+    clearTimer()
+    stopSession()
+    stopRelay()
+  }
+  const start = (): void => {
+    if (disposed || active || serverId === undefined) return
+    active = true
+    deadline = Date.now() + 30_000
+    timer = setTimeout(() => settle({ type: 'verification-failed', reason: 'timeout' }), 30_000)
+    inspect()
+  }
+  return {
+    saved(id: string): void { if (serverId !== undefined || disposed) return; serverId = id; start() },
+    retry(): void {
+      // A held absence is feedback from the last wait, not a new failed attempt.
+      ignoredAbsence = true
+      start()
+    },
+    cancel
+  }
 }

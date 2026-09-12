@@ -12,9 +12,11 @@ import {
   shouldRefreshList,
   requestConversationList,
   subscribeConversations,
-  ConversationListData
+  ConversationListData,
+  subscribeConnectedConversationLists
 } from './conversationListBridge'
 import { createConversationListStore, selectConversations } from './conversationListStore'
+import { createSessionStore } from './sessionStore'
 import { partitionByPromotion } from '../screens/channels/channelListViewModel'
 
 // Framework-free data-path tests with injected spies (the runConfigSnapshot idiom): no React, no
@@ -75,11 +77,11 @@ describe('translateConversationsEvent', () => {
 })
 
 describe('requestConversationList', () => {
-  it('fires exactly one requestConversations command (the bare #139 member)', () => {
+  it('fires exactly one host-addressed requestConversations command', () => {
     const sendCommand = vi.fn()
-    requestConversationList(sendCommand)
+    requestConversationList(sendCommand, 'host-a')
     expect(sendCommand).toHaveBeenCalledTimes(1)
-    expect(sendCommand).toHaveBeenCalledWith({ type: 'requestConversations' })
+    expect(sendCommand).toHaveBeenCalledWith({ type: 'requestConversations', serverId: 'host-a' })
   })
 })
 
@@ -127,7 +129,7 @@ describe('subscribeConversations', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy.
   function fakeBridge(): {
     onDaemonEvent: (l: (e: DaemonEvent) => void) => () => void
-    emit: (e: DaemonEvent) => void
+    emit: (e: DaemonEvent & { serverId?: unknown }) => void
     off: ReturnType<typeof vi.fn>
     subscribeCalls: () => number
   } {
@@ -179,7 +181,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
 
-    bridge.emit({ type: 'workspaceUpdated', path: '/w', label: 'Second Brain' })
+    bridge.emit({ serverId: 'host-a', type: 'workspaceUpdated', path: '/w', label: 'Second Brain' })
 
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // The load-bearing half, and the deterministic detector for the plan's security finding: the
@@ -290,7 +292,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
 
-    bridge.emit({ type: 'conversationUpdated', conversation: updated() })
+    bridge.emit({ serverId: 'host-a', type: 'conversationUpdated', conversation: updated() })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // An update event carries no rows to land — it only triggers the authoritative re-request.
     expect(setConversations).not.toHaveBeenCalled()
@@ -302,7 +304,7 @@ describe('subscribeConversations', () => {
     const refreshOnChange = vi.fn()
     subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
 
-    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    bridge.emit({ serverId: 'host-a', type: 'conversationDeleted', id: 'a' })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // A delete event carries no rows to land — it only triggers the authoritative re-request.
     expect(setConversations).not.toHaveBeenCalled()
@@ -315,7 +317,7 @@ describe('subscribeConversations', () => {
     subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
 
     bridge.emit({
-      type: 'conversationCreated',
+      serverId: 'host-a', type: 'conversationCreated',
       conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts', workspace_label: null }
     })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
@@ -335,7 +337,7 @@ describe('subscribeConversations', () => {
     )
 
     expect(selectConversations(store.getState())).toBeNull()
-    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    bridge.emit({ serverId: 'host-a', type: 'conversationDeleted', id: 'a' })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // The delete cannot fabricate an empty loaded list — the store stays not-loaded (null).
     expect(selectConversations(store.getState())).toBeNull()
@@ -356,7 +358,7 @@ describe('subscribeConversations', () => {
     expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
 
     // The correlated delete triggers exactly one re-request; it writes no rows itself.
-    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    bridge.emit({ serverId: 'host-a', type: 'conversationDeleted', id: 'a' })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
 
@@ -378,7 +380,7 @@ describe('subscribeConversations', () => {
     bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'a' }), row({ id: 'b' })] })
 
     // The trigger is id-blind: an absent id still fires exactly one re-request.
-    bridge.emit({ type: 'conversationDeleted', id: 'zzz' })
+    bridge.emit({ serverId: 'host-a', type: 'conversationDeleted', id: 'zzz' })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
 
     // The identical authoritative reply leaves the rows unchanged.
@@ -426,7 +428,7 @@ describe('subscribeConversations', () => {
     expect(partitionByPromotion(seeded).channels).toEqual([])
 
     // The unsolicited promote broadcast triggers exactly one re-request; it writes no rows itself.
-    bridge.emit({ type: 'conversationUpdated', conversation: updated({ id: 'a' }) })
+    bridge.emit({ serverId: 'host-a', type: 'conversationUpdated', conversation: updated({ id: 'a' }) })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
 
     // The daemon's authoritative reply carries the flipped row; the whole-array replace lands it.
@@ -453,7 +455,7 @@ describe('subscribeConversations', () => {
 
     // The correlated created reply triggers exactly one re-request; it writes no rows itself.
     bridge.emit({
-      type: 'conversationCreated',
+      serverId: 'host-a', type: 'conversationCreated',
       conversation: { id: 'b', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts', workspace_label: null }
     })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
@@ -481,4 +483,79 @@ describe('ConversationListData (container)', () => {
     }).not.toThrow()
     expect(markup).toBe('')
   })
+})
+
+
+describe('host connection list lifecycle', () => {
+  it('loads mounted hosts and each independent edge without duplicate requests, then unsubscribes', () => {
+    const store = createSessionStore()
+    const ack = {} as import('@shared/wire/types').HelloAckPayload
+    store.getState().dispatch({ type: 'connected', serverId: 'a', ack })
+    const send = vi.fn()
+    const off = subscribeConnectedConversationLists(store, send)
+    expect(send.mock.calls).toEqual([[{ type: 'requestConversations', serverId: 'a' }]])
+    store.getState().dispatch({ type: 'connected', serverId: 'b', ack })
+    store.getState().dispatch({ type: 'connected', serverId: 'b', ack })
+    store.getState().dispatch({ type: 'disconnected', serverId: 'a' })
+    store.getState().dispatch({ type: 'connected', serverId: 'a', ack })
+    for (const serverId of [undefined, null, '']) {
+      store.getState().dispatch({ type: 'connected', serverId, ack })
+    }
+    expect(send.mock.calls.map(([command]) => command.type === 'requestConversations' ? command.serverId : undefined)).toEqual(['a', 'b', 'a'])
+    off()
+    store.getState().dispatch({ type: 'connected', serverId: 'c', ack })
+    expect(send).toHaveBeenCalledTimes(3)
+  })
+
+  it('mounts multiple connected hosts and preserves the other list across a reconnect reply', () => {
+    const sessions = createSessionStore()
+    const lists = createConversationListStore()
+    const ack = {} as import('@shared/wire/types').HelloAckPayload
+    for (const serverId of ['a', 'b']) sessions.getState().dispatch({ type: 'connected', serverId, ack })
+    let receive: (event: DaemonEvent) => void = () => {}
+    const offEvents = subscribeConversations((listener) => {
+      receive = listener
+      return () => {}
+    }, (rows, serverId) => lists.getState().setConversations(rows, serverId), vi.fn())
+    let revision = 0
+    const send = vi.fn((command: import('@shared/ipc/commands').RendererCommand) => {
+      if (command.type !== 'requestConversations') throw new Error('Expected list request')
+      receive({ type: 'conversationsReceived', serverId: command.serverId,
+        conversations: [row({ id: String(revision) })] } as DaemonEvent)
+    })
+    const offStatuses = subscribeConnectedConversationLists(sessions, send)
+    expect(send.mock.calls.map(([command]) => command.type === 'requestConversations' ? command.serverId : undefined)).toEqual(['a', 'b'])
+    const kept = lists.getState().byServer.get('b')
+    sessions.getState().dispatch({ type: 'disconnected', serverId: 'a' })
+    expect(lists.getState().byServer.get('b')).toBe(kept)
+    revision++
+    sessions.getState().dispatch({ type: 'connected', serverId: 'a', ack })
+    expect(send.mock.calls.map(([command]) => command.type === 'requestConversations' ? command.serverId : undefined)).toEqual(['a', 'b', 'a'])
+    expect(lists.getState().byServer.get('a')?.[0].id).toBe('1')
+    expect(lists.getState().byServer.get('b')).toBe(kept)
+    offStatuses()
+    offEvents()
+  })
+
+  it.each(['conversationUpdated', 'conversationDeleted', 'conversationCreated', 'workspaceUpdated'] as const)(
+    'refreshes only the main-stamped origin for %s', (type) => {
+      let listener: (event: DaemonEvent) => void = () => {}
+      const send = vi.fn()
+      subscribeConversations((fn) => { listener = fn; return () => {} }, vi.fn(),
+        (serverId) => requestConversationList(send, serverId))
+      // Payload identity is deliberately misleading; it must never select a destination.
+      const event = { type, conversation: { serverId: 'payload-host' }, serverId: 'a' } as unknown as DaemonEvent
+      listener(event)
+      listener({ ...event, serverId: 'b' } as unknown as DaemonEvent)
+      for (const origin of [undefined, null, '', 7, {}, false]) {
+        listener({ ...event, serverId: origin } as unknown as DaemonEvent)
+      }
+      const { serverId: _ignored, ...bare } = event as DaemonEvent & { serverId: string }
+      listener(bare)
+      expect(send.mock.calls).toEqual([
+        [{ type: 'requestConversations', serverId: 'a' }],
+        [{ type: 'requestConversations', serverId: 'b' }]
+      ])
+    }
+  )
 })

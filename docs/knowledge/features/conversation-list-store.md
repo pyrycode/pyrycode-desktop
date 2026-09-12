@@ -18,9 +18,10 @@ precedents.
 
 ## What it does
 
-Requests a fresh `conversations` list once the connection reaches `connected`, and holds the
-arriving rows in a read-only store until the next list for that server arrives. Since #1086 this is
-per-server, not whole-store: each `conversationsReceived` replaces only the slot of the server it was
+Requests a fresh `conversations` list for each connected host on mount and on each host's transition
+to `connected`, always with an explicit `serverId`. Mutation events refresh only their emitting host.
+The arriving rows stay in a read-only store until the next list for that server arrives. Since #1086
+this is per-server, not whole-store: each `conversationsReceived` replaces only the slot of the server it was
 stamped with, no merge and no dedupe within a slot, and the flat read every consumer sees is a
 **union across every server's slot**. Deliberately **not** a [session store](session-store.md) facet:
 a list update never touches connection/messages state and vice versa, so a list arrival re-renders
@@ -240,13 +241,19 @@ originOf(event: DaemonEvent): ConversationListOrigin   // since #1086
 // !('serverId' in event) → undefined; serverId === null → null; a string → that string;
 // anything else → undefined. Total by construction, never throws.
 
-requestConversationList(sendCommand: (c: RendererCommand) => void): void
-// sendCommand({ type: 'requestConversations' })  — bare, no new command/builder
+requestConversationList(sendCommand: (c: RendererCommand) => void, serverId: string): void
+// sendCommand({ type: 'requestConversations', serverId })
+
+subscribeConnectedConversationLists(store, sendCommand): () => void
+// Subscribe to sessionStore.statuses, then inspect its current snapshot.
+// Request each newly connected nonempty string identity; return the unsubscribe handle.
 
 subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
 // onDaemonEvent(event => {
 //   const list = translateConversationsEvent(event); if (list !== null) setConversations(list, originOf(event))
-//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376, widened #515, widened #1288
+//   const serverId = originOf(event)
+//   if (shouldRefreshList(event) && typeof serverId === 'string' && serverId.length > 0)
+//     refreshOnChange(serverId)
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
 
@@ -259,7 +266,8 @@ shouldRefreshList(event: DaemonEvent): boolean
 // OR'd at the call site.
 
 ConversationListData(): null
-// headless component, two effects: subscribe on mount ([]), request on the rising edge to `connected` ([isConnected])
+// Headless component, one mount effect ([]): install event listener, then status observer;
+// clean up both on unmount.
 ```
 
 `translateConversationsEvent` uses a **soft** `default: null`, not `assertNever` — the deliberate
@@ -284,6 +292,12 @@ listener's parameter to `StampedDaemonEvent` was also rejected — this module's
 `DaemonEvent` literals, and `ServerOrigin.serverId` being required would make a bare event
 non-assignable.
 
+All four mutation arms pass only a nonempty string from that main-stamped origin to
+`refreshOnChange(serverId)`. Missing, null, non-string and empty origins cause no request; there is
+no payload-derived destination or unaddressed fallback, even with a single saved host. The mutation
+itself writes no rows: the authoritative list reply replaces only its origin's slot. Lifecycle
+diagnostics use only the static `conversation-list` event and `requested` / `invalid-origin` codes.
+
 **A testing trap this ticket surfaced: `toEqual` ignores an `undefined`-valued property.** Every
 pre-existing bridge assertion of the form `expect(setConversations).toHaveBeenCalledWith(list)` (or
 `toEqual(list)` on a captured row) kept passing once rows carried `serverId: undefined` — green, but
@@ -299,38 +313,31 @@ files under. That is a real tripwire on a signature change like this one; on a t
 assertion's arity is only incidental, the same failure would read as noise and invite loosening to
 `expect.anything()` rather than fixing the assertion.
 
-`ConversationListData` owns two effects:
+`ConversationListData` owns one mount effect. It installs `subscribeConversations` before
+`subscribeConnectedConversationLists`, so the reply listener is ready before any initial request.
+Cleanup removes the status subscription and then the daemon listener. Each new subscription loads
+the currently connected hosts again; this includes a remount. Bridge access stays inside the effect,
+so the component still server-renders to empty markup without a window mock.
 
-1. **Subscribe** (deps `[]`) — `subscribeConversations(window.pyry.onDaemonEvent, (list, serverId) =>
-   conversationListStore.getState().setConversations(list, serverId), () =>
-   requestConversationList(window.pyry.sendCommand))`; the off-handle is the cleanup, so a
-   StrictMode double-mount nets exactly one live listener. The third arg re-requests the list on a
-   `conversationUpdated` broadcast (#275), a `conversationDeleted` reply (#376), a
-   `conversationCreated` reply (#515), or a `workspaceUpdated` frame (#1288) — `window.pyry.sendCommand`
-   is dereferenced only when the arrow runs, never during render, so the server-render-to-empty-markup
-   invariant is unaffected.
-2. **Request on the rising edge to `connected`** (deps `[isConnected]`, `isConnected =
-   useSessionStore(s => s.status.type === 'connected')`) — a `useRef(false)` guard fires exactly one
-   request per connection episode: resets to `false` while disconnected (so a reconnect re-requests)
-   and fires once per rising edge (StrictMode double-invoke included).
-
-A **component**, not a hook called directly in `App` — this isolates the connected-gate
-`useSessionStore` read in a headless leaf. `App` itself subscribes to no store (only `useState` +
-the effect-only `useDaemonEventBridge`); a hook called in `App` would subscribe `App` to status
-flips and, because `App`'s inline `onPaired`/`onUnpaired` arrows are unstable, cascade a re-render
-into `ConversationScreen` on every connect/disconnect. This diverges from
-[`useTimelineBridge`](conversation-timeline-store.md)'s hook form because no list render-component
-exists yet to host a hook — a dedicated headless mount is the app-level equivalent.
+`subscribeConnectedConversationLists` observes the vanilla store synchronously rather than a
+React-selected global connected flag. A second host can connect while the first stays connected,
+and a disconnect/reconnect pair can occur between React renders; neither may be lost to a boolean
+that stayed true. The helper subscribes before reading the current snapshot and keeps a Set of
+connected, nonempty string identities. It replaces that Set **before sending requests**, preventing
+synchronous callbacks from requesting the same edge again. Disconnected or removed slots leave the
+Set, rearming only those hosts. This subscription does not clear lists or cause a React render.
 
 ### Data flow
 
 ```
 App mount → <ConversationListData/> (app-level, sibling of AppView)
-  → subscribe effect: window.pyry.onDaemonEvent → subscribeConversations (live immediately)
-  → connected-gate effect: useSessionStore(status.type==='connected') rising edge
-    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}
-    → COMMAND_CHANNEL → onCommand → connection.requestConversations() → buildListConversations
-      [#139, already shipped]
+  → window.pyry.onDaemonEvent → subscribeConversations (live before requests)
+  → subscribeConnectedConversationLists(sessionStore, window.pyry.sendCommand)
+    → current connected hosts, then each host's transition to connected
+    → requestConversationList(window.pyry.sendCommand, serverId)
+    → {type:'requestConversations', serverId}
+    → COMMAND_CHANNEL → onCommand → servers.route(serverId)?.requestConversations()
+    → buildListConversations on the selected connection
 
 daemon → conversations frame → parseInboundMessage → conversationsReceived DaemonEvent [#139]
   → DAEMON_EVENT_CHANNEL → subscribeConversations listener
@@ -340,48 +347,28 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
   → selectConversations (union) / selectConversationsFor(serverId) / useConversationListStore
     (read by #141; per-server read expected first from #1070)
 
-pairing ends (unpair, or pairing a different server from inside the shell) [#1086]
+last paired server forgotten
   → clearPairingScopedState → deps.clearAllConversations() → conversationListStore.clearAllConversations()
     → conversations: null, byServer: new Map()   [every server's slot dropped, not just the departed one]
 
-daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conversationUpdated DaemonEvent [#273]
-  → DAEMON_EVENT_CHANNEL → subscribeConversations listener
-    → shouldRefreshList(event) → true → refreshOnChange()
-    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#275]
-    → … re-enters the flow above; the arriving conversationsReceived lands the flipped row
-
-daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conversationDeleted{id} DaemonEvent [#375]
-  → DAEMON_EVENT_CHANNEL → subscribeConversations listener
-    → shouldRefreshList(event) → true (id-blind — the id is never consulted) → refreshOnChange()
-    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#376]
-    → … re-enters the flow above; the arriving conversationsReceived omits the deleted row
-
-daemon → conversation_created frame (CORRELATED reply to the creator, no broadcast) → conversationCreated
-DaemonEvent [#241] → DAEMON_EVENT_CHANNEL → subscribeConversations listener (independent of the
-new-discussion FAB's own subscription on the same event, #242)
-    → shouldRefreshList(event) → true → refreshOnChange()
-    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#515]
-    → … re-enters the flow above; the arriving conversationsReceived lands the new, complete row
-
-daemon → workspace_updated frame (CORRELATED to the renamer, UNSOLICITED to every other client) →
-workspaceUpdated{path,label} DaemonEvent [#1288] → DAEMON_EVENT_CHANNEL → subscribeConversations
-listener
-    → shouldRefreshList(event) → true (path/label never read) → refreshOnChange()
-    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#1288]
-    → … re-enters the flow above; the arriving conversationsReceived lands the renamed workspace's
-      new label on every row that shares its `cwd`
+daemon → conversation_updated / conversation_deleted / conversation_created / workspace_updated
+  → typed event with main-stamped serverId → DAEMON_EVENT_CHANNEL → subscribeConversations
+    → shouldRefreshList(event) → true; originOf(event) → nonempty string or skip request
+    → refreshOnChange(serverId) → requestConversationList(window.pyry.sendCommand, serverId)
+    → … re-enters the addressed request/reply flow above
+    → authoritative reply replaces that host's rows, including creates, deletes and workspace labels
 ```
 
 ## Configuration and usage
 
 - Mounted app-level in `src/renderer/src/App.tsx`, alongside `useDaemonEventBridge()`, as a sibling
-  of `<AppView/>` inside a fragment — one stable, app-lifetime listener with no subscribe/unsubscribe
-  churn as the route flips, because the list must stay live for #141's Channel List regardless of
-  which screen is shown.
+  of `<AppView/>` inside a fragment — stable, app-lifetime event and status subscriptions with no
+  subscribe/unsubscribe churn as the route flips, because the list must stay live for #141's Channel
+  List regardless of which screen is shown.
 - Import surface for #141/#142: `import { useConversationListStore, selectConversations } from
   '@renderer/store/conversationListStore'`.
-- No component consumes `useConversationListStore` yet — it is exported ahead of its first consumer,
-  the same shape `useRunConfigStore` shipped ahead of #188.
+- The Channel List, Archive screen and conversation connection controls read
+  `useConversationListStore(selectConversations)`.
 - **Per-server import surface, since #1086, no production consumer yet**:
   `import { selectConversationsFor } from '@renderer/store/conversationListStore'` — returns
   `readonly ServerConversationSummary[] | null`, defaulting a missing slot to `null` (the store's own
@@ -405,12 +392,19 @@ listener
 
 ## Edge cases and limitations
 
-- **Trigger is per-connection-episode, not fire-once-ever.** The minimal reading of AC4 ("issued at
-  least once, without user action, after connected") plus natural robustness: a reconnect gets a
-  fresh list, and a request lost to a mid-flight disconnect recovers on the next connect. This is
-  layered with the intra-connection reflection (below) — the two triggers are independent and never
-  conflict, since the per-server replace setter (§ "One slot per server, since #1086") makes every
-  arrival idempotent within its own slot regardless of what triggered the request.
+- **Connection requests are per host, since [#1363](https://github.com/pyrycode/pyrycode-desktop/issues/1363).**
+  Mount requests every currently connected host. A newly connected host gets its own addressed
+  request even while another remains connected; repeated connected notifications do not duplicate it.
+  Disconnecting or removing a status slot rearms that host, so reconnecting refreshes only its list.
+  Connection transitions leave all held rows intact, and the reply replaces only its stamped slot.
+  A request lost during a disconnect can recover on the next connect; there is no retry timer.
+- **Mutation refresh requires a valid origin.** `conversationCreated`, `conversationUpdated`,
+  `conversationDeleted` and `workspaceUpdated` each refresh only the host in the main-stamped
+  `serverId`. Missing, null, non-string and empty origins produce no refresh, regardless of payload
+  fields. This validation is stricter than list-reply storage, which still accepts diagnostic
+  null/undefined slots. The main router continues to refuse ambiguous unaddressed commands; having
+  only one connected host among several saved hosts does not make an unaddressed request safe.
+  Connection-request deduplication does not coalesce separate mutation events.
 - **The once-deferred "richer refresh policy" — intra-connection re-requests on a
   `conversation_updated` broadcast — landed in [#275](../codebase/275.md).** A promote (#274),
   rename, or archive fans out `conversation_updated`; `subscribeConversations`'s third param,
@@ -452,9 +446,7 @@ listener
   grouping states for why the label rides in on the re-list rather than the broadcast's own payload.
   `conversationListBridge.test.ts` pins `setConversations` called **zero** times for a `workspaceUpdated`
   event, so a future "just patch the row" shortcut reddens a gate instead of shipping quietly. Like
-  `conversationUpdated`, the re-list this trigger fires is **global**, not scoped to the server the frame
-  arrived on — scoping a refresh to its origin server is a command-with-a-server-id concern the routing
-  ticket owns, not opened here.
+  the other three mutation arms, its re-list targets only the frame's main-stamped origin.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
   not — is written unconditionally into its stamped slot; safe because only the authenticated daemon
   can produce one (see [conversation list fetch § Correlation is deliberately
@@ -493,10 +485,13 @@ listener
   review. This slice only stores and reads it as a string — no filesystem use. Any later "open
   workspace" feature (#141 or beyond) that resolves `cwd` into a real path **must** boundary-check it
   (`path.resolve` + known-root prefix) before any filesystem access.
-- **`ConversationListData`'s effect timing is not unit-tested** — mirrors the `RunConfigData`
-  precedent: a bare component's effect lifecycle (deps/refs/StrictMode) is untestable without a React
-  renderer (none in this repo). The pure `translateConversationsEvent`/`requestConversationList`/
-  `subscribeConversations` helpers carry all the testable logic.
+- **Static renders do not run the subscription effect.** The injected
+  `subscribeConnectedConversationLists` tests exercise mount snapshots, independent connection and
+  reconnect edges, duplicate notifications, invalid slots, retained lists and cleanup. The four-arm
+  mutation matrix proves origin-scoped requests despite misleading payload identities. The actual
+  app mount and request/reply wiring need the [two-server browser fixture](e2e-harness.md#two-server-launches).
+  In that path, the authoritative row also lets `serverIdForOpenConversation` resolve the new chat's
+  host for the connection warning and Send state; a successful create alone does not establish it.
 
 ## Related
 

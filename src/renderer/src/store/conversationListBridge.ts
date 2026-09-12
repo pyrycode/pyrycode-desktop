@@ -5,13 +5,13 @@
 // fills. The three helpers are React-free and injected, so the whole path is unit-testable with plain
 // spies (the runConfigSnapshot idiom); `ConversationListData` is the thin React glue over them.
 // Nothing here touches keys, sockets, ipcRenderer, or raw frames — it only subscribes through the
-// preload bridge and dispatches an already-typed event, and sends an existing bare command.
-import { useEffect, useRef } from 'react'
+// preload bridge and dispatches an already-typed event, and sends an existing host-addressed command.
+import { useEffect } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 import { conversationListStore, type ConversationListOrigin } from './conversationListStore'
-import { useSessionStore } from './sessionStore'
+import { sessionStore, type SessionState } from './sessionStore'
 
 /**
  * Read the server this event came from (#1086), off #1068's stamp.
@@ -98,14 +98,42 @@ export function shouldRefreshList(event: DaemonEvent): boolean {
   )
 }
 
-/**
- * Fire the existing bare `requestConversations` command (#139 wired the main side through to
- * `buildListConversations`; the daemon returns every conversation, so there is no payload). An inline
- * literal typed as RendererCommand — no constructor added, keeping the change renderer-contained.
- * Fire-and-forget, like the composer's send: `sendCommand` is `void`, so there is no result to await.
- */
-export function requestConversationList(sendCommand: (command: RendererCommand) => void): void {
-  sendCommand({ type: 'requestConversations' })
+/** Send only to an explicit host; no payload fields participate in routing. */
+export function requestConversationList(
+  sendCommand: (command: RendererCommand) => void,
+  serverId: string
+): void {
+  logListLifecycle('requested')
+  sendCommand({ type: 'requestConversations', serverId })
+}
+
+function logListLifecycle(code: 'requested' | 'invalid-origin'): void {
+  if (typeof window !== 'undefined') {
+    window.pyry?.sendDiagnostic?.({ event: 'conversation-list', code })
+  }
+}
+
+/** Observe every store transition, including edges React could batch into one render. */
+export function subscribeConnectedConversationLists(
+  store: Pick<typeof sessionStore, 'getState' | 'subscribe'>,
+  sendCommand: (command: RendererCommand) => void
+): () => void {
+  let connected = new Set<string>()
+  const observe = ({ statuses }: SessionState): void => {
+    const next = new Set<string>()
+    for (const [serverId, status] of statuses) {
+      if (typeof serverId === 'string' && serverId.length > 0 && status.type === 'connected') {
+        next.add(serverId)
+      }
+    }
+    const newlyConnected = [...next].filter((serverId) => !connected.has(serverId))
+    // Commit before sending: a synchronous reply must not request the same edge again.
+    connected = next
+    for (const serverId of newlyConnected) requestConversationList(sendCommand, serverId)
+  }
+  const off = store.subscribe(observe)
+  observe(store.getState())
+  return off
 }
 
 /**
@@ -129,9 +157,8 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
  * Since #1086 each write also carries the server the reply came from, so it replaces only that
  * server's rows. `translateConversationsEvent` is left alone by the keying: the origin rides beside
  * the union rather than inside the arm, so it is read here at the event, not folded into a filter
- * whose whole job is selecting one named field. The refresh triggers are untouched too — they still
- * re-request from every server; making a trigger re-request only from the server that emitted it is a
- * command with a server id and belongs to the routing ticket.
+ * whose whole job is selecting one named field. Mutation refreshes use only a nonempty
+ * main-stamped identity, so they cannot fall back to another saved host.
  */
 export function subscribeConversations(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
@@ -139,63 +166,32 @@ export function subscribeConversations(
     conversations: readonly ConversationSummary[],
     serverId?: string | null
   ) => void,
-  refreshOnChange: () => void
+  refreshOnChange: (serverId: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const list = translateConversationsEvent(event)
     if (list !== null) setConversations(list, originOf(event))
-    if (shouldRefreshList(event)) refreshOnChange()
+    if (shouldRefreshList(event)) {
+      const serverId = originOf(event)
+      if (typeof serverId === 'string' && serverId.length > 0) refreshOnChange(serverId)
+      else logListLifecycle('invalid-origin')
+    }
   })
 }
 
-/**
- * The conversation-list data-path binding — a headless component mounted app-level in App.tsx,
- * alongside useDaemonEventBridge: one stable, app-lifetime listener with no subscribe/unsubscribe
- * churn as the route flips, because the list must stay live for #141's Channel List regardless of
- * which screen is shown. It owns the two lifecycle effects and renders nothing. `window.pyry` is
- * dereferenced only inside effects, never during render, so it server-renders without a bridge mock.
- *
- * Trigger: the request fires once per connection episode — on each rising edge to `connected` — the
- * minimal reading of AC4 ("issued at least once, without user action, after connected") plus natural
- * robustness (a reconnect gets a fresh list; a request lost to a mid-flight disconnect recovers on
- * the next connect). This is NOT the deferred "richer refresh policy" (intra-connection re-requests
- * on archive change / focus / a future `conversation_updated`) — it is the list following the
- * connection lifecycle. The whole-list-replace setter makes each re-request's arrival idempotent.
- */
+/** App-lifetime data binding: subscribe to replies before requesting connected hosts. */
 export function ConversationListData(): null {
   useEffect(() => {
-    // Subscribe first (declared before the request effect, so it runs first on mount): the listener
-    // is live before any request goes out. The returned off handle is the effect cleanup, so a
-    // StrictMode double-mount nets exactly one live listener (the daemonEventBridge idiom). Each
-    // conversationsReceived writes its rows verbatim into the app-singleton store via its setter,
-    // under the server it came from (#1086); a conversationUpdated broadcast (#275), a
-    // conversationDeleted reply (#376) or a conversationCreated reply (#515) re-requests the list so
-    // the changed row lands without a reconnect. `window.pyry.sendCommand` is dereferenced only when
-    // the arrow runs (a refresh trigger fires), never during render — so the
-    // server-render-to-empty-markup invariant is unaffected.
-    return subscribeConversations(
+    const offEvents = subscribeConversations(
       window.pyry.onDaemonEvent,
       (list, serverId) => conversationListStore.getState().setConversations(list, serverId),
-      () => requestConversationList(window.pyry.sendCommand)
+      (serverId) => requestConversationList(window.pyry.sendCommand, serverId)
     )
-  }, [])
-
-  // Read the derived boolean (not the whole status object) so the binding only re-renders on a
-  // connected-edge flip, not on every status change.
-  const isConnected = useSessionStore((s) => s.status.type === 'connected')
-  // One request per connection episode. The ref flag makes the StrictMode dev double-invoke fire
-  // exactly one request per rising edge; resetting it while disconnected re-arms the next connect.
-  const requested = useRef(false)
-
-  useEffect(() => {
-    if (!isConnected) {
-      requested.current = false
-      return
+    const offStatuses = subscribeConnectedConversationLists(sessionStore, window.pyry.sendCommand)
+    return () => {
+      offStatuses()
+      offEvents()
     }
-    if (requested.current) return
-    requested.current = true
-    requestConversationList(window.pyry.sendCommand)
-  }, [isConnected])
-
+  }, [])
   return null
 }

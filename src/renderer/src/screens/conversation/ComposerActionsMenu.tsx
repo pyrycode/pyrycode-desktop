@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useConversationActionAvailability } from './conversationActionAvailability'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
 import { markUnavailableActions } from './composerActionAvailability'
 import {
@@ -127,19 +128,8 @@ const CHEVRON_PATH =
  * `node` vitest environment. Every prop is required, the "a view that cannot answer is a bug" rule
  * (ConversationScreen.tsx:2033), and `menu` states the unknown reading as `null` rather than by omission.
  *
- * It holds NO `canSend` prop on purpose: #680's AC4 gate is the container's single `sendText`, and a
- * second copy of that gate here is a second copy that can drift. The trigger is never disabled, including
- * while disconnected — that AC asks that picking send nothing, not that the menu be unopenable, and the
- * state is already said elsewhere: #279's banner at the top of the thread in every non-connected arm, and
- * #797's chip or #963's button in the status row directly above the composer. (Until #968 the composer's
- * own `Not connected` caption said it one row up; that caption is retired, the other two surfaces are
- * not.)
- *
- * #681's gate is a DIFFERENT axis and is deliberately not fused with that one: connection state decides
- * whether anything can be sent at all, the published list decides which of these three verbs this
- * workspace knows. The whole decision is `markUnavailableActions`, computed here in the render body from
- * the live entry — nothing is cached, memoised or carried across conversations, because a marking that
- * outlived `clearAllSlashCommandLists` would re-hydrate one workspace's verdict into the next pairing.
+ * The container hides this menu when the owning host is unavailable. Its callbacks also
+ * recheck current host availability before dispatch.
  */
 export function ComposerActionsMenuView({
   menu,
@@ -222,12 +212,14 @@ export function ComposerActionsMenu({
   conversationId: string | null
   onCommand: (command: string) => void
   onNewSession: () => void
-}): JSX.Element {
+}): JSX.Element | null {
+  const available = useConversationActionAvailability(conversationId)
   const selectMenu = useMemo(
     () => (conversationId === null ? () => null : selectSlashCommandListFor(conversationId)),
     [conversationId]
   )
   const menu = useSlashCommandListStore(selectMenu)
+  if (!available) return null
 
   return (
     <ComposerActionsMenuView menu={menu} onCommand={onCommand} onNewSession={onNewSession} />

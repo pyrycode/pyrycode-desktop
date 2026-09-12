@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { ConversationCreatedPayload } from '@shared/wire/types'
 import { NewFolderData } from '../../store/newFolderBridge'
@@ -48,9 +49,11 @@ export function CreateFolderDialogView({
   roundTrip,
   onNameChange,
   onCancel,
-  onCreate
+  onCreate,
+  available = true
 }: {
   name: string
+  available?: boolean
   roundTrip: NewFolderRoundTrip
   onNameChange: (next: string) => void
   onCancel: () => void
@@ -97,7 +100,7 @@ export function CreateFolderDialogView({
             type="button"
             className="create-folder__create"
             onClick={onCreate}
-            disabled={blank || busy}
+            disabled={blank || busy || !available}
           >
             Create
           </button>
@@ -118,9 +121,11 @@ export function CreateFolderDialogView({
 export function requestCreateWorkspaceFolder(
   sendCommand: (command: RendererCommand) => void,
   parent: string,
-  name: string
+  name: string,
+  serverId?: string
 ): void {
-  sendCommand({ type: 'createWorkspaceFolder', payload: { parent, name: name.trim() } })
+  sendCommand({ type: 'createWorkspaceFolder', payload: { parent, name: name.trim() },
+    ...(serverId === undefined ? {} : { serverId }) })
 }
 
 /**
@@ -144,6 +149,7 @@ export function CreateFolderDialog({
 }): JSX.Element {
   // The controlled field — transient UI state → useState, not the store (ADR 0006, the renameName
   // precedent). Resets for free on unmount (the dialog only mounts while open).
+  const available = useConversationActionAvailability(conversation.id)
   const [name, setName] = useState('')
   const roundTrip = useNewFolderStore(selectNewFolderRoundTrip)
 
@@ -160,6 +166,10 @@ export function CreateFolderDialog({
   // the unmount, so the switch never races the store reset.
   useEffect(() => {
     if (roundTrip.status !== 'created') return
+    if (connectedConversationHostNow(conversation.id) === null) {
+      newFolderStore.getState().dispatch({ type: 'reset' })
+      return
+    }
     requestChangeWorkspace(window.pyry.sendCommand, conversation.id, roundTrip.path)
     onCreated()
   }, [roundTrip, conversation.id, onCreated])
@@ -171,6 +181,7 @@ export function CreateFolderDialog({
           in-flight and the dialog hangs forever. Renders null. */}
       <NewFolderData />
       <CreateFolderDialogView
+        available={available}
         name={name}
         roundTrip={roundTrip}
         onNameChange={setName}
@@ -179,8 +190,10 @@ export function CreateFolderDialog({
         // the active conversation's cwd as `parent` and the trimmed name. window.pyry is dereferenced only
         // here (interaction time, never render — the ChannelInfoSheet discipline).
         onCreate={() => {
+          const serverId = connectedConversationHostNow(conversation.id)
+          if (serverId === null) return
           newFolderStore.getState().dispatch({ type: 'createRequested' })
-          requestCreateWorkspaceFolder(window.pyry.sendCommand, conversation.cwd, name)
+          requestCreateWorkspaceFolder(window.pyry.sendCommand, conversation.cwd, name, serverId)
         }}
       />
     </>

@@ -1,4 +1,5 @@
 import './pairedShell.css'
+import { connectedConversationHostNow } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
@@ -136,6 +137,7 @@ const activateDeps: ActivateConversationDeps = {
   // reaches its store through `historyAskDeps` (the `stampLastRead` shape) rather than a fourth
   // `getState()` arrow here, so the read-then-mark decision stays in one tested place.
   requestConversationConfig: (conversationId) => {
+    if (connectedConversationHostNow(conversationId) === null) return
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
     requestSystemPrompt(window.pyry.sendCommand, conversationId)

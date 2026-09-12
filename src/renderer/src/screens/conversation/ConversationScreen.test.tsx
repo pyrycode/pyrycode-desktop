@@ -1815,7 +1815,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // written here would pass a regex-shaped rewrite while the control had silently gone back to being
     // unfocusable. The attribute order is JSX order — `type` first, matching .bubble__copy's button.
     expect(markup).toContain(
-      'data-thread-role="user">here is the report<button type="button" class="bubble__file">'
+      'data-thread-role="user">here is the report<button type="button" class="bubble__file" disabled="">'
     )
     expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
   })
@@ -1963,7 +1963,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
       // A real button is what makes one tab stop, Enter and Space, and screen-reader semantics come for
       // free instead of being rebuilt out of tabIndex + onKeyDown — the ChannelList row's ruling.
-      expect(markup).toContain(`<button type="button" class="${ROW}">`)
+      expect(markup).toContain(`<button type="button" class="${ROW}" disabled="">`)
       expect(markup).not.toContain(`<div class="${ROW}">`)
       // `type="button"` matters beyond tidiness: the default is `submit`, and a submitting button inside a
       // form would reload the window rather than download anything.
@@ -2006,7 +2006,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       // Two rows, two buttons — each addressing its own attachment through its own closure. Counted rather
       // than matched by string, so a shared control wrapping both rows would redden here.
       expect(rowCount(markup)).toBe(2)
-      expect(markup.match(/<button type="button" class="bubble__file">/g)?.length ?? 0).toBe(2)
+      expect(markup.match(/<button type="button" class="bubble__file" disabled="">/g)?.length ?? 0).toBe(2)
       // Becoming a control did not give the storage handle a reason to appear in the DOM: it reaches the
       // click closure and nothing else.
       for (const id of ['att-1', 'att-2']) expect(markup).not.toContain(id)
@@ -2065,7 +2065,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       )
       expect(rowCount(markup)).toBe(1)
       expect(markup).toContain(
-        'data-thread-role="user">both kinds<button type="button" class="bubble__file">'
+        'data-thread-role="user">both kinds<button type="button" class="bubble__file" disabled="">'
       )
       expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
     })
@@ -3073,7 +3073,7 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
     expect(markup).not.toContain('aria-label="Send"')
   })
 
-  it('never disables the stop variant, even when the session cannot send', () => {
+  it('disables the stop variant when the session cannot send', () => {
     // The deliberate asymmetry: `canSend` gates the send variant only. A turn can be running while the
     // session is disconnected, and hiding the only interrupt affordance there would be a new behaviour.
     // Without this test a later tidy-up collapsing the two gates into one would pass silently.
@@ -3081,7 +3081,7 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
       <ComposerSendButton isRunning={true} canSend={false} onSend={noop} onInterrupt={noop} />
     )
     expect(markup).toContain('aria-label="Stop the running turn"')
-    expect(buttonTags(markup)[0]).not.toContain('disabled')
+    expect(buttonTags(markup)[0]).toContain('disabled')
   })
 
   it('renders exactly one button in either state — never null (the one-control invariant, AC1)', () => {
@@ -4618,48 +4618,28 @@ describe('ConversationScreen — store binding', () => {
     expect(footerAt).toBeGreaterThan(rowAt)
   })
 
-  // #680: the Actions menu's mount site. Every assertion in ComposerActionsMenu.test.tsx passes on an
-  // UNMOUNTED component, so these two are the only proof the control is actually wired into the footer.
-  //
-  // They render against a DISCONNECTED session — this block's beforeEach leaves it there, and zustand v5
-  // reads getInitialState() under renderToStaticMarkup anyway (the standing note at :2972-2977). That is
-  // convenient rather than limiting: it also pins AC4's static half, that the trigger renders ENABLED
-  // while the composer cannot send. Picking sends nothing because `sendText`'s first line is the canSend
-  // gate, not because the menu is unopenable.
-  it('mounts the Actions trigger in the footer row, closed and enabled while disconnected (AC1, AC4)', () => {
+  it('hides Actions without connected ownership while retaining the footer', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    const footerAt = markup.indexOf('class="composer__footer"')
-    const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
-    expect(footerAt).toBeGreaterThanOrEqual(0)
-    expect(triggerAt).toBeGreaterThan(footerAt)
-    expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
-    // Closed at mount: aria-expanded="false" and no panel in the tree.
-    expect(markup).toContain('aria-expanded="false"')
-    expect(markup).not.toContain('composer-options__item')
-    // Enabled: the trigger's own tag carries no `disabled`, unlike the send control one row up.
-    //
-    // THE NON-EMPTY ASSERTION IS LOAD-BEARING, and #988 is why it is here. This extractor used to end in
-    // `?? ''`, so when the class run changed under it (the shared-treatment lift) the match returned
-    // nothing, `expect('').not.toContain('disabled')` held, and the guard would have disappeared with no
-    // red anywhere in the suite. A whole-attribute-run match must prove it matched before it asserts an
-    // absence.
-    const triggerTag = markup.match(
-      new RegExp(`<button[^>]*${ACTIONS_TRIGGER_CLASS_RUN}[^>]*>`)
-    )?.[0]
-    expect(triggerTag).toBeDefined()
-    expect(triggerTag).not.toContain('disabled')
+    expect(markup).toContain('class="composer__footer"')
+    expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
   })
 
-  // The design's item order: Actions is the footer's leftmost control (Figma 110:3494, x=0), ahead of the
-  // context reading. The container smoke renders against the initial run-config store, where the reading
-  // is ABSENT — so the comparison is against the row's own opening tag, not against composer__context.
-  it('places the Actions trigger first in the footer row (Figma 115:3677 at x=0)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    const anchorAt = markup.indexOf('class="composer-options-anchor"')
-    const footerAt = markup.indexOf('class="composer__footer"')
-    expect(anchorAt).toBeGreaterThan(footerAt)
-    // Nothing of the footer's own between the row's tag and the anchor: the anchor opens the row.
-    expect(markup.slice(footerAt, anchorAt)).not.toContain('composer__context')
+  it('places the closed Actions trigger first in the connected footer', () => {
+    const restore = stageOpenConnection(CONNECTED)
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const footerAt = markup.indexOf('class="composer__footer"')
+      const anchorAt = markup.indexOf('class="composer-options-anchor"')
+      expect(footerAt).toBeGreaterThanOrEqual(0)
+      expect(anchorAt).toBeGreaterThan(footerAt)
+      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(anchorAt)
+      expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
+      expect(markup).toContain('aria-expanded="false"')
+      expect(markup).not.toContain('composer-options__item')
+      expect(markup.slice(footerAt, anchorAt)).not.toContain('composer__context')
+    } finally {
+      restore()
+    }
   })
 
   // #811: the reading's PRESENT arm through the mounted container — the only test that proves
@@ -4830,7 +4810,8 @@ describe('ConversationScreen — store binding', () => {
       const permissionAt = markup.indexOf('composer__permission-label')
       const modelAt = markup.indexOf('composer__model-label')
       // Figma 110:3494's order, in full: Actions, permission mode, model, effort, then the reading.
-      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      else expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
       expect(permissionAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
       expect(modelAt).toBeGreaterThan(permissionAt)
       expect(markup.indexOf('composer__effort-label')).toBeGreaterThan(modelAt)
@@ -4838,10 +4819,10 @@ describe('ConversationScreen — store binding', () => {
       // must not reach the row, which is where this control departs from the effort trigger beside it.
       expect(markup).toContain(`>${PERMISSION_MODE_LABELS.acceptEdits}<`)
       expect(markup).not.toContain('>acceptEdits<')
-      // Connected ownership enables permission choices; without ownership only Actions opens.
+      // Connected ownership enables permission choices; without ownership all mutation menus stay hidden.
       // Held labels and their order must survive in both presentations.
-      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(connected ? 2 : 1)
-      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(connected ? 2 : 1)
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(connected ? 2 : 0)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(connected ? 2 : 0)
     } finally {
       spy.mockRestore()
       restoreConnection()
@@ -5107,24 +5088,11 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('role="menu"')
   })
 
-  it('renders no overflow menu for a bare ConversationScreen (onBack absent — unchanged, AC1)', () => {
+  it('renders no menus for a bare ConversationScreen without connected ownership', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__overflow')
-    // Only the thread's menu popup must be absent here. #680 mounted the footer's Actions trigger, which
-    // legitimately advertises aria-haspopup="menu" — so the bare absence check this line used to make is
-    // no longer the right proxy. (StatusRow used to carry the region's only aria-haspopup="dialog" and
-    // was the other half of this note; #962 retired it, which changes nothing about the count below —
-    // it was never one of the menu popups.) Pinned as a COUNT instead, and
-    // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
-    // which is the guard #276 wanted.
-    // (The count stays 1 with #988's model menu, #989's effort menu and #682's permission-mode menu
-    // mounted: the bare tree has no run-config snapshot, so the effective model, effort and permission
-    // mode are all '' and none of the three renders anything at all. #682 is the one that would have
-    // broken this had it drawn a placeholder — it is operable whenever a mode is known, so "no mode is
-    // known" is the whole of what keeps it out of the bare tree.)
-    expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
-    // Adjacency-sensitive on purpose: it pins the class run immediately followed by aria-haspopup.
-    expect(markup).toContain(`${ACTIONS_TRIGGER_CLASS_RUN} aria-haspopup="menu"`)
+    expect(markup).not.toContain('aria-haspopup="menu"')
+    expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
   })
 })
 
@@ -5228,4 +5196,9 @@ describe('model rejection in the mounted status row', () => {
       restore()
     }
   })
+})
+
+it('disables the held running-turn interrupt when sending is unavailable', () => {
+  const markup = renderToStaticMarkup(<ComposerSendButton isRunning canSend={false} onSend={() => {}} onInterrupt={() => {}} />)
+  expect(markup).toContain('disabled=""')
 })

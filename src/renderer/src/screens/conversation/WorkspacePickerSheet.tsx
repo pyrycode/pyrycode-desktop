@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { ConversationCreatedPayload, RecentWorkspace } from '@shared/wire/types'
 import { formatLastActivity } from '../channels/channelListViewModel'
@@ -214,6 +215,7 @@ function WorkspacePickerSheet({
 }): JSX.Element {
   // Read the app-singleton store — the bridge (mounted below) writes it, this reads the slice; the view
   // re-renders when rows arrive. Unidirectional: the only write path is daemon → bridge → setter.
+  const available = useConversationActionAvailability(conversation?.id ?? null)
   const workspaces = useRecentWorkspacesStore(selectRecentWorkspaces)
   // The "default" mark source: null for a list-opened thread (activeConversationStore is written only on
   // conversation_created), which marks no row (AC2).
@@ -236,7 +238,7 @@ function WorkspacePickerSheet({
       {/* The dormant #382 data-path bridge — mounting it only while the picker is open gives exactly its
           documented behaviour: a fresh one-shot requestRecentWorkspaces per open (fresh instance → fresh
           useRef → one request), re-fetching on each reopen. Renders null. */}
-      <RecentWorkspacesData />
+      {available && <RecentWorkspacesData />}
       <WorkspacePickerSheetView
         workspaces={workspaces}
         activeCwd={activeCwd}
@@ -247,9 +249,10 @@ function WorkspacePickerSheet({
         // callback (interaction time, never render — the ChannelInfoSheet discipline), so a server-rendered
         // container never touches the bridge. The chosen row's path maps into the `cwd` wire field; then close.
         onChoose={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : (path) => {
+                if (connectedConversationHostNow(conversation.id) === null) return
                 requestChangeWorkspace(window.pyry.sendCommand, conversation.id, path)
                 onClose()
               }
@@ -257,7 +260,7 @@ function WorkspacePickerSheet({
         // #398: supply onCreateFolder ONLY for a non-null conversation (gated exactly like onChoose — the
         // dialog needs the conversation_id the switch reflects onto). It just opens the dialog; no wire
         // traffic here.
-        onCreateFolder={conversation === null ? undefined : () => setCreateFolderOpen(true)}
+        onCreateFolder={conversation === null || !available ? undefined : () => setCreateFolderOpen(true)}
       />
       {/* #398: the Create-folder dialog, mounted picker-scoped as a sibling (the ChannelInfoSheet-mounts-
           RenameConversationDialog idiom). onDismiss closes the dialog alone (picker stays, AC2); onCreated

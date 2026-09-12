@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { activeConversationStore } from '../../store/activeConversationStore'
+import { connectedConversationHostNow } from './conversationActionAvailability'
 import type { MessageAttachment } from '../../store/threadTimeline'
 import { attachmentImageSources } from './attachmentImageSource'
 
@@ -135,6 +137,11 @@ export function BubbleAttachmentImage({
   const [state, setState] = useState<AttachmentThumbnailState>({ type: 'pending' })
 
   useEffect(() => {
+    const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
+    if (connectedConversationHostNow(conversationId) === null) {
+      setState({ type: 'failed' })
+      return
+    }
     // ⭐ THE RELEASE HANDLE IS THE CLEANUP, RETURNED DIRECTLY. #1044's contract hands it back on EVERY
     // branch before any terminal, so it is callable unconditionally without knowing which branch the ask
     // took — which is what licenses this one-liner. Releasing on unmount is LOAD-BEARING, not hygiene: URLs

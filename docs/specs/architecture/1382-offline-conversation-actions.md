@@ -79,3 +79,9 @@ None. Thumbnail retrieval is included because offline opening must not issue att
 
 **Reviewer:** builder self-review using `builder/security-review.md`
 **Date:** 2026-09-13
+
+## Revisions
+
+- 2026-09-13: `RunConfigData` also checks current availability inside its request effect, ensuring a disconnect between rendering and effect execution cannot issue configuration requests. This is a ninth production file under the same depth-cap exception; the screen's conditional mount remains the reactive presentation gate.
+
+- 2026-09-13: Hide `ComposerActionsMenu` when unavailable, matching the settings-menu gates. Reusing unavailable rows would incorrectly announce a workspace limitation for an offline host. Current-state callback guards remain required.

@@ -355,8 +355,8 @@ test('long host details wrap at minimum width and all controls remain reachable 
   await expect(dialog).toHaveCount(0)
 })
 
-// https://github.com/pyrycode/pyrycode-desktop/issues/1361 — shared Modal inlines an SVG blocked by CSP.
-test.skip('blocked on #1361 — shared Modal close image decodes in the built app', async ({ launchPairedApp }) => {
+// #1361: the real build and renderer image policy must allow the shared close asset.
+test('shared Modal close image decodes in the built app', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp()
   await page.locator('.channel-list__host-edit').first().click()
   const closeImage = page.getByRole('dialog', { name: 'Edit host' }).locator('.modal__close img')

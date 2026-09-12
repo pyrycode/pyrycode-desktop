@@ -86,7 +86,7 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     expect(markup).not.toContain(CURSOR)
   })
 
-  it('surfaces an answerable dialog from a modal_shown event', () => {
+  it('surfaces an answerable panel from a modal_shown event', () => {
     const bridge = fakeBridge()
     const store = createModalStore()
     // #1140: the injected per-server conversation resolution. This case emits no `connected`, so it is
@@ -118,6 +118,8 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
       <PermissionModalView
         prompt={outstanding[0]}
         pendingOption={null}
+        selectedOption={null}
+        onContinue={() => {}}
         onSelect={() => {}}
         onConfirm={() => {}}
         onBack={() => {}}
@@ -125,17 +127,14 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
       />
     )
 
-    // Answerable: the dialog chrome, the prompt text, one option button per option (the default
-    // visually distinguished), plus the leading Cancel affordance.
-    expect(markup).toContain('role="dialog"')
+    // One native choice per supplied option, default indication and explicit action controls.
+    expect(markup).toContain('role="region"')
     expect(markup).toContain('run the build')
-    // Match an option button's class start (option followed by a space or the closing quote), not the
-    // plural `permission-modal__options` container that also begins with `permission-modal__option`.
-    const optionButtons = markup.match(/class="permission-modal__option[ "]/g)?.length ?? 0
-    expect(optionButtons).toBe(2)
-    expect(markup).toContain('permission-modal__option--default')
-    expect(markup).toContain('>Allow</button>')
-    expect(markup).toContain('>Deny</button>')
+    const optionInputs = markup.match(/type="radio"/g)?.length ?? 0
+    expect(optionInputs).toBe(2)
+    expect(markup).toContain('permission-panel__default')
+    expect(markup).toContain('>Allow</span>')
+    expect(markup).toContain('>Deny<span')
     expect(markup).toContain('>Cancel</button>')
   })
 })

@@ -108,12 +108,13 @@ export type ModalEvent =
  * the arrival-ordered, de-duplicated `modalId`s of answers that round-tripped to a daemon `error`
  * (#249). `rejections` is ORTHOGONAL to `outstanding`: the answered prompt is already gone (#237), so a
  * rejection is new UI state, not a re-surfaced prompt. It holds bare `modalId` strings — the event is
- * content-free, so there is genuinely nothing else to carry — and each id is the stable React key when
- * more than one banner shows (AC4).
+ * content-free. Separate ownership records scope those IDs to a chat for the feedback's lifetime.
  */
 export interface ModalState {
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]
+  // Feedback ownership survives reconnect independently of resolved suppression records.
+  rejectionOwners: readonly ResolvedModal[]
   // #195: the prompts that have LEFT `outstanding` via `dismissed` (answer/cancel/remote/timeout).
   // Internal reducer bookkeeping — no selector, no consumer reads it, inside this module or outside it.
   // It lets the `shown` arm tell a never-seen id (→ append) from a seen-then-resolved one (→ no-op), so
@@ -299,12 +300,21 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
     case 'rejected': {
       const rejections = appendUnique(state.rejections, event.modalId)
       // Duplicate id: appendUnique returned the same array — return the same state (no churn).
-      return rejections === state.rejections ? state : { ...state, rejections }
+      if (rejections === state.rejections) return state
+      const owner = state.outstanding.find((p) => p.modalId === event.modalId)
+        ?? state.resolved.find((p) => p.modalId === event.modalId)
+      const rejectionOwners = owner ? appendResolved(state.rejectionOwners, {
+        modalId: event.modalId, conversationId: owner.conversationId
+      }) : state.rejectionOwners
+      return { ...state, rejections, rejectionOwners }
     }
     case 'rejectionDismissed': {
       const rejections = removeRejection(state.rejections, event.modalId)
       // Unknown/already-dismissed id: removeRejection returned the same array — return the same state.
-      return rejections === state.rejections ? state : { ...state, rejections }
+      return rejections === state.rejections ? state : {
+        ...state, rejections,
+        rejectionOwners: state.rejectionOwners.filter((r) => r.modalId !== event.modalId)
+      }
     }
     case 'reconnected': {
       // #415: on every (re)handshake, clear `outstanding` so the daemon's connect-time re-sends are the
@@ -348,7 +358,7 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
   }
 }
 
-export const initialModalState: ModalState = { outstanding: [], rejections: [], resolved: [] }
+export const initialModalState: ModalState = { outstanding: [], rejections: [], rejectionOwners: [], resolved: [] }
 
 /** Selector — the read surface, returns the slice by reference (matching `selectItems`). */
 export const selectOutstanding = (s: ModalState): readonly ModalPrompt[] => s.outstanding

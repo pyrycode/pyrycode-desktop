@@ -5211,6 +5211,39 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
 })
 
 describe('createDaemonConnection — answerModal (outbound modal_answer, #236)', () => {
+  it.each([false, true])('logs content-free modal lifecycle and send failures (throw=%s)', async (throwOnSend) => {
+    const { log, records } = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: log, throwOnSend })
+    connection.answerModal({ modal_id: 'private-modal', option_id: 'private-option' })
+    connection.cancelModal({ modal_id: 'private-modal' })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[0].emit({ type: 'message', plaintext: modalShownPlaintext({
+      conversation_id: 'private-chat', modal_id: 'private-modal', class: 'permission',
+      title: 'private-title', prompt: 'private-prose', options: [{ id: 'private-option', label: 'private-label' }],
+      default_option_id: 'private-option'
+    }) })
+    connection.answerModal({ modal_id: 'private-modal', option_id: 'private-option' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+    connection.cancelModal({ modal_id: 'private-modal' })
+    drivers[0].emit({ type: 'message', plaintext: modalDismissedPlaintext({
+      modal_id: 'private-modal', outcome: 'private-option', source: 'remote'
+    }) })
+    expect(records.filter((r) => r.event.startsWith('modal-'))).toEqual([
+      { event: 'modal-answer-failed', code: 'unavailable' },
+      { event: 'modal-cancel-failed', code: 'unavailable' },
+      { event: 'modal-shown' },
+      ...(throwOnSend ? [{ event: 'modal-answer-failed', code: 'send-failed' }] : [
+        { event: 'modal-answer-sent' }, { event: 'modal-answer-rejected' }
+      ]),
+      throwOnSend ? { event: 'modal-cancel-failed', code: 'send-failed' } : { event: 'modal-cancel-sent' },
+      { event: 'modal-dismissed' }
+    ])
+    expect(JSON.stringify(records)).not.toMatch(/private-|test-token|secret error detail/)
+    connection.stop()
+  })
+
   const PAYLOAD = { modal_id: 'md-1', option_id: 'opt-1' }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */

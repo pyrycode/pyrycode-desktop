@@ -86,26 +86,14 @@ const SPEC_TIMEOUT_MS = 300_000
 // the tool call before it blocks on the permission, so bound it as generously as a whole turn.
 const MODAL_TIMEOUT_MS = 120_000
 
-/**
- * Answer the relayed permission dialog "allow". Over the real stack the affirmative label + which option is
- * default are DAEMON-SUPPLIED (the daemon relays claude's actual options), so neither is known ahead of time:
- *   - The affirmative label is matched by a start-anchored, case-insensitive regex over the plausible
- *     affirmative vocabulary, scoped INSIDE the dialog, first match. The `^…\b` anchor keeps it from matching
- *     a decline like "No, and tell Claude…"; the client-owned Cancel/Back/Confirm buttons carry different
- *     labels and are not matched.
- *   - Which option is default is unknown, so clicking the affirmative either answers straight-through (if it
- *     IS the default — modalResolution.selectOption resolves it in one tap) or opens the client-owned confirm
- *     sub-step (if non-default — held pending a second `Confirm`). Resolve both: click the affirmative, then
- *     click `Confirm` iff it appeared. `Confirm` is client-owned + deterministic; the sub-step transition is
- *     a synchronous local React state update, so it is present (or not) by the time the option click resolves.
- * The regex + the conditional confirm are the two live-tunable knobs the operator adjusts on the first real
- * run (OQ-b): if the daemon's affirmative uses vocabulary the regex misses, the click below fails cleanly.
- */
+// Choose a supplied affirmative row, then Continue; only a non-default needs Confirm.
+// The wire's labels and default remain authoritative, and no option is sent by selection alone.
 async function answerAllow(dialog: Locator): Promise<void> {
   await dialog
-    .getByRole('button', { name: /^(yes|allow|approve|accept|grant)\b/i })
+    .locator('.question-panel__option').filter({ hasText: /^(yes|allow|approve|accept|grant)\b/i })
     .first()
     .click()
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
   const confirm = dialog.getByRole('button', { name: 'Confirm', exact: true })
   if ((await confirm.count()) > 0) await confirm.click()
 }
@@ -139,9 +127,8 @@ test('real claude relays a per-tool permission modal that answering "allow" clea
   const conversation = page.locator('.conversation')
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
-  // The single-dialog FIFO surface (PermissionModal): the oldest outstanding prompt renders as one
-  // role="dialog"; option / Confirm buttons are scoped inside it.
-  const dialog = page.getByRole('dialog')
+  // Current-chat FIFO permission panel; questionnaire controls have their own request path.
+  const dialog = page.locator('.permission-panel')
 
   await pairFromUnpairedLaunch(page, payload)
 

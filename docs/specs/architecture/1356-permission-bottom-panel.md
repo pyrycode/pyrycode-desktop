@@ -74,3 +74,7 @@ Pending documentation stage: update `docs/knowledge/features/conversation-shell-
 
 **Reviewer:** builder, self-review using `builder/security-review.md`.
 **Date:** 2026-09-12.
+
+## Revisions
+
+2026-09-12 — The logging audit found generic transport diagnostics but no permission lifecycle diagnostics. Add static, content-free events at `createDaemonConnection`'s existing modal shown/dismissed/rejected and answer/cancel boundaries, including unavailable/send-failed classifications. This satisfies the builder's required feature logging without introducing renderer logging or changing transport behavior. Read `src/main/daemonConnection.ts` (`answerModal`, `cancelModal`, `onDriverEvent`) and its existing `daemonConnection.test.ts` capture helpers; no remote branch overlaps these files. The scope is now four production TypeScript files plus the stylesheet, about 650 written lines, and no new exported contract. Security re-review: PASS; logs accept no IDs, tokens, labels, plaintext or caught error objects.

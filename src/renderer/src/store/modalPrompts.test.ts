@@ -71,6 +71,22 @@ function run(events: readonly ModalEvent[]): ModalState {
   return events.reduce(reduceModal, initialModalState)
 }
 
+it('keeps rejection ownership after optimistic removal and reconnect until Dismiss or reset', () => {
+  const state = run([shown('m1'), dismissed('m1', 'deny', 'local'), rejected('m1')])
+  expect(state.rejectionOwners).toEqual([{ modalId: 'm1', conversationId: 'conv-m1' }])
+  const rejoined = reduceModal(state, reconnected('conv-m1'))
+  expect(rejoined.resolved).toEqual([])
+  expect(rejoined.rejectionOwners).toBe(state.rejectionOwners)
+  expect(reduceModal(rejoined, rejectionDismissed('m1')).rejectionOwners).toEqual([])
+  expect(reduceModal(rejoined, reset()).rejectionOwners).toEqual([])
+})
+
+it('copies outstanding rejection ownership without attributing unknown IDs to a chat', () => {
+  const state = run([shown('m1'), rejected('m1'), rejected('unknown')])
+  expect(state.rejectionOwners).toEqual([{ modalId: 'm1', conversationId: 'conv-m1' }])
+  expect(reduceModal(state, rejected('m1'))).toBe(state)
+})
+
 describe('reduceModal — install', () => {
   it('holds a single shown prompt addressed by modalId, carrying its fields verbatim', () => {
     const state = run([shown('m1')])

@@ -3874,141 +3874,61 @@
   overflow-y: auto;
 }
 
-/* #224 — the interactive permission/trust modal (Figma "Dialogs" section, node 22-3). Reuses the
-   status-sheet overlay+scrim STRUCTURE but centers the panel (a centered M3 dialog) instead of
-   bottom-anchoring it (a bottom sheet). A distinct class set, not the status-sheet classes: the two
-   modals share a chrome pattern, not a stylesheet, so the sheet's future changes never leak here. */
-.permission-modal-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
+/* Permission variant of the questionnaire: actions stay outside the scrollable content. */
+.question-panel.permission-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 60vh;
 }
 
-/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
-   40% via opacity (not a color literal) — the status-sheet-overlay__scrim idiom. */
-.permission-modal-overlay__scrim {
-  position: absolute;
-  inset: 0;
-  background: var(--color-scrim);
-  opacity: 0.4;
+.permission-panel__title {
+  margin: 0;
+  max-height: 15vh;
+  overflow-y: auto;
 }
 
-/* The centered M3 dialog panel (Figma 19:14 et al.): surface-container-high, 28px radius, 24px padding,
-   a column with 16px gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows;
-   max-height + overflow keep a long untrusted prompt scrolling inside the panel, not overflowing. */
-.permission-modal {
-  position: relative;
+.permission-panel > .question-panel__title,
+.permission-panel .question-panel__separator,
+.permission-panel .question-panel__actions {
+  flex: 0 0 auto;
+}
+
+.permission-panel > .question-panel__box {
+  min-height: 0;
+}
+
+.permission-panel__content {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  width: 100%;
-  max-width: 360px;
-  max-height: 90%;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-6);
-  background: var(--color-surface-container-high);
-  border-radius: var(--radius-lg);
-  color: var(--color-on-surface);
 }
 
-/* The headline-small title. margin: 0 resets the heading default. */
-.permission-modal__title {
-  margin: 0;
-  color: var(--color-on-surface);
-  font-size: var(--text-headline-small-size);
-  line-height: var(--text-headline-small-line);
-  letter-spacing: var(--text-headline-small-tracking);
-  font-weight: var(--text-headline-small-weight);
+.permission-panel__content > * {
+  flex: 0 0 auto;
 }
 
-/* The body prompt — body-medium, muted. margin: 0 resets the <p> default; word-break so an unbounded
-   untrusted daemon string wraps inside the panel rather than overflowing. */
-.permission-modal__prompt {
-  margin: 0;
-  color: var(--color-on-surface-variant);
-  word-break: break-word;
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
+.permission-panel .permission-panel__explanation {
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
 }
 
-/* The bottom action-button row (Figma 19:19): right-aligned pills; wraps for N > 2 options or long
-   daemon labels so the row degrades gracefully instead of overflowing. */
-.permission-modal__options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  justify-content: flex-end;
+.permission-panel__default {
+  margin-left: var(--space-2);
+  color: var(--color-tertiary);
+  font-weight: var(--text-label-medium-weight);
 }
 
-/* An action-row text button — the Dialogs text-button treatment: pill, transparent fill,
-   --color-primary label, label-large. Shared by each daemon option, the client-owned cancel affordance
-   (#237), and the confirm sub-step's Back / Confirm actions (#226). focus-visible keeps it
-   keyboard-reachable, the file's button convention. */
-.permission-modal__option,
-.permission-modal__cancel,
-.permission-modal__back,
-.permission-modal__confirm {
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.permission-modal__option:focus-visible,
-.permission-modal__cancel:focus-visible,
-.permission-modal__back:focus-visible,
-.permission-modal__confirm:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-/* The leading-dismissive M3 action stays left-aligned in the flex-end action row (margin-right: auto
-   pushes the trailing action(s) to the right) while sharing the text-button treatment above: the
-   list-mode Cancel (#237) and the confirm-mode Back (#226). */
-.permission-modal__cancel,
-.permission-modal__back {
-  margin-right: auto;
-}
-
-/* The fail-safe default (the safe deny) is the emphasized, filled-tonal choice: --color-secondary-container
-   fill + --color-on-secondary-container text (the .log-data__download / effort-selected treatment) — a
-   clear, assertable distinction that makes the safe option the prominent one. */
-.permission-modal__option--default {
-  background: var(--color-secondary-container);
-  color: var(--color-on-secondary-container);
-}
-
-/* #249 — the modal-answer rejection surface: a transient, bottom-anchored stack of "your answer was
-   rejected" banners at the modal host. The answer path clears the modal optimistically (#237), so when
-   an ungranted device's answer round-trips to a daemon error (#248) the prompt is already gone — this
-   banner is the only surface telling the user it did not go through. Content-free: client-owned category
-   copy only, no daemon text (AC3). A minimal placeholder chrome pending a bespoke Figma follow-up —
-   reuses the modal chrome tokens + the --color-error accent (#230); no new theme tokens (ticket forbids).
-   pointer-events: none so the full-width strip never blocks the composer beneath it (it is NOT a scrim);
-   each banner re-enables its own pointer events so the Dismiss control stays clickable. */
+/* Feedback occupies normal flow; it never paints over the restored input controls. */
 .modal-rejections {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-4);
-  z-index: 1;
-  pointer-events: none;
 }
 
 /* One banner: a surface-container-high card with an error-colored LEADING ACCENT (a border, not a

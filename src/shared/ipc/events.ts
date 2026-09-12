@@ -440,6 +440,8 @@ type BaseDaemonEvent =
   // only to its own held conversation and is dropped by translateTimelineEvent.
   | { type: 'compacting'; active: boolean; conversationId: string; compactResult?: string; compactError?: string }
   | { type: 'compactionBoundary'; conversationId: string; trigger: string; preTokens?: number | null; postTokens?: number | null }
+  /** Untrusted Claude prose: text children only, never attributes/logs; stopsTurn controls display only. */
+  | { type: 'banner'; conversationId: string; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   // The announced-model arm (#587) — what claude named as the model it resolved for the turn, off its
   // `system` / `init` line. Neither a claude sub-state like its three status neighbours above nor a
   // daemon mapping gap like unrecognizedMessage: an IDENTITY report, answering what the spawn argument

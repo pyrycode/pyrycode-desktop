@@ -1799,6 +1799,30 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
   })
 })
 
+describe('createDaemonConnection — banner reports', () => {
+  it('delivers named fields over IPC without interpreting stopping reports or logging prose', async () => {
+    const { log, records } = captureLog()
+    const { sink, drivers, connection } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(sink).length
+    const sent = drivers[0].sent.length
+    const push = (payload: unknown) => drivers[0].emit({ type: 'message',
+      plaintext: encodeEnvelope({ id: 913, type: 'banner', ts: FIXED_TS, payload }) })
+    const payload = { conversation_id: 'private-chat', level: 'private-level', text: 'private-prose', stops_turn: true, truncated: false }
+    push({ ...payload, extra: 'must-not-cross' })
+    push({ ...payload, level: '', text: '', stops_turn: false, truncated: true })
+    push({ ...payload, stops_turn: 'true' })
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'banner', conversationId: 'private-chat', level: 'private-level', text: 'private-prose', stopsTurn: true, truncated: false },
+      { type: 'banner', conversationId: 'private-chat', level: '', text: '', stopsTurn: false, truncated: true }
+    ])
+    expect(drivers[0].sent).toHaveLength(sent)
+    expect(JSON.stringify(records)).not.toMatch(/private-chat|private-level|private-prose|must-not-cross/)
+  })
+})
+
 describe('createDaemonConnection — compacting stream (#495)', () => {
   it('carries outcomes and boundary counts through IPC, rejecting malformed frames without leaking prose', async () => {
     const { log, records } = captureLog()

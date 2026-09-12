@@ -26,6 +26,7 @@ import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type {
+  BannerPayload,
   MessagePayload,
   MessageChunkPayload,
   AssistantDeltaPayload,
@@ -670,6 +671,7 @@ interface FrameTimestamp {
  * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage =
+  | { kind: 'banner'; banner: BannerPayload }
   | { kind: 'message'; message: MessagePayload }
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
@@ -3242,6 +3244,17 @@ function narrowSystemPromptRejectReason(payload: unknown): SystemPromptRejectRea
   }
 }
 
+function parseBannerPayload(payload: unknown): BannerPayload {
+  if (!isRecord(payload)) throw new WireDecodeError('malformed banner payload')
+  return {
+    conversation_id: requireString(payload, 'conversation_id'),
+    level: requireString(payload, 'level'),
+    text: requireString(payload, 'text'),
+    stops_turn: requireBoolean(payload, 'stops_turn'),
+    truncated: requireBoolean(payload, 'truncated')
+  }
+}
+
 /**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
@@ -3456,6 +3469,12 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'api-retry', apiRetry, ts: envelope.ts }
+    }
+    case 'banner': {
+      const banner = parseBannerPayload(envelope.payload)
+      diagnosticLog?.event({ event: 'inbound-decoded', code: 'banner',
+        bytes: plaintext.length, hash: hashPlaintext(plaintext) })
+      return { kind: 'banner', banner }
     }
     case 'compaction_boundary': {
       const boundary = parseCompactionBoundaryPayload(envelope.payload)

@@ -90,6 +90,7 @@ export interface ToolResult {
 export type ThreadItem =
   | { kind: 'compactionBoundary'; failed: boolean; manual: boolean; preTokens?: number | null; postTokens?: number | null }
   | { kind: 'modelRefusal'; refusal: ModelRefusalEvent }
+  | { kind: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   // #1013: `createdAt` is the epoch-millisecond moment this bubble first appeared — the arrival of its
   // FIRST delta, stamped in the renderer from an injected clock, not carried from the envelope `ts` (the
   // `assistantDelta` IPC arm names four fields fail-closed and does not forward it; the two agree to within
@@ -202,6 +203,7 @@ export type ThreadItem =
  */
 export type ThreadEvent =
   | { type: 'modelRefusal'; refusal: ModelRefusalEvent; live: boolean }
+  | { type: 'banner'; level: string; text: string; stopsTurn: boolean; truncated: boolean }
   | { type: 'refusalWriteStarted'; offer: NonNullable<TimelineState['refusalOffer']>; changeId: string }
   | { type: 'refusalWriteSettled'; changeId: string; confirmed: boolean }
   | { type: 'refusalModelSelected'; changeId: string }
@@ -373,6 +375,8 @@ export interface ApiRetryStatus {
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase + the five chrome scalars. */
 export interface TimelineState {
+  /** Latest stopping report, retired only by a local optimistic send or timeline reset. */
+  stoppingBanner?: Omit<Extract<ThreadItem, { kind: 'banner' }>, 'kind'>
   /** Reference identity survives intervening content, echo removal and history prepend. */
   pendingCompaction?: Extract<ThreadItem, { kind: 'compactionBoundary' }>
   refusalOffer?: {
@@ -543,6 +547,11 @@ function removeUserEcho(items: readonly ThreadItem[], messageId: string): readon
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
   let next = reduceTimelineContent(state, event)
+  const stoppingBanner = event.type === 'userText' || event.type === 'reset' ? undefined
+    : event.type === 'banner' && event.stopsTurn
+      ? { level: event.level, text: event.text, stopsTurn: event.stopsTurn, truncated: event.truncated }
+      : state.stoppingBanner
+  if (next.stoppingBanner !== stoppingBanner) next = { ...next, stoppingBanner }
   // Content reducers reconstruct their fields. Preserve the association except at its own edges/reset.
   if (event.type !== 'compacting' && event.type !== 'compactionBoundary' && event.type !== 'reset' &&
       next.pendingCompaction !== state.pendingCompaction) {
@@ -597,6 +606,11 @@ function reduceRefusalOffer(
 
 function reduceTimelineContent(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
+    case 'banner':
+      return { ...state, items: [...state.items, {
+        kind: 'banner', level: event.level, text: event.text,
+        stopsTurn: event.stopsTurn, truncated: event.truncated
+      }] }
     case 'modelRefusal':
       return { ...state, items: [...state.items, { kind: 'modelRefusal', refusal: event.refusal }] }
     case 'refusalWriteStarted': case 'refusalWriteSettled': case 'refusalModelSelected':

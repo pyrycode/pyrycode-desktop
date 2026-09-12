@@ -119,6 +119,11 @@ export function translateTimelineEvent(
   now?: () => number
 ): ThreadEvent | null {
   switch (event.type) {
+    case 'banner':
+      return event.conversationId === '' ? null : {
+        type: 'banner', level: event.level, text: event.text,
+        stopsTurn: event.stopsTurn, truncated: event.truncated
+      }
     case 'modelRefusalFallback':
     case 'modelRefusalNoFallback': {
       const live = 'conversationId' in event && typeof event.conversationId === 'string'
@@ -560,6 +565,7 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
   switch (event.type) {
     case 'toolProgress':
       return event.conversationId
+    case 'banner':
     case 'modelRefusalFallback':
     case 'modelRefusalNoFallback':
     case 'toolDenied':

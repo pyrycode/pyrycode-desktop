@@ -1623,6 +1623,14 @@
   white-space: normal;
 }
 
+.composer-status__banner {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 /* The chip's assistive-technology marking (AC4): present for a screen reader, absent from the visual
    design. Hidden TEXT rather than an aria-label — see ComposerErrorChip's comment; an aria-label on a
    role="generic" element is dropped by the browser. The standard visually-hidden recipe, using clip-path
@@ -2644,6 +2652,18 @@
   color: var(--color-primary);
   text-align: center;
   word-break: break-word;
+}
+
+.session-delimiter__title.claude-banner {
+  width: 100%;
+  color: var(--color-on-surface-variant);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-delimiter__title.claude-banner--warning {
+  color: var(--color-warning);
 }
 
 /* The two hairlines (Figma nodes 119:3846 / 119:3841): 1px bands in inverse-primary at 60% opacity —

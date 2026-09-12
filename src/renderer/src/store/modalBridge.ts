@@ -154,6 +154,7 @@ export function translateModalEvent(
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'apiRetry':
+    case 'banner':
     case 'compactionBoundary':
     case 'compacting':
     case 'unrecognizedMessage':

@@ -52,7 +52,7 @@ function rowName(row: { name: string | null }): string {
 }
 
 // Composer recovery preserves saved hosts; explicit removal is covered by the Settings specs.
-test('re-pair: a fatal relay close surfaces Re-pair, which opens recovery beside the sidebar', async ({
+test('re-pair: a fatal relay close surfaces Re-pair, which opens a recovery modal', async ({
   launchPairedApp
 }) => {
   const { page, forwarder } = await launchPairedApp()
@@ -145,7 +145,12 @@ test('re-pair with a second server preserves both hosts in the paired shell', as
   await expect(repair).toBeVisible()
   await repair.click()
 
+  const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
+  await expect(recovery).toBeVisible()
   await expect(pairingBox).toBeVisible()
+  await recovery.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(recovery).toHaveCount(0)
+  await expect(page.locator('.conversation')).toBeVisible()
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
 

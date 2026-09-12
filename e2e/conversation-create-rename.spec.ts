@@ -1,28 +1,11 @@
+import { mkdir } from 'node:fs/promises'
+import { decodeEnvelope } from '../src/main/transport/codec'
 import { test, expect } from './fixtures/launchPairedApp'
+import { bubbleTextExactly } from './fixtures/bubbleText'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for the CREATION and NAMING flows (#451, split from #422): the create-and-navigate
-// round-trip, the Channel-info SHEET rename entry point, and a grown two-row Channel List — none of which
-// had e2e coverage. It rides the merged fixtures (launchPairedApp #433 / conversationStateFake #434) and
-// asserts existing UI only; zero production code.
-//
-// It is deliberately NOT a re-prove of the LIST-ROW rename (the `.channel-list__rename` pencil): that
-// entry point is owned by conversation-state-fake.spec.ts (#434's demonstrator). This spec clones that
-// demonstrator's shape (seed → launchPairedApp passthrough → one back-nav → the shared rename dialog
-// drive) and adds the three uncovered steps: FAB create-nav, the sheet rename, and the two-row re-list.
-//
-// One `test`, one `launchPairedApp` launch (a fresh launch + pairing costs ~15–60s), one sequential
-// drive. It runs under the default `npm run e2e` (its filename does NOT match the config's `real-*`
-// testIgnore).
-//
-// SECRET HYGIENE (carried verbatim from the demonstrator): every assertion reads DOM text / visibility /
-// counts only; SEED.name and NEW_TITLE are non-secret display literals; the pairing plumbing (synthetic
-// token, fake static key) lives in launchPairedApp and is never echoed. No failure diagnostic serialises
-// a token, key, or plaintext.
-
-// The full create→nav / rename→broadcast→re-list→re-render loop is a fast in-process round-trip, so a
-// short headroom over Playwright's 5s default suffices for a cold runner (the demonstrator's value).
+// Creation and both rename entry points through the real UI and fake transport.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
@@ -55,8 +38,40 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
 }) => {
   // Seed the stateful fake with one promoted row; its buildReplyFrames answers the connected-edge
   // list_conversations from that seed and applies every list mutation (create/rename) to the held state.
-  const buildReplyFrames = conversationStateFake({ conversations: [SEED] })
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const fake = conversationStateFake({ conversations: [SEED] })
+  const renames: unknown[] = []
+  const mutations: string[] = []
+  let listed: ConversationSummary[] = []
+  const { page, app } = await launchPairedApp({
+    buildReplyFrames: (inbound) => {
+      const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'rename_conversation') renames.push(envelope.payload)
+      if (['rename_conversation', 'change_workspace', 'promote_conversation',
+        'archive_conversation', 'delete_conversation'].includes(envelope.type)) {
+        mutations.push(envelope.type)
+      }
+      const replies = fake(inbound)
+      for (const reply of replies) {
+        const response = decodeEnvelope(reply)
+        if (response.type === 'conversations') {
+          listed = (response.payload as { conversations: ConversationSummary[] }).conversations
+        }
+      }
+      return replies
+    }
+  })
+  const userRows = page.locator('.bubble[data-thread-role="user"]')
+  await page.getByPlaceholder('Message…').fill('Saved channel history')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(userRows).toHaveText([bubbleTextExactly('Saved channel history')])
+  const dialog = page.getByRole('dialog', { name: 'Rename', exact: true })
+  const input = dialog.getByRole('textbox', { name: 'Channel name:', exact: true })
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true })
+  const openChatRename = async (): Promise<void> => {
+    await page.locator('.conversation').getByRole('button', { name: 'Rename', exact: true }).click()
+    await expect(dialog).toBeVisible()
+  }
 
   // launchPairedApp lands IN the seeded row's thread (it clicked the seeded promoted row to reach it),
   // with activeConversation = SEED. The app-singleton conversation-list store already holds SEED (listed
@@ -91,6 +106,10 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // open-row read mirrors `conversation-switch-keeps-both-threads`'s `expectOnlyOpenRow`.
   await page.locator('.channel-list__fab').click()
   await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(UNTITLED)
+  await page.getByPlaceholder('Message…').fill('Chat history')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(userRows).toHaveText([bubbleTextExactly('Chat history')])
+  const originalRows = structuredClone(listed)
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
 
   // Open the Channel-info sheet from the thread overflow menu. The sheet mounts reading the
@@ -107,10 +126,34 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // Channel-info sheet renders INSIDE ConversationScreen, so `.conversation` is a valid scoping root.
   // The pill opens the same RenameConversationDialogView the list-row rename uses, prefilled "Untitled"
   // (the created row is unnamed); `.fill` replaces the prefill.
-  await page.locator('.conversation').getByRole('button', { name: 'Rename', exact: true }).click()
-  await expect(page.locator('.rename-conversation')).toBeVisible()
-  await page.locator('.rename-conversation__input').fill(NEW_TITLE)
-  await page.locator('.rename-conversation__save').click()
+  await openChatRename()
+  await expect(input).toHaveValue(UNTITLED)
+  await expect(input).not.toBeFocused()
+  await input.fill('Cancelled draft')
+  await cancel.click()
+  await expect(dialog).toHaveCount(0)
+  await openChatRename()
+  await expect(input).toHaveValue(UNTITLED)
+  await input.fill('Closed draft')
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  await expect(dialog).toHaveCount(0)
+  await openChatRename()
+  await expect(input).toHaveValue(UNTITLED)
+  expect(renames).toEqual([])
+  await input.fill('')
+  await expect(ok).toBeDisabled()
+  await input.fill('   ')
+  await expect(ok).toBeDisabled()
+  await input.fill('  ' + NEW_TITLE + '  ')
+  await input.press('Tab')
+  await expect(cancel).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(ok).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => renames).toEqual([
+    { conversation_id: 'created-1', name: NEW_TITLE }
+  ])
   // Save fires rename_conversation → the fake mutates its held `created-1` row → conversation_updated
   // broadcast → shouldRefreshList true → re-request list_conversations → the fake answers from UPDATED
   // state (now two rows: SEED + the renamed created row).
@@ -140,4 +183,64 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   await expect(
     page.locator('.channel-list').getByText('Seeded channel', { exact: true })
   ).toBeVisible()
+  await expect(userRows).toHaveText([bubbleTextExactly('Chat history')])
+
+  // Rename the other identity from the saved-channel sidebar while the chat stays open.
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setSize(800, 600)
+  })
+  const pencil = page.locator('.channel-list__rename')
+  await pencil.click()
+  await expect(input).toHaveValue(SEED.name)
+  await input.press('Escape')
+  await expect(dialog).toBeVisible()
+  await page.locator('.rename-conversation-overlay__scrim').click({ position: { x: 2, y: 2 } })
+  await expect(dialog).toBeVisible()
+  const box = await dialog.boundingBox()
+  expect(box?.width).toBe(640)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await mkdir('/tmp/builder-1352-visual', { recursive: true })
+  await page.screenshot({ path: '/tmp/builder-1352-visual/rename-800x600.png' })
+  await input.fill('Discard sidebar draft')
+  await cancel.click()
+  await pencil.click()
+  await expect(input).toHaveValue(SEED.name)
+  expect(renames).toHaveLength(1)
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setMinimumSize(800, 180)
+    window.setSize(800, 180)
+  })
+  expect(await dialog.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await input.fill('  Renamed saved channel  ')
+  await input.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(ok).toBeFocused()
+  await expect(ok).toBeInViewport()
+  await page.screenshot({ path: '/tmp/builder-1352-visual/rename-800x180-scrolled.png' })
+  await page.keyboard.press('Enter')
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => renames).toEqual([
+    { conversation_id: 'created-1', name: NEW_TITLE },
+    { conversation_id: SEED.id, name: 'Renamed saved channel' }
+  ])
+  expect(mutations).toEqual(['rename_conversation', 'rename_conversation'])
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 600))
+  await expect(page.locator('.channel-list').getByText('Renamed saved channel', { exact: true })).toBeVisible()
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(NEW_TITLE)
+  await pencil.click()
+  await expect(input).toHaveValue('Renamed saved channel')
+  await dialog.getByRole('button', { name: 'Close dialog' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(dialog).toHaveCount(0)
+  expect(renames).toHaveLength(2)
+  expect(listed).toEqual(originalRows.map((row) => ({
+    ...row, name: row.id === SEED.id ? 'Renamed saved channel' : NEW_TITLE
+  })))
+  await page.locator('.channel-list__row-open').filter({ hasText: 'Renamed saved channel' }).click()
+  await expect(userRows).toHaveText([bubbleTextExactly('Saved channel history')])
+  await page.locator('.channel-list__row-open').filter({ hasText: NEW_TITLE }).click()
+  await expect(userRows).toHaveText([bubbleTextExactly('Chat history')])
+
 })

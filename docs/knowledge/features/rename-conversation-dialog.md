@@ -1,8 +1,8 @@
 # Rename dialog + per-row affordance
 
-The naming half of Figma 19:14: a per-row "Rename" affordance on [Channel List](channel-list.md)
-saved (promoted) Channel rows, opening a dialog prefilled with the row's current title that
-dispatches the already-shipped [`renameConversation` command](conversation-rename.md). The dialog
+The shared Rename presentation serves saved (promoted) rows in [Channel List](channel-list.md)
+and the conversation-info action for chats and channels. Both open a dialog prefilled with the
+current displayed title and dispatch the [`renameConversation` command](conversation-rename.md). The dialog
 collects input and dispatches only; it never mutates the list — the renamed row's new title
 appearing is [#275](conversation-list-store.md)'s job, reacting to the daemon's
 `conversation_updated` broadcast, exactly as [Save-as-channel](save-as-channel-dialog.md)'s
@@ -32,14 +32,16 @@ keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only 
   control; 19:14 is the dialog only). Recent (unpromoted) discussion rows render no Rename
   affordance — the exact symmetric counterpart of [Save-as-channel](save-as-channel-dialog.md),
   which lives only on Recent rows, so no row ever carries two trailing buttons.
-- Clicking it opens a centered modal dialog (`role="dialog"`, `aria-modal`, `aria-labelledby`): the
-  title "Rename", a single outlined Name field **prefilled** with the row's displayed title
-  (`titleFor(row.name)` — the same `'Untitled'` fallback for a null/blank name as save-as), and a
-  trailing Cancel / Save action pair.
-- Save is disabled while the name is blank (empty or whitespace-only) and enabled once non-blank.
-- Confirming Save dispatches `renameConversation{conversation_id: row.id, name: name.trim()}` —
-  note **no `cwd`**, unlike `promoteConversation` — and closes the dialog. Cancel or dismiss closes
-  the dialog and dispatches nothing.
+- Both entry points open the [shared Modal](modal-presentation.md) at a preferred width of
+  640px, with the title **Rename**, header close button and divider, a filled **Channel name:**
+  field (including for chats), and centred outlined **Cancel** / filled **OK** buttons.
+  The field is prefilled from `titleFor(name)`, including the **Untitled** fallback for a
+  null or blank name.
+- OK is disabled while the name is empty or whitespace-only and enabled once non-blank.
+- Confirming OK dispatches `renameConversation{conversation_id: row.id, name: name.trim()}`
+  and closes the dialog. The payload has no `cwd`, unlike `promoteConversation`.
+  Cancel and the header close button dismiss without dispatching. Identity, history, folder
+  and chat/channel status are preserved.
 - The renamed row's new title appears later, if at all, when the daemon's `conversation_updated`
   reply triggers [#275](conversation-list-store.md)'s list re-request — there is no optimistic UI
   change here, mirroring [Save-as-channel](save-as-channel-dialog.md)'s and the
@@ -47,12 +49,12 @@ keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only 
 
 ## How it works
 
-One new module plus a `ChannelList.tsx` extension, both under
-`src/renderer/src/screens/channels/`:
+The view and helper live under `src/renderer/src/screens/channels/`; `ChannelList` and
+`ConversationScreen` each call both.
 
-### `RenameConversationDialog.tsx` (new)
+### `RenameConversationDialog.tsx`
 
-Two pure, SSR-testable exports, mirroring `SaveAsChannelDialog.tsx` field-for-field:
+Two pure, SSR-testable exports:
 
 ```ts
 export function RenameConversationDialogView(props: {
@@ -69,12 +71,16 @@ export function requestRenameConversation(
 ): void
 ```
 
-`RenameConversationDialogView` is the `SaveAsChannelDialogView` clone — same overlay → scrim →
-`role="dialog"` panel chrome, same wrapping-`<label>` Name field, same inline `blank = name.trim()
-=== ''` computed for the Save `disabled` state, same auto-escaped input value (never
-`dangerouslySetInnerHTML`) so the daemon-derived prefill is inert. The class prefix is
-`rename-conversation`/`rename-conversation__*` instead of `save-as-channel`, the title is "Rename",
-and `RENAME_CONVERSATION_TITLE_ID` is a second fixed id (safe — only one dialog is ever open).
+`RenameConversationDialogView` retains its fixed overlay and inert scrim, and composes
+`components/Modal.tsx` with `width={640}`. Modal owns the panel, divider, close asset and
+centred actions. Its React `useId()` ties `aria-labelledby` to the title; the old fixed
+`RENAME_CONVERSATION_TITLE_ID` is gone. The wrapping label gives the input its accessible
+name, **Channel name:**. React escapes the controlled input value.
+
+Cancel and close both call `onCancel`; OK calls the existing `onSave` prop and is disabled
+by `name.trim() === ''`. Presentation reuse does not transfer draft, focus or dismissal
+ownership to Modal. Each caller seeds the draft on every open, so reopening after Cancel
+or close restores the current displayed name instead of the discarded draft.
 
 `requestRenameConversation` is the `requestPromoteConversation` twin **minus the `cwd` field**: an
 inline literal typed as `RendererCommand`, `name` trimmed before send, no redundant blank guard
@@ -109,7 +115,7 @@ const [renameName, setRenameName] = useState('')
   `position: fixed; inset: 0` overlay covers the whole window, so the row affordance behind it
   isn't clickable while a dialog is open, and the two affordance sets are disjoint by row anyway.
 - The container returns a fragment: the list view, then both dialogs as conditional siblings —
-  `saveRow && <SaveAsChannelDialogView …/>` and `renameRow && <RenameConversationDialogView …/>`.
+  `saveRow && <SaveAsChannelDialog …/>` and `renameRow && <RenameConversationDialogView …/>`.
   `onCancel` clears `renameRow` (dispatches nothing). `onSave` calls `requestRenameConversation
   (window.pyry.sendCommand, renameRow, renameName)` then clears `renameRow`.
 - `window.pyry` is dereferenced only inside the `onSave` closure, and the dialog is absent on first
@@ -124,7 +130,7 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
                                                      ▼
                                 RenameConversationDialogView (controlled by renameName state)
                                    │                              │
-                            Cancel/dismiss                  Save (enabled iff non-blank)
+                            Cancel/close                    OK (enabled iff non-blank)
                                    │                              │
                             setRenameRow(null)      requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
                             (dispatches nothing)          → [#359] COMMAND_CHANNEL → daemon
@@ -140,12 +146,15 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
   [#1171](channel-list-desktop-row-geometry.md) redraw — icon-only, absolutely positioned at the row's
   trailing edge, invisible at rest and revealed by the row's hover or its own `:focus-visible`,
   `--color-primary` with no hover circle and no background behind the glyph.
-- `.rename-conversation-overlay`/`.rename-conversation*`: cloned from `.save-as-channel*` — same
-  `position: fixed; inset: 0; z-index: 2` overlay (needed because `.channel-list` is itself the
-  `overflow-y: auto` scroll column, and `z-index: 2` must clear the FAB's sticky `z-index: 1`; see
-  [Save-as-channel's Lessons learned](../codebase/274.md#lessons-learned)), same panel/scrim/
-  title/field/action-row token mapping. Code review verified every rule resolves to a theme
-  variable — zero hardcoded color/typography literals.
+- `.rename-conversation-overlay` keeps the fixed, full-window overlay at `z-index: 2`,
+  above the sidebar's sticky controls. Its separate scrim dims the background without dimming
+  the panel and has no dismissal handler.
+- `channels.css` owns only the rename field and overlay. The field uses label-large emphasized,
+  body-medium input text, a translucent on-primary fill and a primary focus outline.
+  `components/modal.css` owns panel width, header, divider, actions and scrolling.
+- Modal constrains width to the container and viewport, and caps height with `100dvh` and
+  `overflow: auto`. Header, content and footer keep their natural height so the whole panel
+  scrolls in short windows; actions are not clipped by a shrinking content region.
 
 ## Edge cases and limitations
 
@@ -156,17 +165,27 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
   [Conversation rename](conversation-rename.md)). There is no timeout, retry, or rejection surface
   in this ticket.
 - **An empty/whitespace-only name is disabled client-side only; the daemon's own trim-guard is the
-  server-side backstop.** No redundant emptiness check exists beyond the Save button's `disabled`
+  server-side backstop.** No redundant emptiness check exists beyond the OK button's `disabled`
   state (Evidence-Based Fix Selection — no observed blank-submit path to defend).
-- **The Name field has no Enter-to-submit or autofocus-select**, matching Save-as-channel's
-  documented, safe additive-enhancement gap.
-- **The affordance is fixed to saved Channel rows only.** Extending Rename to Recent (unpromoted)
-  discussion rows was explicitly out of scope for this ticket (a rename is meaningful on any row,
-  but the ticket scoped the entry surface to the symmetric Channel-row counterpart of Save-as-
-  channel) — a trivial follow-up if desired.
-- **The click→open, typed→controlled-input, and Save-click→dispatch wiring live in the container
-  and are not DOM-tested** — same boundary as Save-as-channel and `PermissionModal`'s click wiring;
-  covered by pure-function specs plus the `ChannelList.test.tsx` affordance-presence assertions.
+- **The Channel name field has no Enter-to-submit or autofocus-select.** Neither Rename nor
+  shared Modal adds a focus trap or focus restoration. Native Tab navigation and activation
+  of a focused button remain available.
+- **Escape remains parent-owned.** The sidebar dialog has no Escape handler; its inert backdrop
+  does not dismiss it. In conversation info, the enclosing `ChannelInfoSheet` document listener
+  closes the sheet on Escape, unmounting its Rename dialog too.
+- **The sidebar affordance is fixed to saved Channel rows.** Chats use the existing
+  conversation-info Rename action.
+- **Static markup cannot prove event wiring or scrolling.** Static tests cover accessible
+  names, shared chrome, blank validation and escaping; helper tests assert the exact trimmed
+  command and target id. `e2e/conversation-create-rename.spec.ts` exercises both entry points
+  with distinct conversation ids, including renaming a sidebar channel while a different chat
+  stays open. It checks prefill, cancelled-draft reset, close without extra commands, keyboard
+  confirmation, unchanged row metadata and retained histories. This catches a wrong-target
+  rename that a single-row fixture could miss.
+- **Viewport proof belongs in the browser.** The same fake spec checks a 640px panel without
+  horizontal overflow at an 800px window width and scrolls focused OK into view in a short
+  window. `conversation-state-fake.spec.ts` covers list reflection. These checks do not prove
+  live daemon persistence; `real-daemon-rename.spec.ts` is the separate live tier.
 
 ## Related
 
@@ -174,7 +193,7 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
   — the `renameConversation` command and `RenameConversationPayload` this dialog dispatches
   unchanged; this ticket is its first live caller.
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274 codebase notes](../codebase/274.md)
-  — the clone source for the dialog chrome, the `Row` sibling-affordance shape, and the
+  — the original precedent for the `Row` sibling-affordance shape and the
   `position: fixed`/`z-index` overlay precedent this ticket reused without re-deriving.
 - [Conversation list store](conversation-list-store.md) / [#275 codebase notes](../codebase/275.md)
   — the `conversation_updated` re-request that reflects the renamed title; this dialog never
@@ -185,4 +204,5 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 - [Conversation shell](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) / [#368 codebase notes](../codebase/368.md)
   — the Channel Info sheet's Rename action, this dialog's second entry point and the source of the
   `Pick<ConversationSummary, 'id'>` param widening.
+- [Shared Rename modal spec](../../specs/architecture/1352-rename-modal.md) — current presentation.
 - Spec: `docs/specs/architecture/360-rename-dialog.md` (dialog); `docs/specs/architecture/368-channel-info-rename-action.md` (second entry point).

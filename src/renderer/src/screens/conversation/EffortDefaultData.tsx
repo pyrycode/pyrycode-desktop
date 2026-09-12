@@ -8,8 +8,8 @@ import {
   runSettingsWriteStore
 } from '../../store/runSettingsWriteStore'
 import { useLastEffortStore, selectLastEffort, lastEffortStore } from '../../store/lastEffortStore'
-import { effortRowFor } from './RunConfigSections'
-import { changeSetting, isAddressableSessionId } from './runSettingsControls'
+import { effortRowFor, useSessionSettingsConnected, sessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import { isAddressableSessionId } from './runSettingsControls'
 
 // #1169 — a new chat opens at the last effort level used. The footer's effort control draws nothing when
 // the session carries no explicit effort (`SessionSettingsPayload.effort === ''`, the inherited daemon
@@ -179,6 +179,7 @@ export function EffortDefaultData({
 }: {
   conversationId: string | null
 }): null {
+  const connected = useSessionSettingsConnected(conversationId)
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // The RAW write state (stable identity between dispatches). NOT selectEffectiveSettings as the zustand
@@ -203,6 +204,8 @@ export function EffortDefaultData({
   const appliedFor = useRef<string | null>(null)
 
   useEffect(() => {
+    // Do not consume the attempt while unavailable; reconnect must re-evaluate eligibility.
+    if (!sessionSettingsConnected(conversationId)) return
     const effective = selectEffectiveSettings(
       selectSnapshot(runConfigStore.getState()),
       runSettingsWriteStore.getState()
@@ -228,15 +231,8 @@ export function EffortDefaultData({
     if (conversationId !== null) appliedFor.current = conversationId
     // An arrow body, so `window.pyry` is dereferenced at effect time and never during render — under
     // `renderToStaticMarkup` there is no window.pyry and the container smoke test would throw.
-    changeSetting(
-      {
-        sessionId: addressedSessionId,
-        sendCommand: window.pyry.sendCommand,
-        dispatch: runSettingsWriteStore.getState().dispatch
-      },
-      { field: 'effort', value: level }
-    )
-  }, [conversationId, sessionId, snapshot, writeState, models, remembered])
+    changeConnectedSetting(conversationId, { field: 'effort', value: level })
+  }, [conversationId, connected, sessionId, snapshot, writeState, models, remembered])
 
   return null
 }

@@ -9,7 +9,6 @@ import type { ServerInfoValue } from '../../store/serverInfoStore'
 // Host identity and relay remain escaped display text; neither becomes navigation or metadata.
 // The stored name reaches only the controlled input value. No host content is logged.
 // Preserve the existing focus policy: no autofocus, Escape listener or backdrop dismissal.
-// Shared Modal's close image is currently blocked by the built app CSP; tracked in #1361.
 
 /**
  * Client-owned failure copy (AC3) — apostrophe-free by design: renderToStaticMarkup escapes ' → &#x27;

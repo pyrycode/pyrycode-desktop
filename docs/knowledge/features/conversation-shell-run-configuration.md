@@ -103,6 +103,39 @@ See [Run configuration store](run-config-store.md) for the full data-path design
 
 ## Run configuration Model/Effort/YOLO sections (#188)
 
+**Writes require the conversation's owning host to be connected (#1380).**
+`useSessionSettingsConnected` resolves unambiguous ownership through
+`serverIdForOpenConversation` and reads that host in `SessionState.statuses`.
+Missing or ambiguous ownership, missing status, and every non-connected status
+fail closed; neither the global last status nor another connected host enables a write.
+An addressable session ID remains required.
+
+The sheet withholds `onChange` while unavailable: model rows and effort segments
+lose their button semantics, and YOLO retains `aria-readonly="true"`. Held values
+remain readable alongside the existing connection indication, including in a
+sheet opened before disconnect. Composer model, effort and permission-mode views
+likewise receive no `onSelect`, retaining their labels without chevrons and
+unmounting any open menu. Reconnection restores controls under the existing
+session-ID, published-choice and capability gates; blocked choices are not queued
+or replayed, and another host's disconnect does not disable this host's controls.
+
+`changeConnectedSetting` synchronously re-reads ownership, status and session ID
+before delegating to `changeSetting`. This also blocks callbacks saved before
+disconnect, creating neither a `setSessionSettings` command nor an optimistic
+change. Diagnostics contain only static `session-settings` codes (`unavailable`
+or `submitted`). Automatic remembered effort uses the same gate; see
+[Testing the default apply](composer-effort-menu.md#testing-the-default-apply-1169).
+
+`e2e/offline-session-settings.spec.ts` exercises pre-opened menus and the sheet
+across disconnect with mouse and keyboard, reconnection, and a usable second host.
+Its CDP function breakpoint observes `window.pyry.sendCommand` at the renderer
+boundary: absent received transport frames alone could hide an attempted write
+discarded downstream. `RunConfigSections.test.tsx` separately calls saved
+selections against unavailable or ambiguous ownership and checks that the real
+write store is unchanged. Footer mount fixtures must seed connected ownership
+and an addressable session ID when asserting operability; held-label and order
+assertions also cover absent ownership.
+
 ```
 .status-sheet__body
 ├── RunConfigData                     (headless: requests + holds, renders null, #187)
@@ -278,8 +311,8 @@ claude echoes an identifier at least as specific as the one it was given, so it 
 `truncated_fields` element are claude-authored strings that crossed the subprocess trust boundary,
 bounded by the daemon and not sanitized by it (the tier [Model-list wire types](model-list-wire-types.md)
 declares). Each reaches exactly one JSX text position, escaped by React's default; none reaches an
-attribute, a URL, a filename, a cache key, a lookup path, or a log line — and nothing on this path is
-logged at all. Each row's second line renders `resolved_model` unconditionally (even an empty or a
+attribute, a URL, a filename, a cache key, a lookup path, or a log line. The write gate
+logs only the static availability codes described above. Each row's second line renders `resolved_model` unconditionally (even an empty or a
 `<unmeasured>` value), which is the honest mitigation for the one risk that is *not* client-closable:
 a `value` cut mid-token by the daemon (`opus[1m]` → `opus`) still passes the daemon's inbound
 `validModel` charset check and silently runs a different model, so showing the concrete resolution

@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { WireModelOption } from '@shared/wire/types'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
-import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
+import { useSessionIdStore, selectSessionId, sessionIdStore } from '../../store/sessionIdStore'
 import {
   useModelListStore,
   selectModelListFor,
@@ -14,6 +14,7 @@ import {
 } from '../../store/announcedModelStore'
 import {
   useRunSettingsWriteStore,
+  runSettingsWriteStore,
   selectEffectiveSettings,
   selectError,
   selectPendingFields,
@@ -21,6 +22,37 @@ import {
 } from '../../store/runSettingsWriteStore'
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { contextUsagePercent } from './contextUsage'
+import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
+import { sessionStore, useSessionStore } from '../../store/sessionStore'
+import { serverIdForOpenConversation } from './unpairAction'
+
+/** Subscribe to the conversation's owner, never the last host whose status changed. */
+export function useSessionSettingsConnected(conversationId: string | null): boolean {
+  const rows = useConversationListStore(selectConversations)
+  const serverId = serverIdForOpenConversation(rows, conversationId)
+  return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
+}
+
+/** Re-read ownership and status at the action boundary, including for pre-opened controls. */
+export function sessionSettingsConnected(conversationId: string | null): boolean {
+  const serverId = serverIdForOpenConversation(
+    selectConversations(conversationListStore.getState()), conversationId
+  )
+  return serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
+}
+
+export function changeConnectedSetting(conversationId: string | null, change: SettingsChange): void {
+  const sessionId = selectSessionId(sessionIdStore.getState())
+  if (!sessionSettingsConnected(conversationId) || !isAddressableSessionId(sessionId)) {
+    window.pyry.sendDiagnostic({ event: 'session-settings', code: 'unavailable' })
+    return
+  }
+  window.pyry.sendDiagnostic({ event: 'session-settings', code: 'submitted' })
+  changeSetting(
+    { sessionId, sendCommand: window.pyry.sendCommand, dispatch: runSettingsWriteStore.getState().dispatch },
+    change
+  )
+}
 
 // The Run configuration sheet's Model / Effort / YOLO sections (Figma node 20-100 subtree
 // 20:111/20:130/20:143). #188 rendered them read-only; #257 makes them INTERACTIVE — selecting a
@@ -727,6 +759,7 @@ function ContextWindowSection({
  * not-yet-known line forever.
  */
 export function RunConfigSections({ conversationId }: { conversationId: string | null }): JSX.Element {
+  const connected = useSessionSettingsConnected(conversationId)
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // Select the RAW write state (stable identity between dispatches). Not selectEffectiveSettings as the
@@ -769,12 +802,8 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
   const onChange =
     // Both null and '' withhold the handler: null is "never observed", '' is the daemon saying it
     // has no session to address. See isAddressableSessionId (#491).
-    isAddressableSessionId(sessionId)
-      ? (change: SettingsChange): void =>
-          changeSetting(
-            { sessionId, sendCommand: window.pyry.sendCommand, dispatch: writeState.dispatch },
-            change
-          )
+    connected && isAddressableSessionId(sessionId)
+      ? (change: SettingsChange): void => changeConnectedSetting(conversationId, change)
       : undefined
 
   return (

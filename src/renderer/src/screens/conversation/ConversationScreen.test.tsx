@@ -62,6 +62,7 @@ import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationListStore } from '../../store/conversationListStore'
+import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 
@@ -4460,6 +4461,10 @@ describe('selectOpenTimelineFor', () => {
 })
 
 describe('ConversationScreen — store binding', () => {
+  const CONNECTED: ConnectionStatus = {
+    type: 'connected',
+    ack: { protocol_version: '1', server_id: 'host', conn_id: 'connection', capabilities: [] }
+  }
   beforeEach(() => {
     // setState shallow-merges (preserving dispatch); reset to a clean, empty session.
     sessionStore.setState({ status: { type: 'disconnected' }, messages: [] })
@@ -4702,6 +4707,10 @@ describe('ConversationScreen — store binding', () => {
   // this a mount proof — the label is the seeded snapshot's own model value, so it can only appear if the
   // container actually read the snapshot.
   it('mounts the model control in the footer row, between Actions and the reading (AC1, AC4)', () => {
+    const restoreConnection = stageOpenConnection(CONNECTED)
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4730,12 +4739,14 @@ describe('ConversationScreen — store binding', () => {
       expect(markup).not.toContain('>seeded-session-model<')
       // AC4's inert arm: THIS control announces no popup and opens no anchor. The count is 2 rather than
       // 1 since #682 — the seeded snapshot names a permission mode, and that control's entries are a
-      // client-owned constant, so it is operable here where the model control is not. Both counts moved
+      // client-owned constant and its owning host is connected, so it is operable here. Both counts moved
       // together, which is what keeps this an assertion about the model control's inert arm.
       expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
       expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 
@@ -4746,8 +4757,12 @@ describe('ConversationScreen — store binding', () => {
   // menus visible at once and lets this test pin the row's ORDER — the one claim neither component's own
   // file can make. With no model list published (the model-list store's initial state is an empty map)
   // both render their inert arms, so each label can only appear if its container actually read the
-  // snapshot, and the row still holds exactly one popup announcement and one anchor (the Actions menu's).
+  // snapshot. Connected ownership leaves Actions and permission mode operable.
   it('mounts the effort control in the footer row, between the model control and the reading (AC1, AC3)', () => {
+    const restoreConnection = stageOpenConnection(CONNECTED)
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4772,12 +4787,14 @@ describe('ConversationScreen — store binding', () => {
       // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
       expect(markup).toContain('>seeded-session-effort<')
       // AC3's inert arm: THIS control adds no popup announcement and no anchor. 2 rather than 1 since
-      // #682 for the reason given one test above — the seeded permission mode makes that control, and
+      // #682 for the reason given one test above — connected ownership and the seeded mode make that control, and
       // only that control, operable here.
       expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
       expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 
@@ -4791,7 +4808,11 @@ describe('ConversationScreen — store binding', () => {
   // entries are a client-owned constant), so the row's popup and anchor counts are exactly 2: the Actions
   // trigger and this one. That pair of counts is also the mount proof's sharpest half — it can only hold
   // if this container really read the snapshot.
-  it('mounts the permission-mode control in the footer row, between Actions and the model control (AC1, AC2)', () => {
+  it.each([true, false])('mounts the permission-mode control in footer order with connected ownership: %s', (connected) => {
+    const restoreConnection = connected ? stageOpenConnection(CONNECTED) : () => {}
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4817,11 +4838,14 @@ describe('ConversationScreen — store binding', () => {
       // must not reach the row, which is where this control departs from the effort trigger beside it.
       expect(markup).toContain(`>${PERMISSION_MODE_LABELS.acceptEdits}<`)
       expect(markup).not.toContain('>acceptEdits<')
-      // Operable while both neighbours are inert: the Actions trigger's popup and anchor, plus this one's.
-      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
-      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
+      // Connected ownership enables permission choices; without ownership only Actions opens.
+      // Held labels and their order must survive in both presentations.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(connected ? 2 : 1)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(connected ? 2 : 1)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 

@@ -4,8 +4,8 @@ import { useModelListStore, selectModelListFor, type ModelListEntry } from '../.
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
-import { publishedRowFor } from './RunConfigSections'
-import { changeSetting } from './runSettingsControls'
+import { publishedRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import { isAddressableSessionId } from './runSettingsControls'
 
 // #682: the composer footer's PERMISSION MODE menu (Figma 115:3678) — the row's second control, between
 // the Actions menu and the model trigger. It owns exactly three things: its entries, what picking one
@@ -224,8 +224,8 @@ export function composerPermissionModeMenuModel(
 
 /**
  * The pure view: props in, markup out — no store read, no window.pyry and no state of its own, so both
- * arms server-render directly under the repo's `node` vitest environment. Every prop is REQUIRED, the
- * "a view that cannot answer is a bug" rule.
+ * arms server-render directly under the repo's `node` vitest environment. An absent selection callback
+ * keeps the held value readable without offering a write.
  *
  * SECURITY — this is a render boundary for daemon-reported text, even though five of its six labels are
  * client-owned constants. `permissionMode` crossed the subprocess trust boundary and DECODED IS NOT
@@ -251,13 +251,20 @@ export function ComposerPermissionModeMenuView({
   model: string
   permissionMode: string
   models: ModelListEntry | null
-  onSelect: (mode: string) => void
+  onSelect?: (mode: string) => void
 }): JSX.Element | null {
-  // #1022 — every prop stays REQUIRED, including the two added here. The container always knows both, so
+  // Model and models remain required inputs. The container always knows both, so
   // an optional `models` would only hide the wiring seam: the model function stays green with the mount
   // unwired, and the failure is silent in the fail-open direction. The e2e drive is what catches that.
   const menu = composerPermissionModeMenuModel(models, model, permissionMode)
   if (menu === null) return null
+  if (!onSelect) {
+    return (
+      <span className="composer__footer-button">
+        <span className="composer__permission-label">{menu.label}</span>
+      </span>
+    )
+  }
 
   return (
     <ComposerOptionsMenu
@@ -300,19 +307,16 @@ export function ComposerPermissionModeMenuView({
  * id keys nothing in the model-list map. #1022 added it; until then this container took no props at all,
  * which was the visible half of reading no per-conversation list.
  *
- * #682's AC3, "sends nothing when there is no addressable session id", is met by changeSetting's OWN gate,
- * not by
- * withholding the handler. The run-configuration sheet withholds `onChange` because its view branches
- * OPERABILITY on handler presence; this view has no operability branch at all, so withholding would fuse
- * two unrelated conditions and make a populated menu unopenable whenever the session id is unknown, which
- * no AC asks for. changeSetting is documented as the deterministic safety net behind that structural gate;
- * here it is the whole gate, and it has its own unit tests.
+ * The host must be connected and the session addressable before a selection callback is offered.
+ * The view retains its label without that callback; changeConnectedSetting rechecks current stores
+ * before sending or recording an optimistic change, including calls saved before disconnect.
  */
 export function ComposerPermissionModeMenu({
   conversationId
 }: {
   conversationId: string | null
 }): JSX.Element | null {
+  const connected = useSessionSettingsConnected(conversationId)
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // The RAW write state (stable identity between dispatches). NOT selectEffectiveSettings as the zustand
@@ -349,12 +353,9 @@ export function ComposerPermissionModeMenu({
       // exist under renderToStaticMarkup and every container smoke test would throw. The mode is submitted
       // as the entry's own machine value, which is a client-owned constant: this is the one footer menu
       // whose outbound value never came off the wire.
-      onSelect={(value) =>
-        changeSetting(
-          { sessionId, sendCommand: window.pyry.sendCommand, dispatch: writeState.dispatch },
-          { field: 'permissionMode', value }
-        )
-      }
+      onSelect={connected && isAddressableSessionId(sessionId)
+        ? (value) => changeConnectedSetting(conversationId, { field: 'permissionMode', value })
+        : undefined}
     />
   )
 }

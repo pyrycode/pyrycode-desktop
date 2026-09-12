@@ -4,8 +4,8 @@ import { useModelListStore, selectModelListFor, type ModelListEntry } from '../.
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
-import { effortRowFor } from './RunConfigSections'
-import { changeSetting } from './runSettingsControls'
+import { effortRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import { isAddressableSessionId } from './runSettingsControls'
 
 // #989: the composer footer's EFFORT menu (Figma 115:3688) — the row's last control before the context
 // reading, and ComposerModelMenu's assembly one button to the right. It owns exactly three things: its
@@ -136,8 +136,8 @@ export function composerEffortMenuModel(
 
 /**
  * The pure view: props in, markup out — no store read, no window.pyry and no state of its own, so both
- * arms server-render directly under the repo's `node` vitest environment. Every prop is REQUIRED, the
- * "a view that cannot answer is a bug" rule.
+ * arms server-render directly under the repo's `node` vitest environment. An absent selection callback
+ * keeps the held value readable without offering a write.
  *
  * SECURITY — this is a render boundary for claude-authored text, and the tier is HIGHER than the
  * workspace-authored strings the slash-command list holds. Every string in `effort_levels` crossed the
@@ -165,7 +165,7 @@ export function ComposerEffortMenuView({
   model: string
   effort: string
   models: ModelListEntry | null
-  onSelect: (level: string) => void
+  onSelect?: (level: string) => void
 }): JSX.Element | null {
   const menu = composerEffortMenuModel(models, model, effort)
   if (menu === null) return null
@@ -175,7 +175,7 @@ export function ComposerEffortMenuView({
   // operable-vs-inert idiom one layer down. The chevron goes with the interactivity it claims: an up
   // chevron is the design's "this opens a panel" mark, and drawing it here would be the visual half of
   // exactly the claim this arm refuses.
-  if (menu.options.length === 0) {
+  if (!onSelect || menu.options.length === 0) {
     return (
       <span className="composer__footer-button">
         <span className="composer__effort-label">{menu.label}</span>
@@ -224,19 +224,16 @@ export function ComposerEffortMenuView({
  * the session id also read here — those are different identifiers, and a session id keys nothing in the
  * model-list map.
  *
- * AC4's "sends nothing when there is no addressable session id" is met by changeSetting's OWN gate, not
- * by withholding the handler, and that differs from the sheet deliberately. The sheet withholds
- * `onChange` because its view branches OPERABILITY on handler presence; this view branches operability
- * on the LEVELS (AC3). Withholding here would fuse two unrelated conditions into one rendering and make
- * a populated menu unopenable whenever the session id is unknown, which no AC asks for. changeSetting
- * is documented as the deterministic safety net behind that structural gate; here it is the whole gate,
- * and it has its own unit tests.
+ * The host must be connected and the session addressable before a selection callback is offered.
+ * The view retains its label without that callback; changeConnectedSetting rechecks current stores
+ * before sending or recording an optimistic change, including calls saved before disconnect.
  */
 export function ComposerEffortMenu({
   conversationId
 }: {
   conversationId: string | null
 }): JSX.Element | null {
+  const connected = useSessionSettingsConnected(conversationId)
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // The RAW write state (stable identity between dispatches). NOT selectEffectiveSettings as the
@@ -270,12 +267,9 @@ export function ComposerEffortMenu({
       // which would be a second copy of the vocabulary #976 deleted, and the daemon's closed inbound
       // enum refusing a level it published is an upstream asymmetry that surfaces here as an ordinary
       // rejection.
-      onSelect={(value) =>
-        changeSetting(
-          { sessionId, sendCommand: window.pyry.sendCommand, dispatch: writeState.dispatch },
-          { field: 'effort', value }
-        )
-      }
+      onSelect={connected && isAddressableSessionId(sessionId)
+        ? (value) => changeConnectedSetting(conversationId, { field: 'effort', value })
+        : undefined}
     />
   )
 }

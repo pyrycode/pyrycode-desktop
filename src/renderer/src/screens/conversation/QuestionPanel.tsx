@@ -64,9 +64,8 @@ import type { QuestionPickEvent, QuestionSelection } from '../../store/questionP
 // both. SINCE #922 TWO BUTTONS ON THIS ROW SEND: Cancel refuses the batch, and the trailing button in its
 // Continue role answers it. Previous and Next step, which is navigation and not an answer, and neither is
 // ever `disabled` — the stepping controls are absent where there is nowhere to go rather than present and
-// inert, the header tabs' call. The ONE unavailable state on this panel is Continue's, and it exists
-// because sending an incomplete batch is silently rejected upstream rather than because the design draws
-// one; the treatment follows the house `.composer__send:disabled` convention.
+// inert, the header tabs' call. Continue also requires a complete batch; both server-bound actions
+// require current host availability. Local selection and navigation remain usable offline.
 export const QUESTION_CANCEL_COPY = 'Cancel'
 export const QUESTION_CONTINUE_COPY = 'Continue'
 // The two stepping labels (#916), constants for the same reason. Previous is the middle instance Figma
@@ -200,6 +199,7 @@ export function QuestionPanelView({
   activeIndex,
   selection,
   canAnswer,
+  responseAvailable,
   onQuestionSelected,
   onCancel,
   onAnswer,
@@ -216,6 +216,7 @@ export function QuestionPanelView({
   // the one function that also builds the frame, so the button's availability and the payload's
   // contents come from the same result and cannot disagree.
   canAnswer: boolean
+  responseAvailable: boolean
   onQuestionSelected: (questionIndex: number) => void
   // THE ROW'S ONE SENDING GESTURE (#921), and variant-neutral like the two chosen-callbacks below: this
   // view knows a refusal was asked for and nothing about what it becomes. It carries NO batch id even
@@ -430,7 +431,7 @@ export function QuestionPanelView({
               attribute here (the panel's standing rule for `questionBatchId`, a one-time nonce this file
               still never reads at all). The view's spec asserts this button's markup is byte-identical to
               what #906 shipped, which is what makes "the handler leaks nothing" structural. */}
-          <button type="button" className="button-small question-panel__cancel" onClick={onCancel}>
+          <button type="button" className="button-small question-panel__cancel" disabled={!responseAvailable} onClick={onCancel}>
             {QUESTION_CANCEL_COPY}
           </button>
           {/* ABSENT ON THE FIRST QUESTION, NEVER `disabled` — the header tabs' call one row up, for the
@@ -458,8 +459,8 @@ export function QuestionPanelView({
               #922 GAVE IT ITS HANDLER: on the last question it sends the assembled answer.
 
               THE GATE IS A CONJUNCTION, AND THE SECOND CONJUNCT IS WHAT KEEPS THE PANEL FROM
-              DEADLOCKING. Unavailable only in the Continue ROLE and only while the batch is short an
-              answer. Gating on `!canAnswer` alone would disable NEXT on any incomplete batch, stranding
+              DEADLOCKING. Unavailable only in the Continue ROLE when the batch is short an answer or
+              its host is unavailable. Gating Next as well would strand
               the operator on question 1 with no way to reach question 2 to answer it — so the batch could
               never become complete. Stepping is never gated on what has been picked; neither is Previous.
               The handler needs no null-guard beside `disabled`: `answerQuestionBatch` refuses the same
@@ -467,7 +468,7 @@ export function QuestionPanelView({
           <button
             type="button"
             className="button-small question-panel__continue"
-            disabled={isLastQuestion && !canAnswer}
+            disabled={isLastQuestion && (!canAnswer || !responseAvailable)}
             onClick={isLastQuestion ? onAnswer : () => onQuestionSelected(activeIndex + 1)}
           >
             {isLastQuestion ? QUESTION_CONTINUE_COPY : QUESTION_NEXT_COPY}

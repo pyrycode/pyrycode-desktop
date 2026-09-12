@@ -19,6 +19,7 @@ import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
+import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
 // #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
@@ -3670,6 +3671,7 @@ const FIRST_QUESTION_INDEX = 0
  * time, never render — so the container's smoke render still touches no bridge.
  */
 export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
+  const responseAvailable = usePromptResponseAvailability(batch.conversationId)
   const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
   // CLAMPED, AND THIS IS A CRASH GUARD RATHER THAN TIDINESS. `jumpedTo` is component state; the batch is
   // store state; they move independently. A same-nonce `question_shown` re-delivery REPLACES the held batch
@@ -3705,6 +3707,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
   const dispatch = questionPicksStore.getState().dispatch
   return (
     <QuestionPanelView
+      responseAvailable={responseAvailable}
       questions={batch.questions}
       activeIndex={activeIndex}
       onQuestionSelected={setJumpedTo}
@@ -3712,25 +3715,27 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       // the batch refused is by construction the batch drawn. Both stores' `dispatch` are read off their
       // singletons rather than through a hook: each is a stable function, so subscribing would buy
       // nothing (the existing `dispatch` read below made the same call).
-      onCancel={() =>
+      onCancel={() => {
+        if (!canRespondToPromptNow(batch.conversationId)) return
         refuseQuestionBatch(batch.questionBatchId, {
           sendCommand: window.pyry.sendCommand,
           dispatchPicks: dispatch,
           dispatchBatch: questionBatchStore.getState().dispatch
         })
-      }
+      }}
       // #922. The same three injected effects as the refusal above — one `QuestionResolveDeps` serves
       // both exits — with the assembled entries in place of nothing. The id read is
       // `batch.questionBatchId`, the value this leaf is keyed on upstream, so the batch answered is by
       // construction the batch drawn.
       canAnswer={answers !== null}
-      onAnswer={() =>
+      onAnswer={() => {
+        if (!canRespondToPromptNow(batch.conversationId)) return
         answerQuestionBatch(batch.questionBatchId, answers, {
           sendCommand: window.pyry.sendCommand,
           dispatchPicks: dispatch,
           dispatchBatch: questionBatchStore.getState().dispatch
         })
-      }
+      }}
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}

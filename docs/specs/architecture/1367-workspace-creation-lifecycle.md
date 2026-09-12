@@ -77,3 +77,7 @@ Pending for the documentation stage, exactly as requested: update `docs/knowledg
 - **Network / threat model:** a relay withholding a reply cannot freeze the local form beyond 30 seconds. Authentication, not relay reachability, admits a create; relay loss clears the authenticated flag. TLS/Noise transport policy remains unchanged.
 - **Errors / logs:** fixed client copy and bare stamped rejections drop daemon/caught error text. Static lifecycle codes describe sent, rejected, disconnected, timeout and closed states without logging host IDs, paths, names or content.
 - **Concurrency:** pending state precedes send, timers clear on every settlement/retry/exit, and the closed flag blocks callbacks already queued at teardown. The deadline ends only the local wait; no automatic retry or exactly-once claim. Same-host request correlation is explicitly unchanged by this ticket.
+
+## Revisions
+
+- Final review: emit `disconnected` on retryable relay loss only if the connection was authenticated. An unconditional transition would overwrite an existing authentication failure; the focused `createConversation` regression proves that failure status survives a later drop. This preserves the existing error-host recovery treatment while still invalidating a lost connected session immediately.

@@ -18,7 +18,7 @@ import { requestNewConversation, requestNewChannel } from '../../store/conversat
 // store's INITIAL cell is imported too —
 // it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
 // same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
+import { useSessionStore, sessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
 import {
   useRelayLinkStore,
   selectRelayLinkStatusFor,
@@ -1021,7 +1021,11 @@ function HostRowControl({
       label={hostRowLabel(hostLabel)}
       serverId={serverId}
       onEditHost={() => onEditHost(serverId, hostRowEditSeed(hostLabel))}
-      onAddWorkspace={() => onAddWorkspace(serverId)}
+      onAddWorkspace={status?.type === 'connected' ? () => {
+        if (selectStatusFor(serverId)(sessionStore.getState())?.type === 'connected') {
+          onAddWorkspace(serverId)
+        }
+      } : undefined}
     />
   )
 }

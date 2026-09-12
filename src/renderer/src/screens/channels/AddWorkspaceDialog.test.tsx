@@ -9,10 +9,11 @@ import { AddWorkspaceDialogView, type AddWorkspaceStatus } from './AddWorkspaceD
 // its three-arm status matrix (AC1–AC3).
 const noop = (): void => {}
 
-function renderView(path: string, status: AddWorkspaceStatus = 'idle'): string {
+function renderView(path: string, status: AddWorkspaceStatus = 'idle', connected = true): string {
   return renderToStaticMarkup(
     <AddWorkspaceDialogView
       path={path}
+      connected={connected}
       status={status}
       onPathChange={noop}
       onCancel={noop}
@@ -26,6 +27,22 @@ const inputDisabled = /add-workspace__input"[^>]*disabled/
 const cancelDisabled = /add-workspace__cancel"[^>]*disabled/
 
 describe('AddWorkspaceDialogView', () => {
+  it('disables submission for an unavailable selected host and preserves an editable field', () => {
+    const markup = renderView('/home/pyry/project', 'idle', false)
+    expect(markup).toMatch(startDisabled)
+    expect(markup).not.toMatch(inputDisabled)
+    expect(markup).not.toMatch(cancelDisabled)
+    expect(markup).toContain('Connect this host before starting a chat')
+  })
+
+  it('reports an uncertain timeout and allows an explicit retry while connected', () => {
+    const markup = renderView('/home/pyry/project', 'timed-out')
+    expect(markup).toContain('Could not confirm completion within 30 seconds. The chat may still appear.')
+    expect(markup).not.toMatch(startDisabled)
+    expect(markup).not.toMatch(inputDisabled)
+    expect(markup).not.toMatch(cancelDisabled)
+  })
+
   it('renders an accessible modal dialog titled Add workspace (AC1)', () => {
     const markup = renderView('')
     expect(markup).toContain('role="dialog"')

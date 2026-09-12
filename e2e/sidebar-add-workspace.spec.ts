@@ -1,31 +1,10 @@
-import { test, expect } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import { MAX_PLAINTEXT_BYTES } from '../src/shared/wire/types'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 
-// #1308 — the dialog the HOST row's plus opens, and the chat it starts in a folder no conversation has
-// used yet. Only this tier can answer any of it: `vitest.config.ts` sets `environment: 'node'` and every
-// renderer spec is a `renderToStaticMarkup` string assertion, so `ChannelList.test.tsx` owns the markup
-// (which rows draw the plus) and `AddWorkspaceDialog.test.tsx` owns the dialog's own three-arm status
-// matrix. Everything below is what needs a running window — a hover, a click, a typed field, a real
-// command on the wire and a daemon answer coming back.
-//
-// A DEDICATED FILE, `sidebar-host-edit.spec.ts`'s stated reason: `host-row-hover-controls.spec.ts` owns
-// the plus's reveal and drawn box, so the dialog gets its own launches exactly as the pen's did.
-//
-// ⭐ THE TWO DRIVES CALIBRATE EACH OTHER, and neither is sound alone. "The dialog closed" would pass just
-// as happily against a Start chat that closed on its own click and never waited for anything — which is
-// exactly the design this ticket rejects. The refusal drive runs the SAME click and reads the dialog still
-// open afterwards, so the only thing that differs between the two outcomes is the daemon's answer. Read
-// together they say the round trip is real; read apart, the first says only that a button worked.
-//
-// WHAT THIS TIER DOES NOT COVER, stated so a reader does not mistake the gap for coverage: the in-flight
-// frame itself (a disabled field and action while the answer is outstanding) is not observable here,
-// because the fake answers a create in the click's own frame. It is a pure function of the view's `status`
-// prop and `AddWorkspaceDialog.test.tsx` server-renders all three arms of it directly. Withholding the
-// reply to expose the frame would need a fixture seam this ticket deliberately did not build.
-//
-// SECRET HYGIENE: the only free text this drive types is a path IT authored, and every assertion reads a
-// count, a class or that same harness-owned string. No daemon text is asserted on — nor could be: the
-// refusal arm is nullary, so the window never receives one.
+// Mounted creation lifecycle, using real Noise/IPC and request-driven conversation list replies.
 
 // The folder the operator types. Absolute (the client's one rule) and NOT the fixture's `/fake/workspace`,
 // so the workspace row it produces is a NEW group and cannot be confused with the seeded one. Its last
@@ -190,4 +169,222 @@ test('a refused create leaves the dialog open with the failure line and draws no
   // user is told, and a second refusal does not stack a second line.
   await start.click()
   await expect(error).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
+})
+
+// The wrapper controls only delivery/outcome; the existing fake owns daemon state and list replies.
+function controlledCreates(conversations?: typeof SECOND_SEEDED_ROW[]) {
+  const accepted = conversationStateFake({ conversations })
+  const rejected = conversationStateFake({ conversations, createOutcome: 'rejected' })
+  let outcome: 'hold' | 'success' | 'reject' = 'hold'
+  let count = 0
+  let requestId = 0
+  let held: Uint8Array[] = []
+  return {
+    reply(bytes: Uint8Array): Uint8Array[] {
+      const request = decodeEnvelope(bytes)
+      if (request.type !== 'create_conversation') return accepted(bytes)
+      count++
+      requestId = request.id
+      if (outcome === 'reject') return rejected(bytes)
+      const frames = accepted(bytes)
+      if (outcome === 'success') return frames
+      held = frames
+      return []
+    },
+    count: () => count,
+    outcome(next: typeof outcome) { outcome = next },
+    release(app: PairedApp) { held.forEach((frame) => app.daemon.pushFrame(frame)); held = [] },
+    reject(app: PairedApp) {
+      app.daemon.pushFrame(encodeEnvelope({ id: 90, type: 'error', ts: '2026-09-12T00:00:00Z',
+        in_reply_to: requestId, payload: { code: 'server.rejected', message: 'private rejection detail', retryable: false } }))
+    }
+  }
+}
+
+async function mainEvent(app: PairedApp, event: object): Promise<void> {
+  await app.app.evaluate(({ BrowserWindow }, { channel, event }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(channel, event)
+  }, { channel: DAEMON_EVENT_CHANNEL, event })
+}
+
+async function openWorkspace(app: PairedApp): Promise<void> {
+  const host = app.page.locator('.channel-list__host').first()
+  await host.hover()
+  await host.locator('.channel-list__host-add').click()
+  await app.page.locator('.add-workspace__input').fill(NEW_FOLDER)
+}
+
+async function freezeTime(app: PairedApp): Promise<void> {
+  await app.page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
+  await app.page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))
+}
+
+const TIMEOUT_COPY = 'Could not confirm completion within 30 seconds. The chat may still appear.'
+const OFFLINE_COPY = 'Connect this host before starting a chat'
+
+test('a missing selected-host status withholds entry while another host stays connected', async ({ launchPairedApp }) => {
+  const fake = controlledCreates()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  // Reload while withholding A's status snapshot to exercise a truly missing per-host slot.
+  await app.app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    const send = contents.send.bind(contents)
+    contents.send = (name, ...args) => {
+      if (name === channel && args[0]?.serverId === serverId &&
+        ['connecting', 'connected', 'disconnected', 'failed'].includes(args[0]?.type)) return
+      send(name, ...args)
+    }
+  }, { channel: DAEMON_EVENT_CHANNEL, serverId: FIRST_SERVER_ID })
+  await app.page.reload()
+  await expect(app.page.locator('.channel-list__host')).toHaveCount(4)
+  const selected = app.page.locator('.channel-list__host').first()
+  await expect(selected.locator('.channel-list__host-add')).toHaveCount(0)
+  await expect(app.page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  expect(fake.count()).toBe(0)
+})
+
+test('connection state gates an open form and loss during submission ends waiting without resending', async ({ launchPairedApp }) => {
+  const fake = controlledCreates()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  await freezeTime(app)
+  await openWorkspace(app)
+  const { page } = app
+  const start = page.locator('.add-workspace__start')
+  for (const type of ['connecting', 'disconnected', 'failed']) {
+    await mainEvent(app, { type, serverId: FIRST_SERVER_ID,
+      error: { code: 'transport', message: 'Connection unavailable', retryable: true } })
+    await expect(start).toBeDisabled()
+    await expect(page.locator('.channel-list__host').first().locator('.channel-list__host-add')).toHaveCount(0)
+    await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
+    await expect(page.locator('.add-workspace__error')).toHaveText(OFFLINE_COPY)
+    await start.evaluate((button: HTMLButtonElement) => button.click())
+    expect(fake.count()).toBe(0)
+  }
+  // A real redial earns a new authenticated acknowledgement, restoring submission eligibility.
+  app.forwarder.dropClientLeg()
+  await expect(start).toBeEnabled()
+  await start.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); button.click() })
+  await expect.poll(fake.count).toBe(1)
+  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await start.evaluate((button: HTMLButtonElement) => { button.click(); button.click() })
+  app.forwarder.dropClientLeg()
+  await expect(page.locator('.add-workspace__error')).toHaveText(OFFLINE_COPY)
+  await expect(page.locator('.add-workspace__input')).toBeEnabled()
+  await page.screenshot({ path: '/tmp/builder-1367-disconnected.png' })
+  await expect(start).toBeEnabled({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  await page.clock.runFor(30_000)
+  expect(fake.count()).toBe(1)
+  fake.outcome('success')
+  await start.click()
+  await expect.poll(fake.count).toBe(2)
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+})
+
+test('host-isolated results, uncertain deadline and late success keep the existing navigation', async ({ launchPairedApp }) => {
+  const fake = controlledCreates()
+  const other = controlledCreates([SECOND_SEEDED_ROW])
+  other.outcome('reject')
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: { buildReplyFrames: other.reply } })
+  await freezeTime(app)
+  await app.page.setViewportSize({ width: 800, height: 600 })
+  await openWorkspace(app)
+  await app.page.screenshot({ path: '/tmp/builder-1367-ready-800.png' })
+  const { page } = app
+  await page.locator('.add-workspace__start').click()
+  await expect.poll(fake.count).toBe(1)
+  const foreignCreate = () => page.evaluate((serverId) => window.pyry.sendCommand({
+    type: 'createConversation', serverId, payload: { cwd: '/other-host', name: null, is_promoted: false }
+  }), SECOND_SERVER_ID)
+  app.servers[1].daemon.pushFrame(encodeEnvelope({ id: 80, type: 'conversation_created',
+    ts: '2026-09-12T00:00:00Z', payload: { id: 'other-created', is_promoted: false,
+      cwd: '/other-host', name: null, last_used_at: '2026-09-12T00:00:00Z', workspace_label: null } }))
+  await foreignCreate()
+  await expect.poll(other.count).toBe(1)
+  for (const serverId of [undefined, null, '', 42, {}]) {
+    await mainEvent(app, { type: 'conversationCreateRejected', serverId })
+    await mainEvent(app, { type: 'conversationCreated', serverId, conversation: {
+      id: 'invalid-origin', is_promoted: false, cwd: '/invalid-origin', name: null,
+      last_used_at: '2026-09-12T00:00:00Z', workspace_label: null
+    } })
+  }
+  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__error')).toHaveCount(0)
+  await page.screenshot({ path: '/tmp/builder-1367-pending-800.png' })
+  await page.clock.runFor(29_999)
+  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await page.clock.runFor(1)
+  await expect(page.locator('.add-workspace__error')).toHaveText(TIMEOUT_COPY)
+  await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
+  await expect(page.locator('.add-workspace__start')).toBeEnabled()
+  await expect(page.locator('.add-workspace__cancel')).toBeEnabled()
+  expect(fake.count()).toBe(1)
+  await page.screenshot({ path: '/tmp/builder-1367-timeout-800.png' })
+  fake.release(app)
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(1)
+  fake.reject(app)
+  await page.clock.runFor(30_000)
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  expect(fake.count()).toBe(1)
+})
+
+test('server rejection permits an explicit retry whose wait survives the old deadline', async ({ launchPairedApp }) => {
+  const fake = controlledCreates()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  await freezeTime(app)
+  await openWorkspace(app)
+  const { page } = app
+  await page.locator('.add-workspace__start').click()
+  await expect.poll(fake.count).toBe(1)
+  await page.clock.runFor(20_000)
+  fake.reject(app)
+  await expect(page.locator('.add-workspace__error')).toHaveText(ERROR_COPY)
+  await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
+  await page.screenshot({ path: '/tmp/builder-1367-rejection.png' })
+  await page.locator('.add-workspace__start').click()
+  await expect.poll(fake.count).toBe(2)
+  await page.clock.runFor(10_000)
+  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__error')).toHaveCount(0)
+  fake.release(app)
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  await page.clock.runFor(30_000)
+  expect(fake.count()).toBe(2)
+})
+
+test('local build failure ends busy immediately and pending cancellation removes the local wait', async ({ launchPairedApp }) => {
+  const fake = controlledCreates()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  await freezeTime(app)
+  await openWorkspace(app)
+  const { page } = app
+  const oversized = '/' + 'p'.repeat(MAX_PLAINTEXT_BYTES)
+  await page.locator('.add-workspace__input').fill(oversized)
+  await page.locator('.add-workspace__start').click()
+  await expect(page.locator('.add-workspace__error')).toHaveText(ERROR_COPY)
+  await expect(page.locator('.add-workspace__input')).toHaveValue(oversized)
+  expect(fake.count()).toBe(0)
+  await page.locator('.add-workspace__input').fill(NEW_FOLDER)
+  await page.locator('.add-workspace__start').click()
+  await expect.poll(fake.count).toBe(1)
+  await expect(page.locator('.add-workspace__cancel')).toBeEnabled()
+  await page.locator('.add-workspace__cancel').click()
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  fake.reject(app)
+  fake.release(app)
+  await page.clock.runFor(30_000)
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  await openWorkspace(app)
+  await expect(page.locator('.add-workspace__error')).toHaveCount(0)
+  expect(fake.count()).toBe(1)
+  // Window reload unmounts a pending attempt; its old timer/results cannot affect a fresh dialog.
+  await page.locator('.add-workspace__start').click()
+  await expect.poll(fake.count).toBe(2)
+  await page.reload()
+  await expect(page.locator('.add-workspace')).toHaveCount(0)
+  fake.release(app)
+  await openWorkspace(app)
+  await expect(page.locator('.add-workspace__error')).toHaveCount(0)
+  expect(fake.count()).toBe(2)
 })

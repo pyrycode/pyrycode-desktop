@@ -73,3 +73,8 @@ None.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+- 2026-09-13: Clear retained mutation-dialog targets synchronously on disconnect, in addition to withholding their render. This prevents a disconnected host's draft from reappearing over a different host's dialog after reconnect. The promotion container retains its own synchronous abandonment guard for a completion already queued before unmount.
+- 2026-09-13: The interaction test exposed overlapping Edit-host and Repair-host targets after preserving local labeling on failed hosts. Update `channels.css` to reserve a separate token-spaced pen position on failed rows and keep their dots visible. No stylesheet overlap found after refreshing remote branches. Scope remains three TypeScript production files plus one stylesheet, within the original total-line estimate.

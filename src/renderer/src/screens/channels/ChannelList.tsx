@@ -1,5 +1,5 @@
 import './channels.css'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -18,7 +18,7 @@ import { requestNewConversation, requestNewChannel } from '../../store/conversat
 // store's INITIAL cell is imported too —
 // it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
 // same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, sessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
+import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState } from '../../store/sessionStore'
 import {
   useRelayLinkStore,
   selectRelayLinkStatusFor,
@@ -185,30 +185,33 @@ export function ChannelList({
   //
   // The honest cost, stated rather than hidden: a pairing change now re-renders the whole sidebar where
   // it used to wake one row. Accepted — a pairing change IS a whole-sidebar change, and the per-server
-  // label and dot reads stay inside their own leaves, so one machine's flap still wakes only that
-  // machine's two dots.
+  // label reads stay inside their leaves. Status changes also update mutation availability.
   const servers = useServerInfoStore(selectServers)
+  const statuses = useSessionStore((state) => state.statuses)
+  const connected = (serverId: string | null | undefined): boolean =>
+    typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
+  const soleServerId = servers.length === 1 ? servers[0].serverId : undefined
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
   // the SaveAsChannelDialog container itself (#288), seeded from the row on mount. The dialog is not
   // rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside the
   // container's callbacks, so ChannelList stays server-renderable (the onNewConversation discipline).
-  const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
+  const [saveRow, setSaveRow] = useState<SidebarRow | null>(null)
   // The Rename dialog's independent per-interaction state (#360) — a separate local pair, not shared with
   // the save-as one. No mutual-exclusion logic is needed: an open dialog's fixed-inset overlay covers the
   // window, so the row affordance behind it is not clickable and the two dialogs cannot both be open.
   // `renameRow` is the row whose Rename dialog is open (or none); `renameName` is the controlled field,
   // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
-  const [renameRow, setRenameRow] = useState<ConversationSummary | null>(null)
+  const [renameRow, setRenameRow] = useState<SidebarRow | null>(null)
   const [renameName, setRenameName] = useState('')
   // The Create-channel dialog's own per-interaction pair (#1179), independent of the two above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
-  // at once and no mutual-exclusion logic is needed. `createChannelCwd` is the WORKSPACE the dialog will
+  // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
   // create in — the group key the clicked plus closed over — and holding it here is what keeps that
   // daemon-asserted path out of the dialog view entirely. `createChannelName` is the controlled field,
   // seeded EMPTY on every open (there is no current name to seed from, this being a create).
-  const [createChannelCwd, setCreateChannelCwd] = useState<string | null>(null)
+  const [createChannelTarget, setCreateChannelTarget] = useState<{ cwd: string; serverId: string } | null>(null)
   const [createChannelName, setCreateChannelName] = useState('')
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
@@ -238,6 +241,16 @@ export function ChannelList({
   // will be created on — the id the clicked plus closed over — and holding it HERE is what keeps it out of
   // the dialog view entirely: that view never sees an id at all, it sees a path and a status.
   const [addWorkspaceServerId, setAddWorkspaceServerId] = useState<string | null>(null)
+
+  // Clear drafts on loss, including a disconnect/reconnect before React paints.
+  useEffect(() => sessionStore.subscribe((state) => {
+    const unavailable = (id: string | null | undefined): boolean =>
+      typeof id !== 'string' || state.statuses.get(id)?.type !== 'connected'
+    if (saveRow && unavailable(saveRow.serverId)) setSaveRow(null)
+    if (renameRow && unavailable(renameRow.serverId)) setRenameRow(null)
+    if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
+    if (editWorkspaceTarget && unavailable(editWorkspaceTarget.serverId)) setEditWorkspaceTarget(null)
+  }), [saveRow, renameRow, createChannelTarget, editWorkspaceTarget])
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -265,6 +278,7 @@ export function ChannelList({
       <ServerInfoData />
       <ChannelListView
         conversations={conversations}
+        statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
         openConversationId={openConversationId}
         onOpen={onOpen}
@@ -272,18 +286,22 @@ export function ChannelList({
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
         onRepairHost={onRepairHost}
-        onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
-        // #1178 — the SECOND caller of the shipped constructor, and the whole of the wiring: it already
-        // took the cwd as a required parameter, so the FAB's client-owned default and the workspace
-        // row's own path are its two arguments and no bridge changed. `window.pyry` is dereferenced
-        // inside the arrow alone, never during render (the onNewConversation discipline).
-        onCreateChat={(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)}
+        onNewConversation={() => {
+          if (!canMutateHost(soleServerId)) return
+          requestNewConversation(window.pyry.sendCommand, defaultWorkspace, soleServerId)
+        }}
+        // Retain the clicked workspace and its host through the synchronous send.
+        onCreateChat={(cwd, serverId) => {
+          if (!canMutateHost(serverId)) return
+          requestNewConversation(window.pyry.sendCommand, cwd, serverId)
+        }}
         // #1179 — the Channels-tree plus OPENS A DIALOG and sends nothing: the workspace is fixed by
         // the row that was clicked, and the name still has to be typed. Both cells are seeded together
         // so a reopen always starts from an empty field (the CreateFolderDialog reset, achieved by the
         // seed rather than by a store, since there is no store here to reset).
-        onCreateChannel={(cwd) => {
-          setCreateChannelCwd(cwd)
+        onCreateChannel={(cwd, serverId) => {
+          if (!canMutateHost(serverId) || serverId === undefined) return
+          setCreateChannelTarget({ cwd, serverId })
           setCreateChannelName('')
         }}
         // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
@@ -292,6 +310,7 @@ export function ChannelList({
         // and the folder segment otherwise, resolved by `groupByWorkspace` and indistinguishable here
         // on purpose (AC4 asks for "the row's current label", which is exactly what the row renders).
         onEditWorkspace={(cwd, label, serverId) => {
+          if (!canMutateHost(serverId)) return
           setEditWorkspaceTarget({ cwd, serverId })
           setEditWorkspaceName(label)
         }}
@@ -310,27 +329,29 @@ export function ChannelList({
         // on close: `ChannelList` mounts a fresh dialog container per open, so the field and the status
         // always start empty and `idle` without a reset here.
         onAddWorkspace={(serverId) => setAddWorkspaceServerId(serverId)}
-        onSaveAsChannel={(row) => setSaveRow(row)}
+        onSaveAsChannel={(row) => { if (canMutateHost(row.serverId)) setSaveRow(row) }}
         onRename={(row) => {
+          if (!canMutateHost(row.serverId)) return
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
           // same one-handler seed as save-as; a null-name row prefills with its "Untitled" placeholder.
           setRenameRow(row)
           setRenameName(titleFor(row.name))
         }}
       />
-      {saveRow && (
+      {saveRow && connected(saveRow.serverId) && (
         <SaveAsChannelDialog
           row={saveRow}
           onDismiss={() => setSaveRow(null)}
           onPromoted={() => setSaveRow(null)}
         />
       )}
-      {renameRow && (
+      {renameRow && connected(renameRow.serverId) && (
         <RenameConversationDialogView
           name={renameName}
           onNameChange={setRenameName}
           onCancel={() => setRenameRow(null)}
           onSave={() => {
+            if (!canMutateHost(renameRow.serverId)) return
             requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
             setRenameRow(null)
           }}
@@ -341,28 +362,30 @@ export function ChannelList({
           header names). It is unreachable today because `renderServerTrees` withholds the plus from the
           unknown-workspace group, whose key IS the empty string — and writing the check this way is
           what keeps that withhold load-bearing for one reason rather than two. */}
-      {createChannelCwd !== null && (
+      {createChannelTarget !== null && connected(createChannelTarget.serverId) && (
         <CreateChannelDialogView
           name={createChannelName}
           onNameChange={setCreateChannelName}
           // Cancel closes and sends nothing (AC2). The next open re-seeds the field, so there is
           // nothing to clear here.
-          onCancel={() => setCreateChannelCwd(null)}
+          onCancel={() => setCreateChannelTarget(null)}
           onCreate={() => {
             // Fire-and-forget, then close (AC3). `window.pyry` is dereferenced HERE, at interaction
             // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
             // the helper trims the name.
-            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelCwd)
-            setCreateChannelCwd(null)
+            if (!canMutateHost(createChannelTarget.serverId)) return
+            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelTarget.cwd, createChannelTarget.serverId)
+            setCreateChannelTarget(null)
           }}
         />
       )}
-      {editWorkspaceTarget !== null && (
+      {editWorkspaceTarget !== null && connected(editWorkspaceTarget.serverId) && (
         <EditWorkspaceDialogView
           name={editWorkspaceName}
           onNameChange={setEditWorkspaceName}
           onCancel={() => setEditWorkspaceTarget(null)}
           onSave={() => {
+            if (!canMutateHost(editWorkspaceTarget.serverId)) return
             requestRenameWorkspace(
               window.pyry.sendCommand,
               editWorkspaceTarget.cwd,
@@ -467,6 +490,7 @@ export function ChannelList({
  */
 export function ChannelListView({
   conversations,
+  statuses,
   serverIds,
   openConversationId,
   onOpen,
@@ -496,6 +520,7 @@ export function ChannelListView({
   // Ids and not `ServerInfoValue`s: this view has no business with a relay URL, and the narrower prop is
   // also the one the unit tier can inject in one literal.
   serverIds: readonly string[]
+  statuses: SessionState['statuses']
   // #1098 — the id of the chat the pane is showing, or `null` when none has been opened this session.
   // REQUIRED rather than optional: the container must decide, and a defaulted prop would let a future
   // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
@@ -516,12 +541,12 @@ export function ChannelListView({
   // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
   // and a defaulted prop would let a future caller silently render a sidebar with no per-workspace route
   // to a new chat. The `cwd` is the group's key and travels verbatim; this view never inspects it.
-  onCreateChat: (cwd: string) => void
+  onCreateChat: (cwd: string, serverId: string | undefined) => void
   // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
   // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
   // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
   // the dialog's Create does, once a name has been typed.
-  onCreateChannel: (cwd: string) => void
+  onCreateChannel: (cwd: string, serverId: string | undefined) => void
   // #1180 — open the Edit-workspace dialog for the named workspace. REQUIRED for its two siblings'
   // reason: a defaulted prop would let a future caller silently render a sidebar whose pen opens
   // nothing. It takes the group's `cwd` AND the label the row is currently showing — the second
@@ -545,8 +570,8 @@ export function ChannelListView({
   // by `HostRowControl`, the level already drawn for one machine. It is not inspected on the way through;
   // it travels verbatim. Like `onEditHost` it sends no command — the dialog's Start chat does.
   onAddWorkspace: (serverId: string) => void
-  onSaveAsChannel: (row: ConversationSummary) => void
-  onRename: (row: ConversationSummary) => void
+  onSaveAsChannel: (row: SidebarRow) => void
+  onRename: (row: SidebarRow) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
@@ -559,6 +584,7 @@ export function ChannelListView({
       </div>
       {renderBody(
         conversations,
+        statuses,
         serverIds,
         openConversationId,
         onPairNewHost,
@@ -572,7 +598,7 @@ export function ChannelListView({
         onSaveAsChannel,
         onRename
       )}
-      <NewConversationFab onClick={onNewConversation} />
+      <NewConversationFab onClick={onNewConversation} disabled={serverIds.length !== 1 || statuses.get(serverIds[0])?.type !== 'connected'} />
     </section>
   )
 }
@@ -643,12 +669,13 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
 // injected handler; navigation to the new thread is decoupled and event-driven (useConversationCreatedNav
 // in PairedShell fires on the daemon's conversationCreated confirmation), never synchronous here. The
 // Material `add` glyph path is the 24px add icon.
-function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
+function NewConversationFab({ onClick, disabled }: { onClick: () => void; disabled: boolean }): JSX.Element {
   return (
     <button
       type="button"
       className="channel-list__fab"
       aria-label="New discussion"
+      disabled={disabled}
       onClick={onClick}
     >
       <svg
@@ -887,7 +914,7 @@ export function HostRow({
           <span className="channel-list__host-repair-icon" aria-hidden="true" />
         </button>
       )}
-      {!failed && onEditHost && (
+      {onEditHost && (
         // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
         // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
         // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
@@ -1542,6 +1569,7 @@ type WorkspaceEditControl = {
 function renderServerTrees(
   rows: readonly SidebarRow[],
   serverIds: readonly string[],
+  statuses: SessionState['statuses'],
   renderRow: (row: SidebarRow) => JSX.Element,
   // #1299 — open the Edit host dialog for one machine. REQUIRED, and placed BEFORE the two optional
   // control objects below rather than beside them: both calls supply it, every host row draws the pen, and
@@ -1563,7 +1591,7 @@ function renderServerTrees(
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
   // they differ in the two fields of this object alone. `onCreate` takes the `cwd` rather than the
   // group, so the caller states exactly what crosses this seam.
-  create?: { readonly label: string; readonly onCreate: (cwd: string) => void },
+  create?: { readonly label: string; readonly onCreate: (cwd: string, serverId: string | undefined) => void },
   // #1180 — the trailing edit control this tree draws on each of its workspace rows. OPTIONAL and
   // trailing like `create`, but BOTH calls supply the SAME object: the pen is not a per-tree
   // difference, which is why its label is one constant rather than two. `onEdit` takes the group's
@@ -1595,9 +1623,9 @@ function renderServerTrees(
         // is an ordinary group and keeps its plus. Since #1179 that withhold covers BOTH trees, and it
         // is what keeps the empty string from ever reaching either create.
         create={
-          create === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+          create === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined
-            : { label: create.label, onCreate: () => create.onCreate(group.key) }
+            : { label: create.label, onCreate: () => create.onCreate(group.key, serverId) }
         }
         // #1180 — the pen, withheld on exactly the same terms and by the same test. Its key is
         // `UNKNOWN_WORKSPACE_KEY`, the empty string, which names no directory, so a rename sent with
@@ -1611,7 +1639,7 @@ function renderServerTrees(
         // one, the folder segment otherwise) and it is passed rather than re-derived so the dialog's
         // field cannot disagree with the row about what the workspace is currently called.
         edit={
-          edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+          edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined
             : { label: edit.label, onEdit: () => edit.onEdit(group.key, group.label, serverId) }
         }
@@ -1726,6 +1754,7 @@ function SectionHeader({
 
 function renderBody(
   conversations: readonly SidebarRow[] | null,
+  statuses: SessionState['statuses'],
   // #1070 — the paired servers to draw, in pairing order. Data, so it leads the callbacks like the id
   // below. Its EMPTINESS is meaningful: it is the launch frame before the one-shot settles.
   serverIds: readonly string[],
@@ -1742,10 +1771,10 @@ function renderBody(
   // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
   // its #1179 sibling below — is the one place the two trees are told apart now that
   // `renderServerTrees` draws both.
-  onCreateChat: (cwd: string) => void,
+  onCreateChat: (cwd: string, serverId: string | undefined) => void,
   // #1179 — open the Create-channel dialog for a named workspace. Handed to the `channels` tree alone.
   // The container turns it into dialog state; nothing is sent until the dialog's Create.
-  onCreateChannel: (cwd: string) => void,
+  onCreateChannel: (cwd: string, serverId: string | undefined) => void,
   // #1180 — open the Edit-workspace dialog for a named workspace. Handed to BOTH trees, unlike the two
   // creates above it: this is the one trailing control that is not a per-tree difference. The container
   // turns it into dialog state; nothing is sent until the dialog's Save.
@@ -1759,8 +1788,8 @@ function renderBody(
   // same machine. The container turns it into dialog state; nothing is sent until the dialog's Start chat.
   onAddWorkspace: (serverId: string) => void,
   onRepairHost: ((serverId: string) => void) | undefined,
-  onSaveAsChannel: (row: ConversationSummary) => void,
-  onRename: (row: ConversationSummary) => void
+  onSaveAsChannel: (row: SidebarRow) => void,
+  onRename: (row: SidebarRow) => void
 ): JSX.Element | null {
   // A view-only empty list leaves the store's not-yet-loaded meaning intact while saved hosts render.
   // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
@@ -1795,7 +1824,7 @@ function renderBody(
           two control objects are built HERE, at the only level that knows which tree it is drawing, so
           the two client-owned label constants stay module-local to this file and neither reaches a
           component that also handles a `cwd`. */}
-      {renderServerTrees(channels, serverIds, (c) => (
+      {renderServerTrees(channels, serverIds, statuses, (c) => (
         <Row
           key={c.id}
           row={c}
@@ -1805,7 +1834,7 @@ function renderBody(
           // `openConversationId` header names the same trap).
           isOpen={c.id === openConversationId}
           onOpen={() => onOpen(c)}
-          onRename={() => onRename(c)}
+          onRename={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? () => onRename(c) : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
@@ -1823,7 +1852,7 @@ function renderBody(
           instances holding two separate booleans. #1070 extends that property across servers by the same
           mechanism and with nothing to implement for it. */}
       <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
-      {renderServerTrees(discussions, serverIds, (d) => (
+      {renderServerTrees(discussions, serverIds, statuses, (d) => (
         <Row
           key={d.id}
           row={d}
@@ -1831,7 +1860,7 @@ function renderBody(
           // marked in whichever tree it lives in and neither is a special case.
           isOpen={d.id === openConversationId}
           onOpen={() => onOpen(d)}
-          onSaveAsChannel={() => onSaveAsChannel(d)}
+          onSaveAsChannel={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? () => onSaveAsChannel(d) : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
@@ -2076,4 +2105,11 @@ function Row({
       )}
     </div>
   )
+}
+
+// Read at interaction time: a render snapshot cannot authorize a later keyboard submission.
+function canMutateHost(serverId: string | null | undefined): boolean {
+  if (typeof serverId === 'string' && selectStatusFor(serverId)(sessionStore.getState())?.type === 'connected') return true
+  window.pyry.sendDiagnostic({ event: 'sidebar-mutation', code: 'host-unavailable' })
+  return false
 }

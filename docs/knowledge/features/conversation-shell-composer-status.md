@@ -163,7 +163,7 @@ hidden `<span className="composer-status__error-prefix">Error: </span>` ahead of
 exactly this, unchanged by #963 below — only its container and its neighbours in the slot changed.
 
 Through #963, `ComposerErrorChipControl` was the module-private, store-bound container —
-`useSessionStore(selectStatus)`, the same narrow slice `ConnectionBannerControl` already reads — mounted
+`useSessionStore(selectStatus)`, then shared with `ConnectionBannerControl` — mounted
 as `ComposerStatusArea`'s `trailing` prop directly. #963 collapsed it into `ComposerErrorSlotControl`,
 which now owns that mount site and calls `ComposerErrorChip` only on its delegate arm — see [Actionable-error
 button](#actionable-error-button-and-the-row-that-grows-to-fit-it-963) below.
@@ -206,17 +206,13 @@ content width and the activity group absorbing the whole squeeze.
 light-scheme fallback `#ffdad6` (the same trap `.status-row` and this row's own comment already record).
 One consumer today; the next slot needing an error container should reuse it rather than re-derive the hex.
 
-**Testing gotcha: the container's showing branch needed a `getInitialState` spy, not `setState`.** The
-architecture spec assumed the container `describe`'s existing `beforeEach` (which `setState`s the session
-store) would make the `error` arm reachable through the mounted `ConversationScreen`, the same way it does
-for `ConnectionBannerControl`. It doesn't: zustand v5's `useStore` reads `getInitialState()` under
-`renderToStaticMarkup`, never `getState()`, so a `setState` in `beforeEach` never surfaces there —
-`ComposerErrorChipControl` turned out to share `RepairControl`'s situation (see [Re-pair
-control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) above and [#69 codebase notes](../codebase/69.md)), not the banner's. The
-shipped test spies `sessionStore.getInitialState` directly, mocks its return once, and restores it in a
-`finally`. Worth remembering for the next container test whose visible branch is not the store's initial
-`disconnected` snapshot — check which read path the mount actually uses before trusting a `beforeEach`
-`setState` to reach it.
+**Static container tests must stage the per-host read path.** Zustand's
+`renderToStaticMarkup` snapshot comes from `getInitialState()`, so `setState()` does not exercise
+a populated arm. `stageOpenConnection` in `ConversationScreen.test.tsx` spies the active
+conversation, its stamped list row and the matching `statuses` entry. It deliberately gives the
+singular `status` a different value, so a regression to that cell fails the assertion. Restore all
+spies afterward. Interaction coverage must wait for the failed host's daemon state, not merely
+its relay dot, before asserting the healthy thread's error UI is absent.
 
 Code review PASS (architect self-review) — see the ticket's own security review for the trust-boundary and
 attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
@@ -255,21 +251,19 @@ no `aria-label`) says it is an error without one.
 No fourth component for the button markup itself (`ComposerRepairButton` was considered and dropped): six
 lines of markup with no branch of its own would add a name and a test surface without adding a decision.
 
-**`ComposerErrorSlotControl({ onUnpaired })`** is the store-bound container, collapsing #797's
-`ComposerErrorChipControl` and #167's `RepairControl` into one — they read the same `selectStatus` slice
-for the same fact and now fill the same hole, so the re-render footprint narrows rather than grows.
-`handleRepair` was `RepairControl`'s body verbatim through [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163):
-`void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })`. #1163
-migrated it onto the per-server channel: it now resolves the open conversation's server id at
-interaction time (`serverIdForOpenConversation` over `conversationListStore`'s stamped rows, via
-`getState()`, not a subscription) and calls `void runUnpair({ unpairServer: window.pyry.unpairServer,
-refreshServers, onLastServerUnpaired: () => onUnpaired?.(), dispatch }, serverId)`, still fired as a bare
-`void` since `runUnpair` never rejects. No confirm phase and no busy guard, for #167's recorded reasons —
-the button only ever appears in an already-terminal error, and it self-hides on both outcomes (`ok` and
-nothing left paired → route unmounts the screen; `ok` and other servers remain → the shell just stays up;
-`error` → the store lands on `code: 'unpair'`, which the predicate excludes). `window.pyry` is
-dereferenced only inside the handler, never during render — see [Unpair channel § The two renderer
-callers](unpair-channel.md#the-two-renderer-callers) for the full mechanism.
+**`ComposerErrorSlotControl({ onRepairHost, onCommand })`** owns the slot's store reads.
+Its connection status comes from `useOpenConnectionStatus`, the same hook used by the composer
+send gate and connection banner: resolve the open conversation's client-stamped server, then read
+that server's status. Missing or ambiguous attribution renders disconnected. A different host's
+failure cannot disable this thread or give it a repair button. See
+[Session store](session-store.md#one-slot-per-server-since-1133).
+
+`handleRepair` re-resolves the open conversation's server at click time and calls
+`onRepairHost(serverId)` when it is attributable. It never calls `runUnpair` or clears stores.
+The shell opens [recovery beside the sidebar](paired-shell-routing.md#host-recovery-and-navigation-lifetime),
+using the existing pairing input and fingerprint confirmation. Cancel returns to the prior thread;
+same-host confirmation replaces credentials and reconnects while preserving held conversations.
+Explicit host removal remains in Settings.
 
 **`COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'`** joins `composerSend.ts` beside
 `COMPOSER_ERROR_CHIP_COPY` — see [Composer send § 9](composer-send.md#9-actionable-error-button-copy-composerrepairbuttoncopy-963).
@@ -343,20 +337,16 @@ it — see [Question panel § Step controls](conversation-shell-question-panel.m
 **e2e (`e2e/unpair-repair.spec.ts`) drives the geometry and the click**, none of which a static render can
 reach: the row's height (24 → 32), the status group's offset from the row's bottom edge (unchanged across
 that transition), the focus ring (Chromium only paints it after keyboard-driven focus, so the spec presses
-a key before calling `.focus()`), and the click landing on the pairing screen through the same `runUnpair`
-flow. The button's locator moved from `getByRole('button', { name: 'Re-pair', exact: true })` to
+a key before calling `.focus()`), and the click opening recovery beside the sidebar without unpairing.
+The button's locator moved from `getByRole('button', { name: 'Re-pair', exact: true })` to
 `COMPOSER_REPAIR_BUTTON_COPY`, imported rather than retyped so a copy change cannot leave the spec passing
 against a string nothing renders; the spec's header comment, which used to describe **four**
 `.conversation__unpair` buttons (Unpair/Cancel/Confirm/Re-pair), now describes three — the button does not
 wear that class.
 
-Security review PASS (builder self-review). One SHOULD FIX carried as a structural requirement rather
-than left as prose: the trust-boundary note above ("read for a decision, never for markup") is enforced by
-the sentinel test, not by convention alone. One accepted risk named, not fixed: the destructive clear
-still has no confirmation step, and this ticket makes the control markedly more prominent (a 157×32 filled
-button replacing a bare de-emphasised text button) — accepted because the consequence is bounded and
-recoverable (re-pair by scanning a QR) and a confirm step on an already-terminal state is pure friction,
-per #167's original rationale.
+The sentinel test enforces the trust boundary: error fields may select the control but cannot
+supply its markup. Recovery entry now performs navigation only; credential changes remain behind
+the pairing form's fingerprint confirmation.
 
 ## Stopped-turn recovery
 

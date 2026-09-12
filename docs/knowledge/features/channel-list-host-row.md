@@ -7,7 +7,7 @@ past it: the sidebar's host row and its two trailing connection dots. Everything
 
 ## The host row (`ChannelList.tsx`, added by #710, the operator's label by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834))
 
-`HostRow({ label, serverId, onAddWorkspace?, onEditHost? }): JSX.Element` — the file's sixth inline-glyph
+`HostRow({ label, serverId, onAddWorkspace?, onEditHost?, failed?, onRepair? }): JSX.Element` — the file's sixth inline-glyph
 idiom instance, alongside `SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save
 buttons — is an **exported pure view**, mirroring `HostConnectionDots`/`HostConnectionDotsControl` below
 it (§ next). It renders `<div className="channel-list__host">` holding a 12px inline Material `dns`
@@ -22,6 +22,15 @@ its neighbour: a Zustand singleton seeded before a `renderToStaticMarkup` call i
 server renderer reads `getServerSnapshot()`, wired to the state captured at store *creation* — so
 `HostRowControl` can only ever render each store's initial cell, and `hostRowLabel`/`HostRow` are the only
 seam the unit tier can reach the matrix through.
+
+`HostRowControl` also reads that server's session status. Any `error` gives the row its
+`channel-list__host--failed` treatment: error-colored glyph and label, plus the primary-colored
+`Repair host` button beside the two dots. The normal pen/plus are withheld in this state; the
+workspace subtree remains. Repair is a real button, visible at rest with a focus outline, and
+delegates the saved server ID to [shell recovery](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
+The unchanged plug SVG lives at `src/renderer/public/repair-plug.svg` and is used as a `currentColor`
+mask. Importing it through Vite inlined a data URL blocked by the renderer CSP. The recovery
+interaction test decodes the mask image: button visibility alone cannot prove the glyph loaded.
 
 **The collapse — `hostRowLabel(value: HostLabelValue): string`.** Unchanged by #1199. Returns the
 operator's label only when the [host-label window store](host-label-window-store.md)'s value is `stored`
@@ -95,11 +104,14 @@ once at launch, before pairing, and never re-runs, leaving the row stale after a
 mounting inside `SettingsScreen` is exactly what "populated with no Settings visit" forbids. Because
 `ChannelList` is rendered at the same element position on both the `list` and `thread` routes ([paired
 shell](paired-shell.md)), React preserves it across that flip and no re-read fires there — it *does*
-remount on return from `settings`/`archive`/`pairServer`, which re-reads both one-shots, keeping a
+remount on return from `settings`/`archive` or ordinary full-screen pairing, which re-reads both
+one-shots, keeping a
 mid-session re-pair (Settings → "Pair another server") from leaving a stale name or a missing server id on
 the row. This is also why neither [host-label window store](host-label-window-store.md) nor
 `serverInfoStore` needs to be in `clearPairingScopedState`: the remount-driven re-read already resolves the
-staleness either store's own edge-case notes once flagged as unresolved.
+staleness either store's own edge-case notes once flagged as unresolved. Host recovery keeps the
+sidebar mounted instead; its confirmation callback explicitly refreshes `serverInfoStore`, including
+the saved-order change from a same-host upsert. The label loader reacts to that refreshed list.
 
 **Launch-frame ordering, since #1199.** `ServerInfoData`'s invoke resolves → `serverInfoStore` fills →
 `HostRowControl`'s derived `serverId` changes → `HostLabelData`'s effect (keyed off that same list, see
@@ -188,6 +200,12 @@ reaches this control: a host row (and so its `HostConnectionDotsControl`) is dra
 already in the paired list, so the id is always a real one, and `serverId` narrowed from `string | null`
 to `string` with the branch deleted. The silent-server collapse above is a different, still-reachable
 case — a paired server that has reported nothing yet — and is untouched.
+
+The display fallback does not settle the host for automatic recovery: that decision reads the raw
+status map and waits for unreported hosts. `daemonLeg` announces a classified rejection as
+`Pyrycode Pairing rejected`, while ordinary failures remain `Pyrycode Offline` and an in-progress
+connection remains `Pyrycode Connecting`. The relay mapping is independent, so rejection may still
+sit beside `Relay Connected`. See [Session store](session-store.md#one-slot-per-server-since-1133).
 
 Two reuse decisions survive #1199 unchanged, at the two levels the contract exists on:
 

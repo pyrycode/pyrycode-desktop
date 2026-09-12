@@ -1,8 +1,8 @@
 import './pairedShell.css'
-import { useReducer, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
-import { ChannelList } from './screens/channels/ChannelList'
+import { ChannelList, hostRowLabel } from './screens/channels/ChannelList'
 import { SettingsScreen } from './screens/settings/SettingsScreen'
 import { ArchiveScreen } from './screens/archive/ArchiveScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
@@ -48,7 +48,10 @@ import { runSettingsWriteStore } from './store/runSettingsWriteStore'
 import { systemPromptStore } from './store/systemPromptStore'
 import { systemPromptWriteStore } from './store/systemPromptWriteStore'
 import { sessionIdStore } from './store/sessionIdStore'
-import { sessionStore } from './store/sessionStore'
+import { sessionStore, useSessionStore, type ConnectionStatus, type StatusOrigin } from './store/sessionStore'
+import { serverInfoStore, useServerInfoStore, selectServers } from './store/serverInfoStore'
+import { useHostLabelStore, selectHostLabelFor } from './store/hostLabelStore'
+import { loadServerInfo } from './store/serverInfoLoader'
 import { slashCommandListStore } from './store/slashCommandListStore'
 import { timelineStore } from './store/timelineStore'
 import { usageLimitStore } from './store/usageLimitStore'
@@ -63,8 +66,7 @@ function assertNever(route: never): never {
  * `getState()` inside the arrow body — the bridge idiom (timelineBridge.ts:206, sessionIdBridge.ts:68)
  * and the in-component one (CreateFolderDialog.tsx:154) — so nothing is dereferenced at module load and
  * nothing is read during render. The object closes over no per-render value, so module scope is right:
- * PairedShell subscribes to no store at all now and re-renders only on its own nav dispatch, which keeps
- * it server-renderable.
+ * The wiring stays independent of render state; PairedShell separately subscribes to recovery status.
  */
 const activateDeps: ActivateConversationDeps = {
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
@@ -124,7 +126,7 @@ const activateDeps: ActivateConversationDeps = {
   //
   // `window.pyry` is dereferenced INSIDE the arrow body, the `getState()` shape every member above uses:
   // it runs only when a conversation is activated, never at module load and never during render, so this
-  // module stays server-renderable and PairedShell still subscribes to no store.
+  // module stays server-renderable.
   //
   // #1259's ask is the FOURTH and the only one that is not unconditional. The three above are
   // whole-value replaces for which a duplicate costs nothing, so they fire on every activation
@@ -146,8 +148,7 @@ const activateDeps: ActivateConversationDeps = {
  * `activateDeps` above — each effect reaches its singleton through `getState()` inside the arrow body,
  * so nothing is dereferenced at module load, nothing is read during render, and the object closes over
  * no per-render value. `sessionStore`, `announcedModelStore`, `slashCommandListStore` and
- * `modelListStore` appear here and nowhere else in this file; PairedShell still subscribes to no store
- * at all and stays server-renderable. #593 widened the set with the announced running model, #779 with
+ * `modelListStore` appear here and nowhere else in this file; the wiring stays server-renderable. #593 widened the set with the announced running model, #779 with
  * the per-conversation read marks, #955 with the published slash-command menus and #977 with the
  * published model menus, and each was a single edit here rather than one per call site — which is the
  * whole reason the clear lives in the shared helper, and which survives #1141 narrowing the callers to
@@ -263,13 +264,28 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
 }
 
+const PAIRING_REJECTION_NOTICE = 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
+
+export function automaticRecoveryTarget(
+  servers: readonly { serverId: string }[],
+  statuses: ReadonlyMap<StatusOrigin, ConnectionStatus>
+): string | null {
+  const states = servers.map(server => statuses.get(server.serverId))
+  if (states.some(status => status === undefined || status.type === 'connecting' || status.type === 'connected')) return null
+  return servers.find(server => {
+    const status = statuses.get(server.serverId)
+    return status?.type === 'error' && status.error.code === 'pairing-rejected'
+  })?.serverId ?? null
+}
+
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
  * App. `list` and `thread` both show the #670 two-pane desktop shell: the Channel List sidebar (#141)
  * beside a chat pane that holds the store-backed ConversationScreen on `thread` and nothing on `list`.
  * `settings` shows the Settings scaffold (#333); `archive` shows the Archive scaffold (#347);
  * `pairServer` re-opens the existing PairingScreen from inside the paired app to switch daemons (#152).
- * Those last three replace the WHOLE shell with a full-screen <section> — that is #670's AC5 (Settings,
+ * Settings, Archive and ordinary pairing replace the shell; host recovery stays beside the sidebar.
+ * The original full-screen navigation followed #670's AC5 (Settings,
  * Archive and Pair-another open over both panes) and it cost no edit, which is why the route model was
  * left alone. Adding a future view is one new case, forced by the assertNever default (AC1: an added
  * arm, not a rewrite). The `settings` and `archive` cases reuse the same `onBack` as `thread` (all
@@ -288,6 +304,10 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
  * lands from the route it was on when the flow opened, not from which control opened it.
  */
 export function PairedShellView(props: {
+  recoveryServerId?: string | null
+  recoveryRejected?: boolean
+  recoveryLabel?: string
+  onRepairHost?: (serverId: string) => void
   route: PairedRoute
   /** The identity of the chat pane's subtree — the active conversation's id, or null when none has been
    *  activated in this shell. Applied as ConversationScreen's `key`, so a change REMOUNTS it. Required,
@@ -303,6 +323,9 @@ export function PairedShellView(props: {
   onPairServerPaired: () => void
   onPairServerCancelled: () => void
 }): JSX.Element {
+  const pairing = <PairingScreen key={props.recoveryServerId}
+    onPaired={props.onPairServerPaired} onCancel={props.onPairServerCancelled} />
+  if (props.route === 'pairServer' && !props.recoveryServerId) return pairing
   switch (props.route) {
     // #670: `list` and `thread` stopped being alternative SCREENS and became one two-pane shell — the
     // sidebar is mounted in both, and the route only decides whether the chat pane holds a thread. They
@@ -322,6 +345,7 @@ export function PairedShellView(props: {
     // <div> survives only as the layout slot.
     case 'list':
     case 'thread':
+    case 'pairServer':
       return (
         <div className="paired-shell">
           <div className="paired-shell__sidebar">
@@ -329,6 +353,7 @@ export function PairedShellView(props: {
               onOpen={props.onOpen}
               onOpenSettings={props.onOpenSettings}
               onOpenArchive={props.onOpenArchive}
+              onRepairHost={props.onRepairHost}
               // #1303 — the SAME `onOpenPairServer` the settings case hands SettingsScreen, reused
               // rather than given a prop of its own, and that reuse is a decision rather than a
               // shortcut. Both entries mean exactly "open the pairing flow", and the container makes
@@ -340,7 +365,13 @@ export function PairedShellView(props: {
             />
           </div>
           <div className="paired-shell__pane">
-            {props.route === 'thread' ? (
+            {props.route === 'pairServer' ? (
+              <section className="paired-shell__recovery" aria-label="Repair pairing">
+                <p className="paired-shell__recovery-title">Repair pairing: {props.recoveryLabel ?? 'Server'}</p>
+                {props.recoveryRejected && <p className="paired-shell__recovery-notice" role="status">{PAIRING_REJECTION_NOTICE}</p>}
+                {pairing}
+              </section>
+            ) : props.route === 'thread' ? (
               // `key` is the pane's IDENTITY, not decoration. Switching conversations from the
               // now-always-mounted sidebar leaves the route on `thread` (`open` is absolute), so React
               // reconciles two `thread` renders by PRESERVING this subtree — a path that was unreachable
@@ -356,7 +387,7 @@ export function PairedShellView(props: {
               // of them store state, and reaches no screen-local value at all.
               <ConversationScreen
                 key={props.paneKey}
-                onUnpaired={props.onUnpaired}
+                onRepairHost={props.onRepairHost}
                 onBack={props.onBack}
               />
             ) : null}
@@ -378,13 +409,6 @@ export function PairedShellView(props: {
       )
     case 'archive':
       return <ArchiveScreen onBack={props.onBack} />
-    case 'pairServer':
-      return (
-        <PairingScreen
-          onPaired={props.onPairServerPaired}
-          onCancel={props.onPairServerCancelled}
-        />
-      )
     default:
       return assertNever(props.route)
   }
@@ -393,9 +417,8 @@ export function PairedShellView(props: {
 /**
  * The paired region's inner router container. Owns the ephemeral nav state via useReducer over the
  * pure nextPairedRoute — ADR 0006 (screen-local, resets on remount, never the session store; AC5).
- * Enters at `list` (AC2); the view calls onOpen/onBack and this dispatches. onUnpaired reaches
- * ConversationScreen through the #531 pairing-ended clear (below) and is otherwise the same App route
- * flip it has been since #166. The FAB's create is confirmed asynchronously:
+ * Enters at `list` (AC2); the view calls onOpen/onBack and this dispatches. Settings keeps the
+ * pairing-ended clear and App route flip; recovery retains the paired shell. The FAB's create is confirmed asynchronously:
  * useConversationCreatedNav subscribes to the daemon's `conversationCreated` event (#242) and drives the
  * same `open` transition, so a create the daemon never confirms simply does not navigate. The hook
  * dereferences `window.pyry` only inside its effect, so this container stays server-renderable and the
@@ -405,9 +428,7 @@ export function PairedShellView(props: {
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
-  // nav reducer — deliberately NOT a subscription to activeConversationStore, which would make this
-  // container a store subscriber and give up the server-renderable invariant the two dep-object comments
-  // above assert. It does not need to be: the two paths that activate a conversation are BOTH right here
+  // nav reducer. The two paths that activate a conversation are BOTH right here
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
   // the id is recorded from the nav action rather than read back out of a store. The set is exactly
   // co-located with `activateConversation` — that call is the marker for "a third activation must record
@@ -430,14 +451,56 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   //
   // RECORDED FROM `route` AT `openPairServer`, NOT PER ENTRY, which is what makes one rule cover both:
   // neither the Settings row nor either header plus has to know its own name — clicked from Settings the
-  // route reads `settings`, clicked from a plus it reads `list` or `thread`. A second recording site is
-  // the only way the two could ever disagree about the rule, and there is not one.
+  // route reads `settings`, clicked from a plus it reads `list` or `thread`. Host recovery captures
+  // that same route when it opens, including automatic recovery.
   //
   // SEEDED `'settings'`, the shipped destination, so the never-opened-but-cancelled frame behaves exactly
   // as it did before this ticket. That frame is unreachable — `pairServerCancelled` is dispatched only by
   // the pairing screen, which only the `openPairServer` that writes this cell puts up — so the seed
   // states which behaviour to preserve rather than being a fallback anything relies on.
   const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
+  const [recoveryServerId, setRecoveryServerId] = useState<string | null>(null)
+  const recoveryConsumed = useRef(false)
+  const pairingGeneration = useRef(0)
+  const activePairingGeneration = pairingGeneration.current
+  useEffect(() => () => { pairingGeneration.current += 1 }, [])
+  const servers = useServerInfoStore(selectServers)
+  const statuses = useSessionStore(s => s.statuses)
+  const recoveryLabel = useHostLabelStore(selectHostLabelFor(recoveryServerId))
+  const recoveryStatus = recoveryServerId === null ? undefined : statuses.get(recoveryServerId)
+  const leaveRecovery = (): void => {
+    // Ordinary navigation must not dismiss a recovery decision still waiting on other hosts.
+    if (recoveryServerId !== null) {
+      recoveryConsumed.current = !servers.some(server => statuses.get(server.serverId)?.type === 'connected')
+    }
+    pairingGeneration.current += 1
+    setRecoveryServerId(null)
+  }
+  const openRecovery = (serverId: string): void => {
+    if (!servers.some(server => server.serverId === serverId)) return
+    if (route === 'pairServer' && recoveryServerId === serverId) return
+    pairingGeneration.current += 1
+    recoveryConsumed.current = true
+    if (route !== 'pairServer') setPairServerReturn(route)
+    setRecoveryServerId(serverId)
+    dispatch({ type: 'openPairServer' })
+    window.pyry.sendDiagnostic({ event: 'pairing-recovery', code: 'opened' })
+  }
+  useEffect(() => {
+    if (servers.some(server => statuses.get(server.serverId)?.type === 'connected')) {
+      recoveryConsumed.current = false
+      return
+    }
+    const target = automaticRecoveryTarget(servers, statuses)
+    if (target === null || recoveryConsumed.current) return
+    if (route !== 'list' && route !== 'thread') return
+    recoveryConsumed.current = true
+    pairingGeneration.current += 1
+    setPairServerReturn(route)
+    setRecoveryServerId(target)
+    dispatch({ type: 'openPairServer' })
+    window.pyry.sendDiagnostic({ event: 'pairing-recovery', code: 'automatic' })
+  }, [servers, statuses, route])
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
   // #530: recording now goes through activateConversation, which first clears the previous
@@ -447,6 +510,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // composer draft. Re-key it on the minted id.
   useConversationCreatedNav((created) => {
+    leaveRecovery()
     activateConversation(activateDeps, created)
     setPaneKey(created.id)
     dispatch({ type: 'open' })
@@ -460,7 +524,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
   useConversationDeletedExit((conversationId) =>
     exitActiveConversation(
-      { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+      { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
       conversationId
     )
   )
@@ -476,7 +540,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     () => exitConversationDeps.getActiveConversation()?.id ?? null,
     (conversationId) =>
       exitActiveConversation(
-        { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+        { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
         conversationId
       )
   )
@@ -492,7 +556,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no
   // payload; in the single-active model "open" means "show the existing active conversation", so this
   // reuses the existing transition (absolute → thread from any paired view, AC2) with no new route or arm.
-  useNotificationActivatedNav(() => dispatch({ type: 'open' }))
+  useNotificationActivatedNav(() => { leaveRecovery(); dispatch({ type: 'open' }) })
   // #392: watch the daemon-event channel for turn-end / permission-prompt moments and, gated by the
   // Settings push toggle (#408), ask main to raise an OS notification (#391 owns the unfocused-window
   // gate). A headless subscriber — no nav, no payload — that tears down with the shell on unpair.
@@ -506,15 +570,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // conversations the operator has NEVER opened, whereas this one only ever writes the OPEN conversation
   // — a concept that exists only inside the paired shell. Every path that unmounts this shell clears the
   // active conversation first, so there is no state in which a conversation is open and this is not
-  // listening. It subscribes for its effect only, never for render, so this container still subscribes to
-  // no store and stays server-renderable.
+  // listening. This hook subscribes for its effect only; recovery owns the render subscriptions.
   useConversationLastRead()
   // #1141: the pairing-change wiring, and the ONE dep object in this file that cannot live at module
   // scope — three of its four members close over per-render values (`onUnpaired`, `dispatch`). That
   // is `exitConversationDeps`' situation one notch further: there the single container-bound member
   // is supplied at the call site and an `Omit` keeps the rest module-scope, which is not worth doing
   // for a majority. The per-render allocation is free, exactly as it is for the inline arrows this
-  // replaces, and the container still subscribes to no store and stays server-renderable.
+  // replaces; the recovery subscriptions are separate from this wiring.
   //
   // `clearPairingScopedState` is nullary HERE: `applyPairingChange` decides whether a change clears,
   // never what the clear contains, so `clearPairingDeps` stays module-scope above and the fifteen
@@ -536,6 +599,10 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     <PairedShellView
       route={route}
       paneKey={paneKey}
+      recoveryServerId={recoveryServerId}
+      recoveryLabel={hostRowLabel(recoveryLabel)}
+      recoveryRejected={recoveryStatus?.type === 'error' && recoveryStatus.error.code === 'pairing-rejected'}
+      onRepairHost={openRecovery}
       // #448: opening a row records THAT conversation as active before navigating, the same
       // record-then-open the created-event path above performs — so the thread's wire actions (send,
       // snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
@@ -547,13 +614,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // DIFFERENT conversation's thread is up. Re-keying the pane on the clicked id is what stops that
       // thread's screen-local state from following the operator into the new one.
       onOpen={(conversation) => {
+        leaveRecovery()
         activateConversation(activateDeps, conversation)
         setPaneKey(conversation.id)
         dispatch({ type: 'open' })
       }}
-      onOpenSettings={() => dispatch({ type: 'openSettings' })}
-      onOpenArchive={() => dispatch({ type: 'openArchive' })}
-      onBack={() => dispatch({ type: 'back' })}
+      onOpenSettings={() => { leaveRecovery(); dispatch({ type: 'openSettings' }) }}
+      onOpenArchive={() => { leaveRecovery(); dispatch({ type: 'openArchive' }) }}
+      onBack={() => { leaveRecovery(); dispatch({ type: 'back' }) }}
       // #1141: all three pairing-change callbacks go through `applyPairingChange`, which owns the
       // decision of WHICH of them ends a pairing and so clears. Only `unpaired` does. Wiring them
       // here rather than threading a dep into runUnpair puts the three on adjacent lines and leaves
@@ -572,13 +640,24 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // rather than passed in by whichever control was clicked. React batches the two calls, and the
       // arrow is re-created each render, so `route` is never a stale closure.
       onOpenPairServer={() => {
-        setPairServerReturn(route)
+        leaveRecovery()
+        if (route !== 'pairServer') setPairServerReturn(route)
         dispatch({ type: 'openPairServer' })
       }}
-      onPairServerPaired={() => applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')}
-      onPairServerCancelled={() =>
+      onPairServerPaired={() => {
+        // Refresh saved order after upsert; the loader contains its own failure mapping.
+        void loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers)
+        // Saving is authorized across navigation; only the initiating flow may change the pane.
+        if (pairingGeneration.current !== activePairingGeneration) return
+        pairingGeneration.current += 1
+        setRecoveryServerId(null)
+        applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')
+      }}
+      onPairServerCancelled={() => {
+        leaveRecovery()
+        window.pyry.sendDiagnostic({ event: 'pairing-recovery', code: 'cancelled' })
         applyPairingChange(pairingChangeDeps, 'cancelledPairAnotherServer')
-      }
+      }}
     />
   )
 }

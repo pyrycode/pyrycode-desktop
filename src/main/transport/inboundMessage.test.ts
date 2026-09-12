@@ -9349,3 +9349,20 @@ describe('parseInboundMessage — the envelope ts on the timeline-bearing arms (
     expect(decodeWithTs('session_settings', RUN_CONFIG)).not.toHaveProperty('ts')
   })
 })
+
+
+describe('pairing rejection classification', () => {
+  it.each([
+    ['auth.invalid_token', 'pairing-rejected'],
+    ['auth.invalid_token extra', undefined],
+    ['other', undefined],
+    [null, undefined]
+  ])('classifies only the exact authentication code', (code, pairingReject) => {
+    const result = parseInboundMessage(encodeEnvelope({
+      id: 1, type: 'error', ts: '2026-09-12T00:00:00Z',
+      payload: { code, message: 'private-daemon-detail', retryable: true }
+    }))
+    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified', pairingReject })
+    expect(JSON.stringify(result)).not.toContain('private-daemon-detail')
+  })
+})

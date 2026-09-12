@@ -62,143 +62,92 @@ was open when the flow started, and the reducer cannot answer that on its own: b
 `pairServerCancelled` fires, `current` is always `'pairServer'`, which says nothing about where the
 operator came from. The origin has to travel with the event, and the container is what records it — see
 § The pair-new-host plus and origin-aware cancel below. `returnTo` is typed as the whole `PairedRoute`
-rather than a narrower `'list' | 'thread' | 'settings'` origin union: only those three are ever reachable,
-but by construction (the sole writer records the route at `openPairServer`, and neither the pairing
-screen nor the archive screen renders an entry into pairing) rather than by type, so a narrower union
-would only buy an unreachable fallback arm with no test that could motivate it.
+rather than a narrower origin union. The shell records an origin only when entering from a route
+other than `pairServer`, so switching flows through the retained recovery sidebar cannot overwrite
+the original return destination with the pairing route itself.
 
 ## The pure view + container (`PairedShell.tsx`)
 
-`PairedShellView` is `AppView`'s inner twin — hookless, effectless, a `switch (props.route)` with its
-own `assertNever` default. [#670](../codebase/670.md) merged the `list`/`thread` arms into the two-pane
-shell and added a required `paneKey` prop (below):
+`PairedShellView` is hookless and effectless. It renders the existing screens according to the
+route and optional `recoveryServerId`; recovery reuses `pairServer`, without a new route or store.
 
-```ts
-export function PairedShellView(props: {
-  route: PairedRoute
-  paneKey: string | null   // #670 — ConversationScreen's `key`; see below
-  onOpen: (conversation: ConversationSummary) => void
-  onOpenSettings: () => void
-  onOpenArchive: () => void
-  onBack: () => void
-  onUnpaired: () => void
-  onOpenPairServer: () => void
-  onPairServerPaired: () => void
-  onPairServerCancelled: () => void
-}): JSX.Element {
-  switch (props.route) {
-    // #670: list and thread stopped being alternative SCREENS and became one two-pane shell — the
-    // sidebar is mounted in both; only the pane's content forks. Combining two case labels with no
-    // statement between them is not a fallthrough, so assertNever still narrows to never.
-    case 'list':
-    case 'thread':
-      return (
-        <div className="paired-shell">
-          <div className="paired-shell__sidebar">
-            <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} onOpenArchive={props.onOpenArchive} onPairNewHost={props.onOpenPairServer} />{/* #1303 */}
-          </div>
-          <div className="paired-shell__pane">
-            {props.route === 'thread'
-              ? <ConversationScreen key={props.paneKey} onUnpaired={props.onUnpaired} onBack={props.onBack} />
-              : null}
-          </div>
-        </div>
-      )
-    case 'settings':
-      return (
-        <SettingsScreen
-          onBack={props.onBack}
-          onPairAnother={props.onOpenPairServer}
-          onUnpaired={props.onUnpaired}   // #1162 — the SAME callback the thread case hands ConversationScreen
-        />
-      )
-    case 'pairServer': return <PairingScreen onPaired={props.onPairServerPaired} onCancel={props.onPairServerCancelled} />
-    case 'archive':    return <ArchiveScreen onBack={props.onBack} />
-    default:           return assertNever(props.route)
-  }
-}
-```
+| Route | Sidebar | Main content |
+| --- | --- | --- |
+| `list` | Mounted | Empty pane |
+| `thread` | Mounted | `ConversationScreen`, keyed by `paneKey` |
+| `pairServer` with a recovery target | Mounted | `Repair pairing` region containing `PairingScreen` |
+| `pairServer` without a recovery target | Replaced | Full-screen `PairingScreen` |
+| `settings` / `archive` | Replaced | The corresponding full-screen view |
 
-[#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) gave the `settings` case a third prop,
-reusing `onUnpaired` rather than a callback of its own: the Settings screen's per-server Unpair action
-([Settings screen § the per-row Unpair action](settings-screen-how-it-works.md#the-per-row-unpair-action-1162))
-reaches it only when its own erase leaves no paired record behind, at which point the app's pairing has
-genuinely ended and the existing `applyPairingChange(pairingChangeDeps, 'unpaired')` clear-then-navigate
-below applies exactly as it does from `thread`. Forgetting one of several servers never reaches this
-prop — it stays inside the shell. **[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
-put the `thread` case's own Re-pair control on the identical condition**, so "exactly as it does from
-`thread`" is no longer true only because the old whole-collection erase always ended the pairing — both
-callers now reach `applyPairingChange('unpaired')` for the same reason, one copy of the remaining-count
-rule (in `runUnpairServer`) that `runUnpair` delegates to rather than restates. See [Unpair
-channel](unpair-channel.md).
+The sidebar and composer both receive `onRepairHost(serverId)`. The shell checks that the target
+is still saved, then opens recovery beside the sidebar. The composer resolves its conversation's
+server from the stamped list; a sidebar repair needs no selected conversation. Both paths preserve
+saved hosts, held timelines and conversation lists. The composer no longer calls `runUnpair`.
+Explicit removal stays in [Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162);
+only removing the last server reaches `onUnpaired` and the app-level pairing clear.
 
-Every route renders a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
-always has *something* to show. The `settings` and `archive` cases both reuse the shared `onBack`
-unchanged — see [Settings screen](settings-screen.md) and [Archive screen](archive-screen.md) for the
-scaffolds they render, and both still replace the **whole** shell (sidebar included), which is what
-makes "still open over both panes" (#670's AC5) cost zero lines in this file.
+`PairedShell` holds route, `paneKey`, pairing origin, recovery target and two lifetime refs locally.
+It subscribes to saved servers, the session status map and the recovery host's label. The view receives
+only the derived target label and rejection flag. The rejection notice appears only for that target's
+`pairing-rejected` code, using the fixed copy documented in
+[Session store](session-store.md#one-slot-per-server-since-1133).
 
 ### The pair-new-host plus and origin-aware cancel (#1303)
 
-The Channels and Chats section headers in the [Channel List](channel-list.md) each carry a 16×16 plus
-that opens the pairing flow — the same `pairServer` route Settings' "Pair another server" row already
-opens (§ Data flow below). See [Channel List — the section header's pair-new-host
-control](channel-list-section-header-pair-control.md) for the control itself (markup, CSS geometry, the
-accessible-name constant); this section is the routing half — how a second entry point made cancel's
-destination origin-dependent, and how that origin is carried without making `nextPairedRoute` stateful.
+The Channels/Chats header plus and Settings' Pair another server row share `onOpenPairServer`.
+These ordinary pairing entries still use the full-screen form. Host recovery uses the same pairing
+input and fingerprint confirmation inside the main pane, with the sidebar available for navigation.
 
-**`PairedShellView` reuses `onOpenPairServer` rather than growing a second prop.** `ChannelList` now
-takes an `onPairNewHost: () => void` (required, `onCreateChat`'s reasoning: a defaulted prop would let a
-future caller silently render headers whose plus opens nothing), and `PairedShellView` binds it to the
-identical callback it already hands `SettingsScreen` as `onPairAnother`. Both callers mean exactly "open
-the pairing flow," and making cancel's destination a function of *the route the shell was on*, not of
-*which control fired the event* (below), is what keeps a second prop from being two names for one act.
-This is also why `PairedShell.test.tsx`'s six `PairedShellView` render literals needed no edit for this
-ticket — only one existing case, which composes `nextPairedRoute` directly rather than rendering the
-view, needed the arm's new `returnTo`.
+`pairServerReturn` records the current route when entering pairing from another route. Cancel sends
+`pairServerCancelled` with that captured `returnTo`; switching recovery hosts or choosing the header
+plus from recovery preserves the original return route instead of recording `pairServer` as its own
+return destination. Re-entering recovery for the same host is a no-op. Switching hosts changes the
+`PairingScreen` key and resets its form.
 
-**`PairedShell` records the origin in a second screen-local cell, `pairServerReturn`, beside `paneKey`**
-— same `useState`, same [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
-justification, never a store, never persisted, never sent over IPC. It is written from **the route the
-reducer is currently on** at the single site both entries pass through:
+Cancel preserves `activeConversationStore` and `paneKey`, so it returns to the prior list or thread
+(or Settings for an ordinary Settings entry). Held conversations survive. The thread itself remounts,
+so screen-local composer drafts and scroll state are not part of that preservation guarantee.
+`pairingChangeDeps` stays a per-render object because its `returnToPairingOrigin` callback must read
+the current captured origin.
 
-```ts
-onOpenPairServer: () => {
-  setPairServerReturn(route)
-  dispatch({ type: 'openPairServer' })
-}
-```
+An active flow's successful confirmation returns to `list` without clearing held state. Existing
+pairing confirmation saves by server ID; a same-server save replaces its credentials and moves that
+record to the end of saved order. Registry reconciliation reconnects that changed record without an
+app restart, leaving unchanged servers alone. Recovery keeps the sidebar mounted, so completion
+explicitly calls `loadServerInfo` to refresh saved order rather than relying on a sidebar remount.
 
-That one site is what makes one rule cover both entries without either having to know its own name:
-clicked from Settings the route reads `'settings'`; clicked from a section-header plus it reads `'list'`
-or `'thread'`. Seeded `'settings'` — the shipped, pre-#1303 destination — so the unreachable
-never-opened-but-cancelled frame keeps behaving exactly as it did before this ticket (the seed states
-which behaviour to preserve; nothing at runtime ever falls through to it, since `pairServerCancelled` is
-dispatched only by the pairing screen, which only this same handler puts up). `pairingChangeDeps`'
-`returnToPairingOrigin` (renamed from `returnToSettings`, `applyPairingChange.ts`) then dispatches
-`{ type: 'pairServerCancelled', returnTo: pairServerReturn }` — the read.
+### Host recovery and navigation lifetime
 
-**`pairingChangeDeps` must stay a per-render object literal**, which it already is for its own reasons
-(three of its members close over per-render values). Hoisting it to module scope, or memoising it on a
-dependency array that omits `pairServerReturn`, would close over a stale origin and send cancel to the
-wrong surface with no type error — flagged in the architecture spec's security review as a SHOULD FIX and
-pinned by `pairedRoute.test.ts`'s three-origin matrix rather than guarded in code.
+Automatic opening considers only currently saved hosts, in saved order. As described in
+[Session store](session-store.md#one-slot-per-server-since-1133), it waits for every host to settle,
+requires at least one pairing rejection and no connected host, and picks the first rejected host.
+The shell opens automatically only from `list` or `thread`; other routes defer the decision.
 
-**Double entry is impossible by construction**, not by a guard: `pairServer` replaces the whole shell, so
-the sidebar carrying the plus is unmounted for the entire time the pairing screen is up, and
-`openPairServer` cannot fire again — and so `pairServerReturn` cannot be rewritten — while a pairing is
-already in progress.
+`recoveryConsumed` allows one automatic opening during an outage. Opening recovery consumes it;
+leaving an actual recovery pane while no saved host is connected keeps it consumed. Repeated failure
+events therefore cannot reopen a cancelled or navigated-away pane. Manual repair remains available.
+Any connected saved host rearms automatic recovery, allowing a later rejection of the last usable
+host to open it again.
 
-**Cancelling back onto `thread` is why `paneKey` (below) now has to keep surviving an exit it used to be
-destroyed by.** Before #1303 every `pairServerCancelled`/`pairServerPaired` exit landed on a route where
-the pane renders `null` (`settings` or `list`), so a stale `paneKey` could never preserve anything. A
-cancel launched from an open thread now lands back on `thread` itself, and it is correct for the pane to
-come back up on the same conversation — the pairing route touches neither `activeConversationStore` nor
-`paneKey`, and cancel reaches no server, so the id `paneKey` still holds still names the chat the store
-still holds. `ConversationScreen` does remount (it was unmounted while the pairing screen replaced the
-shell) and its own screen-local state — scroll pin, composer draft — resets on that remount; that is
-accepted, and is not what this ticket promises to preserve. See § The conversation-switch remount bug and
-the `paneKey` fix below for the comment this correction lands on.
+Ordinary navigation while another host is connecting or unreported must not consume that first
+opening. For example, selecting A's held thread while A is rejected and B is connecting leaves the
+decision pending; if B settles offline, A's recovery still opens. This differs from dismissing an
+already-open recovery pane, even though both paths can end on the same thread route.
+
+`pairingGeneration` fences completion navigation. Each initiating flow captures its generation;
+starting another flow, leaving pairing or unmounting the shell invalidates it. `onPairServerPaired`
+always refreshes saved hosts, but only a current generation may clear the recovery target and
+navigate to `list`. The authorized credential save and registry reconciliation still finish after
+navigation. React ignoring a child's state update after unmount is insufficient: its captured
+completion callback can still navigate a mounted parent.
+
+`e2e/pairing-recovery.spec.ts` covers startup before any received list, keyboard reopening, cancel,
+same-host replacement, healthy-host send/reply, suppression/rearm, deferred navigation with both
+connecting and unreported hosts, and delayed confirmation after switching to a healthy thread or
+another recovery host. The delayed-confirmation tests hold the real handler's reply, then wait for
+the saved-order refresh before checking the newer draft or pairing input. Connection success alone
+would not prove that the obsolete callback had run. Static renderer tests cover markup and the pure
+selection helper; they cannot prove these effects or interleavings.
 
 ## The two-pane desktop shell (`pairedShell.css`, `src/main/index.ts`, #670)
 
@@ -301,6 +250,13 @@ before (AC3). At the 800px floor the chat pane is 340px (`800 − 20 − 400 −
 by the composer's own `min-width: 0` and bubble `max-width` bounds; flagged in the spec as arithmetic to
 watch, not a defect.
 
+Recovery adapts `PairingScreen` to that 340px pane with reduced padding and hero inset, wrapping
+notice/footer text and internal vertical scrolling. `.paired-shell__recovery` is positioned relative
+to paint above the pane's wash. An unpositioned section looked visible and passed overflow checks,
+but the wash intercepted Cancel; an actual click is required to verify this stacking behavior.
+The focused recovery spec checks input and fingerprint confirmation at 800px, including overflow
+and Cancel's viewport visibility.
+
 **Why the sidebar survives a `list`↔`thread` flip instead of remounting.** Both arms render
 `ChannelList` at the same element position, so React preserves its subtree across the switch rather than
 tearing it down — safe and desirable, since `ChannelList` is bound to the live
@@ -337,9 +293,8 @@ shipped in a follow-up commit on the same PR:
 - `PairedShell` (the container) holds `paneKey` in a `useState` beside the nav `useReducer`, and records
   it at exactly the two production sites that change the active conversation:
   `useConversationCreatedNav`'s payload (the FAB's daemon-confirmed create) and `onOpen`'s argument (a
-  sidebar row click) — see the container code below. It is **not** derived from
-  `activeConversationStore`; doing that would make `PairedShellView` a store subscriber and give up the
-  server-renderable invariant the file asserts twice.
+  sidebar row click). It is recorded from the activation action rather than subscribed back from
+  `activeConversationStore`; the shell's separate recovery subscriptions do not own pane identity.
 - The nullary `open` (a push-notification click, [#393](../codebase/393.md)) deliberately does **not**
   touch `paneKey` — it carries no conversation payload and means "show the conversation that's already
   active," so the pane's identity hasn't moved.
@@ -388,124 +343,25 @@ screen). An in-file `BackControl({ onBack })` mirrors the (then-live, since #106
 **first child** of `.conversation` — at the time of this ticket, before the `UnpairControl` header row
 that `UnpairControl` idiom implied. #1061 deleted that row outright (no header-row unpair entry point
 exists today); the composer's Re-pair affordance now lives inside `ComposerErrorSlot`, an
-already-terminal-error-only control (see [Unpair channel § The two renderer
-callers](unpair-channel.md#the-two-renderer-callers)), not a persistent header row `BackControl` sits
-beside.
+already-terminal-error-only control that opens [host recovery](#host-recovery-and-navigation-lifetime).
+Explicit removal is in Settings.
 
 ## Data flow
 
-```
-AppView (route='conversation')
-  └─ PairedShell            useReducer(nextPairedRoute, 'list')  ← nav state (ADR 0006)
-       │                    useState<string|null>(null)          ← paneKey, #670, ADR 0006
-       │                    useConversationCreatedNav((created) => {
-       │                      activateConversation(activateDeps, created)   ← #530, see below
-       │                      setPaneKey(created.id)              ← #670
-       │                      dispatch({type:'open'})              ← #242
-       │                    })
-       │                    useNotificationActivatedNav(() => dispatch({type:'open'}))  ← #393, no activateConversation, no paneKey
-       │                    useConversationLastRead()  ← #777, subscribes to conversationTimelineStore, no render
-       └─ PairedShellView   route='list'|'thread' → #670 two-pane shell, sidebar mounted on BOTH:
-                                                .paired-shell__sidebar → ChannelList (store-backed) — any row → onOpen(conversation):
-                                                  activateConversation(activateDeps, conversation) ← #530
-                                                  setPaneKey(conversation.id)                       ← #670
-                                                  dispatch{open}                                    ← #448
-                                                new-discussion FAB → createConversation command (#242)
-                                                SettingsButton → dispatch{openSettings} (#333)
-                                                ArchiveButton → dispatch{openArchive} (#347)
-                                                SectionHeader plus ×2 (Channels/Chats) → onPairNewHost ← #1303
-                                                  = the SAME onOpenPairServer below → setPairServerReturn(route); dispatch{openPairServer}
-                                                .paired-shell__pane → route==='thread' ?
-                                                  ConversationScreen key={paneKey} (store-backed) + BackControl — [←] → dispatch{back}
-                                                  → WorkspaceChip reads activeConversationStore (#278)
-                                                  ComposerErrorSlotControl Re-pair (#1163) → runUnpair(serverIdForOpenConversation(…)) → runUnpairServer → window.pyry.unpairServer(serverId)
-                                                    ok + servers remain   → serverInfoStore re-read/written
-                                                                             → clearServerScopedState(serverScopedClearDeps + navigateToList: onBack)  ← #1196, #1197
-                                                                               departed rows + threads dropped; open chat (always this server's, per
-                                                                               serverIdForOpenConversation) exited via exitActiveConversation → dispatch{back};
-                                                                               departed conversations' last-read marks dropped LAST, after the loop ← #1197
-                                                    ok + servers empty    → onLastServerUnpaired() → applyPairingChange(deps,'unpaired')
-                                                                             → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as settings' unpair
-                                                                               App sets route='pairing'
-                                                    error/rejected/no resolvable server → dispatch{failed}, nothing cleared, nothing navigated
-                                                  : null   ← #670, genuinely empty, no placeholder
-
-  activateConversation(activateDeps, conversation):  ← #530 (src/renderer/src/activateConversation.ts)
-    previous = activateDeps.getActiveConversation()
-    if previous?.id !== conversation.id:
-      activateDeps.dispatchTimeline({type:'reset'})   ← #528, clears timelineStore
-      activateDeps.clearSessionId()                    ← #529, clears sessionIdStore
-    activateDeps.setActiveConversation(conversation)    ← unconditional, both branches
-    activateDeps.stampLastRead(conversation.id)          ← #777, unconditional, OUTSIDE the gate too
-    activateDeps.markViewed(conversation.id)             ← #786, unconditional, OUTSIDE the gate
-    activateDeps.requestConversationConfig(conversation.id)  ← #1166, unconditional, OUTSIDE the gate, LAST
-                                                                  → requestRunConfigSnapshot + requestModelList,
-                                                                    re-asking for what clearSessionId just wiped
-                            route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
-                                                PairAnotherServerRow → onOpenPairServer  ← same handler as the
-                                                  section-header plusses above: setPairServerReturn('settings');
-                                                  dispatch{openPairServer} (#152, origin recording added #1303)
-                                                ServerRowControl per-row Unpair (#1162) → runUnpairServer → window.pyry.unpairServer(serverId)
-                                                  ok + servers remain   → serverInfoStore re-read/written
-                                                                           → clearServerScopedState(serverScopedClearDeps + navigateToList: no-op)  ← #1196, #1197
-                                                                             departed rows + threads dropped; an open chat belonging to the departed
-                                                                             server is exited (exitActiveConversation), but Settings stays on screen —
-                                                                             `nextPairedRoute`'s only exit from 'settings' is the already-absolute 'back';
-                                                                             departed conversations' last-read marks dropped LAST, after the loop ← #1197
-                                                                           shell stays on 'settings'
-                                                  ok + servers empty    → onUnpaired() → applyPairingChange(deps,'unpaired')
-                                                                           → clearPairingScopedState(clearPairingDeps)  ← same #531 clear as thread's unpair
-                                                                             App sets route='pairing'
-                                                  error/rejected        → row returns to idle, nothing cleared, nothing navigated
-                            route='pairServer' → PairingScreen (window.pyry default) — (#152)
-                                                onCancel → dispatch{pairServerCancelled, returnTo: pairServerReturn}  ← #1303
-                                                            → 'settings' | 'list' | 'thread', whichever route
-                                                              was open when openPairServer fired (recorded once,
-                                                              at that single site — see PairedShell above)
-                                                onPaired → clearPairingScopedState(clearPairingDeps)  ← #531
-                                                            dispatch{pairServerPaired} → 'list'
-                            route='archive'  → ArchiveScreen (pure, no store) + BackControl — [←] → dispatch{back} (#347)
-                                                tabs: useState<ArchiveTab> screen-local, both bodies empty (#348 mount point)
-
-  clearPairingScopedState(clearPairingDeps):  ← #531 (src/renderer/src/clearPairingScopedState.ts)
-    clearPairingDeps.dispatchTimeline({type:'reset'})        ← #528, clears timelineStore
-    clearPairingDeps.clearAllTimelines()                       ← #757, clears conversationTimelineStore (every slice)
-    clearPairingDeps.clearActiveConversation()                 ← #529, clears activeConversationStore
-    clearPairingDeps.clearSessionId()                          ← #529, clears sessionIdStore
-    clearPairingDeps.clearAnnouncedModel()                     ← #593, clears announcedModelStore
-    clearPairingDeps.clearAllSlashCommandLists()                ← #955, clears slashCommandListStore (every menu)
-    clearPairingDeps.dispatchSession({type:'reset'})           ← #166, clears sessionStore
-    clearPairingDeps.clearAllLastRead()                        ← #779, LAST — clears conversationLastReadStore
-                                                                   (in memory AND on disk), after clearAllTimelines
-                                                                   so #777's re-mint of the open conversation's
-                                                                   mark is wiped rather than persisted
-    (unconditional — no id gate, unlike activateConversation above; the ordering constraints among the
-     eight are clearAllLastRead after clearAllTimelines and after clearAllSlashCommandLists, and last
-     overall — see #779 and #955 above)
+```text
+AppView (conversation)
+  PairedShell
+    saved servers + per-host statuses -> automaticRecoveryTarget -> recovery pane
+    sidebar Repair host / composer Re-pair -> openRecovery(saved server ID)
+    sidebar conversation -> leaveRecovery -> activateConversation -> keyed thread
+    Settings / Archive / Back -> leaveRecovery -> selected route
+    pairing Cancel -> leaveRecovery -> captured origin
+    pairing Confirm -> existing encrypted save -> registry reconciliation
+      -> saved-host refresh -> generation check -> list if still the initiating flow
+    Settings explicit Unpair -> unpairServer -> scoped clear
+      -> app-level pairing clear and pairing screen only when no servers remain
 ```
 
-A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
-click — see [the new-discussion FAB](new-discussion-fab.md) for the bridge that fires it. A clicked
-push notification reaches the same `dispatch({ type: 'open' })` the same way, independently of both —
-see [Push notifications](push-notifications.md#clicking-the-notification-393) for that bridge.
-
-See [Paired shell — conversation exits and stamps § The run-configuration and model-list
-ask](paired-shell-conversation-exits.md#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166)
-for why `requestConversationConfig` is one member firing two requests, why it runs last, and the
-late-reply attribution gap it widened per-occurrence — closed client-side by #1176, see [Run config
-store § Conversation-attributed since #1176](run-config-store.md#conversation-attributed-since-1176).
-
-`sessionStore` (module-singleton, app-lifetime) holds the messages, independent of this nav state.
-Navigating list→thread→list→thread still unmounts/remounts `ConversationScreen` (the pane goes through
-`null` on the way), which re-reads the store on each mount — so store-backed messages stay intact across
-navigation (AC4). Only `ConversationScreen`'s own ephemeral UI state (composer draft, sheet-open, unpair
-phase) resets on remount, same as any other `useState`/`useReducer` component state — expected under
-ADR 0006, and not a regression (there was no navigation, and hence no remount, before this ticket).
-**Since [#670](../codebase/670.md), a sidebar row click can also switch conversations without the route
-ever leaving `thread`** — that path relies on `paneKey` changing to force the same remount-and-reset by
-`key`, rather than on the route itself cycling through `list`; see [the two-pane
-shell](#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) above for why that remount had to
-be added explicitly. `sessionStore` is, however, explicitly reset —
-along with the flat timeline, (since [#757](../codebase/757.md)) every retained per-conversation
-timeline, the active conversation, the session id, and (since #593) the announced running model — when
-the pairing itself ends; see [#531](../codebase/531.md) above.
+Conversation activation and exits keep their existing ownership; see
+[Conversation exits and stamps](paired-shell-conversation-exits.md). Recovery opening and cancellation
+perform navigation only. They never erase a host or clear its held conversations.

@@ -24,8 +24,13 @@ section header's pair-new-host control](channel-list-section-header-pair-control
 [Paired shell — routing § The pair-new-host plus and origin-aware
 cancel](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1303) for how a second
 entry made `onPairServerCancelled`'s destination origin-dependent rather than the fixed `'settings'` it
-used to resolve to. `onPairServerPaired` is unaffected — a completed pair still always goes home to
-`list`, from either entry.
+used to resolve to. An active flow's successful confirmation goes home to `list`.
+
+Host recovery uses this route with a saved-host target and retains the sidebar. It preserves the
+same return origin when switching recovery hosts, and keys `PairingScreen` by the target so each
+host gets a fresh form. Completion refreshes saved-host order, but a generation check allows only
+its initiating flow to navigate: a confirmation finishing after sidebar navigation still saves
+credentials without replacing the newer pane. See [the current shell contract](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
 
 `case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`
 button); [#141](../codebase/141.md) replaced it wholesale with the real
@@ -33,102 +38,11 @@ button); [#141](../codebase/141.md) replaced it wholesale with the real
 behavior. Every row's `onClick` still opens the single active conversation (the placeholder's one
 affordance, preserved), since per-conversation selection needs a transport path that doesn't exist yet.
 
-`PairedShell` is the container — the only new state owner:
-
-```ts
-// #530: the store wiring for the conversation-switch clear, module-scope — each effect reaches its
-// singleton via getState() inside the arrow body, so nothing is read during render.
-const activateDeps: ActivateConversationDeps = {
-  getActiveConversation: () => activeConversationStore.getState().activeConversation,
-  setActiveConversation: (conversation) =>
-    activeConversationStore.getState().setActiveConversation(conversation),
-  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
-  // #777 — restore point 1 of "the open conversation's mark equals its own held item count". Routed
-  // through conversationLastReadBridge's own production wiring object rather than a fifth getState()
-  // arrow here, so the sampling branch lives in one tested place. See below.
-  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId),
-  // #786 — the view stamp that arms conversationTimelineStore's ten-slice eviction bound. Unlike
-  // stampLastRead above it reaches its store DIRECTLY, the clearTimelineFor/clearAllTimelines shape below:
-  // there is no sampling branch to keep in one tested place. See below.
-  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId)
-}
-
-// #531: the store wiring for the pairing-ended clear, module scope for the same reason as
-// activateDeps above — each effect reaches its singleton through getState() inside the arrow body,
-// so nothing is dereferenced at module load, nothing is read during render, and the object closes over
-// no per-render value. sessionStore and announcedModelStore appear here and nowhere else in this
-// file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
-// set with the announced running model and #779 with the per-conversation read marks, and because the
-// call site below passes this one object, each was a single edit rather than a hunt across callers.
-// #1141 narrowed the callers to one (unpair, via applyPairingChange's `unpaired` arm below) without
-// touching this object at all — clearPairingScopedState still decides WHAT clearing means; the caller
-// count is a different question.
-const clearPairingDeps: ClearPairingScopedStateDeps = {
-  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearAllTimelines: () => conversationTimelineStore.getState().clearAllTimelines(),
-  clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
-  clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
-  dispatchSession: (action) => sessionStore.getState().dispatch(action),
-  // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
-  // #776 persists the marks. It reaches its store DIRECTLY rather than through
-  // conversationLastReadDeps, the stampLastRead argument above: the bridge's deps object exists so the
-  // SAMPLING branch lives in one tested place, and there is no sampling branch here — the store method
-  // takes nothing at all. Widening ConversationLastReadDeps with a member the stamp path never uses
-  // would put an unused effect on a tested interface.
-  clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
-}
-
-export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
-  const [route, dispatch] = useReducer(nextPairedRoute, 'list')
-  // #670 — the chat pane's identity (PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside
-  // the nav reducer — deliberately NOT read from activeConversationStore, which would make this
-  // container a store subscriber. Recorded at exactly the two sites that activate a conversation, each
-  // already holding the conversation it's activating. The nullary `open` (below) records nothing on
-  // purpose — it means "show the conversation that's already active." Nothing clears it on exit: every
-  // exit lands on a route where the pane renders `null`, destroying the subtree regardless.
-  const [paneKey, setPaneKey] = useState<string | null>(null)
-  useConversationCreatedNav((created) => {   // #242, widened #278
-    activateConversation(activateDeps, created)   // #530 — clear-then-set, see below
-    setPaneKey(created.id)   // #670
-    dispatch({ type: 'open' })
-  })
-  useNotificationActivatedNav(() => dispatch({ type: 'open' }))   // #393 — no setActiveConversation, no paneKey change
-  // #1141 — the pairing-change wiring, built per-render because three of its four members close over
-  // per-render values (onUnpaired, dispatch). Free: PairedShell subscribes to no store and re-renders
-  // only on its own nav dispatch. clearPairingScopedState stays nullary here — applyPairingChange
-  // decides WHICH change clears, never WHAT the clear contains; that stays clearPairingDeps' job above.
-  const pairingChangeDeps: PairingChangeDeps = {
-    clearPairingScopedState: () => clearPairingScopedState(clearPairingDeps),
-    navigateToPairingScreen: onUnpaired,
-    navigateToNewServerList: () => dispatch({ type: 'pairServerPaired' }),
-    returnToSettings: () => dispatch({ type: 'pairServerCancelled' })
-  }
-  return (
-    <PairedShellView
-      route={route}
-      paneKey={paneKey}   // #670
-      onOpen={(conversation) => {
-        activateConversation(activateDeps, conversation)   // #530 — clear-then-set, see below
-        setPaneKey(conversation.id)   // #670 — the sidebar switch the two-pane shell exists to enable
-        dispatch({ type: 'open' })
-      }}
-      onOpenSettings={() => dispatch({ type: 'openSettings' })}
-      onOpenArchive={() => dispatch({ type: 'openArchive' })}
-      onBack={() => dispatch({ type: 'back' })}
-      // #1141 — all three callbacks route through applyPairingChange, which owns the decision of
-      // which of them ends a pairing. Only `unpaired` does, and so only it clears.
-      onUnpaired={() => applyPairingChange(pairingChangeDeps, 'unpaired')}
-      onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
-      onPairServerPaired={() => applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')}
-      onPairServerCancelled={() =>
-        applyPairingChange(pairingChangeDeps, 'cancelledPairAnotherServer')
-      }
-    />
-  )
-}
-```
+`PairedShell` owns routing, pane identity and pairing lifetimes. See
+[the current view/container contract](paired-shell-routing.md#the-pure-view--container-pairedshelltsx)
+for its callbacks, recovery state and completion generation. `activateDeps` and `clearPairingDeps`
+remain module-scoped effect wiring; `pairingChangeDeps` stays per-render because cancel captures
+its origin. The helper decides whether to clear, while `clearPairingScopedState` owns what is cleared.
 
 `useReducer(nextPairedRoute, 'list')` is screen-local ephemeral state per
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — resets on remount, never
@@ -225,8 +139,8 @@ that absence from an unobservable fact into a positive, spy-tested assertion for
 (`applyPairingChange.test.ts`), the same test file that gives the unpair arm's clear-then-navigate
 ordering its first executable assertion since [#531](../codebase/531.md) removed the one
 `unpairAction.test.ts` case that pinned it. Wrapping at this shared prop-handoff point, rather than
-threading a dependency through `runUnpair` and its `ConversationScreen.tsx` call sites, still inherits
-`runUnpair`'s existing ok-only fail-safe posture for free — see [#531 codebase notes](../codebase/531.md)
+threading a dependency through the old composer unpair call sites, kept the clear conditional on
+successful removal. Settings now owns explicit removal; composer recovery does not call `runUnpair` — see [#531 codebase notes](../codebase/531.md)
 for that rationale and the divergence trap it closed (`sessionStore`'s reset used to live in
 `unpairAction.ts` alone; see [Session store](session-store.md) and [Unpair channel](unpair-channel.md)).
 

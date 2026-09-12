@@ -29,6 +29,22 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
 - **`stop()`** tears the driver down idempotently and **suppresses** the clean-stop `terminal` (the window is going away on quit, so there is nothing to report).
 - **On the driver's `relay-link-up`/`relay-link-down{code}`** ([#328](../codebase/328.md)), it emits a `relayLinkChanged{status}` event carrying the relay-**socket** leg — distinct from the combined session status above. This is the single point that classifies the relay-controlled raw close `code` into the closed `RelayLinkStatus` enum (`connected`/`offline`/`daemon-absent`, `4404` → `daemon-absent`); the code itself never crosses IPC. Ships **dormant** (see the driver-event mapping table below).
 
+### Pairing rejection lifetime
+
+`parseInboundMessage` supplies a separate `pairingReject: 'pairing-rejected'` category for an
+exact decoded `auth.invalid_token`. `onDriverEvent` consumes it before request-specific error
+correlation: authentication rejects the connection even when the frame has `in_reply_to`.
+It fails active bundle/upload/retrieval work and latches rejection in that connection's closure.
+`emitFailed` then keeps the client-owned rejection code and fixed notice through subsequent generic
+send and terminal-close failures. Raw daemon error text never crosses IPC or enters logs.
+
+A valid parsed handshake clears the latch; merely starting another dial does not. Existing driver
+generation fencing excludes replaced drivers, and each connection owns its own latch, so recovering
+A cannot clear B's reason. Unit coverage drives connected → rejection → send failure → terminal
+failure, an independent healthy connection, and a successful reconnect followed by a generic failure.
+See [Session store](session-store.md#one-slot-per-server-since-1133) for the notice and per-host readers,
+and [shell recovery](paired-shell-routing.md#host-recovery-and-navigation-lifetime) for navigation.
+
 ### Tool-denial delivery
 
 `tool_denied` uses one payload parser for live frames and stored history. All seven

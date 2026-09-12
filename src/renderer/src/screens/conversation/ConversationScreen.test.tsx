@@ -60,6 +60,8 @@ import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
+import { activeConversationStore } from '../../store/activeConversationStore'
+import { conversationListStore } from '../../store/conversationListStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 
@@ -72,6 +74,23 @@ import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 // the wire→view-model adaptation in messageViewModel.test.ts.
 function bubbleCount(markup: string): number {
   return markup.match(/data-message-role="/g)?.length ?? 0
+}
+
+function stageOpenConnection(status: ConnectionStatus): () => void {
+  const active = { id: 'open', name: 'Open chat', cwd: '/workspace', is_promoted: false,
+    last_used_at: '2026-09-12T00:00:00Z', workspace_label: null }
+  const session = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
+    ...sessionStore.getInitialState(), status: { type: 'connecting' },
+    statuses: new Map([['host', status]])
+  })
+  const open = vi.spyOn(activeConversationStore, 'getInitialState').mockReturnValue({
+    ...activeConversationStore.getInitialState(), activeConversation: active
+  })
+  const list = vi.spyOn(conversationListStore, 'getInitialState').mockReturnValue({
+    ...conversationListStore.getInitialState(), conversations: [{ ...active,
+      serverId: 'host', is_archived: false, last_message_ts: active.last_used_at }]
+  })
+  return () => { session.mockRestore(); open.mockRestore(); list.mockRestore() }
 }
 
 describe('MessageThread', () => {
@@ -4528,14 +4547,10 @@ describe('ConversationScreen — store binding', () => {
   // this stages now. The claim is unchanged — the `trailing` prop reaches the row with the chip in it —
   // and the button's mounted arm is proven by its own test below.
   it('mounts the error chip in the status row once the session is in a retryable error arm (AC1)', () => {
-    const initial = sessionStore.getInitialState()
-    const spy = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
-      ...initial,
-      status: {
+    const restore = stageOpenConnection({
         type: 'error',
         error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-      }
-    })
+      })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
       expect(markup).toContain('composer-status__error')
@@ -4545,7 +4560,7 @@ describe('ConversationScreen — store binding', () => {
         markup.indexOf('class="composer-status"')
       )
     } finally {
-      spy.mockRestore()
+      restore()
     }
   })
 
@@ -4559,11 +4574,7 @@ describe('ConversationScreen — store binding', () => {
   // admits — terminal, non-retryable, and not the self-inflicted 'unpair' code — which is what flips the
   // slot's occupant.
   it('mounts the actionable button in the status row once the pairing is terminally dead (AC1, AC2)', () => {
-    const initial = sessionStore.getInitialState()
-    const spy = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
-      ...initial,
-      status: { type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }
-    })
+    const restore = stageOpenConnection({ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
       expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
@@ -4577,7 +4588,7 @@ describe('ConversationScreen — store binding', () => {
       // AC2: the retired block is absent in the exact state that used to render it.
       expect(markup).not.toContain('composer__repair')
     } finally {
-      spy.mockRestore()
+      restore()
     }
   })
 
@@ -5179,9 +5190,7 @@ describe('model rejection in the mounted status row', () => {
     [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_REPAIR_BUTTON_COPY],
     [{ type: 'disconnected' }, false, null]
   ] as const)('arbitrates connection priority for %j', (status, visible, higherPriorityCopy) => {
-    const session = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
-      ...sessionStore.getInitialState(), status
-    })
+    const restore = stageOpenConnection(status)
     const settings = vi.spyOn(runSettingsWriteStore, 'getInitialState').mockReturnValue({
       ...runSettingsWriteStore.getInitialState(), error: 'model'
     })
@@ -5192,7 +5201,7 @@ describe('model rejection in the mounted status row', () => {
       if (higherPriorityCopy !== null) expect(markup).toContain(higherPriorityCopy)
     } finally {
       settings.mockRestore()
-      session.mockRestore()
+      restore()
     }
   })
 })

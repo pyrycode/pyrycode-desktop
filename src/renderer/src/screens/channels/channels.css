@@ -374,9 +374,9 @@
    `opacity` and never `display: none` / `visibility: hidden`, #1171's ruling — here it is the DOTS that
    would vanish from the box tree, and `connection-dot-colours.spec.ts` and `host-label-sidebar.spec.ts`
    both count and measure them without ever hovering. */
-.channel-list__host:hover:has(> .channel-list__host-edit, > .channel-list__host-add)
+.channel-list__host:not(.channel-list__host--failed):hover:has(> .channel-list__host-edit, > .channel-list__host-add)
   .channel-list__host-status,
-.channel-list__host:has(
+.channel-list__host:not(.channel-list__host--failed):has(
     > .channel-list__host-edit:focus-visible,
     > .channel-list__host-add:focus-visible
   )
@@ -2272,6 +2272,15 @@
 .channel-list__host--failed .channel-list__host-icon,
 .channel-list__host--failed .channel-list__host-label {
   color: var(--color-error);
+}
+
+/* Local labeling remains available beside repair; reserve separate targets and keep both dots. */
+.channel-list__host--failed {
+  padding-right: calc(var(--space-7) + var(--space-6) + var(--space-5));
+}
+
+.channel-list__host--failed .channel-list__host-edit {
+  right: calc(var(--space-7) + var(--space-6));
 }
 
 .channel-list__host-repair {

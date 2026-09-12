@@ -167,14 +167,24 @@ the store:
 
 ### The container + pure view (`ChannelList.tsx`)
 
-`ChannelList` (container) reads `useConversationListStore(selectConversations)` — its only impurity,
-safe under `renderToStaticMarkup` in Node (the store yields its initial `null` there). It passes the
-result down to `ChannelListView` (pure), which always returns a stable
-`<section className="channel-list" aria-label="Conversations">` root — the test hook, present in
-every state — with content by store state (see § What it does). Until
-[#1097](https://github.com/pyrycode/pyrycode-desktop/issues/1097) it also captured `Date.now()` and
-threaded it down as a `now` prop through four file-local signatures; that capture and the prop are
-gone along with the time span below.
+`ChannelList` supplies conversations, paired host ids and `SessionState.statuses` to
+`ChannelListView`. The view keeps a stable `<section className="channel-list"
+aria-label="Conversations">` root, including under static server rendering.
+
+Sidebar mutations require the clicked row/group/host's status to be `connected`;
+missing, connecting, disconnected and error entries fail closed. This covers chat/channel
+creation, conversation rename, save-as-channel, workspace rename and Add-workspace.
+The open chat never determines availability. The global New discussion button requires
+exactly one paired, connected host. Held rows remain selectable, groups expandable, and
+local host labeling and explicit pairing repair available.
+
+Creation retains both `cwd` and `serverId`; successful host-scoped commands carry that id
+at the top level, while rename/promotion retain the clicked `conversation_id`. Submission
+checks the live store immediately before sending. Disconnect clears rename, create-channel,
+workspace-edit and save-as-channel targets synchronously: merely hiding them would let
+reconnect restore a stale draft over another host's dialog. Add-workspace disables offline
+submission. [Save-as-channel](save-as-channel-dialog.md#what-it-does) also abandons its pending
+folder continuation across reconnect.
 
 Each row's title renders as `<span className="channel-list__title">{titleFor(row.name)}</span>` — an
 auto-escaped React child (never `dangerouslySetInnerHTML`), the #203/#218 untrusted-string posture,
@@ -359,8 +369,8 @@ Since [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-a
 and [#1179](create-channel-dialog.md), each `WorkspaceRow` optionally draws a trailing create
 control keyed on this same `group.key` — a "Create chat" plus on a Chats-tree row, a "Create
 channel" plus opening a dialog on a Channels-tree row — withheld on both trees from the
-`UNKNOWN_WORKSPACE_KEY` fallback group alone. A channel is no longer only reachable by [promoting
-an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
+`UNKNOWN_WORKSPACE_KEY` fallback group and groups without a connected owning host.
+A channel is no longer only reachable by [promoting an existing chat](save-as-channel-dialog.md); see [Create-channel dialog](create-channel-dialog.md)
 for the direct path.
 
 Both of those are creators *within* an existing group. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)
@@ -416,6 +426,10 @@ Split out to its own page: [the row's status dot](channel-list-status-dot.md) �
 placement/geometry/testing lessons from wiring it in.
 
 ### CSS (`channels.css`)
+
+Failed hosts keep their dots visible on hover and reserve separate pen and repair targets.
+A DOM-presence assertion misses overlapping controls; exercise the actual Edit host and
+Repair host clicks (`e2e/sidebar-offline-mutations.spec.ts`).
 
 Token-only: every color/type/spacing value is a `var(--…)` token; opacity is the de-emphasis device
 (the #218 precedent), never a color literal. Added a new `--text-title-medium-*` quad to

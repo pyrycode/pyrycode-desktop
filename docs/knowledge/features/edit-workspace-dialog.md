@@ -1,43 +1,33 @@
 # Edit workspace dialog
 
-The dialog opened by the [workspace row's hover pen](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178):
-a Name field seeded with the row's current label, a read-only line showing the workspace's full `cwd`,
-and a Cancel/Save pair that renames the workspace — every conversation sharing that `cwd`, in both
-trees, on every client — via [`renameWorkspace`](conversation-workspace-change.md#workspace-rename-label-change-1289).
-This is the first surface in the app that shows a workspace's full path; the sidebar row has declined
-`title={label}` since [#703](../codebase/703.md).
-
-Introduced in #1180. Purely renderer-side: the wire verb (#1289), the inbound re-list (#1288) and the
-daemon-held label on the row (#1287) had all already shipped — this ticket is the pen, the dialog, and
-the send, the only part of the round trip a user can reach.
+The [workspace row's pen](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
+in either sidebar tree opens the [shared Modal](modal-presentation.md) to edit an
+optional workspace label. The selected host and exact remote `cwd` remain the save
+target; neither is displayed. Renaming changes the label, never the folder's name or location.
 
 ## What it does
 
-- Every workspace row, in both trees, except the unknown-workspace group, draws a trailing 14×14 pen on
-  hover or keyboard focus — `aria-label="Edit workspace"` — 10px to the left of the create plus, both
-  absolutely positioned so neither one's box depends on the other. Hovering or focusing it shows the
-  same name-pill treatment ([#1181](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181))
-  reading "Edit workspace"; clicking it never touches the group's `aria-expanded`.
-- The pen opens a centered `role="dialog"` titled "Edit workspace": the Name field opens **seeded**
-  with the row's current label (the daemon's `workspace_label` when there is one, the folder segment
-  otherwise — indistinguishable here on purpose, since the row already resolved which one to show), one
-  read-only line under it rendering the workspace's full `cwd`, and Cancel/Save. Save is disabled while
-  the trimmed name is blank or over 128 characters; Cancel is never disabled.
-- Save sends exactly one `renameWorkspace` and closes. `path` is the group's `cwd` verbatim; `label` is
-  the trimmed name, or `null` when the trimmed name equals the **folder segment**
-  (`workspaceLabelFor(cwd)`, never the current label) — that comparison is the whole of "the way back
-  to the folder name is Save itself." There is no separate reset control.
-- Cancel closes with no change and sends nothing.
-- The rename lands on every row sharing that `cwd`, in both trees, the moment the daemon's
-  `workspace_updated` reply reaches [#1288](channel-list.md#workspace-grouping)'s inbound re-list —
-  already shipped and already driven; this ticket adds no new inbound handling.
+- Opens with the row's displayed name: its custom label or folder-name fallback.
+- Shows a single filled field labelled “Workspace name (optional):”, an accessible
+  “Edit workspace” title, a visible header close icon, and centred Cancel/OK actions.
+- OK sends one `renameWorkspace` to the selected host, then closes immediately.
+  The name is trimmed. Empty or whitespace-only input and the folder's own name
+  send explicit `label: null`, clearing the custom label. Other names send the
+  trimmed string. OK is disabled only above 128 UTF-16 code units after trimming.
+- Cancel and header close dismiss without sending. Each reopening seeds the current
+  row name, discarding an abandoned draft. Escape and backdrop clicks do not dismiss;
+  the seeded field is not autofocused.
+- The existing `workspace_updated` re-list updates both trees on one host. Multi-host
+  refresh remains limited by [#1363](https://github.com/pyrycode/pyrycode-desktop/issues/1363),
+  independently of the correctly addressed rename (§ Edge cases and limitations).
 
 ## How it works
 
-**No Figma node draws it.** Verified against the Figma on 2026-09-08: the Desktop page's Dialogs
-section holds Rename, Save as Channel, Create Folder and Paste Code only. The dialog clones the Rename
-dialog's chrome (overlay/scrim/panel/outlined field), matching [Create-channel dialog](create-channel-dialog.md)'s
-own precedent for a dialog with no drawing of its own.
+The [Edit workspace Figma instance](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=487-2239)
+uses the [Modal component design](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=489-1942).
+`Modal` supplies the 640px preferred panel width, divided title/close header,
+24px vertical and 28px horizontal padding, 20px section gaps, title-large typography,
+and centred outlined Cancel / filled OK buttons. Host and folder layers are absent.
 
 ### The pen — `WorkspaceRow`'s second optional trailing control (`ChannelList.tsx`)
 
@@ -50,9 +40,9 @@ affordances that differ in everything but position. `onEdit` is nullary, so no c
 
 The chain is the same shape `create` already threads: `WorkspaceRow` gains `edit?: WorkspaceEditControl`,
 `CollapsibleWorkspaceGroup` passes it through unchanged, `renderServerTrees` gains a trailing `edit?:
-{ label, onEdit: (cwd, label) => void }` parameter and closes over the group — `onEdit: () =>
-edit.onEdit(group.key, group.label)`, passing the group's **key** (for the send) and its **label** (to
-seed the dialog's field) — and `renderBody` hands the **same** control object to both trees, unlike the
+{ label, onEdit: (cwd, label, serverId) => void }` parameter and closes over the group — `onEdit: () =>
+edit.onEdit(group.key, group.label, serverId)`, passing the group's **key** (for the send) and its **label** (to
+seed the dialog's field), plus the enclosing server's identity — and `renderBody` hands the **same** control object to both trees, unlike the
 two `create` labels: the pen says the same word above the divider and below it.
 
 **One label constant for both trees**, `EDIT_WORKSPACE_CONTROL_LABEL = 'Edit workspace'`, read twice —
@@ -94,133 +84,71 @@ The pen's name pill reuses the shared `.channel-list__control-name` class and [#
 append-after-the-`<svg>` discipline, triggered off the **pen's own** `:hover`/`:focus-visible` (never
 the row's) — hovering the row's label shows nothing.
 
-### The dialog (`EditWorkspaceDialog.tsx`, new module)
+### The dialog (`EditWorkspaceDialog.tsx`)
 
-Two exports, both pure and server-renderable, living **together** — unlike [Create-channel
-dialog](create-channel-dialog.md)'s split of view and command constructor into separate files —
-because this verb has exactly one sender and no shipped twin to sit beside, the shape
-`RenameConversationDialog.tsx` already uses for the same reason:
+`EditWorkspaceDialogView` takes `name`, `onNameChange`, `onCancel` and `onSave`;
+it has no path prop. It delegates panel, heading, close control and footer to
+`Modal`, wiring both Cancel and close to `onCancel`. The wrapping label gives the
+controlled input its accessible name. React escapes its value; names and paths
+are never logged. See [props and caller ownership](modal-presentation.md#props-and-caller-ownership).
 
-```ts
-EditWorkspaceDialogView({
-  name: string
-  path: string
-  onNameChange: (next: string) => void
-  onCancel: () => void
-  onSave: () => void
-}): JSX.Element
+Validation is a presentation affordance computed from `name.trim().length`.
+Blank is a valid reset, and 64 astral characters occupy the full 128-unit allowance.
+`requestRenameWorkspace(sendCommand, cwd, name, serverId?)` trims and sends without
+adding its own length guard. The daemon remains authoritative.
 
-requestRenameWorkspace(
-  sendCommand: (command: RendererCommand) => void,
-  cwd: string,
-  name: string
-): void
-```
-
-**The `cwd` is a prop here, where `CreateChannelDialogView` deliberately refused one.** That refusal was
-available there because nothing in that dialog showed the workspace; showing it is half of this ticket.
-The protection changes form rather than weakening: the value reaches exactly one sink, an auto-escaped
-React **child** in `<p className="edit-workspace__path">`, and no attribute of the overlay, panel,
-field, input, path line or either action derives from it — no `title`, no `aria-label`, no `id`, no
-class-name interpolation, no log line. The four sinks `WorkspaceRow` already declines for the label are
-re-derived here rather than inherited, since this is the first surface in the app that renders a `cwd`
-at all.
-
-**No `autoFocus`**, the one place this parts company with `CreateChannelDialogView`: that field opens
-empty and focusing it costs nothing; this one opens seeded, and stealing focus into a prefilled field
-invites an accidental overwrite of the very label the user came to read.
-
-**Save's `disabled` is computed inline from the trimmed name** (blank, or over
-`MAX_WORKSPACE_LABEL_LENGTH = 128`), so the state is directly assertable in static markup. This
-constant is an **affordance**, not a re-implementation of the wire rule: `RenameWorkspacePayload`'s own
-type carries no client-side length check on the send path (`requestRenameWorkspace` refuses nothing),
-and the daemon polices 128 UTF-16-agnostic characters server-side. The disable exists to refuse a blank
-or over-long name to the user's face before a command exists at all — the home
-[`groupByWorkspace`'s docblock](channel-list.md#workspace-grouping) already named for this ticket. The
-honest gap: this counts UTF-16 code units, and the daemon's rule need not use the same unit, so an
-astral-plane name can pass here and be refused there — not exploitable, just a silent no-op, the same
-outcome every rejection on this fire-and-forget verb produces.
-
-**`requestRenameWorkspace`** is `requestRenameConversation`'s shape one verb over — an inline command
-literal, no constructor, fire-and-forget. `cwd` goes out **verbatim**: no normalisation, no trim, no
-`path` module, because the daemon looks it up by byte-for-byte equality against a stored `cwd`, never a
-join, so a `../`-laden value draws `workspace.not_found` rather than traversing anything; main
-re-validates at the untrusted IPC boundary and rebuilds a fresh literal before the wire. `label` is
-`null` exactly when the trimmed name equals `workspaceLabelFor(cwd)` (the folder segment) — `null` for
-a `cwd` with no usable segment, which a non-blank trimmed name can never equal, so the unknown-workspace
-shape needs no special case (and is unreachable anyway, since the pen is withheld there). **The `label`
-key is named unconditionally**: a literal `null` is the daemon's "clear this label" value, and an
-absent key is a contract violation it rejects as malformed.
+The helper preserves `cwd` verbatim: no normalization, trimming or local filesystem
+resolution. Reset compares against `workspaceLabelFor(cwd)`, not the current custom
+label. The payload always includes `label`; null means clear, whereas omission
+violates the existing command contract. The optional `serverId` is top-level routing
+metadata, outside the payload, and is omitted only for unattributed rows.
 
 ### Container state (`ChannelList.tsx`)
 
-Two `useState` cells, beside the three dialogs already there, independent of them for the reason they
-all share — an open dialog's fixed-inset overlay covers the window, so no two can be open at once and
-no mutual-exclusion logic is needed:
+`ChannelList` holds one nullable `editWorkspaceTarget` containing `{ cwd, serverId }`
+and a separate `editWorkspaceName` draft. `renderServerTrees` closes over each server
+while building its workspace groups; both trees forward that identity with the group
+key and displayed label. The path and host therefore stay together through the edit,
+even when two hosts share a path.
 
-```ts
-const [editWorkspaceCwd, setEditWorkspaceCwd] = useState<string | null>(null)
-const [editWorkspaceName, setEditWorkspaceName] = useState('')
-```
-
-Rendered on `editWorkspaceCwd !== null` — an **explicit null check, never a truthiness test** — so an
-empty-string `cwd` (the unknown-workspace sentinel) cannot collapse into "no dialog open"; unreachable
-today because the pen is withheld from that group by key, and writing the check this way keeps that
-withhold load-bearing for one reason rather than two. Opening seeds both cells together from the
-group's **current** label (not the abandoned draft of a prior Cancel). `window.pyry` is dereferenced
-inside the Save handler alone, never during render.
-
-A `workspace_updated` landing mid-edit re-lists the sidebar under the open dialog and does **not**
-re-seed the field — clobbering what the user is typing would be worse than a stale seed.
+Opening sets the target and seeds the draft from the current row. Rendering is gated
+on `editWorkspaceTarget !== null`. OK calls the helper once and immediately clears
+the target, without awaiting or correlating a reply. Cancel and close only clear the
+target. There is no new store, subscription, pending state or error UI. An inbound
+workspace update during editing may refresh rows but does not overwrite the draft.
 
 ### CSS (`channels.css`)
 
-A fifth `*-overlay` block, `.edit-workspace-*`, mirroring `.create-channel*` declaration for
-declaration plus one added element — not a reuse of `.rename-conversation*`, for
-[Create-channel dialog](create-channel-dialog.md)'s own stated reason: `e2e/conversation-create-rename.spec.ts`
-scopes to the Rename dialog's classes under Playwright's strict-locator mode, and a second dialog
-wearing them would strict-violate; and this dialog's extra line would land inside markers
-`RenameConversationDialog.test.tsx` pins.
-
-**The path line, `.edit-workspace__path`**, takes `.settings__default-workspace-value`'s recipe
-(body-small, on-surface-variant) with `overflow-wrap: anywhere` and deliberately **no ellipsis chain**
-— the opposite call from every other daemon-derived string in this file. The sidebar row ellipsizes
-because a row is a fixed band and the name is a glance; this line exists *because* the user came to
-read the path, and a path cut off at the panel's edge answers nothing. `anywhere` rather than
-`break-word` so an unbroken long segment breaks too, rather than pushing the panel past its
-`max-width`. Vertical growth is bounded instead: the panel carries `max-height: 90%; overflow-y: auto`,
-load-bearing here in a way it is not on the sibling dialogs, since this is the first dialog rendering
-an untrusted string of unbounded length.
+The caller retains `.edit-workspace-overlay` and its separate scrim. The shared
+panel owns viewport bounds and whole-panel scrolling; header and footer are not
+pinned. It fits the app's 800px minimum width and can scroll to controls in short
+windows. The field uses an 8px label gap, label-large emphasized text and a 52px
+filled input with body-medium text, theme colors and a focus-visible outline.
+The old outlined field, path line and dialog-specific panel/action styles are gone.
 
 ## Testing
 
-- **`ChannelList.test.tsx`**: the pen drawn once per workspace row in both trees as a real `<button
-  type="button">`, named `Edit workspace`; rendered *after* the create plus (the Tab-order proof);
-  the 14px glyph's whole opening run pinned as one string; the pill appended after `</svg>`; withheld
-  from the unknown-workspace group in both trees; a hostile `cwd`/`workspace_label` reaching none of
-  the pen's attributes; every existing workspace-row marker and tag-scan assertion unchanged.
-- **`EditWorkspaceDialog.test.tsx`** (new, static markup): title/role/`aria-labelledby`, the field
-  seeded (not `autofocus`ed) with the current label, the `cwd` rendered as an escaped child on its own
-  line under the field, Save `disabled` on blank/whitespace/129 chars and enabled at 128, Cancel never
-  disabled, a hostile label/`cwd` escaping to inert text with no attribute reached; the send helper
-  sends exactly one `renameWorkspace`, `label: null` on the folder segment (not the current label),
-  the `label` key present unconditionally, and a `../`-laden `cwd` passed through verbatim.
-- **`e2e/sidebar-workspace-edit.spec.ts`** (new, own launch — beside, not inside,
-  `sidebar-workspace-create.spec.ts`, whose own assertions had to stay untouched, and distinct from
-  `sidebar-tree-geometry.spec.ts`, which owns tree placement and drives no hover): seeds one promoted
-  row, mints the second tree's group at the same `cwd` via the FAB (`workspace-collapse.spec.ts`'s
-  idiom), reads the **old** label first — a positive auto-waiting read, never an absence, the
-  `workspace-updated-relist.spec.ts` ruling — then the pen's resting opacity, its drawn box (14px,
-  right 28, 10px clear of the plus, row still 28 tall), click → path line text → type → Save → the
-  **new** label in both trees with `aria-expanded` unchanged.
-- **`e2e/sidebar-workspace-plus-name-pill.spec.ts`** (revised, not new) — see § Revision below.
-- **`e2e/real-daemon-workspace-rename.spec.ts`** (#1293, [real-daemon credential-light
-  e2e](real-daemon-credential-light-e2e.md)) is the real-daemon twin: the fake twin's
-  `conversationStateFake` answers whatever `rename_workspace` the client sent, so it proves the frame
-  leaves the app and nothing about whether a real `pyry` registers a handler for it. Pairs against a
-  claude-less spawned daemon, reads the pre-save label off a `seedCwdSubdir` seed, drives the same
-  pen → dialog → fill → Save gesture, and asserts the label changed on the daemon's own re-list —
-  see that doc's § on the label-clearing trap this drive has to pin apart first.
+- `ChannelList.test.tsx` pins pen availability, accessible naming, glyph geometry,
+  escaping and disclosure → plus → pen DOM order.
+- `EditWorkspaceDialog.test.tsx` checks shared modal markup, the single optional
+  field, blank resets, trimmed UTF-16 boundaries (including astral characters),
+  explicit null payloads, exact paths and selected-host routing. Static renders
+  cannot prove callbacks, scrolling or close-image decoding.
+- `e2e/sidebar-workspace-edit.spec.ts` exercises both-tree rename on one host,
+  reset and reseed, dismissal without saving, keyboard controls, preserved
+  Escape/backdrop behavior, the decoded close image and scrolling at 800×200.
+  It also checks 640px panel width at normal and minimum window widths.
+- The active two-host browser test counts requests at each fake daemon and checks
+  exact paths independently of refreshed labels. The separate row-refresh test is
+  skipped for #1363; a successful rename frame does not prove the subsequent list
+  refresh worked. Enable and pass that assertion when the refresh defect is fixed.
+- The multi-host fixture pushes a default second-host row after pairing. Replace
+  that seed with the same-path scenario before exercising its pen; a custom reply
+  builder alone does not establish the intended initial rows.
+- `e2e/real-daemon-workspace-rename.spec.ts` drives the optional-name field and OK
+  against a real daemon. Unlike the fake, this proves a real handler exists; see
+  [credential-light e2e](real-daemon-credential-light-e2e.md) for its label-clearing
+  trap. Execution of the updated spec remains a dispatcher handoff.
 
 ## Revision: the pen's pill forced a sibling spec to narrow its locator
 
@@ -236,33 +164,27 @@ pill and contradict the ticket's own "the plus's pill treatment."
 
 ## Edge cases and limitations
 
-- **No `serverId` on the send**, matching every other sidebar-originated command — with two servers
-  paired sharing an identical `cwd`, `servers.route` resolves the sole connection ambiguously. Not a
-  regression this ticket introduces; a per-server surface is its own future ticket.
-- **No rejection is surfaced.** A daemon refusal (bad label, unknown path) closes the dialog and
-  changes nothing, with no message — this verb is fire-and-forget and this client neither awaits nor
-  correlates its reply. The dialog's own disable covers the two cases a user can actually reach.
-- **A UTF-16-length mismatch against the daemon's own bound** can allow an astral-plane name here that
-  the daemon then refuses — a silent no-op, not a security gap (§ How it works above).
-- **A `workspace_updated` arriving mid-edit does not re-seed the open dialog's field** — deliberate,
-  since clobbering an in-progress edit would be worse than a stale seed.
+- **Selected-host rename and row refresh are separate paths.** The rename includes
+  the clicked host's `serverId`, but `subscribeConversations` drops the triggering
+  event's origin and `requestConversationList` sends an unaddressed refresh. With
+  multiple paired hosts that request is refused as ambiguous, leaving rows stale.
+  Full two-host row-refresh acceptance remains pending
+  [#1363](https://github.com/pyrycode/pyrycode-desktop/issues/1363).
+- **Unattributed rows omit server identity.** They preserve the existing fallback
+  routing behavior rather than guessing which host owns the path.
+- **No rejection is surfaced.** The dialog closes immediately after dispatch;
+  a daemon refusal produces no dialog error or retry state. The view bounds the
+  trimmed name in UTF-16 units but does not replace daemon validation.
+- **An update during editing does not reseed the draft.** Reopening reads the
+  current sidebar label, which can remain stale while the refresh defect persists.
+- **Focus policy is unchanged.** There is no autofocus, focus trap or Escape/backdrop
+  dismissal. Native enabled controls remain keyboard-operable through the existing
+  tab sequence; Cancel and header close are the explicit exits.
 
 ## Related
 
-- [Channel list § Workspace grouping](channel-list.md#workspace-grouping) — the sidebar's read of the
-  label this dialog changes, and the home of the "refusing a blank belongs to the dialog that sends the
-  rename" ruling this ticket fulfils.
-- [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat
-  plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
-  (#1178) and [§ the plus names itself in a pill](channel-list-desktop-row-geometry.md#the-workspace-rows-plus-names-itself-in-a-pill-1181)
-  (#1181) — the shared plus geometry and pill treatment this ticket's pen sits beside and reuses.
-- [Create-channel dialog](create-channel-dialog.md) (#1179) — the nearest structural sibling: a pure
-  view plus container `useState` pair opening a fresh CSS block cloned from the Rename dialog's chrome.
-- [Conversation workspace change § Workspace rename](conversation-workspace-change.md#workspace-rename-label-change-1289)
-  (#1289) — the `renameWorkspace` wire contract, guard shape and security review this dialog's Save
-  sends against; this ticket is that verb's first and, so far, only caller.
-- [Rename conversation dialog](rename-conversation-dialog.md) (#360) — the chrome this dialog clones.
-- [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / #1293 — the real-`pyry`
-  proof that a handler is registered for this verb, and the trap a fresh registry's fallback label
-  hides from a careless choice of typed name.
-- Spec: `docs/specs/architecture/1180-workspace-edit-dialog.md`.
+- [Channel list — workspace grouping](channel-list.md#workspace-grouping) — label and path identity.
+- [Shared modal](modal-presentation.md) — presentation ownership and close asset delivery.
+- [Conversation workspace change — workspace rename](conversation-workspace-change.md#workspace-rename-label-change-1289)
+  — command and wire contract.
+- [Architecture spec](../../specs/architecture/1349-edit-workspace-modal.md) — design and scope.

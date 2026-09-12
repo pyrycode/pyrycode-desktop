@@ -2004,24 +2004,7 @@
   cursor: default;
 }
 
-/* #1180 — THE EDIT-WORKSPACE DIALOG, what the workspace row's pen opens. No node of its own is drawn:
-   verified against the Figma on 2026-09-08, the Desktop page's Dialogs section holds Rename, Save as
-   Channel, Create Folder and Paste Code only. The ticket pins this dialog's chrome to the Rename one's
-   (102:498), so the block below mirrors .create-channel* — which already mirrors that node declaration
-   for declaration — with ONE element added, the path line, and the Rename dialog's own Cancel / Save
-   action pair.
-
-   A FIFTH CLASS FAMILY rather than reusing .rename-conversation*, and the reason is not tidiness. Two:
-     - Playwright locators run in strict mode and `e2e/conversation-create-rename.spec.ts` scopes to the
-       Rename dialog's classes, so a second dialog wearing them would JOIN that spec's match set and
-       strict-violate rather than fail an assertion — the guard `WorkspaceRow`'s header states for the
-       sidebar, applied to a dialog. `.create-channel*` was minted for exactly this.
-     - This dialog has an element the Rename one does not, and `RenameConversationDialog.test.tsx` pins
-       that dialog's markup with attribute-run markers; a path line inside them would land between
-       assertions written to describe a two-child panel.
-
-   `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll column and covers
-   the window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+/* Workspace dialog placement; Modal owns the panel and scrolling. */
 .edit-workspace-overlay {
   position: fixed;
   inset: 0;
@@ -2041,139 +2024,40 @@
   opacity: 0.4;
 }
 
-/* The centered M3 dialog panel: surface-container-high, 28px radius, 24px padding, a column with 16px
-   gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows.
-
-   ⭐ `max-height` + `overflow-y` ARE LOAD-BEARING HERE IN A WAY THEY ARE NOT ON THE SIBLING DIALOGS.
-   Those two bound a name the user is typing; this panel also renders an untrusted daemon `cwd` of
-   unbounded length, which WRAPS rather than ellipsizing (that is the point of showing it). Without the
-   cap a hostile or merely deep path grows the panel past the window with its actions off-screen — so
-   the pair is what turns "unbounded text" into "text that scrolls inside the dialog". Do not drop them
-   on the reasoning that the neighbours barely need them. */
-.edit-workspace {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  width: 100%;
-  max-width: 360px;
-  max-height: 90%;
-  overflow-y: auto;
-  padding: var(--space-6);
-  background: var(--color-surface-container-high);
-  border-radius: var(--radius-lg);
-  color: var(--color-on-surface);
-}
-
-/* The headline-small title (102:499's treatment, reading "Edit workspace"). margin: 0 resets the
-   heading default. */
-.edit-workspace__title {
-  margin: 0;
-  color: var(--color-on-surface);
-  font-size: var(--text-headline-small-size);
-  line-height: var(--text-headline-small-line);
-  letter-spacing: var(--text-headline-small-tracking);
-  font-weight: var(--text-headline-small-weight);
-}
-
-/* The outlined Name field (102:500) — a bordered frame stacking the label over the input value. The
-   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
-   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal —
-   the .create-channel__field token-mapping precedent. */
 .edit-workspace__field {
   display: flex;
   flex-direction: column;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-outline);
-  border-radius: var(--radius-xs);
+  gap: var(--space-2);
 }
 
-/* The field label (102:501) is M3 label-medium (12px); the theme has no label-medium token, so map to
-   the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
 .edit-workspace__label {
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
-}
-
-/* The input value (102:502) — body-large, on-surface. Reset to a borderless field so the frame's border
-   is the only chrome; the label above supplies the field's meaning. */
-.edit-workspace__input {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--color-on-surface);
-  font-family: var(--font-sans);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
-}
-
-/* THE PATH LINE — the workspace's full `cwd`, and the one element this dialog has that its siblings do
-   not. `.settings__default-workspace-value`'s recipe (body-small, on-surface-variant, the muted
-   value-line treatment), which is where this app already renders a workspace path for information.
-
-   ⭐ `overflow-wrap: anywhere` AND DELIBERATELY NO ELLIPSIS CHAIN — the opposite call from every other
-   daemon-derived string in this file. The sidebar row ellipsizes its label because a row is a fixed
-   band and the name is a glance; this line exists BECAUSE the user came to read the path, and a path
-   cut off at the panel's edge answers nothing. `anywhere` rather than `break-word` so a long
-   unbroken segment (a path with no separators near the wrap point) breaks too, instead of pushing the
-   panel wider than its max-width. Vertical growth is bounded by the panel's own scroll, above.
-
-   margin: 0 resets the <p> default; the panel's 16px column gap owns the spacing, so the line sits the
-   same distance under the field as the actions sit under it. */
-.edit-workspace__path {
-  margin: 0;
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-  overflow-wrap: anywhere;
-}
-
-/* The action row (the Rename dialog's 19:19) — Cancel + Save both right-aligned (the node's
-   justify-end). 4px gap = --space-1. */
-.edit-workspace__actions {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  justify-content: flex-end;
-}
-
-/* The two text-button actions — the M3 dialog text-button treatment (pill, transparent fill,
-   --color-primary label, label-large), mirroring create-channel__create. */
-.edit-workspace__cancel,
-.edit-workspace__save {
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
+  color: var(--color-on-primary-container);
   font-size: var(--text-label-large-size);
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
+  font-weight: var(--text-label-large-weight-emphasized);
 }
 
-.edit-workspace__cancel:focus-visible,
-.edit-workspace__save:focus-visible {
-  outline: 1px solid var(--color-outline);
+.edit-workspace__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  padding-right: calc(var(--space-7) * 2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
-/* Save disabled while the trimmed name is blank or over 128 characters (AC4) — the M3 38% disabled
-   emphasis (opacity, not a color literal — the #218 de-emphasis precedent) and a non-interactive
-   cursor. */
-.edit-workspace__save:disabled {
-  opacity: 0.38;
-  cursor: default;
+.edit-workspace__input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 /* #800 — the status dot leading each chat and channel row (Figma 106:3051), drawn from #799's resolved

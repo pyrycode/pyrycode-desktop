@@ -10,11 +10,10 @@ import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspace
 // the send helper's payload (AC4/AC5).
 const noop = (): void => {}
 
-function renderView(name: string, path = '/home/me/second-brain'): string {
+function renderView(name: string): string {
   return renderToStaticMarkup(
     <EditWorkspaceDialogView
       name={name}
-      path={path}
       onNameChange={noop}
       onCancel={noop}
       onSave={noop}
@@ -34,58 +33,55 @@ describe('EditWorkspaceDialogView', () => {
     const markup = renderView('Second Brain')
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
-    expect(markup).toContain('aria-labelledby="edit-workspace-title"')
-    expect(markup).toContain('id="edit-workspace-title"')
+    const titleId = markup.match(/aria-labelledby="([^"]+)"/)?.[1]
+    expect(titleId).toBeTruthy()
+    expect(markup).toContain(`id="${titleId}"`)
+    expect(markup).toContain('--modal-width:640px')
     expect(markup).toContain('>Edit workspace</h2>')
   })
 
   it('seeds the Name field with the row’s current label (AC4)', () => {
     const markup = renderView('Second Brain')
-    expect(markup).toContain('>Name</span>')
+    expect(markup).toContain('>Workspace name (optional):</span>')
     expect(markup).toContain('value="Second Brain"')
-    // Exactly one field. The path line is read-only prose, not a second input a user could edit into
-    // a rename of the wrong thing.
+    // Only the optional name appears; host and folder are held by the container.
     expect(markup.split('<input').length - 1).toBe(1)
     // NOT autofocused, unlike the Create-channel dialog: that field opens empty, this one opens
     // seeded, and stealing focus into a prefilled field invites an accidental overwrite.
     expect(markup).not.toContain('autofocus')
   })
 
-  it('renders the workspace’s full cwd on one line under the field (AC4)', () => {
-    const markup = renderView('Second Brain', '/home/me/notes/second-brain')
-    expect(markup).toContain(
-      '<p class="edit-workspace__path">/home/me/notes/second-brain</p>'
-    )
-    // Under the field, not above it — the field is the thing being edited and leads.
-    expect(markup.indexOf('edit-workspace__field')).toBeLessThan(
-      markup.indexOf('edit-workspace__path')
-    )
-  })
-
-  it('renders Cancel and Save actions (AC4)', () => {
+  it('renders only the name field in shared modal content', () => {
     const markup = renderView('Second Brain')
-    expect(markup).toContain('edit-workspace__cancel')
-    expect(markup).toContain('edit-workspace__save')
+    expect(markup).toContain('modal__content')
+    expect(markup).not.toContain('edit-workspace__path')
+    expect(markup).toContain('aria-label="Close dialog"')
+  })
+
+  it('renders Cancel and OK actions (AC4)', () => {
+    const markup = renderView('Second Brain')
+    expect(markup).toContain('modal__action--cancel')
+    expect(markup).toContain('modal__action--confirm')
     expect(markup).toContain('>Cancel</button>')
-    expect(markup).toContain('>Save</button>')
+    expect(markup).toContain('>OK</button>')
   })
 
-  it('disables Save when the trimmed name is blank (AC4)', () => {
-    expect(renderView('')).toMatch(/edit-workspace__save"[^>]*disabled/)
-    expect(renderView('   ')).toMatch(/edit-workspace__save"[^>]*disabled/)
+  it('enables OK when the trimmed name is blank', () => {
+    expect(renderView('')).not.toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(renderView('   ')).not.toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
-  it('disables Save past 128 characters and enables it at exactly 128 (AC4)', () => {
-    // The bound is measured on the TRIMMED name, which is what Save sends — so surrounding whitespace
+  it('disables OK past 128 characters and enables it at exactly 128 (AC4)', () => {
+    // The bound is measured on the TRIMMED name, which is what OK sends — so surrounding whitespace
     // can never push an otherwise-legal name over. `x`.repeat is a client-owned literal, not daemon text.
-    expect(renderView(`  ${'x'.repeat(128)}  `)).not.toMatch(/edit-workspace__save"[^>]*disabled/)
-    expect(renderView('x'.repeat(129))).toMatch(/edit-workspace__save"[^>]*disabled/)
+    expect(renderView(`  ${'x'.repeat(128)}  `)).not.toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(renderView('x'.repeat(129))).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
-  it('enables Save on an ordinary name and never disables Cancel (AC4)', () => {
+  it('enables OK on an ordinary name and never disables Cancel (AC4)', () => {
     const markup = renderView('Kitchen Ledger')
-    expect(markup).not.toMatch(/edit-workspace__save"[^>]*disabled/)
-    expect(markup).not.toMatch(/edit-workspace__cancel"[^>]*disabled/)
+    expect(markup).not.toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(markup).not.toMatch(/modal__action--cancel"[^>]*disabled/)
   })
 
   it('renders a hostile label as inert attribute text, never live markup (AC4)', () => {
@@ -93,21 +89,29 @@ describe('EditWorkspaceDialogView', () => {
     // inside the value and is inert there, because `<` and `>` are escaped so no tag is ever opened.
     const markup = renderView('Tom & <img src=x onerror=boom>')
     expect(markup).toContain('value="Tom &amp; &lt;img src=x onerror=boom&gt;"')
-    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('<img src=x')
   })
 
-  it('renders a hostile cwd as an escaped CHILD and lets it reach no attribute (AC4)', () => {
-    const markup = renderView('Second Brain', '/home/me/<img src=x onerror=boom>')
-    expect(markup).toContain('&lt;img src=x onerror=boom&gt;</p>')
-    expect(markup).not.toContain('<img')
-    // The whole of "neither the cwd nor the label reaches an attribute": no title anywhere, and no
-    // aria-label built from either value — the dialog is named by its title element alone.
-    expect(markup).not.toContain('title=')
-    expect(markup).not.toContain('aria-label=')
+  it('counts astral characters as two UTF-16 code units', () => {
+    expect(renderView('😀'.repeat(64))).not.toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(renderView('😀'.repeat(65))).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
+
 })
 
 describe('requestRenameWorkspace', () => {
+  it.each(['', '   ', ' second-brain '])('clears an optional name: %j', (name) => {
+    expect(capture(send => requestRenameWorkspace(send, '/home/me/second-brain', name, 'host-b')))
+      .toEqual([{ type: 'renameWorkspace', serverId: 'host-b',
+        payload: { path: '/home/me/second-brain', label: null } }])
+  })
+
+  it('routes exactly one rename to the selected host without changing its path', () => {
+    expect(capture(send => requestRenameWorkspace(send, '/fake/../workspace ', ' Ledger ', 'host-a')))
+      .toEqual([{ type: 'renameWorkspace', serverId: 'host-a',
+        payload: { path: '/fake/../workspace ', label: 'Ledger' } }])
+  })
+
   it('sends exactly one renameWorkspace carrying the cwd and the trimmed name (AC5)', () => {
     const sent = capture((send) =>
       requestRenameWorkspace(send, '/home/me/second-brain', '  Kitchen Ledger  ')
@@ -121,7 +125,7 @@ describe('requestRenameWorkspace', () => {
   })
 
   it('sends label: null when the trimmed name is the FOLDER segment, not the current label (AC5)', () => {
-    // The way back to the folder name is Save itself. The comparison is against `workspaceLabelFor`'s
+    // The way back to the folder name is OK itself. The comparison is against `workspaceLabelFor`'s
     // segment — the daemon may be holding a quite different label at the time, and that is irrelevant.
     const sent = capture((send) =>
       requestRenameWorkspace(send, '/home/me/second-brain', ' second-brain ')

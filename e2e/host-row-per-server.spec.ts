@@ -67,10 +67,8 @@ test('the host row reports the server it names, and the other machine dropping d
   // spec's own (the unpair-repair two-server drive's shape). Filtering by row name is safe where
   // filtering by server id is not: the two seeded names share no substring.
   //
-  // Reaching the thread is what puts the composer on screen BESIDE the sidebar, and that is the whole
-  // point of the navigation here: the composer's Re-pair control still reads the APP-WIDE session
-  // status, so this one window holds both a surface that must move on server B's drop and a surface
-  // that must not. The contrast is the assertion.
+  // Reaching A's thread puts its composer beside the sidebar. Both now read A's own connection
+  // status, so B's drop must leave A's composer usable as well as its host dots connected.
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST_ROW_NAME }).click()
   await expect(page.locator('.conversation')).toBeVisible()
 
@@ -120,12 +118,19 @@ test('the host row reports the server it names, and the other machine dropping d
   // A's dots holding still.
   await expect.poll(() => labelsOf(rowB)).not.toEqual(baselineB)
 
-  // The app-wide contrast #1199 established, kept: the composer's Re-pair control still reads the
-  // app-wide session cell, which server B's terminal close writes, so one window holds a surface that
-  // must move on that drop and a surface that must not.
-  await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toBeVisible()
+  // Wait for B's daemon state too: a relay-dot change alone can precede the terminal failure.
+  await expect(dotsOf(rowB).first()).toHaveAttribute('aria-label', 'Pyrycode Offline')
+  // A's composer stays usable after B settles, with no connection error or repair flow taking over.
+  const input = page.getByPlaceholder('Message…')
+  await expect(input).toBeEditable()
+  await input.fill('Draft for the connected host')
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toHaveCount(0)
+  await expect(page.locator('.composer-status__error')).toHaveCount(0)
+  await expect(page.locator('.conversation__banner')).toHaveCount(0)
+  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
 
-  // AC3 — and only now. Two surfaces have moved in this same window; the row naming server A has not.
+  // AC3 — and only now. B's dots have changed; the row naming server A has not.
   // Both dots, so a regression on either leg reddens: the daemon leg is the one server B's close writes,
   // and the relay leg is its twin through `selectRelayLinkStatusFor`.
   expect(await labelsOf(rowA)).toEqual(baselineA)

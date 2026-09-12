@@ -38,6 +38,9 @@ The row lookup (`effortRowFor` since #1168, `publishedRowFor` before it) is used
 | null`, turning three inputs into everything the view needs (`label`, `options`, `currentId`), so every
 rule below is unit-testable as data rather than only through markup.
 
+The table assumes a selection callback is available; without it, any held label
+uses the inert span described in [The write](#the-write).
+
 | Input | Rendering |
 |---|---|
 | `effort === ''` (no run-config snapshot has arrived) | `null` — nothing in the row |
@@ -109,15 +112,17 @@ list for a session already running a level outside it.
 
 ## The write
 
-`onSelect` calls `changeSetting({ sessionId, sendCommand: window.pyry.sendCommand, dispatch }, { field:
-'effort', value })` — the same single-field write path the run-configuration sheet uses.  `window.pyry`
-is dereferenced only inside this arrow, at interaction time, never during render, exactly as the model
-menu's does.
+`onSelect` is optional. The container supplies it only when the conversation's
+unambiguous owning host reports `connected` and the session ID is addressable.
+Without it, a held effort renders as an inert label even when levels are published;
+an open menu unmounts. The published-level rules above still apply when connected.
 
-**AC4's "sends nothing when there is no addressable session id" is met by `changeSetting`'s own gate, not
-by withholding the handler** — the model menu's ruling, for the same reason: this view branches
-operability on the *levels*, and withholding the handler would fuse two unrelated conditions and make a
-populated menu unopenable whenever the session id happens to be unknown, which no AC asks for.
+The callback calls `changeConnectedSetting(conversationId, { field: 'effort', value })`,
+which re-reads current ownership, status and session ID before `changeSetting` and
+`submitSettingsChange`. A stale callback therefore cannot send or create an optimistic
+change after disconnect. The bridge is dereferenced at interaction time, never during
+render. See [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188)
+for the sheet and sibling menus; reconnection never replays a blocked choice.
 
 Picking a level moves the trigger's label to the optimistic value at once and reverts it if the change is
 rejected — not local state: `selectEffectiveSettings`'s pending-overlay-over-confirmed-over-snapshot
@@ -190,8 +195,9 @@ invented, #988's constraint intact.
 beside `<ComposerEffortMenu />` in the composer footer. This control is documented as reading no state of
 its own beyond what it draws; folding a write policy into it would fuse two unrelated concerns and make
 its own tests answer for a decision they do not own. The leaf renders no DOM node, so no footer count,
-anchor or geometry assertion anywhere in `e2e/` can see it — and the write path is otherwise untouched:
-`changeSetting` → `submitSettingsChange` still sends the one existing single-field `set_session_settings`.
+anchor or geometry assertion anywhere in `e2e/` can see it. The write now passes through
+`changeConnectedSetting` → `changeSetting` → `submitSettingsChange`, retaining the
+existing single-field `set_session_settings` contract.
 
 ```ts
 effortDefaultToApply(input: EffortDefaultInput): string | null
@@ -263,7 +269,7 @@ JSX text position (React's default escaping) plus four non-sink places, all the 
 `key={option.id}` (React's own keyed reconciliation, a `Map` internally, never a plain-object index — the
 `__proto__`-as-key hazard closed by that alone), the `option.id === currentId` string comparison, the
 `onSelect` pass-through into the write payload, and an array index. No plain object is keyed by any of it,
-and nothing on this path logs. The panel's `aria-label` is the client-owned `COMPOSER_EFFORT_MENU_LABEL =
+and the write gate logs only static availability codes, never these values. The panel's `aria-label` is the client-owned `COMPOSER_EFFORT_MENU_LABEL =
 'Effort'`, naming the panel, never the trigger's visible text; the trigger itself carries no `aria-label`,
 so its accessible name stays its visible, auto-escaped text.
 
@@ -309,6 +315,24 @@ See [PR #1019](https://github.com/pyrycode/pyrycode-desktop/pull/1019) and
 `## Revisions` entry recording the two e2e lessons above.
 
 ### Testing the default apply (#1169)
+
+Host availability is checked before the six-rule decision and before recording
+`appliedFor`. Missing ownership/status and every non-connected status therefore
+send nothing without consuming the mount-local attempt. The availability
+subscription wakes the effect on reconnection, when it rechecks eligibility:
+an effort acquired while offline, an unavailable session ID, or an unsupported
+remembered level still prevents application. An attempt already made, including
+one rejected by the daemon, is not retried merely because the host reconnects.
+Leaving and reopening the conversation retains the existing new-mount semantics.
+
+`e2e/offline-session-settings.spec.ts` proves this through the actual effect and
+renderer-boundary command observation. It first remembers a confirmed level,
+opens a fresh effort-less chat while unavailable, then checks one application on
+reconnect and none after rejection plus another reconnect. A separate fresh chat
+acquires its own effort before reconnect and receives no default. The fresh chat
+matters: an old confirmed overlay can make the composed effort non-empty and hide
+a missing availability gate. Static rendering runs no effects, and pure decision
+tests alone cannot prove either the availability subscription or attempt timing.
 
 `EffortDefaultData.test.tsx` covers `effortDefaultToApply` as a table — each of the six rules returning
 `null` in isolation, the one path returning the level, the empty-model row substitution (#1168's

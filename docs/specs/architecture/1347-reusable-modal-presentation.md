@@ -92,3 +92,16 @@ No unresolved questions; the issue has no security-sensitive label.
 Pending for the documentation stage: the ticket specifies no documentation path,
 section or documentation-only acceptance criterion. Record the reusable props and
 caller ownership in the appropriate renderer topic when documenting adoption.
+
+## Revisions
+
+### 2026-09-12 — recovery and visual evidence
+
+The committed plan survived the earlier interrupted run; its implementation did not.
+Rechecked the current Figma context, variable definitions and screenshot, and refreshed
+20 remote feature branches with no file overlap. The design and scope counts stand.
+Recreate the component with RED → GREEN coverage. Following the shared visual-review
+recipe, capture the actual statically rendered component with inline assets at 1280×800,
+800×600 and 800×240, including a caller width override and tall content. Inspect the
+images against Figma. This replaces the earlier markup-only visual check; clicks,
+focus and integrated scrolling remain the adoption tickets' browser-tier checks.

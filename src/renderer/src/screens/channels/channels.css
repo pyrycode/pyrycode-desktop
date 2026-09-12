@@ -2284,30 +2284,7 @@
   }
 }
 
-/* #1299 — THE EDIT HOST DIALOG, what the host row's hover pen opens. No Figma node draws it (verified
-   2026-09-08: the Desktop page's Dialogs section holds Rename, Save as Channel, Create Folder and Paste
-   Code only), and the ticket pins its chrome to the Rename dialog's (102:498). So the block below is
-   .edit-workspace*'s — which already mirrors that node declaration for declaration — with its path line
-   dropped and the failure line added.
-
-   A SIXTH CLASS FAMILY rather than reusing .edit-workspace* or .rename-conversation*, the call #1180
-   made for the same reason and it is not tidiness: Playwright locators run in strict mode, and
-   `e2e/sidebar-workspace-edit.spec.ts` and `e2e/conversation-create-rename.spec.ts` scope to those two
-   dialogs' classes, so a third dialog wearing either set would JOIN their match sets and strict-violate
-   rather than fail an assertion.
-
-   ⭐ THE max-height / overflow-y PAIR IS HERE SINCE #1300, and the #1299 comment it replaces is CORRECTED
-   rather than left standing. That comment declined the pair on the premise that every string this panel
-   renders is client-owned copy or a label bounded at MAX_HOST_LABEL_LENGTH inside a single-line input.
-   #1300 falsified it: the identity block renders a server id and a relay URL, both verbatim QR/paste
-   payload fields with NO length limit (`parsePairingPayload` requires only non-empty), and both WRAP
-   rather than ellipsizing because a value the user opened the dialog to read has to be readable whole.
-   Wrapping bounds the width; nothing else bounds the height. So the pair does here exactly what
-   .edit-workspace's own comment says it does there — it turns "unbounded text" into "text that scrolls
-   inside the dialog" instead of a panel grown past the window with its actions off-screen.
-
-   `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll column and covers the
-   window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+/* Edit host retains its window overlay; Modal owns panel geometry and scrolling. */
 .edit-host-overlay {
   position: fixed;
   inset: 0;
@@ -2318,8 +2295,6 @@
   padding: var(--space-4);
 }
 
-/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
-   40% via opacity (not a color literal) — the edit-workspace-overlay__scrim idiom. */
 .edit-host-overlay__scrim {
   position: absolute;
   inset: 0;
@@ -2327,118 +2302,65 @@
   opacity: 0.4;
 }
 
-/* The centered M3 dialog panel: surface-container-high, 28px radius, 24px padding, a column with 16px
-   gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows. */
-.edit-host {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  width: 100%;
-  max-width: 360px;
-  max-height: 90%;
-  overflow-y: auto;
-  padding: var(--space-6);
-  background: var(--color-surface-container-high);
-  border-radius: var(--radius-lg);
-  color: var(--color-on-surface);
-}
-
-/* The headline-small title (102:499's treatment, reading "Edit host"). margin: 0 resets the heading
-   default. */
-.edit-host__title {
-  margin: 0;
-  color: var(--color-on-surface);
-  font-size: var(--text-headline-small-size);
-  line-height: var(--text-headline-small-line);
-  letter-spacing: var(--text-headline-small-tracking);
-  font-weight: var(--text-headline-small-weight);
-}
-
-/* The outlined Name field (102:500) — a bordered frame stacking the label over the input value. The
-   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
-   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal —
-   the .edit-workspace__field token-mapping precedent. */
 .edit-host__field {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-outline);
-  border-radius: var(--radius-xs);
-}
-
-/* The field label (102:501) is M3 label-medium (12px); the theme has no label-medium token, so map to
-   the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
-.edit-host__label {
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
-}
-
-/* The input value (102:502) — body-large, on-surface. Reset to a borderless field so the frame's border
-   is the only chrome; the label above supplies the field's meaning. */
-.edit-host__input {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--color-on-surface);
-  font-family: var(--font-sans);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
-}
-
-/* #1300 — THE IDENTITY BLOCK: which machine this row is, under the field that renames it. The host's
-   counterpart to .edit-workspace__path, and one wrapper element rather than two loose lines so the panel's
-   16px column gap falls between the field and the block while the pair sits at a tighter 8px inside it.
-
-   NO `min-width: 0` is needed on anything here, which is worth stating because the reflex says otherwise:
-   the flex `min-width: auto` floor is MAIN-axis only, this is a flex COLUMN, so its children's WIDTH is
-   the cross axis and takes the panel's own bounded width. The <p> blocks then wrap inside it normally. */
-.edit-host__details {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
 }
 
-/* One captioned line, on .edit-workspace__path's recipe — muted body-small, and WRAPPING rather than
-   ellipsizing, which is the whole point: a value the user opened the dialog to read must be readable
-   whole, and a relay URL cut off at the panel's edge answers nothing. `anywhere` rather than `break-word`
-   so a URL or an id carrying no separator near the wrap point breaks too, instead of pushing the panel
-   wider than its max-width. Vertical growth is bounded by the panel's own scroll, above.
+.edit-host__label,
+.edit-host__detail-label {
+  color: var(--color-on-primary-container);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight-emphasized);
+}
 
-   margin: 0 resets the <p> default; the block's own 8px gap owns the spacing between the two lines. */
+.edit-host__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+.edit-host__input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.edit-host__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .edit-host__detail {
+  display: flex;
+  align-items: baseline;
+  gap: calc((var(--space-2) + var(--space-3)) / 2);
   margin: 0;
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
+}
+
+.edit-host__detail-label {
+  flex-shrink: 0;
+}
+
+/* Long unbroken identities stay whole and wrap within the value column. */
+.edit-host__detail-value {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-/* The caption over each value — the .edit-host__label treatment one element up, which is what lets it
-   read as a caption rather than as part of the value. `display: block` is load-bearing: it is what puts
-   the value on its own line under the caption in ordinary inline flow, with no second nesting level and
-   no value span. Same label-small gap-map as .edit-host__label (M3 label-medium is 12px; the theme's
-   nearest token is 11px). */
-.edit-host__detail-label {
-  display: block;
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
-}
-
-/* The failure line (AC3) — spec-added, not in the Figma, on .save-as-channel__error's recipe. It renders
-   only when the write failed, so the panel's own column gap owns its spacing and margin: 0 resets the <p>
-   default. The text is a client-owned constant; nothing daemon- or main-derived reaches it. */
 .edit-host__error {
   margin: 0;
   color: var(--color-error);
@@ -2446,47 +2368,6 @@
   line-height: var(--text-body-medium-line);
   letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-medium-weight);
-}
-
-/* The action row (the Rename dialog's 19:19) — Cancel + Save both right-aligned (the node's justify-end).
-   4px gap = --space-1. It leaves room for a third action without a rebuild (#1061's unpair, if it lands
-   here), which is why the row is a flex container rather than the two buttons floated. */
-.edit-host__actions {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  justify-content: flex-end;
-}
-
-/* The two text-button actions — the M3 dialog text-button treatment (pill, transparent fill,
-   --color-primary label, label-large), mirroring edit-workspace__save. */
-.edit-host__cancel,
-.edit-host__save {
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.edit-host__cancel:focus-visible,
-.edit-host__save:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-/* Save disabled while a write is in flight or the trimmed name is over MAX_HOST_LABEL_LENGTH (AC3) — and
-   deliberately NOT while it is blank, which is the departure from .edit-workspace__save: a blank name is a
-   valid answer here and means "no label". The M3 38% disabled emphasis (opacity, not a color literal — the
-   #218 de-emphasis precedent) and a non-interactive cursor. */
-.edit-host__save:disabled {
-  opacity: 0.38;
-  cursor: default;
 }
 
 /* #1308 — the ADD WORKSPACE dialog: what the HOST row's hover plus opens. The Rename dialog's chrome

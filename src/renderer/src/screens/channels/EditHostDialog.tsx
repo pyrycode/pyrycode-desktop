@@ -1,66 +1,14 @@
 import { MAX_HOST_LABEL_LENGTH } from '@shared/ipc/pairing'
 import type { HostLabelResult } from '@shared/ipc/hostLabel'
+import { Modal } from '../../components/Modal'
 import { mapHostLabel } from '../../store/hostLabelLoader'
 import type { HostLabelValue } from '../../store/hostLabelStore'
 import type { ServerInfoValue } from '../../store/serverInfoStore'
 
-// #1299: the Edit host dialog — what the host row's hover pen opens, and the pen's FIRST caller. `HostRow`
-// has drawn that pen behind an optional `onEditHost` since #1185 and `channels.css` has carried its
-// geometry and the `:has()` dot-swap guard just as long, but nothing passed the handler, so until this
-// ticket the pen was not drawn in the running app at all.
-//
-// A near-clone of `EditWorkspaceDialogView` (#1180), itself a clone of the Rename dialog (#360): the same
-// overlay / scrim / panel chrome and Name field, differing in the title ("Edit host"), the absence of the
-// path line (the server id and relay URL are #1300's), and a round-trip status the sibling has no use for.
-//
-// No Figma node draws it. Verified 2026-09-08 and already recorded in `EditWorkspaceDialog.tsx`'s header:
-// the Desktop page's Dialogs section holds Rename (102:498), Save as Channel, Create Folder and Paste Code
-// only, and the ticket pins this dialog's chrome to the Rename one's. So the markup below is
-// `EditWorkspaceDialogView`'s, which already mirrors that node declaration for declaration, minus its one
-// added element.
-//
-// ⭐ THE WRITE REACHES NO DAEMON. `window.pyry.setHostLabelFor` (#1186) is a keyed IPC write to the
-// background process's at-rest store; `sendCommand` is not a parameter of anything in this module and no
-// wire type, command or bridge method is added. That is why this dialog awaits a PROMISE where
-// `requestRenameWorkspace` fires and forgets: there is no correlated daemon reply to wait for, only main's
-// own answer, and that answer describes the label as it is held AFTER the write.
-//
-// TWO exports, both pure and unit-testable without a DOM: the view (props in, markup out) and the write
-// helper (injected transport, no `window` dereference). They live TOGETHER here, the sibling's ruling for
-// the same reason — this verb has exactly one sender and no shipped twin to sit beside. The open → write
-// wiring lives in the ChannelList container (`window.pyry` dereferenced only at interaction time).
-//
-// NO Escape handler and no scrim `onClick`, matching `RenameConversationDialogView` and
-// `EditWorkspaceDialogView` exactly — the ticket pins this dialog's close behaviour to the Rename one's,
-// and today that is Cancel alone. Matching therefore means adding NOTHING, which also keeps a sixth
-// unconditional `document` listener off a window that already has several.
-//
-// SINKS. The label is untrusted text off disk, and it reaches exactly one place here: the controlled
-// input's `value`, which React auto-escapes, so `<` and `>` never open a tag. It is the field's own content
-// rather than metadata about it, and it is the sink `EditWorkspaceDialogView` and
-// `RenameConversationDialogView` already ship for exactly this. `HostRow`'s four declines are re-derived
-// rather than inherited and hold here in full — no `title`, no `aria-label`, no id / key / lookup path
-// built from it, no class-name interpolation, no log line.
-//
-// #1300 ADDS THE IDENTITY BLOCK — the row's own server id and relay URL under the Name field, which is
-// what makes this a place to CHECK a host rather than only rename one. Both are SEMI-TRUSTED: they are
-// QR/paste-payload fields held verbatim (`pairedServerStore`'s own header calls the `server` id untrusted
-// input), reaching the renderer through the shipped `serverInfo` handler, which crosses exactly those two
-// non-secret keys per entry and no other record field. So the decline list above extends over them
-// UNCHANGED: each reaches one auto-escaped React child and nothing else.
-//
-// ⭐ THE RELAY URL IS DISPLAYED, NEVER DIALLED. No `new URL`, no `<a href>`, no `window.open`. An anchor
-// is the obvious reflex here and it would turn a semi-trusted string into a navigation sink; a bare
-// escaped child does not. What makes the value safe to put on screen at all is a check one layer down
-// rather than an assumption: `parsePairingPayload` rejects `relay-has-credentials` for any URL carrying a
-// `username` or `password`, AFTER the policy verdict and therefore on every accepted host, the dev
-// loopback included — so no stored relay can carry an embedded credential for this line to print.
-
-// A stable id tying the dialog's aria-labelledby to its title element (the EDIT_WORKSPACE_TITLE_ID idiom).
-// A single FIXED id, never one derived from the server id: only one Edit host dialog is open at a time
-// (the modal overlay guarantees it), and deriving the id — the obvious way to support two — would
-// interpolate untrusted text into an `id` and an `aria-labelledby` attribute.
-const EDIT_HOST_TITLE_ID = 'edit-host-title'
+// Modal owns the panel chrome; ChannelList owns the selected host, field and save state.
+// Host identity and relay remain escaped display text; neither becomes navigation or metadata.
+// The stored name reaches only the controlled input value. No host content is logged.
+// Preserve the existing focus policy: no autofocus, Escape listener or backdrop dismissal.
 
 /**
  * Client-owned failure copy (AC3) — apostrophe-free by design: renderToStaticMarkup escapes ' → &#x27;
@@ -71,15 +19,8 @@ const EDIT_HOST_TITLE_ID = 'edit-host-title'
  */
 const EDIT_HOST_ERROR_COPY = 'Could not save that name'
 
-/**
- * The two captions on the identity block (#1300). `EditWorkspaceDialogView` renders its ONE path line
- * bare and says why — one line needs no caption. Two do: a relay URL announces itself with its scheme,
- * an opaque server id does not, and a reader who cannot name the second value has not been told which
- * machine this is. Client-owned copy, apostrophe-free by design (renderToStaticMarkup escapes ' →
- * &#x27;, the standing desktop lesson).
- */
-const EDIT_HOST_SERVER_ID_CAPTION = 'Server ID'
-const EDIT_HOST_RELAY_CAPTION = 'Relay'
+const EDIT_HOST_SERVER_ID_CAPTION = 'Server identity:'
+const EDIT_HOST_RELAY_CAPTION = 'Relay address:'
 
 /**
  * What a caption's value slot reads when the container's lookup MISSED — a reseed or an unpair can empty
@@ -156,28 +97,30 @@ export function EditHostDialogView({
   const refused = busy || name.trim().length > MAX_HOST_LABEL_LENGTH
   return (
     <div className="edit-host-overlay">
-      {/* A dedicated scrim element (not the overlay's own background) so the opaque panel sibling is
-          never dimmed and no bare color literal is needed — the edit-workspace-overlay__scrim idiom. */}
       <div className="edit-host-overlay__scrim" aria-hidden="true" />
-      <div
-        className="edit-host"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={EDIT_HOST_TITLE_ID}
+      <Modal
+        title="Edit host"
+        width={646}
+        cancelAction={{ label: 'Cancel', onClick: onCancel }}
+        confirmAction={{ label: 'OK', onClick: onSave, disabled: refused }}
+        onClose={onCancel}
       >
-        <h2 id={EDIT_HOST_TITLE_ID} className="edit-host__title">
-          Edit host
-        </h2>
-        {/* The Figma outlined Name field (the Rename dialog's 102:500), opening SEEDED — this is an edit,
-            so the machine's current name is what the user is changing, and it opens EMPTY when nothing is
-            stored. The wrapping <label> gives the input its accessible name from the "Name" text, so no
-            id/htmlFor pair is needed.
-
-            The seeded value is untrusted text off disk and this is its one and only sink here: a
-            controlled input's `value`, which React auto-escapes. Frozen while the write is in flight, so
-            the field cannot drift from the value the outstanding write carries. */}
+        <div className="edit-host__details">
+          <p className="edit-host__detail">
+            <span className="edit-host__detail-label">{EDIT_HOST_SERVER_ID_CAPTION}</span>
+            <span className="edit-host__detail-value">
+              {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.serverId}
+            </span>
+          </p>
+          <p className="edit-host__detail">
+            <span className="edit-host__detail-label">{EDIT_HOST_RELAY_CAPTION}</span>
+            <span className="edit-host__detail-value">
+              {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.relayUrl}
+            </span>
+          </p>
+        </div>
         <label className="edit-host__field">
-          <span className="edit-host__label">Name</span>
+          <span className="edit-host__label">Host name:</span>
           <input
             type="text"
             className="edit-host__input"
@@ -186,53 +129,8 @@ export function EditHostDialogView({
             disabled={busy}
           />
         </label>
-        {/* #1300: the identity block — which machine this row actually is, under the field that renames
-            it. It is the host's counterpart to `.edit-workspace__path`, and it renders in EVERY status:
-            which machine the dialog names does not depend on whether a write is in flight.
-
-            ONE wrapper element rather than two loose <p>s, so the panel's 16px column gap falls between
-            the field and the block while the two lines sit at the tighter gap inside it.
-
-            Each value is a DIRECT TEXT CHILD of its <p>, immediately after a block-level caption span —
-            the Name field's own label-over-value shape, one element up, which is what lets the caption
-            read as a caption without a second nesting level or a value span to locate it by. Ordinary
-            inline flow puts the value on its own line; `overflow-wrap: anywhere` on the <p> is what
-            breaks a URL carrying no space, and the panel's max-height + overflow-y bounds the height
-            neither value has a length limit on.
-
-            The sink list in this module's header holds over both: an auto-escaped child each, and NO
-            attribute of the block, its lines or its captions derives from either — no `title`, no
-            `aria-label`, no id, no key, no class-name interpolation, no href and no log line. */}
-        <div className="edit-host__details">
-          <p className="edit-host__detail">
-            <span className="edit-host__detail-label">{EDIT_HOST_SERVER_ID_CAPTION}</span>
-            {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.serverId}
-          </p>
-          <p className="edit-host__detail">
-            <span className="edit-host__detail-label">{EDIT_HOST_RELAY_CAPTION}</span>
-            {server === null ? EDIT_HOST_DETAIL_UNAVAILABLE : server.relayUrl}
-          </p>
-        </div>
-        {/* The failure line (AC3) — spec-added, not in the Figma, the `save-as-channel__error` idiom.
-            Rendered ONLY when the write failed; `idle` and `saving` render none. */}
         {status === 'failed' && <p className="edit-host__error">{EDIT_HOST_ERROR_COPY}</p>}
-        {/* The action row (the Rename dialog's 19:19): Cancel + Save both right-aligned (justify-end in
-            the node). It leaves room for a third action without a rebuild — #1061 recorded the host row as
-            unpair's likely home, and it returns in its own ticket if it is wanted here. */}
-        <div className="edit-host__actions">
-          <button type="button" className="edit-host__cancel" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="edit-host__save"
-            onClick={onSave}
-            disabled={refused}
-          >
-            Save
-          </button>
-        </div>
-      </div>
+      </Modal>
     </div>
   )
 }

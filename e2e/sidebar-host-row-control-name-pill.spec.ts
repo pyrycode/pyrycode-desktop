@@ -322,5 +322,5 @@ test('the host row’s pen and plus name themselves in a pill, inside the scroll
   // whole control while showing (a click hovers first): `pointer-events: none` on the shared block is the
   // only reason this click lands at all. ---
   await pen.click()
-  await expect(page.locator('.edit-host')).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(page.getByRole('dialog', { name: 'Edit host' })).toBeVisible({ timeout: TIMEOUT_MS })
 })

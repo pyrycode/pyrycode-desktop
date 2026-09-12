@@ -85,3 +85,21 @@ footer order and held labels with ownership absent as well. This changes only
 test prerequisites and coverage; the host gate and security design remain unchanged.
 Verify `ConversationScreen.test.tsx` and the build. The existing interaction proof
 is unchanged; full regression gates remain with the dispatcher.
+
+### 2026-09-13 — verifier authentication inspection rework
+
+The second verifier finding identifies an intermittent Electron execution-context
+loss in the onboarding daemon-absence test's `control` read. Ten focused repetitions
+reproduced it once in the final save-count inspection after Cancel; launch-fate
+reported the app running at outcome. This establishes a test inspection failure,
+not causation by the session-settings implementation.
+
+In `e2e/pairing-authentication.spec.ts`, extract the neighboring onboarding test's
+existing context-loss handling into `readAuthentication`. Both count inspections
+in the affected test poll this read with a five-second deadline. Only the exact
+execution-context error yields a pending result; other errors propagate, and
+authentication/event actions continue using `control` without retry. Persistent
+context loss still fails the assertion. No production or security contract changes.
+
+Verify the pairing-authentication spec, repeat the affected scenario ten times,
+and run the build. The dispatcher owns full regression verification.

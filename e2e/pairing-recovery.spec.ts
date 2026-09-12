@@ -4,6 +4,8 @@ import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW,
 import { launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
 import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import { PAIRING_CHANNEL } from '../src/shared/ipc/pairing'
 
 const NOTICE = 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
 const ts = '2026-09-12T00:00:00Z'
@@ -159,3 +161,112 @@ test('healthy host remains usable; last-host failure opens once and re-arms afte
   await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Repair host', exact: true })).toHaveCount(4)
 })
+
+for (const pendingState of ['connecting', 'unreported'] as const) {
+  test(`thread navigation while a host is ${pendingState} preserves the first automatic recovery`, async ({
+    launchPairedApp
+  }) => {
+    const { app, page, servers: [a, b] } = await launchPairedApp({}, {
+      hostLabel: 'Alpha', secondServer: { buildReply: () => seedConversationsFrame(SECOND_SEEDED_ROW) }
+    })
+    // Withhold B's status replay from the fresh renderer while retaining both real saved hosts.
+    await app.evaluate(({ BrowserWindow, ipcMain }, { channel, serverId }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents
+      const send = contents.send.bind(contents)
+      contents.send = (name, ...args) => {
+        if (name === channel && args[0]?.serverId === serverId &&
+          ['connecting', 'connected', 'disconnected', 'failed'].includes(args[0]?.type)) return
+        send(name, ...args)
+      }
+      ipcMain.once('test:restore-status-delivery', () => { contents.send = send })
+    }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId })
+    await page.reload()
+    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+    await expect(page.getByRole('img', { name: 'Pyrycode Offline', exact: true })).toHaveCount(2)
+    a.daemon.pushFrame(seedConversationsFrame())
+    await expect(page.locator('.channel-list__row-open')).toHaveCount(1)
+    await app.evaluate(({ ipcMain, BrowserWindow }, { channel, serverId, pendingState }) => {
+      ipcMain.emit('test:restore-status-delivery')
+      if (pendingState === 'connecting') {
+        BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'connecting', serverId })
+      }
+    }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId, pendingState })
+    if (pendingState === 'connecting') {
+      await expect(page.getByRole('img', { name: 'Pyrycode Connecting', exact: true })).toHaveCount(2)
+    }
+    a.daemon.pushFrame(rejection())
+    await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
+    const recovery = page.getByRole('region', { name: 'Repair pairing', exact: true })
+    await expect(recovery).toHaveCount(0)
+    await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
+    await expect(page.locator('.conversation')).toBeVisible()
+    // B settles without ever reporting a successful connection to this renderer.
+    await app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'disconnected', serverId })
+    }, { channel: DAEMON_EVENT_CHANNEL, serverId: b.serverId })
+    await expect(page.getByText('Repair pairing: Alpha', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(page.locator('.conversation')).toBeVisible()
+    a.daemon.pushFrame(rejection())
+    a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Deferred failure barrier' }))
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Deferred failure barrier' })).toBeVisible()
+    await expect(recovery).toHaveCount(0)
+  })
+}
+
+for (const destination of ['healthy thread', 'other recovery'] as const) {
+  test(`a delayed confirmation cannot replace a newer ${destination}`, async ({ launchPairedApp }) => {
+    const { app, page, servers: [a, b] } = await launchPairedApp({}, {
+      hostLabel: 'Alpha', secondServer: { buildReply: () => seedConversationsFrame(SECOND_SEEDED_ROW) }
+    })
+    a.daemon.pushFrame(rejection())
+    await expect(page.getByRole('button', { name: 'Repair host', exact: true })).toHaveCount(2)
+    await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+    await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(a))
+    await page.getByRole('button', { name: 'Pair', exact: true }).click()
+    // Wrap Electron's real handler in the test process only: save and reconnect still run,
+    // but hold the confirmation reply so navigation can interleave deterministically.
+    await app.evaluate(({ ipcMain }, channel) => {
+      const handlers = (ipcMain as typeof ipcMain & {
+        _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, request: unknown) => Promise<unknown>>
+      })._invokeHandlers
+      const original = handlers.get(channel)
+      if (!original) throw new Error('Pairing handler missing')
+      const released = new Promise<void>(resolve => ipcMain.once('test:release-confirmation', () => resolve()))
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async (event, request) => {
+        const result = await original(event, request)
+        if (request?.type === 'confirm') await released
+        return result
+      })
+    }, PAIRING_CHANNEL)
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Confirming…', exact: true })).toBeDisabled()
+    if (destination === 'healthy thread') {
+      await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
+      await page.getByPlaceholder('Message…').fill('Keep this newer draft')
+    } else {
+      b.daemon.pushFrame(rejection())
+      const repairB = page.locator('.channel-list__host').filter({
+        has: page.locator('.channel-list__host-label').filter({ hasText: /^Server$/ })
+      }).getByRole('button', { name: 'Repair host', exact: true }).first()
+      await repairB.click()
+      await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()
+      await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill('Newer input')
+    }
+    // A's authorized save finishes even after leaving its flow. Its order is refreshed only
+    // when the held confirmation reaches onPairServerPaired, providing a completion barrier.
+    await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(
+      destination === 'healthy thread' ? 4 : 2)
+    await expect(page.locator('.channel-list__host-label').first()).toHaveText('Alpha')
+    await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-confirmation') })
+    await expect(page.locator('.channel-list__host-label').first()).toHaveText('Server')
+    if (destination === 'healthy thread') {
+      await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep this newer draft')
+      await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+    } else {
+      await expect(page.getByText('Repair pairing: Server', { exact: true })).toBeVisible()
+      await expect(page.getByRole('textbox', { name: 'Pairing code', exact: true })).toHaveValue('Newer input')
+    }
+  })
+}

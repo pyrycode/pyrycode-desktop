@@ -461,16 +461,25 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
   const [recoveryServerId, setRecoveryServerId] = useState<string | null>(null)
   const recoveryConsumed = useRef(false)
+  const pairingGeneration = useRef(0)
+  const activePairingGeneration = pairingGeneration.current
+  useEffect(() => () => { pairingGeneration.current += 1 }, [])
   const servers = useServerInfoStore(selectServers)
   const statuses = useSessionStore(s => s.statuses)
   const recoveryLabel = useHostLabelStore(selectHostLabelFor(recoveryServerId))
   const recoveryStatus = recoveryServerId === null ? undefined : statuses.get(recoveryServerId)
   const leaveRecovery = (): void => {
-    recoveryConsumed.current = !servers.some(server => statuses.get(server.serverId)?.type === 'connected')
+    // Ordinary navigation must not dismiss a recovery decision still waiting on other hosts.
+    if (recoveryServerId !== null) {
+      recoveryConsumed.current = !servers.some(server => statuses.get(server.serverId)?.type === 'connected')
+    }
+    pairingGeneration.current += 1
     setRecoveryServerId(null)
   }
   const openRecovery = (serverId: string): void => {
     if (!servers.some(server => server.serverId === serverId)) return
+    if (route === 'pairServer' && recoveryServerId === serverId) return
+    pairingGeneration.current += 1
     recoveryConsumed.current = true
     if (route !== 'pairServer') setPairServerReturn(route)
     setRecoveryServerId(serverId)
@@ -484,8 +493,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     }
     const target = automaticRecoveryTarget(servers, statuses)
     if (target === null || recoveryConsumed.current) return
-    recoveryConsumed.current = true
     if (route !== 'list' && route !== 'thread') return
+    recoveryConsumed.current = true
+    pairingGeneration.current += 1
     setPairServerReturn(route)
     setRecoveryServerId(target)
     dispatch({ type: 'openPairServer' })
@@ -514,7 +524,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
   useConversationDeletedExit((conversationId) =>
     exitActiveConversation(
-      { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+      { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
       conversationId
     )
   )
@@ -530,7 +540,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     () => exitConversationDeps.getActiveConversation()?.id ?? null,
     (conversationId) =>
       exitActiveConversation(
-        { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+        { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
         conversationId
       )
   )
@@ -637,6 +647,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onPairServerPaired={() => {
         // Refresh saved order after upsert; the loader contains its own failure mapping.
         void loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers)
+        // Saving is authorized across navigation; only the initiating flow may change the pane.
+        if (pairingGeneration.current !== activePairingGeneration) return
+        pairingGeneration.current += 1
         setRecoveryServerId(null)
         applyPairingChange(pairingChangeDeps, 'pairedAnotherServer')
       }}

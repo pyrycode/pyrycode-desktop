@@ -850,10 +850,8 @@ describe('ChannelListView', () => {
       })
     })
 
-    describe('the pen and the plus are DRAWN on every host row (#1299, #1308)', () => {
-      // #1185 shipped `HostRow`'s two optional handlers with no caller, so the running app drew neither
-      // control; #1299 was the pen's first caller and #1308 is the plus's, which is what the assertions
-      // below now read back at the view level. BOTH halves of the swap are finally wired.
+    describe('host controls before authenticated status arrives', () => {
+      // Static rendering reads the initial missing session slots; the mounted tier proves connection.
       const EDIT_NAME_MARKER = 'aria-label="Edit host"'
       const ADD_NAME_MARKER = 'aria-label="Add workspace"'
       const HOST_ROW_MARKER = 'class="channel-list__host"'
@@ -874,20 +872,17 @@ describe('ChannelListView', () => {
         expect(occurrences(markup, EDIT_NAME_MARKER)).toBe(4)
       })
 
-      it('draws exactly one plus per host row, in both trees (#1308 AC1)', () => {
+      it('withholds the plus while the host has no authenticated status', () => {
         const markup = render([row({ id: 'a' })])
         const rows = occurrences(markup, HOST_ROW_MARKER)
         expect(rows).toBe(2)
-        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(rows)
+        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(0)
       })
 
-      it('draws one plus per row for EVERY paired machine, rows or not (#1308 AC1)', () => {
-        // The second machine holds NO conversation here, which is AC1's "a paired host that has no
-        // conversations at all": `groupByServer` buckets every paired id whether or not it holds rows,
-        // so that machine's two host rows are drawn and each carries the plus that starts its first chat.
+      it('withholds the plus for every host whose authenticated status is missing', () => {
         const markup = render([row({ id: 'a' })], null, ['server-a', 'server-b'])
         expect(occurrences(markup, HOST_ROW_MARKER)).toBe(4)
-        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(4)
+        expect(occurrences(markup, ADD_NAME_MARKER)).toBe(0)
       })
     })
 

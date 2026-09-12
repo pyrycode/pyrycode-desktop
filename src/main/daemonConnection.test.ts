@@ -4185,11 +4185,63 @@ describe('createDaemonConnection — createConversation (create_conversation req
     return ctx
   }
 
-  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
-    const { connection, drivers } = build()
+  it('refuses a create before start with host-stamped local feedback', () => {
+    const { connection, drivers, sink } = build({ serverId: 'selected-host' })
 
     expect(() => connection.createConversation(ALL_NULL)).not.toThrow()
     expect(drivers).toHaveLength(0)
+    expect(stampedEvents(sink)).toEqual([{ type: 'conversationCreateRejected', serverId: 'selected-host' }])
+  })
+
+  it('requires authentication, including after relay loss and before reauthentication', async () => {
+    const { connection, drivers, sink } = build()
+    connection.start()
+    await tick()
+    connection.createConversation(ALL_NULL)
+    expect(drivers[0].sent).toHaveLength(0)
+    expect(emitted(sink).at(-1)).toEqual({ type: 'conversationCreateRejected' })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    expect(emitted(sink)).toContainEqual({ type: 'disconnected' })
+    drivers[0].emit({ type: 'relay-link-up' })
+    connection.createConversation(ALL_NULL)
+    expect(drivers[0].sent).toHaveLength(0)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.createConversation(ALL_NULL)
+    expect(drivers[0].sent).toHaveLength(1)
+    connection.stop()
+    connection.createConversation(ALL_NULL)
+    expect(drivers[0].sent).toHaveLength(1)
+    expect(emitted(sink).at(-1)).toEqual({ type: 'conversationCreateRejected' })
+  })
+
+  it('preserves an existing authentication failure across a later relay drop', async () => {
+    const { connection, drivers, sink } = await connected()
+    drivers[0].emit({ type: 'error', reason: 'handshake-read-failed' })
+    const before = emitted(sink).length
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'relayLinkChanged', status: 'offline' }])
+    connection.createConversation(ALL_NULL)
+    expect(drivers[0].sent).toHaveLength(0)
+    expect(emitted(sink).at(-1)).toEqual({ type: 'conversationCreateRejected' })
+  })
+
+  it.each(['build', 'send'] as const)('reports a local %s failure without content or phantom pending state', async (failure) => {
+    const logs: DiagnosticEvent[] = []
+    const { connection, drivers, sink } = build({
+      serverId: 'selected-host', throwOnSend: failure === 'send',
+      diagnosticLog: { event: (event) => { logs.push(event) } }
+    })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.createConversation({ ...ALL_NULL, cwd: failure === 'build' ? '/' + 'private-folder'.repeat(100_000) : '/private-folder' })
+    const rejected = () => stampedEvents(sink).filter((e) => e.type === 'conversationCreateRejected')
+    expect(rejected()).toEqual([{ type: 'conversationCreateRejected', serverId: 'selected-host' }])
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(2) })
+    expect(rejected()).toHaveLength(1)
+    expect(logs).toContainEqual({ event: 'conversation-create-failed', code: 'build-or-send-failed' })
+    expect(JSON.stringify([stampedEvents(sink), logs])).not.toContain('private-folder')
   })
 
   it('after handshake-complete, forwards one create_conversation envelope with id 2, ts, and the three explicit nulls', async () => {
@@ -4455,7 +4507,7 @@ describe('createDaemonConnection — create_conversation rejection correlation (
     expect(emitted(ctx.sink).slice(before)).toEqual([])
   })
 
-  it('a create whose send throws records no pending entry — a later error emits no rejection (AC1)', async () => {
+  it('a create whose send throws rejects locally once and records no pending entry', async () => {
     const { connection, sink, drivers } = build({ throwOnSend: true })
     connection.start()
     await tick()
@@ -4466,7 +4518,7 @@ describe('createDaemonConnection — create_conversation rejection correlation (
     connection.createConversation(PAYLOAD)
     drivers[0].emit({ type: 'message', plaintext: errorPlaintext(2) })
 
-    expect(createRejections(sink)).toEqual([])
+    expect(createRejections(sink)).toEqual([{ type: 'conversationCreateRejected' }])
   })
 })
 

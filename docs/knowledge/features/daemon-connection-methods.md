@@ -104,8 +104,10 @@ fresh `conversationsReceived` literal reusing the decoded array **verbatim** —
 
 **`createConversation(payload)` was added in [#241](../codebase/241.md)** — the write-side twin of
 `requestConversations`, asking the daemon to create a fresh conversation (all three fields nullable,
-`null` = "let the daemon choose"). Also the **`send` twin, not a consumer-failing twin** — inert
-no-op when `driver === null`, shares the one `nextEnvelopeId` counter, never throws (parity #490).
+`null` = "let the daemon choose"). Since #1367 it requires an authenticated session and
+emits host-stamped, content-free `conversationCreateRejected` on an unavailable connection
+or a local build/send failure. A driver can survive relay loss; its existence alone cannot
+admit creation. It shares `nextEnvelopeId` and never throws transport/build errors to callers.
 Unlike `requestSnapshot`/`requestConversations`, it builds a **fresh literal** naming exactly the
 three modeled fields (`{ is_promoted: payload.is_promoted, name: payload.name, cwd: payload.cwd }`)
 before calling `buildCreateConversation` — never a spread of the caller's `payload` — the
@@ -114,9 +116,9 @@ structural-minimum `isCreateConversationPayload` guard let through (the [#236](.
 fresh-literal posture, reused here for the first `send`-family method carrying more than one field).
 The reply is routed through the same `case 'message'` seam as a new `case 'conversation-created':`,
 emitting `conversationCreated` as a verbatim passthrough — nothing to drop, like `conversations`. Its
-caller is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242), blocked
-on this ticket. See the [conversation create](conversation-create.md) feature doc for the full
-contract.
+callers include the [new-discussion FAB](new-discussion-fab.md), workspace-row create actions
+and [Add workspace dialog](add-workspace-dialog.md). See [Conversation create — Error
+handling](conversation-create.md#error-handling) for local feedback and the dialog's bounded wait.
 
 **`setSessionSettings(payload, changeId)` was added in [#263](../codebase/263.md)** (send) and widened
 with `changeId` in [#261](../codebase/261.md) (correlation) — the outbound send half of a per-session

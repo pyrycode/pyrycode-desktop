@@ -328,12 +328,10 @@ export interface DaemonConnection {
    */
   requestRecentWorkspaces(): void
   /**
-   * Encrypt a payload-carrying `create_conversation` control envelope onto the live session — asks the
-   * daemon to create a fresh conversation (all three fields nullable; `null` = let the daemon choose).
-   * The `send` TWIN, not `requestDebugBundle`: a create request has no consumer to fail, so it is an
-   * inert no-op when not connected (`driver === null` → return). The reply arrives asynchronously as one
-   * `conversationCreated` DaemonEvent, consumed by the render slice (#242), not the session store. Its
-   * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
+   * Request a fresh conversation on an authenticated session. Unavailable connections and local
+   * build/send failures emit a content-free conversationCreateRejected through the host-bound sink.
+   * The reply arrives asynchronously as conversationCreated or a correlated rejection. Never throws
+   * transport/build errors to the caller; daemon folder validation remains unchanged.
    */
   createConversation(payload: CreateConversationPayload): void
   /**
@@ -712,6 +710,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let started = false
   let stopped = false
   let driver: NoiseRelayDriver | null = null
+  let authenticated = false
   // Monotonic connection fence, mirroring the driver's own generation idiom
   // (noiseRelayDriver.ts:100-118) one layer up. `dial()` bumps it before tearing down the old
   // driver, so a superseded driver's events — including the terminal{1000,'stopped'} that stopping
@@ -907,6 +906,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let pairingRejected = false
 
   function emitFailed(code: string, message = messageFor(code)): void {
+    authenticated = false
     if (pairingRejected) {
       code = 'pairing-rejected'
       message = messageFor(code)
@@ -1042,6 +1042,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         pairingRejected = false
+        authenticated = true
         emitDaemonEvent(sink, { type: 'connected', ack })
         // The load-bearing "Noise handshake finished" signal — event name only, never the ack bytes.
         // Distinct from #127's relay-open (the WS socket opening, which precedes the handshake).
@@ -1132,11 +1133,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               // one store can hold it. The emitted event reads NOTHING from the untrusted error payload — it
               // is nullary by construction; the numeric inReplyTo stays main-internal, never placed on the
               // event, and the daemon's refusal message is not echoed even in part (it names no path of its
-              // own to surface). No diagnostic log, matching every member of this tier: the only values one
-              // could carry here are the wire routing id and daemon-authored text, and neither may reach a
-              // sink.
+              // own to surface). Diagnostics name only the static rejection classification.
               if (pendingCreateConversations.has(inReplyTo)) {
                 pendingCreateConversations.delete(inReplyTo)
+                deps.diagnosticLog?.event({ event: 'conversation-create-failed', code: 'server-rejected' })
                 emitDaemonEvent(sink, { type: 'conversationCreateRejected' })
                 return
               }
@@ -2002,6 +2002,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'conversation-created':
+            deps.diagnosticLog?.event({ event: 'conversation-create-confirmed' })
             // The conversation-created data path (#241). Verbatim passthrough (the `conversations`
             // precedent): parseConversationCreatedPayload already returned a fresh 5-field object with
             // nothing to drop (no secret field), so the reference passes through — no re-construction.
@@ -2392,6 +2393,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        const wasAuthenticated = authenticated
+        authenticated = false
         // A retryable close is stream-fatal too (#505): the supervisor auto-re-dials into a fresh
         // session the daemon-side request does not survive. Fail first, then emit — the terminal
         // arm's order. Above the classification below, so the emitted bundle failure is identical
@@ -2406,6 +2409,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // category crosses IPC (AC3, content-free). No log call: #127 already logs the close code
         // content-free at relayConnection.ts, and this arm carries no secret.
         const status = event.code === RELAY_NO_DAEMON_CLOSE_CODE ? 'daemon-absent' : 'offline'
+        // Preserve an existing authentication error when its socket subsequently drops.
+        if (wasAuthenticated) emitDaemonEvent(sink, { type: 'disconnected' })
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status })
         return
       }
@@ -2718,10 +2723,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function createConversation(payload: CreateConversationPayload): void {
-    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
-    // mid-bootstrap, or bootstrap-failed). A create request has no consumer to fail; a request sent
-    // while disconnected simply produces no reply.
-    if (driver === null) return
+    // A driver can exist before authentication or after its socket has dropped.
+    if (driver === null || !authenticated || stopped) {
+      deps.diagnosticLog?.event({ event: 'conversation-create-failed', code: 'unavailable' })
+      emitDaemonEvent(sink, { type: 'conversationCreateRejected' })
+      return
+    }
     // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
     // envelope id — the value the daemon echoes as in_reply_to on the rejecting error (#1307). The
     // createWorkspaceFolder shape; this function named no id before it had a rejection to correlate.
@@ -2748,10 +2755,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // outbound envelope re-mints — one that would swallow THAT envelope's reject. Removed by the
       // correlated error in onDriverEvent, or abandoned on the next dial().
       pendingCreateConversations.add(envelopeId)
+      deps.diagnosticLog?.event({ event: 'conversation-create-sent' })
     } catch {
-      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
-      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
-      // no event (classify-don't-forward, inherited #62).
+      // Drop the caught object: it may contain folder text or transport secrets.
+      deps.diagnosticLog?.event({ event: 'conversation-create-failed', code: 'build-or-send-failed' })
+      emitDaemonEvent(sink, { type: 'conversationCreateRejected' })
     }
   }
 
@@ -3467,6 +3475,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    authenticated = false
     const gen = ++generation
     // Tear down a live driver before dialing the next, so two sockets never stack and only the
     // fresh server is dialed (AC3). Its stop-terminal carries the OLD gen, so the onEvent wrapper
@@ -3551,6 +3560,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     stop(): void {
       if (stopped) return
       stopped = true
+      authenticated = false
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()

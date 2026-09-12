@@ -220,6 +220,7 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   when the trimmed name equals the folder segment rather than the row's current label — the whole of "the
   way back to the folder name is Save itself." Renderer-only, no wire/IPC change (both shipped already).
   Builder self-review PASS.
+- [Reusable modal presentation](features/modal-presentation.md) — Caller-supplied content and actions, caller-owned lifecycle, viewport constraints and grid-sizing evidence.
 - [Edit host dialog (#1299)](features/edit-host-dialog.md) —
   gave the host row's hover pen (#1185, dormant since) its first caller: a near-clone of the [Edit
   workspace dialog](features/edit-workspace-dialog.md) that renames the machine through

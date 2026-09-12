@@ -2,6 +2,9 @@ import type { ConversationSummary } from './wire/types'
 import type { ModelRefusalEvent } from './ipc/events'
 import { MAX_SERVER_ID_LENGTH } from './ipc/unpair'
 
+export const CHAT_HISTORY_CHANNEL = 'pyry:chat-history'
+export const CHAT_HISTORY_FLUSH_CHANNEL = 'pyry:chat-history-flush'
+
 /** Display records only: no running state, permissions, retry offers or attachment bodies. */
 export type DurableThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string; createdAt?: number }

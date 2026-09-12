@@ -6,14 +6,15 @@ read saved content without a connection or Noise handshake. Host identity is the
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
-The service and injected handler are available; application recording is not yet
-wired. [#1338](https://github.com/pyrycode/pyrycode-desktop/issues/1338) owns production
-registration, preload exposure and renderer projection/recording;
-[#1339](https://github.com/pyrycode/pyrycode-desktop/issues/1339) owns offline display;
-[#1340](https://github.com/pyrycode/pyrycode-desktop/issues/1340) owns reconnect and
-explicit-removal integration. Storage does not fetch history. Retention covers
-received content, including pages fetched through scrolling, independently of the
-renderer holder's ten-conversation memory limit.
+The app records received lists, live timeline content, composer echoes and loaded
+history pages automatically. [#1339](https://github.com/pyrycode/pyrycode-desktop/issues/1339)
+still owns offline display and restoration entry points, including explicit
+ownership installation before a restored slice can record further live content.
+[#1340](https://github.com/pyrycode/pyrycode-desktop/issues/1340) owns reconnect,
+scroll-trigger changes and explicit host/conversation removal integration.
+Observing, saving and flushing add no history requests; existing opening and
+scroll requests remain. Disk retention is independent of the renderer holder's
+ten-conversation memory limit.
 
 ## API
 
@@ -28,10 +29,17 @@ returns `execute(request: unknown): Promise<ChatHistoryResult>`.
 returns an injected listener `(event: unknown, request: unknown)` with the same
 result. It validates and copies the request synchronously, then checks
 `pairedServers.loadById(serverId)` for existence before accessing chat storage.
-Saved disconnected hosts are eligible; a live connection is never consulted.
+Saved hosts are eligible while disconnected or pairing-rejected; a live
+connection is never consulted.
 The store validates independently but has no pairing dependency, so saved-host
 authorization belongs to the handler. Pairing records are reduced to membership,
 never forwarded to the caller.
+
+[`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
+store for the app lifetime, sharing the existing secure store and paired-server
+store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
+on the fixed `pyry:chat-history` channel; `PyryApi` carries its type into the window.
+Reads and replacements need no handshake.
 
 Every request has `operation` and `serverId`. Additional fields are operation-specific:
 
@@ -68,6 +76,13 @@ that history has reached its beginning. Empty cursor strings are valid. Successf
 coverage stays separate from later pending or failed requests; row count alone
 does not establish coverage or the beginning of history.
 
+The writer retains the last successful coverage beside each observed timeline.
+`HistoryRequestState` alone is insufficient: `markHistoryRequested` and
+`recordHistoryFailure` replace its loaded cursor and `atStart`. A served page
+updates rows before `recordHistoryPage` publishes successful coverage; only that
+loaded state advances durable coverage. A live-only timeline stays `unknown`,
+and a successfully received empty page still establishes coverage.
+
 `DurableThreadItem` retains the display fields of every current
 [`ThreadItem`](../../../src/renderer/src/store/threadTimeline.ts) variant. In this
 table, `?` marks an optional field:
@@ -101,6 +116,49 @@ Connection state, running-turn phase, in-flight requests, pending permissions,
 recovery offers/actions and credentials are excluded. Retained reports and denial
 text are display data; they cannot restore a live permission or recovery action.
 Renderer web storage remains prohibited for conversation content.
+
+### Received-state admission and ownership
+
+[`useChatHistoryWriter`](../../../src/renderer/src/store/chatHistoryWriter.ts)
+mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives), observing
+`conversationListStore` and `conversationTimelineStore` across routes. It projects
+through `parseChatHistorySnapshot` synchronously, detaching content and host
+coordinates before scheduling any write.
+
+Preload's [receipt context](daemon-event-channel-plumbing.md#3-the-preload-subscription-srcpreloadindexts)
+exposes only the event type and main-stamped `serverId` during a daemon subscriber's
+synchronous call, restoring the previous context in `finally`. This gives store
+observers the supplying host without a second event subscription whose ordering
+could misattribute content. List recording accepts changed `byServer` arrays only
+during `conversationsReceived`, preserving received order. Timeline updates folded
+during daemon delivery use that receipt's origin, never the active host at save time.
+
+Outside daemon delivery, two local edits qualify:
+
+- An appended `userText` echo with a message id and `localSendPending`, whose
+  preceding rows retain their references and order. Its host must be the unique
+  `byServer` list claiming that conversation.
+- Removal of one previously admitted echo object with a nonempty message id,
+  matching `removeUserEcho`: surviving rows retain their references and order,
+  and history/prepend metadata is unchanged. A weak set tracks admitted row
+  identities without retaining evicted rows. Cancellation keeps the held owner
+  and successful coverage, even when it removes the only row and saves an empty
+  timeline. An append-only rule misclassifies this edit as restoration and stops
+  later recording; removing an arbitrary restored row cannot authorize a save.
+
+Timeline slices are keyed only by conversation id, so the writer pins an owner
+while each slice is held. Missing origin, conflicting list claims or a supplying
+host change refuse new replacements and preserve existing saved copies. Once
+ownership is unknown or conflicting, a later apparently valid receipt cannot
+repair it while the slice remains held; clearing/evicting the slice releases its
+observation metadata. Main independently checks saved-host membership again.
+
+Startup-empty state, activation, direct snapshot installation, list/holder clears
+and memory eviction are not deletion signals. Directly installed nonempty rows
+have no observed owner and cannot establish one by later live delivery. Restore
+snapshots through the future restoration entry point, never through live reducers.
+Failed requests and rejected pairings do not delete saved content. Received empty
+lists/pages and cancellation of an observed echo remain valid durable changes.
 
 ### Admission limits
 
@@ -148,16 +206,40 @@ malformed-record overwrite during re-pairing: chat history has no such recovery
 exception.
 
 Diagnostics contain only static lifecycle event names and operation/result codes:
-`history-storage-operation`, `history-storage-result` and `history-handler-result`.
+`history-storage-operation`, `history-storage-result`, `history-handler-result`,
+`history-writer-started`, `history-writer-result` and `history-flushed`.
 They include no requests, coordinates, message content, keys, storage paths or
 caught errors. Successful reads return the declared chat content; error replies
 contain only their static classification.
 
+Projection failures, rejected storage results and IPC exceptions stay local to
+recording; they never dispatch connection failures or disable the live chat.
+The drain remains usable for later changed content. A failed save is not an
+automatic retry loop for an unchanged snapshot.
+
 ## Storage and concurrency
 
-One main-process owner must construct one store and one handler, never a service
-per request. Both capture detached validated request copies before asynchronous
-work, so caller mutation while queued cannot alter a pending save.
+### Buffered replacements
+
+The renderer writer coalesces bursts on a 200 ms timer in a per-record pending map.
+Canonical projected values are compared with the latest observed value, so
+transient-only changes and unchanged durable records submit no replacement.
+One async drain retains the newest update arriving while a prior write is pending.
+It also compares the final candidate with the last successful save: a burst that
+changes a saved value and then returns to it needs no replacement. Comparing only
+successive queued values misses that case.
+
+Detached pending snapshots survive navigation, host switches, disconnects and
+holder eviction with their original coordinates. Eviction drops observation and
+comparison metadata, never the pending save or the disk record. The eleventh
+received conversation can therefore evict the first before its timer runs without
+losing the first conversation's captured snapshot.
+
+### Protected collection
+
+The single main-process store and handler both capture detached validated request
+copies before asynchronous work, so caller mutation while queued cannot alter a
+pending save. Never create a service per request.
 
 The handler queues valid calls before the asynchronous membership lookup and
 waits for storage completion. The store has its own queue covering every valid
@@ -187,13 +269,33 @@ of memory eviction. A future storage-layout change must account for the versione
 format and atomic removal contract.
 
 Protection inherits [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md).
-Production composition must reuse OS-backed encryption and
+Production composition reuses OS-backed encryption and
 `fileSecretPersistence(join(app.getPath('userData'), 'secrets'))`; encryption
 unavailability, including Linux `basic_text`, cannot fall back to plaintext.
 The existing adapter supplies owner-only files and temp-file/rename replacement,
 so readers see the old or new complete ciphertext. Atomic replacement supplies
 file integrity; the queues supply invocation order. No new cryptography, network
 work or background pruning is involved.
+
+### Window close and app quit
+
+`writer.stop()` unsubscribes both stores, cancels the timer and drains buffered
+and in-flight updates. Main defers normal window close and `before-quit` teardown
+until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
+`flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
+submitted history operations before resuming close/quit. App quit stops the
+connection registry before draining; closing a window leaves the app able to
+open a fresh window and writer.
+
+Readiness registration avoids waiting on a window whose observer never mounted.
+Lifecycle messages must come from a window's main frame; flush acknowledgements
+resolve only that sender's wait. Closing the window releases its wait and tracking
+entries. Hook cleanup removes its flush listener, and `will-quit` removes the
+main handler and lifecycle listener. Reconnect adds no listeners.
+
+The guarantee covers graceful close/quit. Abrupt process termination cannot drain
+renderer buffers; atomic file replacement still protects the last complete
+collection. Flushing never adds a completion boundary to a partial answer.
 
 ## Testing
 
@@ -208,6 +310,25 @@ These tests exercise the storage seams without proving the OS keychain adapter.
 [`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
 covers membership, rejected requests before record access, ordering and contained
 failures for all six operations.
+
+[`chatHistoryWriter.test.ts`](../../../src/renderer/src/store/chatHistoryWriter.test.ts)
+injects stores, receipt context, scheduling and storage to prove coalescing,
+return-to-saved-value suppression, newest-during-write retention, failure recovery,
+successful coverage, attribution refusal and capture before eleven-chat eviction.
+Cancellation regressions must include later live content and retained coverage;
+checking only echo addition or its immediate removal misses a writer that has
+silently stopped recording the held chat.
+
+[`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
+exercises the mounted production observer and handler, real composer cancellation,
+quit/relaunch and window close/reopen. It freezes renderer timers after earlier
+saves, verifies the final content is still absent on disk, then closes: a test
+that waits for the debounce before quitting cannot prove the flush. Reusing the
+user-data directory proves disconnected local reads without a new handshake,
+including the last list, partial live text and loaded older page. The suite also
+covers pairing-rejected access, saved-host validation and zero added history
+requests. Its test encryption backend does not prove the OS keychain adapter or
+offline restoration UI.
 
 The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
 [`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).

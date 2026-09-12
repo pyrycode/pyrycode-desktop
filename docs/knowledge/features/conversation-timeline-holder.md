@@ -153,8 +153,11 @@ exactly the thread the operator stepped away from.
 - **Log-free by construction.** No `console.*` on any path — a diagnostic here would carry not just an
   untrusted `conversationId` but assistant message text. [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)'s
   content-free rule keeps both out. A read miss and an eviction are both silent by design, not swallowed
-  errors. Nothing is persisted, and must not be — a `localStorage` write here would carry conversation
-  content across the pairing boundary #757 exists to enforce.
+  errors. The holder performs no persistence and never writes conversation content
+  to renderer web storage. The separate [chat-history writer](chat-history.md#received-state-admission-and-ownership)
+  saves display snapshots through main's protected storage with captured host
+  ownership. Clearing or evicting a slice leaves its saved copy and any buffered
+  snapshot intact; live session state remains confined to the holder.
 
 ### Stopped records and history isolation
 

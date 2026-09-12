@@ -110,8 +110,11 @@ Acceptance means inserting the optimistic user row through
 [composer send](composer-send.md), not receiving a daemon acknowledgement. The
 reducer wrapper preserves the report across other content reducers, even when they
 reconstruct state. `stopsTurn` only controls display: it never interrupts, retries,
-changes permission or mutates turn lifecycle. Reports share the existing in-memory
-timeline lifetime; they are not persisted across app restarts or recovered from history.
+changes permission or mutates turn lifecycle. The `stoppingBanner` reading shares
+the in-memory timeline lifetime. Received banner rows are saved by
+[local chat history](chat-history.md#snapshot-contract), including `stopsTurn`,
+without restoring the separate live reading. History replay of banners is absent;
+offline snapshot restoration remains pending.
 
 The shipped daemon producer maps Claude's `informational` subtype, including a
 captured hook-block reason. That subtype is distinct from the payload's open `level`.
@@ -164,7 +167,9 @@ The wire call id already identifies the original call: do not substitute Claude'
 synthetic heartbeat id or the tool's grouping parent. Progress replaces only a
 matching pending, non-denied call's reading. Result or denial sets that reading to
 `undefined`; late progress cannot restore it. No row or lifecycle transition is
-created, and there is no history replay, persistence or locally inferred reading.
+created, and there is no history replay or locally inferred reading.
+[Local chat history](chat-history.md#snapshot-contract) retains a received row's
+optional `elapsedSeconds` as display data, without restoring a running tool.
 An absent conversation is a [holder no-op](conversation-timeline-holder.md#how-it-works).
 
 The reducer tests in `src/renderer/src/store/toolProgress.test.ts` cover conversation,
@@ -325,9 +330,11 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   so it cannot manufacture a completed divider. Received rows and any pending
   metadata association survive scrolling, navigation and reconnect while the
   [keyed holder](conversation-timeline-holder.md) retains that conversation.
-- **Permanent means the lifetime of the held timeline.** A timeline reset, holder
-  clear or eviction drops its dividers and pending association; they are not persisted
-  across app restarts. This feature does not recover missed offline events or replay
+- **Held state and saved rows have separate lifetimes.** A timeline reset, holder
+  clear or eviction drops its in-memory dividers and pending association.
+  [Local chat history](chat-history.md#storage-and-concurrency) retains received
+  divider rows on disk, never the pending association; offline restoration remains
+  pending. This feature does not recover missed offline events or replay
   `compaction_boundary` from history. History's existing `compacting` decoder carries
   outcomes, but prepending its reduced rows does not create a live pending association.
 - **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot

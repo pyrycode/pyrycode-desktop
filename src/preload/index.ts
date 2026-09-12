@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
 import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
@@ -55,7 +56,25 @@ import {
 // the background process arrive via onDaemonEvent; typed user commands go out via
 // sendCommand. Keys and raw bytes stay in the background process; ipcRenderer itself never
 // crosses the bridge.
+let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
+
 const api = {
+  chatHistory: (request: ChatHistoryRequest): Promise<ChatHistoryResult> =>
+    ipcRenderer.invoke(CHAT_HISTORY_CHANNEL, request),
+  chatHistoryReceipt: () => historyReceipt,
+  onChatHistoryFlush: (listener: () => Promise<void>): (() => void) => {
+    const handler = (): void => {
+      void listener().catch(() => {
+        ipcRenderer.send(DIAGNOSTIC_CHANNEL, { event: 'history-writer-result', code: 'flush-failed' })
+      }).then(() => ipcRenderer.send(CHAT_HISTORY_FLUSH_CHANNEL, 'flushed'))
+    }
+    ipcRenderer.on(CHAT_HISTORY_FLUSH_CHANNEL, handler)
+    ipcRenderer.send(CHAT_HISTORY_FLUSH_CHANNEL, 'ready')
+    return () => {
+      ipcRenderer.removeListener(CHAT_HISTORY_FLUSH_CHANNEL, handler)
+      ipcRenderer.send(CHAT_HISTORY_FLUSH_CHANNEL, 'unready')
+    }
+  },
   /**
    * Ship a typed command to the background process. Fire-and-forget (no reply); the daemon's
    * response arrives later as typed events over the #18 channel. COMMAND_CHANNEL is fixed
@@ -237,7 +256,11 @@ const api = {
    * tests are untouched and each simply ignores the field until it needs it.
    */
   onDaemonEvent: (listener: (event: StampedDaemonEvent) => void): (() => void) => {
-    const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => listener(event)
+    const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => {
+      const previous = historyReceipt
+      historyReceipt = { type: event.type, serverId: event.serverId }
+      try { listener(event) } finally { historyReceipt = previous }
+    }
     ipcRenderer.on(DAEMON_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(DAEMON_EVENT_CHANNEL, handler)
   },

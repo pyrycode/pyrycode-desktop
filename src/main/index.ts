@@ -12,6 +12,9 @@ import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { hostname } from 'os'
 import { createSecureStore } from './secureStore'
+import { createChatHistoryStore } from './chatHistoryStore'
+import { createChatHistoryHandler } from './chatHistoryHandler'
+import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL } from '../shared/chatHistory'
 import { electronSecretEncryption } from './electronSecretEncryption'
 import { selectSecretEncryption } from './secretBackend'
 import { fileSecretPersistence } from './fileSecretPersistence'
@@ -357,6 +360,47 @@ app.whenReady().then(() => {
   const deviceName = hostname()
   const clientVersion = app.getVersion()
   logSessionStart(diagnosticLog, clientVersion)
+
+  const historyHandler = createChatHistoryHandler({
+    store: createChatHistoryStore({ secureStore, log: diagnosticLog }),
+    pairedServers: pairedServerStore, log: diagnosticLog
+  })
+  const historyOperations = new Set<Promise<unknown>>()
+  ipcMain.handle(CHAT_HISTORY_CHANNEL, (event, request: unknown) => {
+    const operation = historyHandler(event, request)
+    historyOperations.add(operation)
+    void operation.finally(() => historyOperations.delete(operation))
+    return operation
+  })
+  const historyReady = new Set<number>()
+  const historyFlushes = new Map<number, { promise: Promise<void>; done: () => void }>()
+  const historyLifecycle = (event: Electron.IpcMainEvent, message: unknown): void => {
+    if (event.senderFrame !== event.sender.mainFrame || BrowserWindow.fromWebContents(event.sender) === null) return
+    if (message === 'ready') historyReady.add(event.sender.id)
+    if (message === 'unready') historyReady.delete(event.sender.id)
+    if (message === 'flushed') historyFlushes.get(event.sender.id)?.done()
+  }
+  ipcMain.on(CHAT_HISTORY_FLUSH_CHANNEL, historyLifecycle)
+  async function flushHistory(window: BrowserWindow): Promise<void> {
+    if (!window.isDestroyed()) {
+      const id = window.webContents.id
+      let flush = historyFlushes.get(id)
+      if (flush === undefined && historyReady.has(id)) {
+        let done = (): void => {}
+        const promise = new Promise<void>((resolve) => { done = resolve })
+        flush = { promise, done }
+        historyFlushes.set(id, flush)
+        window.webContents.send(CHAT_HISTORY_FLUSH_CHANNEL)
+      }
+      await flush?.promise
+    }
+    while (historyOperations.size > 0) await Promise.all(historyOperations)
+    diagnosticLog.event({ event: 'history-flushed' })
+  }
+  app.on('will-quit', () => {
+    ipcMain.removeHandler(CHAT_HISTORY_CHANNEL)
+    ipcMain.removeListener(CHAT_HISTORY_FLUSH_CHANNEL, historyLifecycle)
+  })
   // The connection registry (#1117): ONE connection per stored paired record, so every machine the
   // operator has paired is connected at once instead of only the one paired most recently. It
   // replaces the single `createDaemonConnection` that stood here — that call is now this factory's
@@ -552,8 +596,39 @@ app.whenReady().then(() => {
   // silently diverge from the first one and leave the harness believing a visible window is hidden.
   // `process.env` structurally satisfies the `Record<string, string | undefined>` param (no cast).
   const windowPresentation = selectWindowPresentation({ isPackaged: app.isPackaged, env: process.env })
+  let quitDrained = false
+  let quitting = false
+  app.on('before-quit', (event) => {
+    if (quitDrained) return
+    event.preventDefault()
+    if (quitting) return
+    quitting = true
+    registry.stop()
+    void Promise.all(BrowserWindow.getAllWindows().map(flushHistory)).then(() => {
+      quitDrained = true
+      app.quit()
+    })
+  })
   const openWindow = (): void => {
     const window = createWindow(windowPresentation)
+    const windowId = window.webContents.id
+    let closeDrained = false
+    let closing = false
+    window.on('close', (event) => {
+      if (closeDrained || quitDrained) return
+      event.preventDefault()
+      if (closing) return
+      closing = true
+      void flushHistory(window).then(() => {
+        closeDrained = true
+        if (!window.isDestroyed()) window.close()
+      })
+    })
+    window.on('closed', () => {
+      historyReady.delete(windowId)
+      historyFlushes.get(windowId)?.done()
+      historyFlushes.delete(windowId)
+    })
     live.attach(window)
     // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
     // subscription (#19) is in place before the load-bearing `connected` event (which arrives only

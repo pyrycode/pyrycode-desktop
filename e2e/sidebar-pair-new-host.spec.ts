@@ -102,20 +102,30 @@ test('the section headers’ plus opens pairing and cancel returns to the surfac
   //
   // The sharpest of the three origins and the one the ticket exists for: a cancel that landed on `list`
   // would drop the operator out of the chat they were reading.
+  await page.getByPlaceholder('Message…').fill('Retain this draft')
   await plusses.nth(0).click()
   await expect(pairingField).toBeVisible()
-  // The whole shell is replaced by the pairing screen, so the sidebar is genuinely gone — which is what
-  // makes the re-appearances below positive, auto-waiting reads of the cancel's own effect rather than
-  // observations of something that never moved.
-  await expect(list).toHaveCount(0)
+  await expect(list).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
+  await expect(pairingField).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByRole('button', { name: 'Close dialog' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: 'Close dialog' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(pairingField).toHaveCount(0)
+  await expect(plusses.nth(0)).toBeFocused()
+  await expect(page.getByPlaceholder('Message…')).toHaveValue('Retain this draft')
+  await plusses.nth(0).click()
 
   await page.getByRole('button', { name: 'Cancel' }).click()
-  // POSITIVE FIRST. `.conversation` re-attaching IS the assertion — the pane was destroyed with the shell
-  // and comes back only if cancel routed to `thread`. A bare "did not go to the list" check ordered here
-  // instead would pass against a frame the click had not yet produced.
+  // The same mounted conversation retains its local draft through cancellation.
   await expect(thread).toBeVisible()
   await expect(list).toBeVisible()
   await expect(pairingField).toHaveCount(0)
+  await expect(page.getByPlaceholder('Message…')).toHaveValue('Retain this draft')
 
   // --- 3. AC3 — the same plus clicked from the LIST returns to the list, not to the thread. ---
   //
@@ -134,8 +144,6 @@ test('the section headers’ plus opens pairing and cancel returns to the surfac
   await expect(pairingField).toBeVisible()
 
   await page.getByRole('button', { name: 'Cancel' }).click()
-  // POSITIVE FIRST again: the sidebar re-attaching is the cancel's own effect. Only THEN is the pane
-  // checked — a `thread` destination would have filled it, so this count discriminates the two routes.
   await expect(list).toBeVisible()
   await expect(pairingField).toHaveCount(0)
   await expect(thread).toHaveCount(0)

@@ -297,6 +297,7 @@ export function PairedShellView(props: {
   recoveryLabel?: string
   onRepairHost?: (serverId: string) => void
   route: PairedRoute
+  pairingOrigin?: PairedRoute
   /** The identity of the chat pane's subtree — the active conversation's id, or null when none has been
    *  activated in this shell. Applied as ConversationScreen's `key`, so a change REMOUNTS it. Required,
    *  not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
@@ -311,95 +312,59 @@ export function PairedShellView(props: {
   onPairServerPaired: () => void
   onPairServerCancelled: () => void
 }): JSX.Element {
-  const pairing = <PairingScreen key={props.recoveryServerId}
+  const pairing = <PairingScreen key={props.recoveryServerId} presentation="modal"
+    context={props.recoveryServerId ? <>
+      <p>Repair pairing: {props.recoveryLabel ?? 'Server'}</p>
+      {props.recoveryRejected && <p role="status">{PAIRING_REJECTION_NOTICE}</p>}
+    </> : undefined}
     onPaired={props.onPairServerPaired} onCancel={props.onPairServerCancelled} />
-  if (props.route === 'pairServer' && !props.recoveryServerId) return pairing
-  switch (props.route) {
-    // #670: `list` and `thread` stopped being alternative SCREENS and became one two-pane shell — the
-    // sidebar is mounted in both, and the route only decides whether the chat pane holds a thread. They
-    // share one arm because the markup is identical; the ternary below is the only fork. Combining the
-    // two labels is not a fallthrough (no statement sits between them), so assertNever still narrows to
-    // `never` and a sixth route member is still a compile error.
-    //
-    // Because both routes render ChannelList at the SAME element position, React preserves its subtree
-    // across the list↔thread flip instead of remounting it — safe and desirable here: ChannelList is
-    // bound to the live useConversationListStore and has no mount-time fetch a remount was refreshing,
-    // so its scroll position now survives opening a conversation.
-    //
-    // The pane renders `null`, never a mounted-but-blank ConversationScreen (AC4). That is load-bearing
-    // beyond the ticket's own wording: four e2e assertions use `.conversation` toHaveCount(0) as their
-    // "left the thread" proof, which a blank-but-mounted pane would time out. Per the operator, the
-    // empty pane stays genuinely empty — no placeholder, illustration or call to action; the wrapper
-    // <div> survives only as the layout slot.
-    case 'list':
-    case 'thread':
-    case 'pairServer':
-      return (
-        <div className="paired-shell">
-          <div className="paired-shell__sidebar">
-            <ChannelList
-              onOpen={props.onOpen}
-              onOpenSettings={props.onOpenSettings}
-              onOpenArchive={props.onOpenArchive}
-              onRepairHost={props.onRepairHost}
-              // #1303 — the SAME `onOpenPairServer` the settings case hands SettingsScreen, reused
-              // rather than given a prop of its own, and that reuse is a decision rather than a
-              // shortcut. Both entries mean exactly "open the pairing flow", and the container makes
-              // cancel's destination a function of the route it was on when this fired rather than of
-              // which control fired it — so a second prop would be two names for one act, with nothing
-              // to tell them apart and every opportunity to drift. It also costs this file's six render
-              // literals in `PairedShell.test.tsx` no edit at all.
-              onPairNewHost={props.onOpenPairServer}
-            />
-          </div>
-          <div className="paired-shell__pane">
-            {props.route === 'pairServer' ? (
-              <section className="paired-shell__recovery" aria-label="Repair pairing">
-                <p className="paired-shell__recovery-title">Repair pairing: {props.recoveryLabel ?? 'Server'}</p>
-                {props.recoveryRejected && <p className="paired-shell__recovery-notice" role="status">{PAIRING_REJECTION_NOTICE}</p>}
-                {pairing}
-              </section>
-            ) : props.route === 'thread' ? (
-              // `key` is the pane's IDENTITY, not decoration. Switching conversations from the
-              // now-always-mounted sidebar leaves the route on `thread` (`open` is absolute), so React
-              // reconciles two `thread` renders by PRESERVING this subtree — a path that was unreachable
-              // before the shell, because the list was unmounted while a thread was up. Every
-              // useState/useRef inside ConversationScreen was written on the assumption that a remount
-              // always separates two conversations — five of them say so in as many words (:137 the
-              // run-config sheet, :142 Channel info, :147 the workspace picker, :152 the background-task
-              // panel, :162 the scroll pin, each "resets on remount for free"), and the composer's draft
-              // (:1787) is the sharpest case: it would follow the operator into the conversation they
-              // switched to and be SENT there. That is AC4's "never a
-              // stale one from a previous selection", and the store-side clear (activateConversation)
-              // cannot cover it — it clears the timeline, the session id and the run configuration, all
-              // of them store state, and reaches no screen-local value at all.
-              <ConversationScreen
-                key={props.paneKey}
+  const visibleRoute = props.route === 'pairServer'
+    ? props.pairingOrigin ?? (props.recoveryServerId ? 'list' : 'settings')
+    : props.route
+  // Stable element position and paneKey retain the invoking view through pairing.
+  const background = (): JSX.Element => {
+    switch (visibleRoute) {
+      case 'list':
+      case 'thread':
+        return (
+          <div className="paired-shell">
+            <div className="paired-shell__sidebar">
+              <ChannelList
+                onOpen={props.onOpen}
+                onOpenSettings={props.onOpenSettings}
+                onOpenArchive={props.onOpenArchive}
                 onRepairHost={props.onRepairHost}
-                onBack={props.onBack}
+                onPairNewHost={props.onOpenPairServer}
               />
-            ) : null}
+            </div>
+            <div className="paired-shell__pane">
+              {visibleRoute === 'thread' ? (
+                <ConversationScreen
+                  key={props.paneKey}
+                  onRepairHost={props.onRepairHost}
+                  onBack={props.onBack}
+                />
+              ) : null}
+            </div>
           </div>
-        </div>
-      )
-    case 'settings':
-      // #1162: the SAME `onUnpaired` the thread case hands ConversationScreen, reused rather than
-      // given a callback of its own. Both mean exactly "the app's pairing has ended — clear and
-      // leave", and the container has already bound it to applyPairingChange's `unpaired` arm. The
-      // per-server action reaches it only when the erase leaves no record behind; unpairing one of
-      // several servers stays inside this shell and never calls it.
-      return (
-        <SettingsScreen
-          onBack={props.onBack}
-          onPairAnother={props.onOpenPairServer}
-          onUnpaired={props.onUnpaired}
-        />
-      )
-    case 'archive':
-      return <ArchiveScreen onBack={props.onBack} />
-    default:
-      return assertNever(props.route)
+        )
+      case 'settings':
+        return (
+          <SettingsScreen
+            onBack={props.onBack}
+            onPairAnother={props.onOpenPairServer}
+            onUnpaired={props.onUnpaired}
+          />
+        )
+      case 'archive':
+        return <ArchiveScreen onBack={props.onBack} />
+      case 'pairServer':
+        return <></>
+      default:
+        return assertNever(visibleRoute)
+    }
   }
+  return <>{background()}{props.route === 'pairServer' && pairing}</>
 }
 
 /**
@@ -422,15 +387,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // co-located with `activateConversation` — that call is the marker for "a third activation must record
   // the id too". The nullary `open` (a notification click, below) records nothing on purpose: it means
   // "show the conversation that is already active", so the pane's identity has not changed. Nothing clears
-  // it on the way out either — and since #1303 that is load-bearing rather than merely harmless. It used
-  // to rest on "the exits (delete, archive, unpair, pair-another) all land on a route where the pane
-  // renders `null`, so the subtree is destroyed and a stale id cannot preserve anything." Cancelling a
-  // pairing opened from the sidebar plus now lands back on `thread`, so the pane comes UP again on this
-  // id — which is exactly how the operator returns to the chat they left, and it is why this cell must
-  // keep surviving the detour. It is not stale there: the pairing route touches neither
-  // `activeConversationStore` nor this cell, and cancel reaches no server, so the id still names the chat
-  // the store still holds. `ConversationScreen` does remount (it was unmounted while the pairing screen
-  // was up) and its screen-local state resets, which is accepted and is not what #1303 promises.
+  // it on the way out. In-app pairing now preserves the background subtree, so
+  // both this identity and the composer's local draft survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
   // #1303 — WHERE CANCELLING THE PAIRING FLOW PUTS THE OPERATOR BACK: the route this shell was on when
   // the flow was opened. Screen-local beside `paneKey` and for its reasons (ADR 0006) — never a store,
@@ -565,6 +523,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   return (
     <PairedShellView
       route={route}
+      pairingOrigin={pairServerReturn}
       paneKey={paneKey}
       recoveryServerId={recoveryServerId}
       recoveryLabel={hostRowLabel(recoveryLabel)}

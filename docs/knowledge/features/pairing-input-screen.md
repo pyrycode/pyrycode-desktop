@@ -1,6 +1,11 @@
 # Pairing input screen
 
-The desktop's paste-only pairing screen: the user pastes the payload printed by `pyry pair --print` on pyrybox, reviews the server-key **fingerprint** the background process derives, and explicitly **confirms** to persist the pairing — or **cancels**, discarding the paste. The paste phase renders as a full-window page on desktop's own Figma frame (`103-2901`, [#665](../codebase/665.md)); the fingerprint-review phase is still the renderer equivalent of mobile's "Paste pairing code" dialog (Figma node `19-54`), plus the desktop-specific human fingerprint-verify step mobile's paste path skipped ([#53](pairing-confirmation.md)).
+The user pastes the payload printed by `pyry pair --print`, reviews the server-key
+fingerprint derived by main, and explicitly confirms before saving. Onboarding keeps
+the full-page `EntryPage` and existing `ReviewCard`. Inside the paired app, added-host
+pairing and manual repair use a two-step **Pair** modal over the invoking view.
+Both presentations share the same reducer and confirmation/storage path; see
+[paired-shell routing](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 
 Introduced in [#55](../codebase/55.md); the paste phase restyled onto its own frame in [#665](../codebase/665.md). Lives entirely under `src/renderer/src/screens/pairing/` — it never touches the token, server key, socket, or Noise handshake; those stay in the background process (ADR [0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "keep the transport out of the window"). It drives the existing [pairing IPC channel](pairing-ipc-channel.md) (#54) and holds the paste string, the optional host label (#825, below), and the fingerprint/reason it gets back.
 
@@ -15,7 +20,13 @@ Gives a fresh-install user a terminal-free way to pair the app with their daemon
 
 A typed validation error (malformed payload, disallowed relay, malformed key, expired pending, or persist failure) is surfaced **inline** and nothing is stored. The screen never receives or renders the `token` or `server_static_pubkey` — only the fingerprint (a hash) and a value-free error category cross the bridge.
 
-**Where the screen mounts:** #55 built this screen as a self-contained, testable unit exposing optional `onPaired` / `onCancel` seams, deferring app-level navigation. The [app shell](app-shell.md) wired `onPaired` in [#80](../codebase/80.md): `App` advances to the [conversation screen](conversation-shell.md) when it fires. Until [#662](../codebase/662.md), `onCancel` was deliberately left unwired — this screen was the app root for every non-`paired` launch outcome, so cancel had nowhere to go and stayed put instead. #662 relocated the root to the [welcome screen](welcome-screen.md), which is what finally gave `onCancel` a safe destination: `App` now wires it to navigate back to `welcome`, never to `conversation`, so this screen is reached only by user action — the welcome screen's CTA, or the mid-session "Pair another server" / post-unpair flip.
+**Where the screen mounts:** `App` uses the default page presentation for onboarding;
+Cancel returns to [Welcome](welcome-screen.md), and success enters the paired shell.
+`PairedShell` passes `presentation="modal"` for sidebar **Pair new host**, Settings
+**Pair another server**, and explicit host-row/composer repair. Idle cancellation
+returns to the invoking view with its selected conversation, draft and held history
+preserved. Success refreshes saved hosts and returns to the host list. Connection
+failure alone never opens pairing.
 
 ## How it works
 
@@ -45,7 +56,7 @@ type PairingState =
   | { phase: 'paired' }
 ```
 
-`paste` is threaded through `editing → submitting → reviewing → confirming` so a confirm failure can return to `editing` with the paste intact for a one-click retry. It embeds the token, so it is the **only** field that transitively holds a secret — it never leaves this module except via the single `submitPairingPaste` call. `error` lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on `reviewing`/`confirming`. `paired` is terminal and carries **nothing** — no secret, no record.
+`paste` is threaded through `editing → submitting → reviewing → confirming` so a confirm failure can return to `editing` with the paste intact for fresh submission and verification. It embeds the token, so it is the **only** field that transitively holds a secret — it never leaves this module except via the single `submitPairingPaste` call. `error` lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on `reviewing`/`confirming`. `paired` is terminal and carries **nothing** — no secret, no record.
 
 `label` (#825) rides the same four phases as `paste`, for the same structural reason: it is typed on the paste phase but sent two phases later, on confirm, so it can't live in a component-local `useState` without splitting AC4 ("cancel discards the label with the paste") across two mechanisms. It is **optional**, not `label: string` defaulting to `''` — it mirrors `PairingRequest`'s own `label?: string` exactly, so state and the wire contract agree that "no label" is an absent key. This keeps the change zero-cascade (every existing `PairingState` literal in both test files still typechecks, and `toEqual` ignores an absent property), and it is safe because exactly one place — `hostLabelToSend`, below — decides whether a label exists at all. `label` is **not** a secret — it is the operator's display name for the host, bound for the [host-label store](host-label-store.md) — but like `paste` it survives `submit-failed`/`confirm-failed` so a retry doesn't make the operator retype it, and dies with the paste on `cancel` via `initialPairingState`.
 
@@ -70,7 +81,7 @@ type PairingState =
 
 ### Host name field (#825)
 
-The paste phase (`EntryPage`) draws a second M3 filled field below the pairing-code field's
+The onboarding paste phase (`EntryPage`) draws a second M3 filled field below the pairing-code field's
 supporting-text slot — the operator's display name for the host they are pairing with, so they are
 not hunting for a settings screen afterwards to name the machine. It reuses the same
 `.pairing-field*` CSS block the code field uses (two new declarations in `pairing.css`: a
@@ -97,7 +108,7 @@ Two structural omissions from the code field, both intentional:
   field's only affordance that it may be skipped. The Pair button's enabled condition
   (`busy || paste.trim() === ''`) stays exactly as it was — the label never gates pairing.
 
-**Attributes, all load-bearing:** `type="text"` (never `password` — the name isn't a secret);
+**Onboarding attributes, all load-bearing:** `type="text"` (never `password` — the name isn't a secret);
 `aria-label="Host name (optional)"`, matching the visible `aria-hidden` span text (label-in-name),
 chosen to contain neither the substring `aria-label="Pairing code"` nor the exact names `Pair` /
 `Clear pairing code`, so it joins none of the six outside consumers' match sets that
@@ -107,7 +118,7 @@ disagreeing with the IPC guard's write bound would let a value pass one boundary
 other; `autoComplete="off"` and `spellCheck={false}`, matching the code field's secret-hygiene
 posture even though this field carries no secret, because the exposure this ticket introduces is
 structural, not content-based (see below); and — like the code field — **no `name`, no `id`, no
-`<form>` ancestor**. The two inputs stay siblings under the hero div.
+`<form>` ancestor**. The onboarding inputs stay siblings under the hero div; the modal uses separate field wrappers.
 
 **Secret hygiene, restated for a second field.** `PairingScreen.tsx`'s header names the risk placing
 a second input beside a bearer-token field creates: a `<form>` ancestor, or a `name`/`id` on either
@@ -155,18 +166,22 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 
 ### Fingerprint formatter
 
+The in-app modal bypasses grouping: it renders the complete returned value as one
+escaped text node, with `white-space: pre-wrap` and `overflow-wrap: anywhere`.
+The formatter below belongs to onboarding only.
+
 `groupFingerprint(fingerprint)` splits the daemon's fixed 23-char form `aa:bb:cc:dd:ee:ff:11:22` (8 colon-separated lowercase-hex byte-pairs) into its 8 **verbatim** groups so the view can render them as spaced monospace segments. Decoration is **spatial only** — characters, case, and order are never altered (`groups.join(':')` equals the input), because the operator compares the string byte-for-byte against pyrybox/the phone. Grouping / decoration for display was handed forward from #53/#54 as this screen's concern.
 
 ### View + container (`PairingScreen.tsx`)
 
-- **`PairingView`** — a pure presentational component (props in, markup out; no hooks, no state, no effects). The root always carries the `.pairing` class — every outside consumer of the screen (`e2e/smoke.spec.ts:81`) binds that one class and expects it present in every phase — plus a phase-derived treatment class, `.pairing-page` or `.pairing-card`:
+- **`PairingView`** — a presentation selector. The default page branch renders markup; `presentation="modal"` delegates to the private `PairingModal`, which owns dialog effects. The root always carries the `.pairing` class — every outside consumer of the screen (`e2e/smoke.spec.ts:81`) binds that one class and expects it present in every phase — plus `.pairing-modal` in-app or a phase-derived page treatment, `.pairing-page` or `.pairing-card`:
 
   ```ts
   const isPaste = state.phase === 'editing' || state.phase === 'submitting'
   // className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}
   ```
 
-  `editing`/`submitting` render `EntryPage` — the full-window paste page ([#665](../codebase/665.md)) described below. `reviewing`/`confirming` render `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) — still the 420px `.pairing-card` dialog inherited from mobile's `19-54`, unchanged since #55. `paired` renders a success marker. This is what `renderToStaticMarkup` renders in tests, one call per phase.
+  In the default page presentation, `editing`/`submitting` render `EntryPage` — the full-window paste page ([#665](../codebase/665.md)) described below. `reviewing`/`confirming` render `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) — still the 420px `.pairing-card` dialog inherited from mobile's `19-54`, unchanged since #55. `paired` renders a success marker. This is what `renderToStaticMarkup` renders in tests, one call per phase.
 
   **`EntryPage`** ([#665](../codebase/665.md)) is a full-window page drawn from desktop's own Figma frame `103-2901` — a radial glow over `--color-surface`, the welcome screen's `--space-7`/`--space-8` frame padding, and a bottom-pinned CTA stack. It replaced the `EntryCard` dialog #55 shipped (card `<h1>`, instruction paragraph, controlled `<textarea>`, inline error row) with:
 
@@ -175,7 +190,7 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
   - a three-row CTA stack: the `Pair` pill (full-width, disabled while `paste` is empty/whitespace or while `busy`, shows `Pairing…` in flight), a bare `Cancel` text row, and the `Open source · github.com/pyrycode/pyrycode-desktop` footer.
 
   No heading — the frame draws none, and the renderer has no visually-hidden utility to compensate with; the screen is left navigable by its named fields (since #825, two: the pairing code and the optional host name) and two named buttons.
-- **`PairingScreen`** — the thin container: `const [state, dispatch] = useReducer(pairingReducer, initialPairingState)`, plus handlers that dispatch the intent then dispatch the awaited runner result. Async is **handler-driven, not effect-driven** — there is no `useEffect`, so no StrictMode double-invoke concern (the deliberate divergence from `daemonEventBridge`, which subscribes for its display lifetime). `onConfirm` fires `onPaired?.()` on `confirm-succeeded`; `onCancel` fires `onCancel?.()`. `handleLabelChange` (#825) dispatches `label-changed`; `handleConfirm` captures `const label = state.label` before its `dispatch({ type: 'confirm' })` — the same before-the-await discipline `handleSubmit` uses for `paste` — and calls `runConfirm(target, label)`.
+- **`PairingScreen`** — the thin container: `const [state, dispatch] = useReducer(pairingReducer, initialPairingState)`, plus handlers that dispatch the intent then dispatch the awaited runner result. IPC calls are handler-driven; a lifecycle effect tracks whether the container remains mounted. `onConfirm` fires `onPaired?.()` on `confirm-succeeded`; `onCancel` fires `onCancel?.()`. `handleLabelChange` (#825) dispatches `label-changed`; `handleConfirm` captures `const label = state.label` before its `dispatch({ type: 'confirm' })` — the same before-the-await discipline `handleSubmit` uses for `paste` — and calls `runConfirm(target, label)`.
 
 **Error-reason → inline copy** is a value-free `Record<PairingErrorReason, string>` in the view — the five coarse #54 categories mapped to fixed copy, no interpolation of any inbound value:
 
@@ -187,23 +202,62 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 | `no-pending-pairing` | "The pairing expired — paste the code again." |
 | `persist-failed` | "Couldn't save the pairing — your system keychain may be unavailable." |
 
+### In-app modal presentation
+
+`PairingModal` wraps the shared `Modal` panel in a native `dialog` opened with
+`showModal()`. Modal owns the Pair title, header close control, divider and centered
+Cancel/Pair footer. The caller owns the top layer, background inertness and keyboard
+handling; Edit host and Edit workspace consumers are unchanged.
+
+Entry has filled fields named exactly **Pairing code** and **Host name**. The name
+remains optional despite dropping onboarding's `(optional)` label. Both inputs keep
+`autoComplete="off"`, `spellCheck={false}`, no `name` or `id`, and no form ancestor;
+the name retains `MAX_HOST_LABEL_LENGTH` and confirmation-time trimming. Blank or
+whitespace code disables Pair. The first Pair validates without saving; errors use
+fixed copy in a `role="alert"` inside the modal. The second Pair confirms and saves.
+Storage failure returns to entry with both fields retained and requires another
+submit and fingerprint verification, because main already consumed its pending record.
+
+Verification exposes the full value in the named **Server key fingerprint** group,
+in a highlighted area followed by “Verify that the code matches to ensure that you
+are connected to the correct host.” Repair context and the target's rejection
+explanation remain inside both steps.
+
+Focus starts in the code field, moves to Pair on verification, and returns to the
+code field on retry. Tab/Shift+Tab stay within enabled controls. Capture-phase Escape
+handling prevents underlying document listeners from navigating. Cancel, header close
+and Escape share the idle cancellation path; none dismiss during submit or confirm.
+Cleanup removes the listener, closes the dialog and restores focus to the invoker
+if it remains connected. Reopening mounts fresh local state.
+
+The wrapper and panel both specify a preferred 640px width, bounded by viewport
+margins; Modal supplies vertical scrolling for short windows. `width: max-content`
+on the native wrapper made entry shrink despite the child's preferred width, so
+panel geometry needs a browser assertion. The fingerprint uses surface-variant
+colors and the display-small scale (36px/44px, emphasized weight 500).
+
 ### Styling
 
-`pairing.css` now serves **two treatments** from one file, kept deliberately separable (siblings, not overrides — neither undoes a property the other sets) so the confirm phase can be lifted onto the page treatment in one move once it has a frame of its own ([#665](../codebase/665.md)):
+`pairing.css` keeps the in-app modal treatment separate from onboarding’s two existing treatments:
 
 - **`.pairing-card`** — the reviewing/confirming/paired phases: the original Figma `19-54` card (`surface-container-high` background, `--radius-lg` corners, `--space-6` padding, `max-width: 420px`), byte-for-byte what `.pairing` carried before #665 split it out.
 - **`.pairing-page`** — the paste phase: desktop's own frame `103-2901`. `height: 100%` (rides the `html`/`body`/`#root` chain both mount sites leave bare), `--space-7`/`--space-8` frame padding, and a radial glow **derived from this frame's own Figma matrix, not copied from `welcome.css`** — the two frames' glows are close but not identical (48%×61% here vs. welcome's 48%×56%, same centre, purely vertical delta). The `.pairing-field*` block is the M3 filled field: a `::before` pseudo carries the 72% translucent fill at `opacity` (never a bare `rgba()`/`color-mix()` literal, per the house rule), and the field's row needs `position: relative` because the absolutely-positioned fill would otherwise paint above its non-positioned siblings.
 
-Both `.pairing` (the shared base — box model, colour, font) and the outside-bound contract described above stay constant across the split. Every color/type/spacing resolves to a `tokens.css` token; the file's header names the remaining bare-literal geometry explicitly (the 56/48/40/24px boxes, the 1px indicator, the glow percentages, the 0.72/0.55/0.38 opacities) — no new tokens were added for #665. The inline error still reuses `--color-tertiary` (no dedicated error token exists — see [#55 notes](../codebase/55.md)). The `reuse` of the welcome frame is **token-level and visual only** — this codebase has no shared cross-screen CSS at all, so the page treatment is restated under its own class names rather than importing `welcome.css` or reaching for `.welcome__*`. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+Both `.pairing` (the shared base — box model, colour, font) and the outside-bound contract described above stay constant across the split. Every color/type/spacing resolves to a `tokens.css` token; the file's header names the remaining bare-literal geometry explicitly (the 56/48/40/24px boxes, the 1px indicator, the glow percentages, the 0.72/0.55/0.38 opacities) — no new tokens were added for #665. The onboarding inline error still reuses `--color-tertiary` (the original choice; the modal uses `--color-error`). The `reuse` of the welcome frame is **token-level and visual only** — this codebase has no shared cross-screen CSS at all, so the page treatment is restated under its own class names rather than importing `welcome.css` or reaching for `.welcome__*`. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
 
 The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-within` (doubling the 1px border into a 2px line) rather than a colour change alone — a hue-only flip between `--color-on-surface-variant` and `--color-primary` measured at 1.00:1 luminance contrast, imperceptible in greyscale or under a blue-yellow deficiency ([#665 code review](../codebase/665.md) finding).
 
 ## State + concurrency model
 
 - **Single source of screen state:** the `useReducer` state; the view is stateless (reads `state`, calls handler props — no two-way binding). See [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) for why this is `useReducer`, not a store.
-- **No streams, subscriptions, or timers.** Two one-shot request/response IPC calls, each triggered by a click and awaited in the handler. Nothing to cancel on teardown — no `AbortController`, no listener to remove.
-- **In-flight re-entrancy** is blocked at the view: Pair/Confirm are `disabled` while `submitting`/`confirming` (and Pair is disabled on an empty/whitespace paste). Even a slipped-through duplicate submit is idempotent on main (supersede-on-submit, #54).
-- **Unmount mid-call:** the awaited `dispatch` is a React-18 no-op on an unmounted reducer — no warning, no leak.
+- **One-shot IPC:** submit and confirm run from handlers. Effects track mount lifetime
+  and, for the modal, install and clean up dialog keyboard/focus handling.
+- **In-flight re-entrancy:** a synchronous `busyRef` guards submit, confirm and cancel
+  before React renders disabled controls. Phase guards reject out-of-phase actions.
+- **Unmount mid-call:** late submit results are ignored. Successful authorized confirmation
+  still calls the shell's saved-host refresh callback after unmount; the shell's
+  [generation guard](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
+  prevents that completion from navigating over a newer interaction.
 
 ## Security posture
 
@@ -218,8 +272,14 @@ The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-wi
 - **A failed confirm** cannot retry with Confirm — the main pending record is already consumed, so the screen returns to `editing` for a fresh submit (paste preserved).
 - **A rejected or throwing bridge invoke** (handler absent/unregistered, invoke racing registration, non-serializable reply) is coerced to `malformed-request` rather than left to wedge the screen in `submitting`/`confirming` with Cancel disabled ([#513](../codebase/513.md)).
 - **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
-- **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`). The clear control's click is likewise unexercised at the test tier for the same reason — a recorded gap, not an oversight ([#665](../codebase/665.md)).
-- **Dark scheme only.** As of [#665](../codebase/665.md) the paste phase (`editing`/`submitting`) is a full-window page on its own Figma frame (`103-2901`); the reviewing/confirming/paired phases are still the 420px dialog card. The flow is deliberately inconsistent between the two treatments until the confirm phase gets its own frame — recorded as an accepted, temporary state, not a bug. Its placement in the app is decided by the [app shell](app-shell.md): as of [#662](../codebase/662.md) it is reached by user action (no longer the unpaired app root, which is now [welcome](welcome-screen.md)), not a dialog over another screen.
+- **Static renderer tests do not execute effects or clicks.** `PairingScreen.test.tsx`
+  checks modal names, full fingerprint, disabled actions, alert markup and input hygiene;
+  controller tests cover the shared reducer/runners. `e2e/pairing-modal.spec.ts` proves
+  focus containment/restoration, inert background, busy guards, retry, fresh reopening,
+  late submit handling and reachable footer actions at 800×400. Sidebar/navigation and
+  recovery specs cover entry points, draft preservation, save and late-confirm navigation.
+- **Dark scheme only.** Onboarding retains its full-window entry page and 420px review
+  card. In-app pairing uses the shared modal for both steps.
 - **The host name field (#825) has no failure mode of its own.** It is a string that is either sent
   or not; a `hostLabel.save` failure in main is deliberately not reported as a failed pairing
   (`pairingHandler.ts`'s confirm arm), so there is no new `PairingErrorReason` and nothing new for

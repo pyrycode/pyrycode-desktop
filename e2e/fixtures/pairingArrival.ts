@@ -95,7 +95,7 @@ export async function pairAnotherServerFromSettings(
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('button', { name: 'Pair another server', exact: true }).click()
 
-  await drivePairingForm(page, payload, label)
+  await drivePairingForm(page, payload, label, true)
 }
 
 /**
@@ -108,7 +108,7 @@ export async function pairAnotherServerFromSettings(
  * selector and the timeout and never the filled value — the one place invariants 2's payload hygiene
  * is now enforced for both flows.
  */
-async function drivePairingForm(page: Page, payload: string, label?: string): Promise<void> {
+async function drivePairingForm(page: Page, payload: string, label?: string, modal = false): Promise<void> {
   const pasteBox = page.locator('[aria-label="Pairing code"]')
   // Not redundant after the caller's navigation: this proves that navigation actually LANDED on the
   // pairing screen — the only executable proof of #662's welcome→pairing hop across all ten unpaired
@@ -122,7 +122,7 @@ async function drivePairingForm(page: Page, payload: string, label?: string): Pr
   // reviewing → confirming, and the confirm sends it (trimmed; an empty or whitespace-only one is sent
   // as no label at all — pairingState.ts). Attribute selector on the accessible name, this file's idiom.
   if (label !== undefined) {
-    await page.locator('[aria-label="Host name (optional)"]').fill(label)
+    await page.getByRole('textbox', { name: modal ? 'Host name' : 'Host name (optional)', exact: true }).fill(label)
   }
 
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
@@ -130,5 +130,5 @@ async function drivePairingForm(page: Page, payload: string, label?: string): Pr
   // Fingerprint card proves #97 active — reached only because parsePairingPayload accepted the
   // loopback ws:// relay. Its presence is the proof; no need to compare the fingerprint text.
   await expect(page.locator('[aria-label="Server key fingerprint"]')).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await page.getByRole('button', { name: modal ? 'Pair' : 'Confirm', exact: true }).click()
 }

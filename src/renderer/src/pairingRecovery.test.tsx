@@ -26,7 +26,7 @@ describe('host repair presentation', () => {
     expect(markup).toContain('type="button"')
   })
 
-  it('renders recovery beside the sidebar without a selected conversation', () => {
+  it('renders recovery in a modal over the sidebar without a selected conversation', () => {
     vi.stubGlobal('window', { pyry: {} })
     const markup = renderToStaticMarkup(<PairedShellView route="pairServer" paneKey={null}
       recoveryServerId="a" recoveryRejected
@@ -34,6 +34,7 @@ describe('host repair presentation', () => {
       onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop}
     />)
     expect(markup).toContain('paired-shell__sidebar')
+    expect(markup).toContain('class="modal"')
     expect(markup).toContain('aria-label="Pairing code"')
     expect(markup).toContain('Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.')
     expect(markup).not.toContain('aria-label="Send"')

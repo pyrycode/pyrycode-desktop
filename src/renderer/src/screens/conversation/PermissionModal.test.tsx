@@ -28,6 +28,7 @@ const noop = (): void => {}
 function renderView(prompt: ModalPrompt, pendingOption: ModalOption | null = null): string {
   return renderToStaticMarkup(
     <PermissionModalView
+      responseAvailable={true}
       prompt={prompt}
       pendingOption={pendingOption}
       selectedOption={null}

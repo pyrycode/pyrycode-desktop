@@ -48,6 +48,10 @@ No documentation-only requirement is present in the ticket. Documentation stage 
 
 None.
 
+## Revisions
+
+- 2026-09-13: `conversation.css` has disabled styling only for Continue. Extend its muted token treatment to Cancel while preserving its outlined shape. The source-file ceiling remains four TypeScript production files, plus this stylesheet; total work stays below 800 lines.
+
 ## Security review
 
 **Verdict:** PASS

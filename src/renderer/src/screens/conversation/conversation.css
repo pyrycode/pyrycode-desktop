@@ -6061,6 +6061,12 @@
   cursor: not-allowed;
 }
 
+.question-panel__cancel:disabled {
+  border-color: var(--color-on-surface-variant);
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
 /* A permission report uses muted ink rather than the failure accent. */
 .tool-row--denied .tool-row__name,
 .tool-row--denied .tool-row__summary,

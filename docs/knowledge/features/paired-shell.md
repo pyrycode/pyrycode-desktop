@@ -12,8 +12,10 @@ Channel List home whose tab bodies [#348](../codebase/348.md) still needs to fil
 [#670](../codebase/670.md) changed what `list` and `thread` mean: they stopped being mutually-exclusive
 alternative screens (the mobile design widened to fill a window) and became the two arms of one
 **two-pane desktop shell** — a fixed 400px sidebar, always mounted, beside a chat pane that holds the
-thread or nothing. `settings`, `archive` and ordinary pairing replace the whole shell. Host recovery
-uses `pairServer` with a target server ID and keeps the pairing form beside the sidebar. See
+thread or nothing. `settings` and `archive` replace the whole shell. In-app pairing uses `pairServer`
+to show a two-step modal over the mounted invoking view; explicit host recovery adds
+a target server ID and rejection context inside that modal. Idle cancellation preserves
+the conversation draft and held history. Onboarding keeps its full-page flow. See
 [below](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the layout and the
 conversation-switch bug the change surfaced.
 

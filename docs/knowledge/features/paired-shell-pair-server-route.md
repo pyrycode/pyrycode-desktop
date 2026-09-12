@@ -6,7 +6,7 @@ Part of [Paired shell (list/thread two-pane desktop shell)](paired-shell.md); se
 
 ## The `pairServer` route (#152)
 
-The `pairServer` case renders the pre-existing `PairingScreen` ([#55](../codebase/55.md)) with **no**
+The `pairServer` case renders the pre-existing `PairingScreen` ([#55](../codebase/55.md)) with `presentation="modal"` over the mounted invoking view and **no**
 `bridge` prop, so it falls back to its production `window.pyry` default — the same posture the app-shell
 `pairing` route already uses. `PairingScreen` derefs `window.pyry` at render time (not in an effect), so
 any test that server-renders the `pairServer` route needs a `globalThis.window = { pyry: {} }` stub, the
@@ -26,10 +26,11 @@ cancel](paired-shell-routing.md#the-pair-new-host-plus-and-origin-aware-cancel-1
 entry made `onPairServerCancelled`'s destination origin-dependent rather than the fixed `'settings'` it
 used to resolve to. An active flow's successful confirmation goes home to `list`.
 
-Host recovery uses this route with a saved-host target and retains the sidebar. It preserves the
+Host recovery uses this modal route with a saved-host target and retains the invoking view,
+including its conversation draft and held history. The background remains inert until dismissal. It preserves the
 same return origin when switching recovery hosts, and keys `PairingScreen` by the target so each
 host gets a fresh form. Completion refreshes saved-host order, but a generation check allows only
-its initiating flow to navigate: a confirmation finishing after sidebar navigation still saves
+its initiating flow to navigate: a confirmation finishing after asynchronous navigation still saves
 credentials without replacing the newer pane. See [the current shell contract](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
 
 `case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`

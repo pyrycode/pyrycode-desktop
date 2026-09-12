@@ -63,7 +63,7 @@ was open when the flow started, and the reducer cannot answer that on its own: b
 operator came from. The origin has to travel with the event, and the container is what records it — see
 § The pair-new-host plus and origin-aware cancel below. `returnTo` is typed as the whole `PairedRoute`
 rather than a narrower origin union. The shell records an origin only when entering from a route
-other than `pairServer`, so switching flows through the retained recovery sidebar cannot overwrite
+other than `pairServer`, so a replacement pairing interaction cannot overwrite
 the original return destination with the pairing route itself.
 
 ## The pure view + container (`PairedShell.tsx`)
@@ -75,12 +75,11 @@ route and optional `recoveryServerId`; recovery reuses `pairServer`, without a n
 | --- | --- | --- |
 | `list` | Mounted | Empty pane |
 | `thread` | Mounted | `ConversationScreen`, keyed by `paneKey` |
-| `pairServer` with a recovery target | Mounted | `Repair pairing` region containing `PairingScreen` |
-| `pairServer` without a recovery target | Replaced | Full-screen `PairingScreen` |
+| `pairServer` | Preserved when present at origin; inert | Invoking view retained beneath `PairingScreen` in modal presentation |
 | `settings` / `archive` | Replaced | The corresponding full-screen view |
 
 The sidebar and composer both receive `onRepairHost(serverId)`. The shell checks that the target
-is still saved, then opens recovery beside the sidebar. The composer resolves its conversation's
+is still saved, then opens recovery in the shared Pair modal over the invoking view. The composer resolves its conversation's
 server from the stamped list; a sidebar repair needs no selected conversation. Both paths preserve
 saved hosts, held timelines and conversation lists. The composer no longer calls `runUnpair`.
 Explicit removal stays in [Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162);
@@ -88,32 +87,38 @@ only removing the last server reaches `onUnpaired` and the app-level pairing cle
 
 `PairedShell` holds route, `paneKey`, pairing origin, recovery target and the `pairingGeneration` ref locally.
 It subscribes to saved servers, the session status map and the recovery host's label. The view receives
-only the derived target label and rejection flag. The rejection notice appears only for that target's
+only the derived target label and rejection flag. The modal rejection notice appears only for that target's
 `pairing-rejected` code, using the fixed copy documented in
 [Session store](session-store.md#one-slot-per-server-since-1133).
 
 ### The pair-new-host plus and origin-aware cancel (#1303)
 
-The Channels/Chats header plus and Settings' Pair another server row share `onOpenPairServer`.
-These ordinary pairing entries still use the full-screen form. Host recovery uses the same pairing
-input and fingerprint confirmation inside the main pane, with the sidebar available for navigation.
+The Channels/Chats header plus and Settings' Pair another server row share
+`onOpenPairServer`. These entries and explicit host recovery use the same two-step
+[Pair modal](pairing-input-screen.md#in-app-modal-presentation). Onboarding remains
+owned by `App` and uses the default full-page presentation.
 
-`pairServerReturn` records the current route when entering pairing from another route. Cancel sends
-`pairServerCancelled` with that captured `returnTo`; switching recovery hosts or choosing the header
-plus from recovery preserves the original return route instead of recording `pairServer` as its own
-return destination. Re-entering recovery for the same host is a no-op. Switching hosts changes the
-`PairingScreen` key and resets its form.
+`pairServerReturn` records the current route when entering pairing from another route.
+The view receives it as `pairingOrigin` and renders that background at the same element
+position while `route === 'pairServer'`, with the modal as a sibling. Keeping both
+position and `paneKey` stable preserves the actual conversation subtree, including
+its unsent composer draft, rather than merely restoring its selected conversation ID.
+The background remains mounted but native dialog inertness blocks pointer and keyboard
+input, including sidebar navigation.
 
-Cancel preserves `activeConversationStore` and `paneKey`, so it returns to the prior list or thread
-(or Settings for an ordinary Settings entry). Held conversations survive. The thread itself remounts,
-so screen-local composer drafts and scroll state are not part of that preservation guarantee.
-`pairingChangeDeps` stays a per-render object because its `returnToPairingOrigin` callback must read
-the current captured origin.
+Cancel, header close and Escape from either idle step send `pairServerCancelled` with
+the captured `returnTo`. They preserve `activeConversationStore`, `paneKey`, held
+history and the mounted invoking view; the modal restores focus to the invoker when
+it remains available. Busy submission/confirmation rejects dismissal. Exiting unmounts
+the pairing reducer, so reopening starts with empty fields. Recovery retains its target
+identity and rejection explanation inside the modal; changing targets changes the
+`PairingScreen` key. `pairingChangeDeps` stays a per-render object because its
+`returnToPairingOrigin` callback must read the current captured origin.
 
 An active flow's successful confirmation returns to `list` without clearing held state. Existing
 pairing confirmation saves by server ID; a same-server save replaces its credentials and moves that
 record to the end of saved order. Registry reconciliation reconnects that changed record without an
-app restart, leaving unchanged servers alone. Recovery keeps the sidebar mounted, so completion
+app restart, leaving unchanged servers alone. The origin view remains mounted during pairing, so completion
 explicitly calls `loadServerInfo` to refresh saved order rather than relying on a sidebar remount.
 
 ### Host recovery and navigation lifetime
@@ -140,9 +145,12 @@ completion callback can still navigate a mounted parent.
 
 `e2e/pairing-recovery.spec.ts` covers unchanged startup/list/thread navigation after these status
 changes, retained rows, timeline and current draft, keyboard and composer repair, cancel, same-host
-replacement, healthy-host send/reply, and delayed confirmation after switching to a healthy thread or
-another recovery host. Before asserting that repair is absent or a draft is unchanged, wait for the
-delivered status or a following visible frame. Repeated failures may leave the status label unchanged;
+replacement, healthy-host send/reply, and delayed confirmation after asynchronous navigation
+and a subsequent switch to a healthy thread or another recovery host. A notification event
+supersedes the modal in the late-result test; clicking the inert background cannot do so.
+Tests that need Settings must first dismiss idle repair. Scope rejection-copy assertions
+to the Pair dialog: the retained conversation can also display the same notice.
+Before asserting that repair is absent or a draft is unchanged, wait for the delivered status or a following visible frame. Repeated failures may leave the status label unchanged;
 a following frame proves delivery where an immediate absence assertion could pass too early.
 The delayed-confirmation tests hold the real handler's reply, then wait for the saved-order refresh
 before checking the newer draft or pairing input. Connection success alone would not prove that the
@@ -250,12 +258,11 @@ before (AC3). At the 800px floor the chat pane is 340px (`800 − 20 − 400 −
 by the composer's own `min-width: 0` and bubble `max-width` bounds; flagged in the spec as arithmetic to
 watch, not a defect.
 
-Recovery adapts `PairingScreen` to that 340px pane with reduced padding and hero inset, wrapping
-notice/footer text and internal vertical scrolling. `.paired-shell__recovery` is positioned relative
-to paint above the pane's wash. An unpositioned section looked visible and passed overflow checks,
-but the wash intercepted Cancel; an actual click is required to verify this stacking behavior.
-The focused recovery spec checks input and fingerprint confirmation at 800px, including overflow
-and Cancel's viewport visibility.
+Recovery now uses the native dialog's window-level top layer, rather than squeezing
+pairing into the 340px chat pane. Its preferred 640px panel is constrained by viewport
+margins and scrolls vertically on short windows. The focused modal/recovery specs
+check overflow and scroll footer actions into view before clicking; static markup or
+a bounding box alone cannot prove reachable controls.
 
 **Why the sidebar survives a `list`↔`thread` flip instead of remounting.** Both arms render
 `ChannelList` at the same element position, so React preserves its subtree across the switch rather than
@@ -298,13 +305,11 @@ shipped in a follow-up commit on the same PR:
 - The nullary `open` (a push-notification click, [#393](../codebase/393.md)) deliberately does **not**
   touch `paneKey` — it carries no conversation payload and means "show the conversation that's already
   active," so the pane's identity hasn't moved.
-- Nothing clears `paneKey` on exit. Delete, archive, and unpair all land on a route where the pane
-  renders `null`, so the subtree is destroyed regardless of what the key holds — a stale key cannot
-  preserve a subtree that no longer exists. **Since [#1303](https://github.com/pyrycode/pyrycode-desktop/issues/1303)
-  this is no longer true of every exit**: cancelling a pairing flow opened from a section-header plus
-  while a thread was open lands back on `thread`, so the pane comes back up on the same `paneKey` — which
-  is correct, not stale, since the pairing route touches neither `activeConversationStore` nor this cell
-  and cancel reaches no server. See § The pair-new-host plus and origin-aware cancel above.
+- Nothing clears `paneKey` on exit. Delete, archive and unpair remove the conversation
+  subtree through routing. In-app pairing preserves the thread at the same position
+  and key beneath its modal, so idle cancellation preserves local state as well as
+  the selected conversation. Successful pairing still goes to `list` and unmounts
+  the thread; its held timeline survives. See § The pair-new-host plus and origin-aware cancel.
 - Making the prop **required**, not optional, turns "a future call site forgets to record the switch"
   into a compile error rather than a silent reintroduction of the bug.
 
@@ -351,7 +356,7 @@ Explicit removal is in Settings.
 ```text
 AppView (conversation)
   PairedShell
-    per-host statuses -> status presentation + rejection notice for an already-open recovery pane
+    per-host statuses -> status presentation + rejection notice for an already-open recovery modal
     sidebar Repair host / composer Re-pair -> openRecovery(saved server ID)
     sidebar conversation -> leaveRecovery -> activateConversation -> keyed thread
     Settings / Archive / Back -> leaveRecovery -> selected route

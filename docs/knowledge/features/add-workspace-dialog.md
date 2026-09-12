@@ -1,62 +1,98 @@
 # Add workspace dialog
 
-Split out of [Channel List — the host row and its connection
-dots](channel-list-host-row.md) to keep that page under the doc-guard's 50000-byte cap
-(`npm run check:docs`). The dialog opened by the [host row's hover
-plus](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185).
+The [host row's hover plus](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)
+opens `AddWorkspaceDialog` in `src/renderer/src/screens/channels/AddWorkspaceDialog.tsx`.
+It starts a chat in an operator-typed folder on that host; the conversation list supplies
+the new workspace group. The single-field form introduced in #1308 keeps its existing
+disabled-action and error styling; #1367 bounds its creation lifecycle.
 
-Introduced in #1308, the plus's first caller: clicking it opens `AddWorkspaceDialogView` (new,
-`src/renderer/src/screens/channels/AddWorkspaceDialog.tsx`), a near-clone of
-[`CreateChannelDialogView`](create-channel-dialog.md) (#1179) with a round trip added, which
-makes [`EditHostDialogView`](edit-host-dialog.md) the closer relative below the field: a three-arm status (`idle` /
-`creating` / `rejected`), a frozen field while the answer is outstanding, a client-owned failure line, and a
-Cancel that is never disabled — load-bearing here specifically, since nothing times out the
-`createConversation` round trip and a silent daemon would otherwise leave the dialog frozen with no exit.
+## Connection and folder admission
 
-**What it sends.** One absolute folder path, typed by the operator — `''.startsWith('/')` both refuses a
-blank field and is the whole of the client-side rule, since the daemon owns confinement and existence
-checks server-side and a client-side normalisation would silently split one sidebar group into two (`~/foo`
-vs `/home/x/foo`). `requestNewWorkspaceChat` (new, `conversationCreatedBridge.ts`) is a **third sibling**
-beside `requestNewConversation`/`requestNewChannel` rather than a widened parameter: same
-`{is_promoted: false, name: null, cwd}` literal, with a top-level `serverId` main refuses to leave unnamed
-once more than one server is paired — required, not optional, since this caller always knows which row's
-plus was clicked. See [Conversation create](conversation-create.md) for the dispatch and [Daemon connection
-correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
-for the round trip's daemon-side half.
+`HostRowControl` supplies Add workspace only when
+`selectStatusFor(serverId).type === 'connected'` and rechecks that host when invoked.
+Missing, connecting, disconnected and failed states withhold the plus. Another connected
+host or an open relay socket cannot enable it: eligibility requires the selected host's
+authenticated session.
 
-**The in-flight gate is the whole of the round trip**, and it discharges #1307's obligation rather than
-rediscovering it: both listeners (`conversationCreated`, `conversationCreateRejected`) act only while
-`status === 'creating'`, read through a ref rather than a closure (the `useConversationCreatedNav` idiom).
-A rejection at `idle` or `rejected` changes nothing. While the dialog's own create genuinely is
-outstanding, a rejection belonging to the FAB's or the Channels-tree workspace plus's concurrent create is
-**indistinguishable from its own** — the arm is nullary, so there is no per-request field to correlate on
-even in principle. Accepted rather than designed away: it fails toward a false failure report on a create
-that will still land, never a false success. Closing on confirmation does not match `cwd` for the matching
-reason — a daemon that normalises the string would otherwise strand the dialog open over a chat it already
-created.
+Start chat requires the same connection, an absolute folder path and no pending attempt.
+Submission rechecks `sessionStore.getState()` immediately before dispatch. Main also
+[refuses an unavailable connection](conversation-create.md#error-handling), covering a
+connection lost between the renderer check and the send.
 
-**Container state lives inside `AddWorkspaceDialog` itself**, not in `ChannelList` — unlike
-[the Edit host dialog](edit-host-dialog.md)'s three cells. `ChannelList` holds only the open cell,
-`addWorkspaceServerId: string | null`, gated on `!== null` for `editHostServerId`'s reason and keyed by
-server id so a reopen against a different machine remounts rather than reuses.
+The folder rule is `path.trim().startsWith('/')`. `requestNewWorkspaceChat` in
+`conversationCreatedBridge.ts` trims edge whitespace and sends
+`{is_promoted: false, name: null, cwd}` with a required top-level `serverId` from the
+clicked host row. It performs no local resolution, `..` collapse or trailing-slash
+normalisation. The daemon retains ownership of folder creation and validation.
 
-**Sinks.** The typed path reaches only the controlled input's `value`; `HostRow`'s four declined sinks (no
-`title`, no `aria-label`, no id/key/lookup path, no log line) hold in full, and the rejection arm carries no
-daemon byte at all to interpolate even by a future edit. **CSS:** `.add-workspace*` is its own class family
-in `channels.css`, cloned from `.edit-host*` (the disabled-field/error-line pair) for the Playwright
-strict-mode reason `.edit-host*` itself was kept separate from `.edit-workspace*`.
+## Local wait and retry
 
-**Tests.** Unit: `AddWorkspaceDialog.test.tsx` — the disabled matrix, the three statuses' chrome, the sink
-guard. E2E, fake tier: `e2e/sidebar-add-workspace.spec.ts` (new) — a happy-path launch and a refusal launch
-against `conversationStateFake`'s new `createOutcome: 'rejected'` option (the first daemon refusal that
-fake models at all), both reading the open row's title through `.channel-list__row-open[aria-current="true"]`
-captured *before* the create so each read is a mutation check rather than a locator that could pass before
-the click's async work resolves — a correction recorded in
-`docs/specs/architecture/1308-host-row-add-workspace-dialog.md` § Revisions after the first run proved a
-naive `.composer`-count assertion vacuous (`launchPairedApp` already leaves a composer on screen at
-launch). `e2e/host-row-hover-controls.spec.ts` inverts rather than replaces its two "no Add workspace
-button" reads — see [the host row's pen and plus on
-hover](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185).
+The mounted dialog owns the folder, status, submitted marker and deadline.
+`ChannelList` holds only `addWorkspaceServerId: string | null`; the dialog is keyed by
+host and remounts with an empty field on reopen. Its status is `idle`, `creating`,
+`rejected`, `disconnected` or `timed-out`.
+
+Submission marks the attempt pending synchronously and arms the single named
+`WORKSPACE_CREATE_DEADLINE_MS = 30_000` before dispatch. The field and Start chat are
+disabled while pending; Cancel stays enabled throughout. A local bridge/build/send
+failure, matching server rejection or selected-host connection loss ends the busy state
+immediately, preserves the entered folder and makes it editable again. Feedback uses
+fixed client copy: generic creation failure or guidance to connect this host.
+
+With no result after 30 seconds, the error reads: “Could not confirm completion within
+30 seconds. The chat may still appear.” Timeout and Cancel end only the local wait;
+neither cancels a server-side create, which may still complete. Cancel closes the form
+and discards its draft. After failure, retry requires an explicit Start chat click and
+a connected selected host. Disconnect, timeout and reconnect never resend automatically.
+
+Every settlement clears the deadline; retry arms a fresh one, so the old timer cannot
+fail the new attempt. Success, Cancel and unmount clear the timer and remove both the
+result and session-state subscriptions. Synchronous pending/closed refs prevent repeated
+clicks before React renders and callbacks acting on a dismissed dialog.
+
+## Host-scoped results
+
+The dialog reads `window.pyry.onDaemonEvent` directly. The older
+`subscribeConversationCreated` and `subscribeConversationCreateRejected` helpers drop
+the main-stamped origin and cannot provide this boundary. Only a nonempty string
+`event.serverId` exactly matching the selected host is accepted; missing, null, invalid
+and foreign-host origins cannot settle this dialog.
+
+A rejection affects only `creating`. A confirmation closes a still-open dialog after
+any submission, including late success after timeout or failure. The independent
+navigation subscription and [host-addressed list refresh](conversation-list-store.md)
+show the created chat through the existing request-driven list reply. Results after
+success or Cancel cannot reopen the dialog or its error.
+
+Per-request correlation remains unchanged: main matches daemon rejection envelope ids,
+but the renderer receives no create-request id. Concurrent creates or retries on the
+same host remain indistinguishable; either result may belong to another same-host
+attempt. This does not establish exactly-once creation. Matching `cwd` would not solve
+correlation because the daemon may normalise the folder string. See
+[create rejection correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307).
+
+## Rendering and testing
+
+The typed path's form sink is the controlled input's escaped `value`; it never supplies
+a `title`, `aria-label`, id, key, lookup path or log entry. Rejection feedback carries no
+daemon or caught-error text. The `.add-workspace*` class family in `channels.css` keeps
+the dialog's disabled field and error line distinct from the host/workspace edit dialogs.
+
+`AddWorkspaceDialog.test.tsx` covers static markup, connection/path admission, timeout
+copy and safe sinks. Mounted effects belong in `e2e/sidebar-add-workspace.spec.ts`:
+unavailable hosts, connection loss, local failure, rejection, deadline, cancellation,
+late success and explicit retry use the existing fake transport. Playwright's clock
+proves the 29,999/30,000ms boundary and retry past the old deadline. Request counts prove
+blocked/repeated clicks and reconnect never produce extra creates.
+
+Keep a second host connected and deliver its confirmation and rejection while the
+selected host is pending. Two `conversationStateFake` instances both mint `created-1`;
+use a distinct synthetic foreign-host confirmation id, or the active-row assertion can
+match two rows. Prove navigation by a change to
+`.channel-list__row-open[aria-current="true"]`, with the starting title captured before
+creation. A composer-count assertion can pass with navigation broken because
+`launchPairedApp` already opens a seeded chat. Retain request-driven list replies so the
+new workspace row proves refresh as well as dialog dismissal.
 
 ## Related
 
@@ -64,10 +100,8 @@ hover](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185).
   adoption is pending in [#1346](https://github.com/pyrycode/pyrycode-desktop/issues/1346).
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — the parent page:
   the row and plus this dialog opens from.
-- [Edit host dialog](edit-host-dialog.md) (#1299) — the host row's other trailing control's dialog, the
-  closer relative to this one than [Create-channel dialog](create-channel-dialog.md): the three-arm
-  status, the frozen field mid-flight, the client-owned failure line and the never-disabled Cancel are
-  all shared with it.
+- [Edit host dialog](edit-host-dialog.md) — the host row's other trailing control's dialog,
+  sharing the frozen field, client-owned failure line and always-available Cancel.
 - [Conversation create](conversation-create.md) / [Daemon connection correlation § Create-conversation
   rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307) —
   the transport `requestNewWorkspaceChat` sends over and the round trip described above consumes.

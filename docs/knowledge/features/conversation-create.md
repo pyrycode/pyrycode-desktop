@@ -51,7 +51,7 @@ distinct "unnamed scratch conversation" signal.
 | `CreateConversationPayload` / `ConversationCreatedPayload` | `src/shared/wire/types.ts` | ported wire types, field-for-field with the daemon |
 | `createConversation` command / `isCreateConversationPayload` guard | `src/shared/ipc/commands.ts` | untrusted renderer→main boundary |
 | `buildCreateConversation` | `src/main/transport/createConversationEnvelope.ts` (new) | pure payload-carrying outbound envelope builder |
-| `createConversation(payload)` | `src/main/daemonConnection.ts` | connection method — the `send` twin, fresh-literal net |
+| `createConversation(payload)` | `src/main/daemonConnection.ts` | authenticated send, fresh-literal payload and local rejection feedback |
 | `parseConversationCreatedPayload` + `conversation-created` kind | `src/main/transport/inboundMessage.ts` | fail-closed inbound decode |
 | `conversationCreated` event | `src/shared/ipc/events.ts` | the `DaemonEvent` arm |
 | `case 'createConversation':` | `src/main/index.ts` | `onCommand` dispatch |
@@ -77,30 +77,25 @@ literal that bounds the field set lives one layer up, in the connection method.
 
 ### 2. The connection method (`daemonConnection.ts`)
 
-```ts
-function createConversation(payload: CreateConversationPayload): void {
-  if (driver === null) return              // inert no-op — a create request has no consumer to fail
-  try {
-    // FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
-    const bytes = buildCreateConversation({
-      id: nextEnvelopeId,
-      ts: now(),
-      payload: { is_promoted: payload.is_promoted, name: payload.name, cwd: payload.cwd }
-    })
-    nextEnvelopeId += 1                     // shares the one counter with send/requestSnapshot/…
-    driver.sendMessage(bytes)
-  } catch {
-    // Never throw out of the module (parity #490). Dropped, no log, no event.
-  }
-}
-```
+`createConversation` requires a driver, an authenticated session and a connection that has
+not been stopped. A driver survives a retryable relay drop, so its existence alone is not
+evidence that a send can reach the daemon. The `authenticated` flag is set only after a
+validated hello acknowledgement and cleared on failure, relay loss, explicit redial and
+stop. Relay-up alone never restores it. Retryable relay loss also emits `disconnected`
+if the session was authenticated, keeping the renderer's per-host status accurate. Making
+that emission unconditional would overwrite an existing authentication failure when its
+socket subsequently drops.
 
-The **`send` twin, not `requestDebugBundle`'s consumer-failing twin** — same rationale as
-`requestSnapshot`/`requestConversations`: a create request has no download-progress state to
-coordinate, so a request sent while disconnected simply produces no reply. The **fresh literal is the
-deterministic security net** (the #236 posture): `isCreateConversationPayload` is a structural
-minimum that tolerates a smuggled extra key, so the outbound wire's three-field shape is guaranteed
-here, not at the boundary guard.
+The method rebuilds exactly `{is_promoted, name, cwd}` before `buildCreateConversation`,
+shares `nextEnvelopeId` with other outbound methods, advances it after a successful build,
+and registers the captured id in `pendingCreateConversations` only after `sendMessage`
+returns. Unavailable connections and build/send exceptions emit content-free rejection
+feedback without adding a pending entry; transport/build errors do not escape to callers.
+See [Error handling](#error-handling).
+
+The fresh literal bounds the outbound field set: `isCreateConversationPayload` is a
+structural minimum that tolerates an extra key, so this reconstruction guarantees the
+wire's three-field shape even when the boundary guard admits additional properties.
 
 ### 3. The inbound decode (`inboundMessage.ts`)
 
@@ -198,7 +193,8 @@ subscriptions are separate and side-effect-disjoint (nav vs. re-list), so they n
 new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand, defaultCwd)
   → sendCommand({type:'createConversation', payload:{is_promoted,name,cwd:defaultCwd}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
-  → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage  [inert no-op if not connected]
+  → authenticated connection check → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage
+    unavailable/build/send failure → host-stamped conversationCreateRejected
 
 daemon → conversation_created frame → onDriverEvent 'message' → parseInboundMessage
   → {kind:'conversation-created', conversationCreated} → emitDaemonEvent
@@ -212,21 +208,43 @@ daemon → conversation_created frame → onDriverEvent 'message' → parseInbou
 | Failure | Layer | Behaviour |
 |---|---|---|
 | Renderer sends malformed command (missing/mistyped/missing-key field) | `isCreateConversationPayload` | rejected at boundary; never reaches `onCommand` |
-| Not connected when `createConversation` called | `daemonConnection` | inert no-op; no throw, no event |
-| Over-cap / driver throw on send | try/catch | caught, dropped |
+| No driver, unauthenticated session or stopped connection when `createConversation` is called | `daemonConnection` | emits host-stamped `conversationCreateRejected` locally; sends nothing |
+| Local build failure (including over-cap plaintext) or driver throw on send | connection method's try/catch | drops the caught object, emits host-stamped `conversationCreateRejected`, registers no pending request |
 | Renderer smuggles an extra payload field | connection method's fresh literal | never crosses the wire — the guard tolerates it, the literal excludes it |
 | `payload` not an object, or a required field missing/mistyped | `parseConversationCreatedPayload` | throws `WireDecodeError`, category-only message; frame dropped, no partial event |
 | `name: null` on the wire | `requireStringOrNull` | decodes to `null` — a valid distinct value, never `''` |
 | Oversized plaintext | existing `MAX_PLAINTEXT_BYTES` guard | throws before parsing begins |
-| Daemon rejects the create (a `cwd` that does not exist, or escapes the daemon's home) | main-side correlation (below) | bare `conversationCreateRejected`; consumed by [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog while its own create is outstanding, ignored otherwise |
+| Daemon rejects the create | main-side correlation (below) | matches `in_reply_to`, emits host-stamped `conversationCreateRejected` without daemon rejection text |
+
+Since #1367, local unavailable/build/send failures have the same bare rejection surface
+as a correlated server refusal. `bindServerOrigin` supplies the paired host's identity;
+the event contains no request id, path, daemon error code/message or caught-error text.
+Diagnostics record only static lifecycle names and classifications (`unavailable`,
+`build-or-send-failed`, `server-rejected`), never error objects or payload fields.
+
+The [Add workspace dialog](add-workspace-dialog.md) consumes rejection only while pending
+and only for its selected host. Local failure, server rejection or that host's connection
+loss ends busy state immediately with client-owned feedback and preserves the folder.
+With no result, its named 30-second deadline explains that completion could not be
+confirmed and the chat may still appear. Retry is explicit and requires a connected host;
+timeout, disconnect and reconnect never resend automatically.
+
+Timeout and Cancel end only the local wait; neither cancels server-side creation. A
+matching late confirmation still closes a submitted dialog while it remains open, and
+the existing navigation and host-addressed list refresh show the chat. These behaviors
+do not add per-request correlation or an exactly-once guarantee.
+
+Focused `daemonConnection.test.ts` coverage drives actual over-cap builds and throwing
+drivers, checks the host stamp and content-free diagnostics, then delivers a later error
+for the attempted envelope id. That later error must not produce a second create
+rejection: a failure test checking only the first event would miss a phantom pending entry.
 
 ## The success reply stays uncorrelated; the rejection, since #1307, does not
 
-Same posture as [conversation list fetch](conversation-list-fetch.md#correlation-is-deliberately-absent)
-for the **success** half only: `in_reply_to` exists on the wire but matching a `conversation_created` reply
-to a specific request is still out of scope — the app hosts one active conversation, so any
-`conversation_created` is decoded and emitted unconditionally, safe because only the authenticated daemon
-(inside the Noise session) can produce one.
+The **success** half remains uncorrelated: `in_reply_to` exists on the wire, but main does
+not match `conversation_created` to a particular create request. It decodes and emits the
+confirmation with the connection's main-owned host stamp. The dialog's exact-host check
+narrows which confirmations it accepts without attributing one to a specific attempt.
 
 The **rejection** half is different since
 [#1307](https://github.com/pyrycode/pyrycode-desktop/issues/1307): `createConversation` now keeps its own
@@ -234,24 +252,24 @@ envelope id in a module-scope `pendingCreateConversations: Set<number>` (`daemon
 daemon `error` back to it by `Envelope.in_reply_to`, and on a match emits a bare `{ type:
 'conversationCreateRejected' }` — never a field read off the untrusted error payload. It exists because a
 create that cannot succeed was previously indistinguishable from one that simply produced no reply yet: the
-FAB and the Channels-tree workspace plus (#1179) both had no failure path at all. Shipped with no consumer;
-[#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog is the first — and,
-as of #1308, the only — caller that can actually receive a daemon rejection (a folder path that does not
-exist or escapes `$HOME`).
+FAB and the Channels-tree workspace plus (#1179) both had no failure path at all. The
+[Add workspace dialog](add-workspace-dialog.md), introduced in #1308, is its first consumer.
 
-Bare by construction, not because only one caller exists — `create_conversation` has three live callers
-now that #1308 shipped, so the arm **cannot** say whose rejection it is reporting. #1308's dialog gates on
-its own in-flight state (`status === 'creating'`) and accepts that a concurrent caller's rejection is
-indistinguishable from its own while its create is outstanding — the residue fails toward a false failure
-report on a create that will still land, never a false success. See [Daemon connection correlation §
-Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
-for the full store design, the accepted unbounded-growth argument, and the corrected bareness rationale (a
-code-review finding during #1307 caught the shipped code comment overstating the single-caller case).
+The event has no request payload even though several callers can create concurrently.
+The dialog gates rejection on `status === 'creating'` and checks the main-stamped host.
+A different host cannot settle its wait, but a same-host concurrent create or earlier
+retry remains indistinguishable from its current attempt. Per-request correlation is
+unchanged by #1367: neither the numeric rejection correlation key nor a new create token
+crosses IPC. See [Daemon connection correlation § Create-conversation rejected
+correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
+for pending-entry lifetime and the accepted concurrent-caller limitation.
 
 ## Out of scope
 
-- **Reply correlation** (`in_reply_to`) — see § Correlation above; an additive read if a future
-  multi-request world needs it, not a reshape of this slice.
+- **Per-request success matching and renderer attempt attribution** — main-side rejection
+  correlation remains in place; neither result identifies a renderer attempt.
+- **Server-side cancellation and exactly-once creation** — timeout and Cancel end only
+  the local wait; explicit retry sends another create request.
 - **Resolving `cwd` into a real filesystem path** — untrusted daemon-supplied text, carried only as
   opaque display text in both directions; the daemon owns server-side `cwd` resolution (#666).
 
@@ -259,7 +277,7 @@ code-review finding during #1307 caught the shipped code comment overstating the
 
 - [Daemon connection correlation § Create-conversation rejected correlation](daemon-connection-correlation.md#create-conversation-rejected-correlation-1307)
   (#1307) — the `pendingCreateConversations` store, the bare `conversationCreateRejected` arm, and the
-  corrected bareness rationale (a rejection cannot be attributed to a caller — three live today).
+  request-attribution limit (a host stamp does not identify the calling surface or attempt).
 - [Channel List — the host row § The Add workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308)
   (#1308) — the third caller, `requestNewWorkspaceChat`, and the first consumer of the rejection arm above.
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
@@ -280,8 +298,8 @@ code-review finding during #1307 caught the shipped code comment overstating the
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) —
   the read-side twin this transport slice mirrors (single-verb request/reply, both shared-file
   touches, the `requireStringOrNull` nullable-field checker reused here).
-- [Daemon connection](daemon-connection.md) — hosts `createConversation(payload)`, the `send` twin
-  with the fresh-literal security net.
+- [Daemon connection](daemon-connection.md) — hosts `createConversation(payload)`, its
+  authenticated-session gate and fresh-literal security net.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseConversationCreatedPayload` and
   the `conversation-created` `InboundDaemonMessage` kind.
 - [Command channel](command-channel.md) — the `createConversation` `RendererCommand` member + guard.

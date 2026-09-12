@@ -134,20 +134,22 @@ no gate checks, and this one does not add a third claim to keep straight.
 
 - **Set / match+delete / reset — the `pendingCreateFolders` template verbatim.** `createConversation`
   captures `envelopeId = nextEnvelopeId` before the build and adds it to the set only after a successful
-  `driver.sendMessage` (a build/send throw registers nothing, so the id cannot be re-minted out from under
-  it); `case 'daemon-error':` checks the set alongside its five siblings inside the existing
+  `driver.sendMessage`. Since #1367, unavailable connections and build/send throws emit a
+  local host-stamped rejection without registering an entry, so a later error cannot
+  falsely correlate to an unsent request. `case 'daemon-error':` checks the set inside the existing
   `inReplyTo !== undefined` guard, and a match deletes the entry, emits the bare
   `{ type: 'conversationCreateRejected' }`, and `return`s before both `reassembler?.fail` and the modal-FIFO
   shift; `dial()` clears the set next to its siblings. Nothing is read off the untrusted error payload — the
-  event is nullary, the strongest form of the no-echo property this whole file follows.
+  event has no request/error payload; `bindServerOrigin` supplies the host stamp. Diagnostics
+  contain only static lifecycle names and classifications, never daemon or caught-error text.
 - **The success reply does not consume the entry — same as `pendingCreateFolders`, not a variant of it.**
-  `conversation_created` also serves as an unsolicited broadcast, so a late error for an already-created
-  conversation still emits a rejection. The obligation this pushes downstream is real, not hypothetical: a
-  consumer must gate on its own in-flight state the way `pendingCreateFolders`' `newFolderStore` already
-  does. [#1308](channel-list-host-row.md#the-add-workspace-dialog-1308)'s Add-workspace dialog is that
-  consumer, and its `status === 'creating'` gate discharges this specific obligation *by construction*
-  rather than by a runtime check: the dialog closes and unmounts on its own confirmation, tearing down both
-  listeners, so a rejection that arrives after the fact has no listener left to reach. Unbounded, on
+  Main emits `conversation_created` without matching a request, so a late error for an
+  already-created conversation can still emit a rejection. The [Add workspace
+  dialog](add-workspace-dialog.md#host-scoped-results) accepts only its selected host's
+  stamped results and gates rejection on `status === 'creating'`. After any submission,
+  a matching confirmation closes the still-open dialog, including after timeout/failure.
+  Success, Cancel and unmount detach its result/session-state listeners and clear its
+  local deadline; a later rejection cannot reopen it. Pending entries remain unbounded, on
   `pendingHistoryRequests`' accepted argument: an entry costs one number, only this client's own sends add
   one, every match or dial removes one.
 - **Bareness does not mean single-caller, and the shipped code comment overstated that it did.** The
@@ -156,11 +158,11 @@ no gate checks, and this one does not add a third claim to keep straight.
   dialog), so more than one request can be outstanding at once. The bare arm therefore cannot say *whose*
   rejection it is reporting — not because only one caller exists, but because the ticket scoped a per-entry
   payload out regardless (the daemon's own refusal message never echoes the path, so there is nothing to
-  carry even if a field were added). #1308's dialog does both things a consumer must: it gates on its own
-  in-flight state, **and** it accepts, rather than tries to fix, that a concurrent caller's rejection is
-  indistinguishable from its own while its own create is genuinely outstanding — that residue is unfixable
-  without a per-request payload the daemon does not send, and it fails toward a false failure report on a
-  create that will still land, never a false success. Do not repeat the "only one dialog is ever open"
+  carry even if a field were added). The dialog now checks the host stamp as well as its
+  pending state. Another host cannot settle its wait, but concurrent creates and retries
+  on the same host remain indistinguishable. No renderer request token or per-request
+  success matching was added; timeout and Cancel end only the local wait and do not cancel
+  the server operation. Do not repeat the "only one dialog is ever open"
   reasoning `pendingCreateFolders` earned honestly (that store really does have exactly one caller) when
   writing this store's next consumer.
 

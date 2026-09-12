@@ -264,8 +264,11 @@ parameter — React's synthetic event cannot reach it.
 
 **This ticket shipped no caller for either handler — both since corrected.**
 [#1299](#the-edit-host-dialog-1299) (split from #1187) gave `onEditHost` its first caller, and
-[#1308](#the-add-workspace-dialog-1308) gave `onAddWorkspace` its own: every production host row now draws
-both controls.
+[#1308](#the-add-workspace-dialog-1308) gave `onAddWorkspace` its own. Since #1367,
+`HostRowControl` supplies the plus only for `selectStatusFor(serverId).type === 'connected'`
+and rechecks that host's current session state when invoked. Missing, connecting,
+disconnected and failed states withhold it; another connected host or relay reachability
+cannot enable Add workspace. Existing error-host recovery controls retain their treatment.
 
 **The swap is guarded on a control actually being drawn, not on the row alone being hovered** — the whole
 point of the ticket, and the reason it needed a `:has()` rule rather than the obvious `.channel-list__host:hover
@@ -400,8 +403,8 @@ Split into its own page, [Add workspace dialog](add-workspace-dialog.md), for th
 caller since #1185 — its first caller: a near-clone of [`CreateChannelDialogView`](create-channel-dialog.md)
 with a round trip added, closer in shape to [the Edit host dialog](edit-host-dialog.md) than to its own
 template. Sends `requestNewWorkspaceChat`, a third sibling beside `requestNewConversation`/
-`requestNewChannel`. See [Add workspace dialog](add-workspace-dialog.md) for the full design: what it
-sends, the in-flight rejection-correlation gate, and the sink guard.
+`requestNewChannel`. See [Add workspace dialog](add-workspace-dialog.md) for connection
+gating, host-scoped results, the 30-second uncertain outcome, explicit retry and safe text sinks.
 
 ## Related
 

@@ -48,3 +48,8 @@ Pending for the documentation stage: update `docs/knowledge/features/edit-host-d
 ## Open questions
 
 None.
+
+## Revisions
+
+- Browser integration found one additional selector consumer in `e2e/sidebar-host-row-control-name-pill.spec.ts`, at the pen-open assertion. Update it to the accessible Edit host dialog locator and run that spec; remote overlap check for this additional file found none. No production contract change; total additions remain under the ~400-line estimate.
+- Visual review exposed a pre-existing shared `Modal` defect: Vite inlines `modal-close.svg` as a data URL, blocked by the app's existing CSP. The actual close control works, but its image has `naturalWidth` 0 rather than 28. Filed #1361 in Inbox and captured a failing browser regression, now skipped with its bug link under the scope rule. Shared component/asset loading and CSP remain outside this adoption. The unresolved visual deviation is the broken close image; all other required layout, controls and scrolling checks passed.

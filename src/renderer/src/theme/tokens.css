@@ -171,6 +171,7 @@
   --text-label-large-line: 20px;
   --text-label-large-tracking: 0.1px;
   --text-label-large-weight: 500;
+  --text-label-large-weight-emphasized: 600; /* M3 Static/Label Large/Weight-emphasized — Edit host captions. */
 
   --text-label-medium-size: 12px;
   --text-label-medium-line: 16px;

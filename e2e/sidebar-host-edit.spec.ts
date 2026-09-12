@@ -1,3 +1,6 @@
+import { mkdirSync } from 'node:fs'
+import { HOST_LABEL_SET_CHANNEL } from '../src/shared/ipc/hostLabel'
+import { SERVER_INFO_CHANNEL } from '../src/shared/ipc/serverInfo'
 import {
   test,
   expect,
@@ -63,8 +66,8 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 
 // #1300 — the two captions on the identity block, restated rather than imported for the FALLBACK_LABEL
 // reason above: they are what the user reads, so a copy change must redden this file loudly.
-const ID_CAPTION = 'Server ID'
-const RELAY_CAPTION = 'Relay'
+const ID_CAPTION = 'Server identity:'
+const RELAY_CAPTION = 'Relay address:'
 
 // #1300's relay URL is a DYNAMIC loopback port, so it is read off the fixture handle and never written as
 // a literal. This is the shape `launchPairedApp` paired each machine with, and `serverInfoHandler` answers
@@ -97,11 +100,12 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
     { hostLabel: OLD_LABEL, secondServer: {} }
   )
 
+  await page.setViewportSize({ width: 1280, height: 800 })
   const hostRows = page.locator('.channel-list__host')
   const hostLabels = page.locator('.channel-list__host-label')
-  const dialog = page.locator('.edit-host')
-  const nameField = page.locator('.edit-host__input')
-  const save = page.locator('.edit-host__save')
+  const dialog = page.getByRole('dialog', { name: 'Edit host' })
+  const nameField = dialog.getByRole('textbox', { name: 'Host name:' })
+  const save = dialog.getByRole('button', { name: 'OK', exact: true })
   const pens = page.locator('.channel-list__host-edit')
   // #1300 — the two identity lines of whichever dialog is open. `.edit-host__detail` is the whole
   // captioned line; `allTextContents` therefore returns caption + value concatenated, which is what
@@ -142,22 +146,36 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // clicking, which hovers the row on the way, so no explicit hover is needed. ---
   await pens.first().click()
   await expect(dialog).toBeVisible()
-  await expect(page.locator('.edit-host__title')).toHaveText('Edit host')
+  await expect(dialog.getByRole('heading')).toHaveText('Edit host')
   await expect(nameField).toHaveValue(OLD_LABEL)
   // #1300/AC1: the dialog names WHICH machine this row is — machine A's own server id and relay URL,
-  // each under its own caption, under the Name field. Both comparands come from the harness rather than
+  // each under its own caption, above the Host name field. Both comparands come from the harness rather than
   // from a literal: the id is the fixture's exported constant and the relay URL is this run's own
   // ephemeral loopback port, which no literal could name.
   await expectIdentity(FIRST_SERVER_ID, relayUrlOf(servers[0].forwarder.url))
   // AC1's sink clause, checked on the live DOM rather than on a server render: no element inside the open
-  // dialog carries a `title`, and none carries an `aria-label` — the dialog is named by its title element
+  // dialog carries a `title`; only the client-owned close control carries an `aria-label`. The title
   // through `aria-labelledby`, and the untrusted label reaches the field's `value` and nothing else. Since
   // #1300 this covers the two identity lines too, which is AC3's live half: neither value reaches an
   // attribute, and the relay URL in particular reaches no `href`.
   expect(await dialog.locator('[title]').count()).toBe(0)
-  expect(await dialog.locator('[aria-label]').count()).toBe(0)
+  await expect(dialog.locator('[aria-label]')).toHaveAttribute('aria-label', 'Close dialog')
+  await expect(dialog.locator('img')).toHaveCount(1)
+  await expect(dialog.locator('img')).toHaveAttribute('alt', '')
   expect(await dialog.locator('a').count()).toBe(0)
-  await page.locator('.edit-host__cancel').click()
+  mkdirSync('/tmp/builder-1348-modal', { recursive: true })
+  await page.screenshot({ path: '/tmp/builder-1348-modal/normal-1280x800.png' })
+  await expect(dialog).toHaveCSS('width', '646px')
+  await expect(nameField).not.toBeFocused()
+  await page.locator('.edit-host-overlay__scrim').click({ position: { x: 4, y: 4 } })
+  await expect(dialog).toBeVisible()
+  await nameField.focus()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeVisible()
+  await nameField.fill('Discard this draft')
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
   await expectLabels(OLD_LABEL, FALLBACK_LABEL)
 
@@ -168,11 +186,14 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // paired-server list's, oldest first, repeated per section), and the count assertion in step 1 is what
   // makes that arithmetic safe. Machine B carries no label, so its field opens EMPTY while its identity
   // lines are fully populated — the two are independent, which is itself worth pinning. ---
-  await pens.nth(1).click()
+  // Open the second host from the Chats tree using the keyboard.
+  await pens.nth(3).focus()
+  await page.keyboard.press('Enter')
   await expect(dialog).toBeVisible()
   await expectIdentity(SECOND_SERVER_ID, relayUrlOf(servers[1].forwarder.url))
   await expect(nameField).toHaveValue('')
-  await page.locator('.edit-host__cancel').click()
+  await dialog.getByRole('button', { name: 'Close dialog' }).focus()
+  await page.keyboard.press('Space')
   await expect(dialog).toHaveCount(0)
 
   // --- 3. AC2/AC3: Save is ENABLED on a blank name — the departure from the Edit workspace dialog — and
@@ -197,8 +218,9 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   // reached the container, the container reached `window.pyry.setHostLabelFor`, main trimmed and persisted
   // it under machine A's key, and the answer came back through the same mapper the reads use. ---
   const framesBeforeSave = inboundFrames
-  await nameField.fill(NEW_LABEL)
-  await save.click()
+  await nameField.fill(`  ${NEW_LABEL}  `)
+  await save.focus()
+  await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
   await expectLabels(NEW_LABEL, FALLBACK_LABEL)
 
@@ -240,4 +262,103 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   for (const index of B_ROWS) {
     expect((await hostLabels.nth(index).textContent())?.trim()).toBe(FALLBACK_LABEL)
   }
+})
+
+for (const exit of ['Cancel', 'Close dialog']) {
+  test(`failed saves can retry and ${exit} stays available during saving`, async ({ launchPairedApp }) => {
+    const { app, page } = await launchPairedApp({}, { hostLabel: OLD_LABEL })
+    // Hold odd requests before returning a failure; even requests use the real persistence handler.
+    await app.evaluate(({ ipcMain }, channel) => {
+      const original = (ipcMain as typeof ipcMain & {
+        _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, request: unknown) => Promise<unknown>>
+      })._invokeHandlers.get(channel)
+      if (!original) throw new Error('Host label handler missing')
+      let calls = 0
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async (event, request) => {
+        calls += 1
+        if (calls % 2 === 0) return original(event, request)
+        await new Promise<void>(resolve => ipcMain.once('test:release-host-save', () => resolve()))
+        return { status: 'error' }
+      })
+    }, HOST_LABEL_SET_CHANNEL)
+    const pen = page.locator('.channel-list__host-edit').first()
+    const dialog = page.getByRole('dialog', { name: 'Edit host' })
+    const field = dialog.getByRole('textbox', { name: 'Host name:' })
+    const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+    await pen.click()
+    await field.fill(NEW_LABEL)
+    await ok.click()
+    await expect(field).toBeDisabled()
+    await expect(ok).toBeDisabled()
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
+    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeEnabled()
+    await app.evaluate(({ ipcMain }) => { ipcMain.emit('test:release-host-save') })
+    await expect(dialog.getByText('Could not save that name', { exact: true })).toBeVisible()
+    await expect(field).toBeEnabled()
+    await expect(ok).toBeEnabled()
+    await ok.click()
+    await expect(page.locator('.channel-list__host-label').first()).toHaveText(NEW_LABEL)
+    await expect(dialog).toHaveCount(0)
+    await pen.click()
+    await ok.click()
+    await expect(ok).toBeDisabled()
+    await dialog.getByRole('button', { name: exit, exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+}
+
+test('long host details wrap at minimum width and all controls remain reachable in a short window', async ({ launchPairedApp }) => {
+  mkdirSync('/tmp/builder-1348-modal', { recursive: true })
+  const { app, page } = await launchPairedApp()
+  const server = { serverId: `host-${'x'.repeat(900)}`, relayUrl: `wss://relay.example/${'y'.repeat(1400)}` }
+  await app.evaluate(({ ipcMain }, { channel, server }) => {
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, () => ({ status: 'available', servers: [server] }))
+  }, { channel: SERVER_INFO_CHANNEL, server })
+  await page.reload()
+  await page.setViewportSize({ width: 800, height: 600 })
+  await page.locator('.channel-list__host-edit').first().click()
+  const dialog = page.getByRole('dialog', { name: 'Edit host' })
+  const values = dialog.locator('.edit-host__detail-value')
+  await expect(values).toHaveText([server.serverId, server.relayUrl])
+  await expect(dialog).toHaveCSS('width', '646px')
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  for (const value of await values.all()) {
+    expect(await value.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(20)
+    expect(await value.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  }
+  await page.screenshot({ path: '/tmp/builder-1348-modal/long-800x600.png' })
+  await page.setViewportSize({ width: 800, height: 240 })
+  await expect(dialog).toBeVisible()
+  expect(await dialog.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  const close = dialog.getByRole('button', { name: 'Close dialog' })
+  await close.focus()
+  await page.keyboard.press('Tab')
+  const field = dialog.getByRole('textbox', { name: 'Host name:' })
+  await expect(field).toBeFocused()
+  await expect(field).toBeInViewport()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeFocused()
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeInViewport()
+  await page.screenshot({ path: '/tmp/builder-1348-modal/short-footer-800x240.png' })
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Shift+Tab')
+  await expect(close).toBeFocused()
+  await expect(close).toBeInViewport()
+  await page.screenshot({ path: '/tmp/builder-1348-modal/short-header-800x240.png' })
+  await page.keyboard.press('Enter')
+  await expect(dialog).toHaveCount(0)
+})
+
+// https://github.com/pyrycode/pyrycode-desktop/issues/1361 — shared Modal inlines an SVG blocked by CSP.
+test.skip('blocked on #1361 — shared Modal close image decodes in the built app', async ({ launchPairedApp }) => {
+  const { page } = await launchPairedApp()
+  await page.locator('.channel-list__host-edit').first().click()
+  const closeImage = page.getByRole('dialog', { name: 'Edit host' }).locator('.modal__close img')
+  await expect(closeImage).toHaveJSProperty('naturalWidth', 28)
 })

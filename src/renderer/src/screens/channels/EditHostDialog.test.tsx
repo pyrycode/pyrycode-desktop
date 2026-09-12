@@ -45,15 +45,16 @@ function renderView(
   )
 }
 
-const SAVE_DISABLED = /edit-host__save"[^>]*disabled/
-const CANCEL_DISABLED = /edit-host__cancel"[^>]*disabled/
+const SAVE_DISABLED = /modal__action--confirm"[^>]*disabled/
+const CANCEL_DISABLED = /modal__action--cancel"[^>]*disabled/
+const CLOSE_DISABLED = /modal__close"[^>]*disabled/
 const INPUT_DISABLED = /edit-host__input"[^>]*disabled/
 
-// #1300 — each caption's whole opening-to-closing run, so an assertion can pin a value IMMEDIATELY
-// after its own caption rather than merely somewhere in the markup. Restated here rather than exported
+// Each caption plus its value span opening, so an assertion pins a value to its own caption.
+// Restated here rather than exported
 // from the view: this is what the user reads, so a copy change must redden these lines loudly.
-const ID_CAPTION = '<span class="edit-host__detail-label">Server ID</span>'
-const RELAY_CAPTION = '<span class="edit-host__detail-label">Relay</span>'
+const ID_CAPTION = '<span class="edit-host__detail-label">Server identity:</span><span class="edit-host__detail-value">'
+const RELAY_CAPTION = '<span class="edit-host__detail-label">Relay address:</span><span class="edit-host__detail-value">'
 
 // `ChannelList.test.tsx`'s helper, restated (it is file-local there, not exported).
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
@@ -63,14 +64,17 @@ describe('EditHostDialogView', () => {
     const markup = renderView('pyrybox')
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
-    expect(markup).toContain('aria-labelledby="edit-host-title"')
-    expect(markup).toContain('id="edit-host-title"')
+    expect(markup).toContain('class="modal"')
+    expect(markup).toContain('--modal-width:646px')
+    const titleId = markup.match(/aria-labelledby="([^"]+)"/)?.[1]
+    expect(titleId).toBeTruthy()
+    expect(markup).toContain(`id="${titleId}"`)
     expect(markup).toContain('>Edit host</h2>')
   })
 
   it('seeds the Name field with the row’s stored label (AC1)', () => {
     const markup = renderView('pyrybox')
-    expect(markup).toContain('>Name</span>')
+    expect(markup).toContain('>Host name:</span>')
     expect(markup).toContain('value="pyrybox"')
     // Exactly one field: this dialog has no second input. The server id and relay URL lines are #1300's.
     expect(markup.split('<input').length - 1).toBe(1)
@@ -85,12 +89,13 @@ describe('EditHostDialogView', () => {
     expect(renderView('')).toContain('value=""')
   })
 
-  it('renders Cancel and Save actions (AC1)', () => {
+  it('renders Cancel, OK and close actions (AC1)', () => {
     const markup = renderView('pyrybox')
-    expect(markup).toContain('edit-host__cancel')
-    expect(markup).toContain('edit-host__save')
+    expect(markup).toContain('modal__action--cancel')
+    expect(markup).toContain('modal__action--confirm')
     expect(markup).toContain('>Cancel</button>')
-    expect(markup).toContain('>Save</button>')
+    expect(markup).toContain('>OK</button>')
+    expect(markup).toContain('aria-label="Close dialog"')
   })
 
   it('keeps Save ENABLED while the name is blank (AC3)', () => {
@@ -115,6 +120,7 @@ describe('EditHostDialogView', () => {
     expect(markup).toMatch(SAVE_DISABLED)
     expect(markup).toMatch(INPUT_DISABLED)
     expect(markup).not.toMatch(CANCEL_DISABLED)
+    expect(markup).not.toMatch(CLOSE_DISABLED)
   })
 
   it('never disables Cancel in any status (AC3)', () => {
@@ -122,6 +128,7 @@ describe('EditHostDialogView', () => {
     // never answers would otherwise leave the dialog frozen with no exit.
     for (const status of ['idle', 'saving', 'failed'] as const) {
       expect(renderView('pyrybox', status)).not.toMatch(CANCEL_DISABLED)
+      expect(renderView('pyrybox', status)).not.toMatch(CLOSE_DISABLED)
     }
   })
 
@@ -147,21 +154,22 @@ describe('EditHostDialogView', () => {
     // inside the value and is inert there, because `<` and `>` are escaped so no tag is ever opened.
     const markup = renderView('Tom & <img src=x onerror=boom>')
     expect(markup).toContain('value="Tom &amp; &lt;img src=x onerror=boom&gt;"')
-    expect(markup).not.toContain('<img')
+    expect(markup.match(/<img /g)).toHaveLength(1)
+    expect(markup).toContain('alt="" aria-hidden="true"')
+    expect(markup).not.toContain('<img src=x')
   })
 
   it('shows the row’s server id and relay URL, each under its own caption (AC1)', () => {
-    // The exact concatenation is the point: the value sits IMMEDIATELY after its caption's closing tag,
+    // The exact concatenation is the point: the value sits in the span after its own caption,
     // so this pins the pairing as well as the presence. A reader who can see only one of the two lines
     // still knows which value it is.
     const markup = renderView('pyrybox')
-    expect(markup).toContain(`${ID_CAPTION}${SERVER.serverId}</p>`)
-    expect(markup).toContain(`${RELAY_CAPTION}${SERVER.relayUrl}</p>`)
-    // UNDER the Name field and above the actions — the field is what the user edits, the block is what
-    // they check it against, and Save must stay the last thing in the panel.
+    expect(markup).toContain(`${ID_CAPTION}${SERVER.serverId}</span></p>`)
+    expect(markup).toContain(`${RELAY_CAPTION}${SERVER.relayUrl}</span></p>`)
+    // Read-only identity comes before the editable field; confirmation remains in the footer.
     const details = markup.indexOf('edit-host__details')
-    expect(details).toBeGreaterThan(markup.indexOf('edit-host__field'))
-    expect(details).toBeLessThan(markup.indexOf('edit-host__actions'))
+    expect(details).toBeLessThan(markup.indexOf('edit-host__field'))
+    expect(details).toBeLessThan(markup.indexOf('modal__footer'))
   })
 
   it('holds a long relay URL whole — the wrap is CSS, never a slice (AC1)', () => {
@@ -170,14 +178,14 @@ describe('EditHostDialogView', () => {
     // .edit-workspace's max-height/overflow-y pair rather than bounding the string.
     const long = `wss://relay.example/${'x'.repeat(300)}`
     const markup = renderView('pyrybox', 'idle', { serverId: 'srv-1', relayUrl: long })
-    expect(markup).toContain(`${RELAY_CAPTION}${long}</p>`)
+    expect(markup).toContain(`${RELAY_CAPTION}${long}</span></p>`)
   })
 
   it('names the same machine in every status (AC1)', () => {
     // Which machine the dialog names does not depend on whether a write is in flight — the identity
     // block is derived from the container's lookup, not from the round trip.
     for (const status of ['idle', 'saving', 'failed'] as const) {
-      expect(renderView('pyrybox', status)).toContain(`${ID_CAPTION}${SERVER.serverId}</p>`)
+      expect(renderView('pyrybox', status)).toContain(`${ID_CAPTION}${SERVER.serverId}</span></p>`)
     }
   })
 
@@ -186,10 +194,10 @@ describe('EditHostDialogView', () => {
     // ticket asks for by name: not a crash (a rendered arm, not a dereference), not a blank the reader
     // cannot tell from a real value, and not a dropped block that would make the panel jump.
     const markup = renderView('pyrybox', 'idle', null)
-    expect(markup).toContain(`${ID_CAPTION}Unavailable</p>`)
-    expect(markup).toContain(`${RELAY_CAPTION}Unavailable</p>`)
-    expect(markup).not.toContain(`${ID_CAPTION}</p>`)
-    expect(markup).not.toContain(`${RELAY_CAPTION}</p>`)
+    expect(markup).toContain(`${ID_CAPTION}Unavailable</span></p>`)
+    expect(markup).toContain(`${RELAY_CAPTION}Unavailable</span></p>`)
+    expect(markup).not.toContain(`${ID_CAPTION}</span></p>`)
+    expect(markup).not.toContain(`${RELAY_CAPTION}</span></p>`)
     // The dialog stays open and keeps its rename: the miss has nothing to do with the name being typed.
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('value="pyrybox"')
@@ -213,7 +221,7 @@ describe('EditHostDialogView', () => {
       markup.indexOf(RELAY_CAPTION) + RELAY_CAPTION.length
     )
     expect(markup).not.toContain('title=')
-    expect(markup).not.toContain('aria-label=')
+    expect(markup.match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Close dialog"'])
   })
 
   it('renders a hostile server id and relay URL as inert text, never live markup', () => {
@@ -224,7 +232,9 @@ describe('EditHostDialogView', () => {
       serverId: 'srv"><img src=x onerror=boom>',
       relayUrl: 'wss://r.example/"onmouseover="alert(1)'
     })
-    expect(markup).not.toContain('<img')
+    expect(markup.match(/<img /g)).toHaveLength(1)
+    expect(markup).toContain('alt="" aria-hidden="true"')
+    expect(markup).not.toContain('<img src=x')
     expect(markup).not.toContain('"onmouseover="')
     expect(markup).not.toContain('<a ')
     expect(markup).not.toContain('href')
@@ -235,7 +245,7 @@ describe('EditHostDialogView', () => {
     // the label, no id and no class name derived from it. The dialog is named by its title element.
     const markup = renderView('pyrybox', 'failed')
     expect(markup).not.toContain('title=')
-    expect(markup).not.toContain('aria-label=')
+    expect(markup.match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Close dialog"'])
     expect(markup.split('pyrybox').length - 1).toBe(1)
   })
 })

@@ -105,3 +105,10 @@ recipe, capture the actual statically rendered component with inline assets at 1
 800×600 and 800×240, including a caller width override and tall content. Inspect the
 images against Figma. This replaces the earlier markup-only visual check; clicks,
 focus and integrated scrolling remain the adoption tickets' browser-tier checks.
+
+The short-window capture exposed a CSS grid sizing failure with a 1200px caller
+width: a percentage inside `max-width: min(...)` let the intrinsic grid track grow,
+offsetting the capped panel beyond the window. `Modal` now supplies a typed CSS
+custom property; `.modal` uses a container-relative width and an independent,
+viewport-relative maximum. The public width contract is unchanged. Re-capture the
+oversized override to verify the document stays 800px wide.

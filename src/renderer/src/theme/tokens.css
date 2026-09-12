@@ -138,6 +138,7 @@
   --text-body-large-line: 24px;
   --text-body-large-tracking: 0.5px;
   --text-body-large-weight: 400;
+  --text-body-large-weight-emphasized: 500; /* M3 Static/Body Large/Weight-emphasized — Modal actions. */
 
   --text-body-medium-size: 14px;
   --text-body-medium-line: 20px;
@@ -244,6 +245,7 @@
   --radius-full: 9999px;
 
   /* Shadows */
+  --shadow-elevation-5: 0 8px 12px 6px rgba(0, 0, 0, 0.15), 0 4px 4px 0 rgba(0, 0, 0, 0.3);
   --shadow-thread: 0 4px 5px rgba(0, 0, 0, 0.2); /* The one drop shadow on EVERY element of the desktop
                                                     message area (the 2026-09-05 shadow fix, Figma "Content"
                                                     132:4012 / "Message area" 132:3959): X 0, Y 4, blur 5,

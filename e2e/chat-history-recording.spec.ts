@@ -12,8 +12,15 @@ const snapshotText = (result: ChatHistoryResult): string => result.status === 's
 
 test('records received content, drains buffered quit, and reads locally after relaunch', async ({ launchPairedApp }) => {
   let historyAsks = 0
+  const queuedText = 'queued echo to cancel'
+  let queuedMessageId: string | undefined
+  let dequeues = 0
   const first = await launchPairedApp({ buildReplyFrames: (bytes) => {
     const env = decodeEnvelope(bytes)
+    if (env.type === 'send_message' && env.payload.text === queuedText && typeof env.payload.message_id === 'string') {
+      queuedMessageId = env.payload.message_id
+    }
+    if (env.type === 'dequeue_message') dequeues++
     if (env.type === 'list_conversations') return [seedConversationsFrame()]
     if (env.type !== 'request_history') return []
     historyAsks++
@@ -40,6 +47,18 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(saved).toMatchObject({ status: 'stored', snapshot: { prependedRows: 15,
     coverage: { status: 'received', cursor: 'oldest-page', atStart: true } } })
   expect(snapshotText(saved)).toContain('composer echo saved')
+
+  await page.getByPlaceholder('Message…').fill(queuedText)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect.poll(() => queuedMessageId).toEqual(expect.any(String))
+  await expect.poll(async () => snapshotText(await read())).toContain(queuedText)
+  await daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id,
+    queued: [{ queued_msg_id: 7, message_id: queuedMessageId, text: queuedText, ts }] }))
+  await page.getByRole('button', { name: 'Drop queued message' }).click()
+  await expect.poll(() => dequeues).toBe(1)
+  await daemon.pushFrame(frame('queue_state', { conversation_id: SEEDED_ROW.id, queued: [] }))
+  await expect(page.locator('.conversation__thread')).not.toContainText(queuedText)
+  await expect.poll(read).toEqual(saved)
 
   // Freeze only renderer timers: the final received updates cannot reach their scheduled save.
   await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })

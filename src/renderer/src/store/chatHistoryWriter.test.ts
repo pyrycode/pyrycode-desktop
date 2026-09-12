@@ -96,6 +96,66 @@ describe('chat history recording', () => {
     expect(h.save).toHaveBeenCalledTimes(1)
   })
 
+  it('saves cancelled echoes and subsequent live content with the held host and successful coverage', async () => {
+    const h = harness()
+    h.list()
+    h.delta('partial')
+    h.receive('historyPageReceived', () => {
+      h.timelines.getState().prependHistoryFor('chat', [{ kind: 'userText', text: 'older', messageId: 'old' }])
+      h.timelines.getState().recordHistoryPage('chat', 'cursor', true)
+    })
+    h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'queued', messageId: 'echo' })
+    await h.writer.flush()
+    h.timelines.getState().markHistoryRequested('chat')
+    h.receive('historyRequestFailed', () => h.timelines.getState().recordHistoryFailure('chat', 'history-unavailable', true))
+    h.receive('turnState', () => h.timelines.getState().dispatchFor('chat', { type: 'turnState', state: 'idle' }))
+    h.lists.getState().clearAllConversations()
+    h.timelines.getState().dispatchFor('chat', { type: 'dropUserText', messageId: 'echo' })
+    await h.writer.flush()
+    expect(timelineRequests(h)).toHaveLength(2)
+    expect(timelineRequests(h)[1].snapshot).toMatchObject({ serverId: 'a', prependedRows: 1,
+      coverage: { status: 'received', cursor: 'cursor', atStart: true }, items: [
+        { kind: 'userText', text: 'older', messageId: 'old' }, { kind: 'assistantText', text: 'partial' }
+      ] })
+    h.delta(' continued')
+    await h.writer.stop()
+    expect(timelineRequests(h)).toHaveLength(3)
+    expect(timelineRequests(h)[2].snapshot).toMatchObject({ serverId: 'a', prependedRows: 1,
+      coverage: { status: 'received', cursor: 'cursor', atStart: true }, items: [
+        { kind: 'userText', text: 'older' }, { kind: 'assistantText', text: 'partial continued' }
+      ] })
+  })
+
+  it('saves an empty timeline after cancelling its only observed echo without inventing coverage', async () => {
+    const h = harness()
+    h.list()
+    h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'queued', messageId: 'echo' })
+    await h.writer.flush()
+    h.timelines.getState().dispatchFor('chat', { type: 'dropUserText', messageId: 'echo' })
+    await h.writer.stop()
+    expect(timelineRequests(h)).toHaveLength(2)
+    expect(timelineRequests(h)[1].snapshot).toMatchObject({ items: [], coverage: { status: 'unknown' } })
+  })
+
+  it.each(['restored', 'conflicting'])('does not authorize %s content by removing an echo', async (mode) => {
+    const h = harness()
+    h.list()
+    h.delta('safe')
+    h.timelines.getState().dispatchFor('chat', { type: 'userText', text: 'queued', messageId: 'echo' })
+    await h.writer.flush()
+    if (mode === 'restored') {
+      h.timelines.getState().prependHistoryFor('chat', [{ kind: 'userText', text: 'restored', messageId: 'old' }])
+    } else {
+      h.list(['chat'], 'b')
+      h.delta('foreign', 'chat', 'b')
+      h.lists.getState().clearConversationsFor('b')
+    }
+    h.timelines.getState().dispatchFor('chat', { type: 'dropUserText', messageId: 'echo' })
+    h.delta('later')
+    await h.writer.stop()
+    expect(timelineRequests(h)).toHaveLength(1)
+  })
+
   it('keeps the newest content received during an in-flight write and drains it on stop', async () => {
     let release: (r: ChatHistoryResult) => void = () => {}
     const h = harness(() => new Promise((resolve) => { release = resolve }))

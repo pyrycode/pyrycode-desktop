@@ -22,6 +22,7 @@ export function createChatHistoryWriter(deps: {
   const seen = new Map<string, string>()
   const saved = new Map<string, string>()
   const observations = new Map<string, Observation>()
+  const localEchoes = new WeakSet<object>()
   let cancel: (() => void) | undefined
   let running: Promise<void> | undefined
   const report = (code: string) => deps.log({ event: 'history-writer-result', code })
@@ -105,7 +106,15 @@ export function createChatHistoryWriter(deps: {
       const echo = receipt === null && slice.timeline.localSendPending && tail?.kind === 'userText' &&
         tail.messageId !== undefined && items.length === previousItems.length + 1 &&
         previousItems.every((item, index) => item === items[index])
-      if (receipt === null && !echo) {
+      // removeUserEcho removes one row; restored arrays cannot confer local echo identity.
+      const droppedIndex = receipt === null && previousItems.length === items.length + 1
+        ? previousItems.findIndex((item, index) => item !== items[index]) : -1
+      const dropped = previousItems[droppedIndex]
+      const droppedEcho = dropped?.kind === 'userText' && dropped.messageId !== undefined &&
+        dropped.messageId !== '' && localEchoes.has(dropped) &&
+        slice.history === before?.history && slice.prependedRows === before?.prependedRows &&
+        items.every((item, index) => item === previousItems[index < droppedIndex ? index : index + 1])
+      if (receipt === null && !echo && !droppedEcho) {
         // A direct restoration is not a receipt. Its existing rows have no observed supplying host.
         if (changed && items.length > 0) {
           forgetComparison(id)
@@ -114,10 +123,11 @@ export function createChatHistoryWriter(deps: {
         continue
       }
       if (!changed && slice.history === before?.history) continue
-      if (items.length === 0 && slice.history?.status !== 'loaded') continue
+      if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho) continue
       const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
-      const supplied = receipt === null ? (claims.length === 1 ? claims[0][0] : null) : receipt.serverId
       const held = observations.get(id)
+      const supplied = receipt === null
+        ? (droppedEcho ? held?.owner : claims.length === 1 ? claims[0][0] : null) : receipt.serverId
       const owner = typeof supplied === 'string' && claims.every(([host]) => host === supplied) &&
         (held === undefined ? previousItems.length === 0 : held.owner === supplied) ? supplied : null
       if (owner === null) forgetComparison(id)
@@ -126,6 +136,7 @@ export function createChatHistoryWriter(deps: {
         : held?.coverage ?? { status: 'unknown' }
       observations.set(id, { owner, coverage })
       if (owner === null) { report('unknown-ownership'); continue }
+      if (echo) localEchoes.add(tail)
       capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
         items: [...items], prependedRows: slice.prependedRows, coverage })
     }

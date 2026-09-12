@@ -17,9 +17,11 @@ transport, or new store/wire code, so not security-sensitive.
 
 ## What it does
 
-- Reads `useConversationListStore(selectConversations)` and renders: **not-yet-loaded** (`null`) →
-  the neutral wrapper only, no headers, no rows; **nothing to draw** (no paired server *and* no
-  active row) → the wrapper only; otherwise both section headers and the divider, unconditionally.
+- Reads saved `serverIds` independently of `useConversationListStore(selectConversations)`.
+  Every saved host renders in both trees even before a conversation list arrives. `renderBody`
+  partitions `conversations ?? []` for display only: the store keeps `null` as **not-yet-loaded**.
+  **Nothing to draw** (no saved server *and* no active row) yields the wrapper only; otherwise
+  both section headers and the divider render.
   The `"No conversations yet"` empty state was retired by
   [#1070](https://github.com/pyrycode/pyrycode-desktop/issues/1070) — a paired app always has at
   least a host row to draw (§ below).
@@ -77,6 +79,14 @@ transport, or new store/wire code, so not security-sensitive.
   pen — every host row now opens an Edit host dialog on click, renaming the machine — and the plus is
   still #1189's. See [the host row and its connection dots](channel-list-host-row.md) for the full
   detail.
+- A failed host keeps its row and held workspace/conversation subtree. Its server glyph and label
+  use the error color, with an always-visible, keyboard-operable `Repair host` button beside the
+  separate daemon and relay dots. Pairing rejection is announced as `Pyrycode Pairing rejected`;
+  ordinary offline and connecting states keep their own labels, and the relay leg stays independent.
+  Repair opens [the host's recovery pane](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
+  beside the sidebar without a selected conversation. Opening or cancelling it removes nothing;
+  explicit host removal remains in Settings. This retains already-held chats; restoring saved chats
+  on a fresh launch is separate work in #1339.
 - Below each host row, that machine's own rows group by **workspace** — one group per distinct
   `cwd`, each headed by a 28px workspace row one indent deeper than the host row (Figma `106:3098`).
   A workspace is a conversation's `cwd`; there is no separate wire concept for it. Both sections
@@ -495,8 +505,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   its absence.
 - **The host row shows the label and connection state of the specific server it names**, not a
   singleton — closed by [#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199); see
-  [the host row and its connection dots](channel-list-host-row.md) for the full detail, including the
-  residual staleness a mid-session re-pair leaves until the next `ChannelList` remount.
+  [the host row and its connection dots](channel-list-host-row.md) for the full detail. Recovery keeps
+  the sidebar mounted, so a successful confirmation explicitly refreshes saved-host order.
 - **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md): `relayLeg(null)` returns
   a fourth category, `unknown`/`Relay Unknown`, instead of being collapsed into `down`/`Relay Offline`.
   See [the host row and its connection dots](channel-list-host-row.md) for how this screen's dots

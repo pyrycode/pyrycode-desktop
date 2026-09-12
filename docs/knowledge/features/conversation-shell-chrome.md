@@ -139,27 +139,13 @@ invoke).
 
 [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) (operator ruling, 2026-09-04) deleted
 the component, its mount, and the `.conversation__header` rule — the desktop `Content` frame (Figma
-106:3321) draws a message area straight onto an input area with no header row at all. **This removes the
-only way to unpair a *healthy* pairing from inside the app.** The one surviving `runUnpair` caller is
-[Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below,
-reachable only on a terminal pairing error; Settings can replace a pairing (`Pair another server`) but
-still has no unpair row. The gap is accepted deliberately, not closed by this ticket: a successor lands
-unpairing on a **host-level** surface instead (unpair forgets the whole server, not one conversation, so
-the conversation-scoped [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)
-is the wrong home for it), most likely the sidebar's host row, to be settled with #1070.
-
-`ConversationScreen`'s **optional** `onUnpaired?: () => void` prop — mirroring `PairingScreen`'s
-`onPaired?`/`onCancel?` — survives the deletion unchanged: its one remaining consumer is the composer
-status row's error slot below, so a bare `<ConversationScreen />` still server-renders green with no
-prop supplied. `unpairAction.ts` and `runUnpair` were untouched, byte-for-byte, by #1061's deletion, and
-their header comment read "UnpairControl is thin glue over this" as a dead reference for a while —
-[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) rewrote both the module and its header
-when it migrated `runUnpair` onto the per-server channel and had it delegate to
-`runUnpairServer`/`serverIdForOpenConversation` instead; see [Unpair channel § The two renderer
-callers](unpair-channel.md#the-two-renderer-callers) for the current shape. See [#166 codebase
-notes](../codebase/166.md) for the original control's full design, the [App shell](app-shell.md) for the
-route-flip half, and the [#1061 architecture spec](../../specs/architecture/1061-hide-the-unpair-control.md)
-for the deletion.
+106:3321) draws a message area straight onto an input area with no header row at all. Explicit host
+removal now lives in
+[Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162). Composer Re-pair opens
+[non-destructive recovery](paired-shell-routing.md#host-recovery-and-navigation-lifetime);
+`onUnpaired?` remains only as a compatibility prop on `ConversationScreen`. See
+[#166 codebase notes](../codebase/166.md) for the original control and the
+[#1061 architecture spec](../../specs/architecture/1061-hide-the-unpair-control.md) for its deletion.
 
 ## Re-pair control (#167, folded into the composer status row's error slot by #963)
 
@@ -192,18 +178,12 @@ without it, a failed re-pair would immediately re-satisfy the predicate and re-o
 loop. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
 re-dials), so it never reaches this predicate either.
 
-The **no confirm phase, no busy guard** posture carried over to `ComposerErrorSlotControl` unchanged —
-the button only ever appears in an already-terminal error, so a confirm step is pure friction, and the
-affordance self-hides on both outcomes (`ok` → either the route unmounts the screen, if that was the
-last paired server, or the shell just stays up with the error cleared; `error` → store lands on
-`code: 'unpair'`, which the predicate excludes). The wiring underneath it changed at
-[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163): `runUnpair` no longer calls a nullary
-`window.pyry.unpair`, it resolves the server whose conversation is open
-(`serverIdForOpenConversation` over `conversationListStore`'s stamped rows, read at click time rather
-than subscribed) and delegates to `runUnpairServer` on the per-server channel, so the route flip is now
-conditional on nothing being left paired rather than unconditional on `ok` — see [Unpair channel § The
-two renderer callers](unpair-channel.md#the-two-renderer-callers) for the mechanism. See [#167 codebase
-notes](../codebase/167.md) for the original design, patterns, and code-review record.
+The button now opens the host's recovery pane without an erase or preliminary confirmation.
+The existing pairing form still requires fingerprint confirmation before saving new credentials.
+`ComposerErrorSlotControl` resolves its status and repair target from the open conversation's server;
+its click delegates to the shell and never invokes `runUnpair`. See
+[the current control](conversation-shell-composer-status.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+and [recovery navigation](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
 
 ## Connection banner (#279)
 
@@ -233,19 +213,17 @@ split exactly, before that control was retired as a separate surface by #963:
   distinct from the status row's remaining strings (`COMPOSER_ERROR_CHIP_COPY`, `COMPOSER_REPAIR_BUTTON_COPY`
   — [#968](../codebase/968.md) retired the three `composerAvailability` hints this was originally argued
   distinct from) so the prominent banner and the row directly above the message box never read as the
-  same string stacked twice. One constant, not a per-arm map — every non-connected arm is a state where
-  pyry is unreachable, so one sentence covers all three honestly.
-- **`ConnectionBanner({ status })`** — exported pure view in `ConversationScreen.tsx`. Returns `null`
-  unless `shouldShowBanner(status)`, else a single `role="status"` `<p className="conversation__banner">`
-  holding only `CONNECTION_BANNER_COPY` — nothing derived from `status`, so no daemon-supplied string
-  (`ConnectionError.message`) can ever reach it, a structural guarantee (the `EMPTY_THREAD_COPY`/
-  `ThinkingIndicator` idiom) rather than a convention. `status` is a **prop**, so the shown/hidden matrix
-  server-renders directly, unlike `RepairPrompt`'s populated branch (which needs an `error` status not
-  reachable from the store's server-snapshot).
-- **`ConnectionBannerControl()`** — in-file, unexported container: `useSessionStore(selectStatus)` then
-  `<ConnectionBanner status={status} />`. Selecting only `status` re-renders it exactly on a connection
-  transition, never on a timeline delta — the same narrow-slice seam the composer gate and
-  `RepairControl` already use.
+  same string stacked twice. This is the generic non-connected copy; classified pairing rejection
+  uses the fixed recovery notice described below.
+- **`ConnectionBanner({ status })`** — exported pure view in `ConversationScreen.tsx`. Returns
+  `null` when connected; otherwise a `role="status"` paragraph. `pairing-rejected` selects exactly:
+  "Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect." Other
+  non-connected states use `CONNECTION_BANNER_COPY`. Both are client-owned strings; the view never
+  renders `ConnectionError.message`.
+- **`ConnectionBannerControl()`** — uses `useOpenConnectionStatus`, shared with the composer send
+  gate and repair/error slot. It selects the open conversation's host, falling back to disconnected
+  for missing attribution or an unreported host, never to another server's status. See
+  [Session store](session-store.md#one-slot-per-server-since-1133).
 
 Mounted directly above `<Timeline />` — the first thing under the overflow menu's gate since #1061
 deleted the header row that used to precede it — "the top of the thread." Styled
@@ -307,7 +285,8 @@ alone.
 | `connected` | up | `Pyrycode Connected` |
 | `connecting` | in-progress | `Pyrycode Connecting` |
 | `disconnected` | down | `Pyrycode Offline` |
-| `error` | down | `Pyrycode Offline` — `ConnectionError.message` never reaches this indicator, the banner (#279) owns error text |
+| `error` with `pairing-rejected` | down | `Pyrycode Pairing rejected` |
+| Other `error` | down | `Pyrycode Offline` — error message text is never rendered |
 
 Both functions `switch` with an explicit `ConnectionLeg` return type and **no `default`** — the
 standing desktop exhaustive-switch guard (TS2366), so a future `RelayLinkStatus`/`ConnectionStatus`

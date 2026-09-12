@@ -40,7 +40,10 @@ The four status arms' `serverId` is **optional**, since [#1133](#one-slot-per-se
 
 The first two message actions mirror the two wire envelope types 1:1, so #3's translation is obvious; `messageSent` ([#66](../codebase/66.md)) is a **locally-composed** echo dispatched by the composer, given a distinct name to document intent (not a daemon delivery) though its reducer body is identical. `message_chunk` is a **batch of complete messages** (backfill), not partial-token streaming — the reducer appends whole messages; there is no per-`message_id` token accumulator.
 
-`ConnectionError` (`{ code, message, retryable }`) is a renderer-owned mirror of the wire `ErrorPayload`. It exists so that failures with **no** wire `ErrorPayload` — a silent Noise-handshake failure, a dropped socket — synthesize `code: 'transport' | 'handshake'` and land in the same `status.error` shape the UI banner reads. A wire `error` envelope simply copies its fields across.
+`ConnectionError` (`{ code, message, retryable }`) is a renderer-owned shape for
+connection failures. Main classifies wire errors and transport failures into
+client-owned codes and copy; raw daemon error text is not copied across IPC.
+The connection banner selects fixed copy from the code, never `error.message`.
 
 ### The reducer
 
@@ -71,18 +74,36 @@ shared cell: `withStatus` writes the *same* `ConnectionStatus` object reference 
 `selectStatus` and `selectStatusFor(origin)` can never disagree about the connection that just moved,
 and an untouched server's slot comes back by reference (no re-render for a component watching it).
 
-`status` itself is **not** reshaped into the index — it stays the single most-recently-written cell,
-byte-for-byte its pre-#1133 behaviour. This is deliberate, not an oversight: it is what the connection
-banner, the composer's status row, the repair control, and `composerSend`'s plain-argument taker all
-still read via `selectStatus`, untouched — four genuinely app-wide consumers.
-[#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199) moved the sidebar's
-`HostConnectionDotsControl` daemon leg **off** this cell and onto `selectStatusFor(serverId)`, because a
-row that names one machine has to report that machine, not whichever connection last moved — so this
-cell keeps a real purpose in the four it still serves rather than surviving on inertia. `relayLinkStore`'s
-matching app-wide cell, `selectRelayLinkStatus`, is **not** in the same position — it lost its only
-reader in the same move (see [relay-link store](relay-link-store.md)) — so do not retire the two
-together on the strength of this one. A fold ("connected if any server is") was considered and rejected —
-it would change what the four remaining consumers say today.
+`status` remains the most-recently-written compatibility cell. Host and thread decisions use
+`statuses`: the sidebar's `HostConnectionDotsControl` selects its own `serverId`, while
+`ConversationScreen`'s `useOpenConnectionStatus` resolves the open conversation against the
+client-stamped conversation list, then selects that server's slot. The composer send gate, connection
+banner and repair/error slot all use this hook. Missing, unstamped or ambiguous attribution, or an
+unreported slot, renders as disconnected; another host's status is never a fallback. The refusal
+Switch back handler also rechecks the open host's connected state at interaction time.
+
+A healthy B must keep its composer usable when A rejects pairing afterward. Neither the last-written
+cell nor an "any host connected" fold can answer whether a particular conversation can send.
+`e2e/host-row-per-server.spec.ts` waits for B's **daemon** to settle offline before asserting A's
+editable input, enabled Send, absent error/repair UI and unchanged dots. A relay-dot change alone
+can precede the daemon failure and let those absence assertions pass too early.
+
+Automatic recovery is a different decision: `automaticRecoveryTarget` in `PairedShell.tsx` reads
+only slots named by the current `ServerInfoState.servers` list. Any connected saved host prevents
+automatic opening; any connecting or unreported host defers it. Once every saved host has settled,
+the first `error` with code `pairing-rejected` in saved order is the target. Disconnected and generic
+error states alone do not trigger recovery. Stale map entries for removed hosts, including a connected
+one, have no vote. Keep `selectStatusFor`'s `undefined` result intact for this decision: the sidebar's
+offline-looking launch dot is a display fallback, not evidence that the host has settled.
+See [routing](paired-shell-routing.md#host-recovery-and-navigation-lifetime) for outage suppression.
+
+Rejection preservation belongs to [the daemon connection](daemon-connection.md#pairing-rejection-lifetime),
+not this unconditional reducer. An exact decoded `auth.invalid_token` yields the client-owned
+`pairing-rejected` category and the notice: "Your pairing has expired or is no longer valid. Enter a
+new pairing code to reconnect." The connection retains that reason through later generic send/close
+failures and clears its latch on a valid handshake. A reconnect or credential replacement for A cannot
+clear B's rejection. The decoder and connection unit tests cover exact classification, private-text
+exclusion, the rejection/send/close sequence, reconnect reset and independent connections.
 
 `StatusOrigin = string | null | undefined` is the renderer-side twin of
 [`liveWindow.ts`'s same-named type](live-window.md#one-slot-per-server-since-1121) (main-side, #1121,
@@ -136,7 +157,7 @@ The app singleton wires it to `logSessionTransition` from the co-located `sessio
 ```
  #3 channel (later)                 sessionStore                 #12 components (later)
  daemon Envelope ──translate──►  dispatch(SessionAction) ──►  useSessionStore(selectMessages) ──► render
-   message / hello_ack / error     reduceSession (pure)         useSessionStore(selectStatus)
+   message / hello_ack / error     reduceSession (pure)         useSessionStore(selectStatusFor(serverId))
 ```
 
 Narrow-slice selection means a status change does not re-render the thread and an append does not re-render the status row: `selectMessages` returns the **same array reference** until an append creates a new one, so Zustand's default `Object.is` equality skips the unrelated re-render.
@@ -144,18 +165,18 @@ Narrow-slice selection means a status change does not re-render the thread and a
 ## Configuration and usage
 
 - **Import surface for #3** (dispatch): `import { sessionStore, type SessionAction } from '@renderer/store/sessionStore'`, then `sessionStore.getState().dispatch(action)` per received envelope.
-- **Import surface for the read side** (realized in [#69](../codebase/69.md)): `import { useSessionStore, selectMessages, selectStatus } from '@renderer/store/sessionStore'`. A per-server reader (none exists yet — see below) adds `selectStatusFor` to that import.
+- **Import surface for the read side:** host-specific readers use `useSessionStore(selectStatusFor(serverId))`. `selectStatus` remains available for the compatibility cell; it cannot identify an open conversation's connection.
 - **The adapter seam (realized in [#69](../codebase/69.md)):** the store holds wire `MessagePayload` (`role: 'user'|'assistant'`, `message_id`, `text`); the shell's `Message` view model uses `type: 'user'|'daemon'`, `id`, `text`. `ConversationScreen` maps each payload through `toMessageViewModel` (`role: 'assistant'` → `'daemon'`, `message_id` → `id`, `conversation_id` dropped) at the store-read boundary — keeping the store's wire types drift-free per ADR 0004. See [conversation-shell](conversation-shell.md).
 
 ## Edge cases and limitations
 
 - **Dedupe by `message_id`.** Every append routes through `appendUnique` (added in #27): a message whose `message_id` the store already holds is skipped in place (arrival order preserved), and the array reference is returned unchanged when nothing new is added, so a pure duplicate does not churn selectors. This covers `message_chunk` backfill overlap and — since [#66](../codebase/66.md) — the optimistic-send → daemon-echo case (the same-`message_id` echo drops against the local copy).
-- **History is never cleared by a status action.** A fresh `connecting`/`disconnected` leaves `messages` intact (status and messages are orthogonal). Reconnect-clears-history is still an open question for #3's reconnect/backfill work. The one action that *does* clear both facets is `reset` ([#166](../codebase/166.md)) — a distinct, explicit mutation for when a pairing ends, not a side effect of any connection-status transition. Since [#531](../codebase/531.md), both paths that end a pairing (unpair, pair-another-server) dispatch it via the shared `clearPairingScopedState` helper — it moved out of `unpairAction.ts`, which used to be its sole caller, so the pair-another path stopped being the one path that left this store stale.
-- **`reset` clears only this store's two facets — it is not the whole pairing-scoped clear.** Before [#179](../codebase/179.md) moved the visible thread onto `timelineStore.items`, resetting `sessionStore` alone was sufficient to hide a previous pairing's conversation. It no longer is: `reset` says nothing about the timeline rows, the active conversation, or the daemon session id, all of which latch independently. [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) ([#531](../codebase/531.md)) owns the full four-store set this action is one member of.
+- **History is never cleared by a status action.** A fresh `connecting`/`disconnected` leaves `messages` intact (status and messages are orthogonal). The one action that *does* clear both facets is `reset` ([#166](../codebase/166.md)) — a distinct, explicit mutation for when a pairing ends, not a side effect of any connection-status transition. The shared `clearPairingScopedState` helper dispatches it when explicit removal ends the last pairing. Adding another host or repairing an existing one ends no pairing and does not clear this state.
+- **`reset` clears only this store's three facets — it is not the whole pairing-scoped clear.** Before [#179](../codebase/179.md) moved the visible thread onto `timelineStore.items`, resetting `sessionStore` alone was sufficient to hide a previous pairing's conversation. It no longer is: `reset` says nothing about the timeline rows, the active conversation, or the daemon session id, all of which latch independently. [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) ([#531](../codebase/531.md)) owns the full four-store set this action is one member of.
 - **Single active conversation.** `MessagePayload` carries `conversation_id`, but #2 appends all messages to one list; multi-conversation routing is out of scope.
 - **Optimistic send (realized in [#66](../codebase/66.md)).** The composer's own-message echo dispatches the dedicated `messageSent` action, appending a wire `MessagePayload { role: 'user' }` through `appendUnique`. Carrying the **same `message_id`** sent on the wire is what lets the daemon's later echo dedupe against the optimistic copy instead of double-posting. See [Composer send](composer-send.md).
 - **Synchronous only.** The store does no async work, no I/O, no subscriptions to tear down; #3/#4 own the channel, cancellation, and teardown and call `dispatch` synchronously.
-- **No whole-map selector, and no live consumer of `statuses` yet.** This ticket (#1133) ships the keyed store and its two read surfaces, deliberately with no visual change: nothing in the renderer can enumerate paired servers yet (`commands.ts` and `connectionRegistry.ts` both record that as a shipped fact), so a whole-map selector would be an unconsumed read surface. #1070 is expected to read `selectStatusFor` per row once it has a real per-server id to call it with.
+- **Recovery preserves state.** Opening, cancelling and completing a same-host re-pair do not dispatch `reset` or erase held conversations. The shell subscribes to `statuses` for automatic recovery; individual host and conversation controls select one slot. Explicit removal remains in Settings.
 
 ## Related
 
@@ -163,7 +184,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store; its `originOf` (#1133) is the only place the per-server `serverId` on a status action is derived, from #1068's stamp
 - [Live window](live-window.md#one-slot-per-server-since-1121) — #1121, the main-side precedent for the same `Map<StatusOrigin, …>` shape, applied to the reopened-window status cache
 - [Relay-link store](relay-link-store.md#one-slot-per-server-since-1134) — #1134, the third application of this shape: the relay leg the same host row reads next to this one, keyed by its own `RelayLinkOrigin` rather than an import of `StatusOrigin`
-- [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md)); its unpair control dispatches `reset` ([#166](../codebase/166.md))
+- [Conversation shell](conversation-shell.md) — its composer, connection banner and repair slot read the open host's connection status
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
 - [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result triggers the pairing-ended clear ([#173](../codebase/173.md)); `runUnpair` itself no longer dispatches `reset` directly as of [#531](../codebase/531.md)
 - [Paired shell](paired-shell.md) — `clearPairingScopedState` ([#531](../codebase/531.md)), the shared helper `reset` is dispatched through; unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — pairing another server adds a server rather than ending one, and stopped clearing anything

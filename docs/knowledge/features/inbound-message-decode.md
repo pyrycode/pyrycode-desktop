@@ -47,6 +47,19 @@ relay socket → supervisor → noiseRelayDriver (Noise decrypt)
 | `case 'message'` arm (consumer) | `void` | `try/catch` → a throw is **dropped silently** (no event, no log, caught object not forwarded); `null` → ignored; a result → exactly one `DaemonEvent`. **Never throws out of the module.** |
 | UI | — | A dropped inbound frame surfaces **nothing** (no `failed`, no banner). A single malformed *message* frame is not connection-fatal — the session continues. Deliberately different from a malformed `hello_ack`, which **is** fatal (`failed('malformed-hello-ack')`) because the handshake cannot complete without it. |
 
+### Pairing rejection classification
+
+The decoded `daemon-error` arm carries optional `pairingReject: 'pairing-rejected'` only when
+the payload is a record whose `code` exactly equals `auth.invalid_token`. Unknown, suffixed or
+mistyped codes leave it undefined; daemon message text is discarded. This category covers expired,
+unknown and revoked credentials without claiming which occurred.
+
+Keep it separate from `DaemonErrorOutcome`: that union also drives attachment-transfer failures,
+so widening it for connection recovery would change unrelated consumers. This follows the existing
+request-specific rejection fields, but [the connection](daemon-connection.md#pairing-rejection-lifetime)
+consumes authentication rejection before request correlation. Decoder tests pin the exact comparison
+and ensure private daemon text cannot appear in the result.
+
 ### Optional stopped-turn reports
 
 `TurnEndPayload` in `src/shared/wire/types.ts` carries optional `outcome`, `is_error`,

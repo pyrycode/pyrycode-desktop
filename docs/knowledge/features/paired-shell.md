@@ -12,8 +12,8 @@ Channel List home whose tab bodies [#348](../codebase/348.md) still needs to fil
 [#670](../codebase/670.md) changed what `list` and `thread` mean: they stopped being mutually-exclusive
 alternative screens (the mobile design widened to fill a window) and became the two arms of one
 **two-pane desktop shell** — a fixed 400px sidebar, always mounted, beside a chat pane that holds the
-thread or nothing. `settings`/`archive`/`pairServer` are unaffected: each already returned a full-screen
-`<section>` that replaces the whole shell, so "still opens over both panes" cost no edit. See
+thread or nothing. `settings`, `archive` and ordinary pairing replace the whole shell. Host recovery
+uses `pairServer` with a target server ID and keeps the pairing form beside the sidebar. See
 [below](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the layout and the
 conversation-switch bug the change surfaced.
 
@@ -50,8 +50,11 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 - [#152](../codebase/152.md) added a fourth view, `pairServer` — reached from a "Pair another server" row
   inside `settings` — that re-opens the existing pairing screen from inside the paired app. Unlike
   `settings`'s single `back` exit, `pairServer` has **two** distinct exits with their own nav arms:
-  cancelling returns to `settings` (the current server stays paired and connected); completing a new
-  pairing goes to `list` (the freshly-paired server's channel home). See [Settings
+  cancelling returns to the captured origin; completing the active flow goes to `list` without clearing
+  held conversations. Sidebar/composer repair and automatic recovery use the same form with a saved-host
+  target. Same-host confirmation replaces credentials and reconnects; a stale confirmation may finish
+  saving but cannot navigate over a newer pane. See [recovery and navigation lifetime](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
+  and [Settings
   screen](settings-screen-how-it-works.md#the-pair-another-server-row-settingsscreentsx-152) for the entry row.
 - [#347](../codebase/347.md) added a fifth view, `archive` — reached from a second entry button on the
   list, sharing the same top-right cluster as the Settings entry — that shows a back header plus a

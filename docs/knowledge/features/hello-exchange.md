@@ -49,7 +49,11 @@ Each rung throws a category-only `WireDecodeError` and returns nothing on failur
 3. **Payload shape** — narrow to a record (non-null, non-array object). A string/number/array/null payload → `'malformed hello_ack payload'`. (Uses a small local `isRecord`; the codec's is not exported.)
 4. **Required string fields** — `protocol_version`, `server_id`, `conn_id`; each `typeof !== 'string'` → `'missing required field: <name>'`.
 5. **`capabilities` — OPTIONAL, default `[]`.** If present it MUST be an array of strings (else `'malformed hello_ack capabilities'`); if absent, use `[]`. The array is copied (`[...]`) so the result doesn't alias the parsed input.
-6. Return **only** the four known fields. Unknown / server-added keys are tolerated (forward-compat, matching the codec) but not copied through.
+6. **`workspace_root` — OPTIONAL, no default.** Omission stays absent. A present value
+   must be a string (including empty or relative strings); non-strings fail through the
+   required-string validator with static field-name copy. Absolute-base admission belongs
+   to [Add workspace](add-workspace-dialog.md#connection-and-folder-admission), not decoding.
+7. Return **only** the validated known fields. Unknown / server-added keys are tolerated (forward-compat, matching the codec) but not copied through.
 
 **`capabilities` is optional, not required — this is the load-bearing correctness point.** The daemon marshals `hello_ack` with `capabilities` as `omitempty` (absent, not `null`, when empty), so a *legitimate* ack usually omits it. Treating it as required would fail-closed on a real daemon response and silently break the handshake — the exact silent-failure class this whole layer exists to prevent. The returned `HelloAckPayload` still always carries `capabilities: string[]` (possibly empty), so the shared wire type needs **no change**: the type is the normalized post-parse shape; `omitempty` lives on the wire only.
 
@@ -61,7 +65,7 @@ Each rung throws a category-only `WireDecodeError` and returns nothing on failur
    │ makeHelloClientPayload          │                                    │ type==='hello_ack'?
    ▼                                 │                                    ▼ narrow payload (record + fields)
  Envelope{type:'hello'} ─encodeEnvelope─► UTF-8 bytes    HelloAckPayload{protocol_version, server_id,
-   → NoiseRelayDriverConfig.session.hello (#62)                          conn_id, capabilities}
+   → NoiseRelayDriverConfig.session.hello (#62)                          conn_id, capabilities, workspace_root?}
 ```
 
 ## Configuration and usage

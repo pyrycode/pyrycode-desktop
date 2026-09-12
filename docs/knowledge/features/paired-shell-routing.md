@@ -86,7 +86,7 @@ saved hosts, held timelines and conversation lists. The composer no longer calls
 Explicit removal stays in [Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162);
 only removing the last server reaches `onUnpaired` and the app-level pairing clear.
 
-`PairedShell` holds route, `paneKey`, pairing origin, recovery target and two lifetime refs locally.
+`PairedShell` holds route, `paneKey`, pairing origin, recovery target and the `pairingGeneration` ref locally.
 It subscribes to saved servers, the session status map and the recovery host's label. The view receives
 only the derived target label and rejection flag. The rejection notice appears only for that target's
 `pairing-rejected` code, using the fixed copy documented in
@@ -118,21 +118,18 @@ explicitly calls `loadServerInfo` to refresh saved order rather than relying on 
 
 ### Host recovery and navigation lifetime
 
-Automatic opening considers only currently saved hosts, in saved order. As described in
-[Session store](session-store.md#one-slot-per-server-since-1133), it waits for every host to settle,
-requires at least one pairing rejection and no connected host, and picks the first rejected host.
-The shell opens automatically only from `list` or `thread`; other routes defer the decision.
+Only explicit user actions open host repair: the sidebar's `Repair host` button or the composer's
+Re-pair action. With saved hosts present, connection-status changes never open repair or change the
+current view. This includes startup before any conversation list arrives, rejection of the last
+connected host, repeated failures, and reconnection followed by another rejection. List and thread
+views keep saved hosts and any held conversation rows visible even when none is connected.
 
-`recoveryConsumed` allows one automatic opening during an outage. Opening recovery consumes it;
-leaving an actual recovery pane while no saved host is connected keeps it consumed. Repeated failure
-events therefore cannot reopen a cancelled or navigated-away pane. Manual repair remains available.
-Any connected saved host rearms automatic recovery, allowing a later rejection of the last usable
-host to open it again.
-
-Ordinary navigation while another host is connecting or unreported must not consume that first
-opening. For example, selecting A's held thread while A is rejected and B is connecting leaves the
-decision pending; if B settles offline, A's recovery still opens. This differs from dismissing an
-already-open recovery pane, even though both paths can end on the same thread route.
+Cancel returns to the captured origin, and later connection events never reopen repair. Likewise,
+selecting a held thread while another host is connecting or unreported keeps that thread open when
+the other host settles offline. Repair remains available through the explicit controls. Normal
+connection retries, Pair new host and initial setup with no saved hosts retain their existing behavior.
+The automatic-opening behavior introduced by [#1336](../../specs/architecture/1336-pairing-recovery.md)
+is implementation history, superseded by [#1354](../../specs/architecture/1354-explicit-host-repair.md).
 
 `pairingGeneration` fences completion navigation. Each initiating flow captures its generation;
 starting another flow, leaving pairing or unmounting the shell invalidates it. `onPairServerPaired`
@@ -141,13 +138,16 @@ navigate to `list`. The authorized credential save and registry reconciliation s
 navigation. React ignoring a child's state update after unmount is insufficient: its captured
 completion callback can still navigate a mounted parent.
 
-`e2e/pairing-recovery.spec.ts` covers startup before any received list, keyboard reopening, cancel,
-same-host replacement, healthy-host send/reply, suppression/rearm, deferred navigation with both
-connecting and unreported hosts, and delayed confirmation after switching to a healthy thread or
-another recovery host. The delayed-confirmation tests hold the real handler's reply, then wait for
-the saved-order refresh before checking the newer draft or pairing input. Connection success alone
-would not prove that the obsolete callback had run. Static renderer tests cover markup and the pure
-selection helper; they cannot prove these effects or interleavings.
+`e2e/pairing-recovery.spec.ts` covers unchanged startup/list/thread navigation after these status
+changes, retained rows, timeline and current draft, keyboard and composer repair, cancel, same-host
+replacement, healthy-host send/reply, and delayed confirmation after switching to a healthy thread or
+another recovery host. Before asserting that repair is absent or a draft is unchanged, wait for the
+delivered status or a following visible frame. Repeated failures may leave the status label unchanged;
+a following frame proves delivery where an immediate absence assertion could pass too early.
+The delayed-confirmation tests hold the real handler's reply, then wait for the saved-order refresh
+before checking the newer draft or pairing input. Connection success alone would not prove that the
+obsolete callback had run. Static renderer tests cover status labels, failed-row styling, the named
+repair button and rejection notice; they cannot prove these effects or interleavings.
 
 ## The two-pane desktop shell (`pairedShell.css`, `src/main/index.ts`, #670)
 
@@ -351,7 +351,7 @@ Explicit removal is in Settings.
 ```text
 AppView (conversation)
   PairedShell
-    saved servers + per-host statuses -> automaticRecoveryTarget -> recovery pane
+    per-host statuses -> status presentation + rejection notice for an already-open recovery pane
     sidebar Repair host / composer Re-pair -> openRecovery(saved server ID)
     sidebar conversation -> leaveRecovery -> activateConversation -> keyed thread
     Settings / Archive / Back -> leaveRecovery -> selected route

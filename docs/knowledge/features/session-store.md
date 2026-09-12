@@ -88,14 +88,14 @@ cell nor an "any host connected" fold can answer whether a particular conversati
 editable input, enabled Send, absent error/repair UI and unchanged dots. A relay-dot change alone
 can precede the daemon failure and let those absence assertions pass too early.
 
-Automatic recovery is a different decision: `automaticRecoveryTarget` in `PairedShell.tsx` reads
-only slots named by the current `ServerInfoState.servers` list. Any connected saved host prevents
-automatic opening; any connecting or unreported host defers it. Once every saved host has settled,
-the first `error` with code `pairing-rejected` in saved order is the target. Disconnected and generic
-error states alone do not trigger recovery. Stale map entries for removed hosts, including a connected
-one, have no vote. Keep `selectStatusFor`'s `undefined` result intact for this decision: the sidebar's
-offline-looking launch dot is a display fallback, not evidence that the host has settled.
-See [routing](paired-shell-routing.md#host-recovery-and-navigation-lifetime) for outage suppression.
+Connection status controls presentation and send availability, never recovery navigation. Only an
+explicit sidebar or composer action opens repair; `PairedShell` validates the requested target against
+the current saved-host list and reads that host's status for the already-open pane's rejection notice.
+Connecting, unreported, disconnected and rejected hosts do not select a repair target or change the
+current view, including after cancellation or reconnection. `selectStatusFor` still returns `undefined`
+for an unreported host; its offline-looking launch dot is only a display fallback.
+See [routing](paired-shell-routing.md#host-recovery-and-navigation-lifetime) for manual recovery and
+completion lifetime guards.
 
 Rejection preservation belongs to [the daemon connection](daemon-connection.md#pairing-rejection-lifetime),
 not this unconditional reducer. An exact decoded `auth.invalid_token` yields the client-owned
@@ -176,7 +176,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - **Single active conversation.** `MessagePayload` carries `conversation_id`, but #2 appends all messages to one list; multi-conversation routing is out of scope.
 - **Optimistic send (realized in [#66](../codebase/66.md)).** The composer's own-message echo dispatches the dedicated `messageSent` action, appending a wire `MessagePayload { role: 'user' }` through `appendUnique`. Carrying the **same `message_id`** sent on the wire is what lets the daemon's later echo dedupe against the optimistic copy instead of double-posting. See [Composer send](composer-send.md).
 - **Synchronous only.** The store does no async work, no I/O, no subscriptions to tear down; #3/#4 own the channel, cancellation, and teardown and call `dispatch` synchronously.
-- **Recovery preserves state.** Opening, cancelling and completing a same-host re-pair do not dispatch `reset` or erase held conversations. The shell subscribes to `statuses` for automatic recovery; individual host and conversation controls select one slot. Explicit removal remains in Settings.
+- **Recovery preserves state.** Opening, cancelling and completing a same-host re-pair do not dispatch `reset` or erase held conversations. The shell subscribes to `statuses` to derive the already-open recovery host's rejection notice; individual host and conversation controls select one slot. Connection events never open or reopen repair. Explicit removal remains in Settings.
 
 ## Related
 

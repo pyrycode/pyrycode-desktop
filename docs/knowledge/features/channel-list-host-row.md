@@ -201,8 +201,9 @@ already in the paired list, so the id is always a real one, and `serverId` narro
 to `string` with the branch deleted. The silent-server collapse above is a different, still-reachable
 case — a paired server that has reported nothing yet — and is untouched.
 
-The display fallback does not settle the host for automatic recovery: that decision reads the raw
-status map and waits for unreported hosts. `daemonLeg` announces a classified rejection as
+An unreported host's offline-looking dots are only a display fallback. Connection-status changes
+never open repair or change the current view; the user opens recovery explicitly through `Repair host`
+or the composer's Re-pair action. `daemonLeg` announces a classified rejection as
 `Pyrycode Pairing rejected`, while ordinary failures remain `Pyrycode Offline` and an in-progress
 connection remains `Pyrycode Connecting`. The relay mapping is independent, so rejection may still
 sit beside `Relay Connected`. See [Session store](session-store.md#one-slot-per-server-since-1133).

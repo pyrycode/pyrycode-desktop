@@ -51,8 +51,9 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
   inside `settings` — that re-opens the existing pairing screen from inside the paired app. Unlike
   `settings`'s single `back` exit, `pairServer` has **two** distinct exits with their own nav arms:
   cancelling returns to the captured origin; completing the active flow goes to `list` without clearing
-  held conversations. Sidebar/composer repair and automatic recovery use the same form with a saved-host
-  target. Same-host confirmation replaces credentials and reconnects; a stale confirmation may finish
+  held conversations. Only explicit sidebar/composer repair opens recovery with a saved-host target;
+  connection-status changes never open or reopen it or change the current view. Same-host confirmation
+  replaces credentials and reconnects; a stale confirmation may finish
   saving but cannot navigate over a newer pane. See [recovery and navigation lifetime](paired-shell-routing.md#host-recovery-and-navigation-lifetime)
   and [Settings
   screen](settings-screen-how-it-works.md#the-pair-another-server-row-settingsscreentsx-152) for the entry row.

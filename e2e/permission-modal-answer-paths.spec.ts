@@ -191,8 +191,13 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await other.fill('Retained first Other')
   await questionnaire.getByRole('button', { name: 'Editor', exact: true }).click()
   await other.fill('Retained editor Other')
-  const longText = 'A complete explanation must wrap and remain reachable. '.repeat(160) + 'FINAL EXPLANATION'
-  daemon.pushFrame(shown('Long permission', { prompt: longText }))
+  const longPath = '/workspace/reports/' + 'a'.repeat(180) + '.json'
+  const longText = `Write the generated report to ${longPath}?\n` +
+    'A complete explanation must wrap and remain reachable. '.repeat(160) + 'FINAL EXPLANATION'
+  const allowLabel = `Allow writing ${longPath}`
+  daemon.pushFrame(shown('Long permission', {
+    prompt: longText, options: [OPTIONS[0], { id: 'allow', label: allowLabel }]
+  }))
   const panel = panelFor(page)
   await expect(panel).toBeVisible()
   await expect(questionnaire).toBeHidden()
@@ -209,12 +214,29 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   }
   expect(captured.filter((e) => ['send_message', 'question_answer', 'modal_answer'].includes(e.type))).toHaveLength(0)
   const scroll = panel.locator('.permission-panel__content')
+  const expectNoHorizontalOverflow = async (): Promise<void> => {
+    for (const element of [scroll, panel.locator('.permission-panel__explanation')]) {
+      const width = await element.evaluate((el) => ({ client: el.clientWidth, scroll: el.scrollWidth }))
+      expect.soft(width.scroll).toBeLessThanOrEqual(width.client)
+    }
+  }
+  await expectNoHorizontalOverflow()
   const dimensions = await scroll.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }))
   expect(dimensions.scroll).toBeGreaterThan(dimensions.client)
   await expect(action(panel, 'Cancel')).toBeInViewport()
   await expect(action(panel, 'Continue')).toBeInViewport()
-  await page.screenshot({ path: '/tmp/builder-1356-permission-long.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-1356-rework-permission-long.png', animations: 'disabled' })
   await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await choose(panel, 'Allow writing')
+  await action(panel, 'Continue').click()
+  await expect(panel.locator('.permission-panel__explanation')).toHaveText(
+    `Send "${allowLabel}"? This grants the requested action.`)
+  await expectNoHorizontalOverflow()
+  await expect(action(panel, 'Back')).toBeInViewport()
+  await expect(action(panel, 'Confirm')).toBeInViewport()
+  await page.screenshot({ path: '/tmp/builder-1356-rework-permission-confirm.png', animations: 'disabled' })
+  expect(resolutions(captured, 'Long permission')).toBe(0)
+  await action(panel, 'Back').click()
   await choose(panel, 'Deny')
   await action(panel, 'Continue').click()
   await expect.poll(() => resolutions(captured, 'Long permission', 'modal_answer', 'deny')).toBe(1)

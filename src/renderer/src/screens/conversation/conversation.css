@@ -3911,6 +3911,7 @@
 
 .permission-panel .permission-panel__explanation {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow: visible;
   text-overflow: clip;
 }

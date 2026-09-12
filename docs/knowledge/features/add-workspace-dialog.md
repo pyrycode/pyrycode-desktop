@@ -60,6 +60,8 @@ hover](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185).
 
 ## Related
 
+- [Reusable modal presentation](modal-presentation.md) — shared panel and action contract;
+  adoption is pending in [#1346](https://github.com/pyrycode/pyrycode-desktop/issues/1346).
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — the parent page:
   the row and plus this dialog opens from.
 - [Edit host dialog](edit-host-dialog.md) (#1299) — the host row's other trailing control's dialog, the

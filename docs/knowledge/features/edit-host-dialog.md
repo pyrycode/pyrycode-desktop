@@ -73,9 +73,9 @@ client-owned copy or a label bounded at `MAX_HOST_LABEL_LENGTH` inside a single-
 falsified that premise by adding an unbounded relay URL (§ below). The comment was corrected in place
 rather than left standing next to code that contradicted it.
 
-**The identity block ([#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)).** No Figma
-node draws this dialog at all, so the block follows [`EditWorkspaceDialogView`](edit-workspace-dialog.md)'s
-own `cwd` line instead: which machine this row actually is, under the field that renames it — the same
+**The identity block ([#1300](https://github.com/pyrycode/pyrycode-desktop/issues/1300)).** The current
+block follows [`EditWorkspaceDialogView`](edit-workspace-dialog.md)'s `cwd` line:
+which machine this row actually is, under the field that renames it — the same
 `{ serverId, relayUrl }` pair [Settings' Connection → Server row](server-info-channel.md) already shows.
 Unlike that one-line precedent, two values need to be tellable apart, so each gets its own caption
 (`Server ID`, `Relay`) — a `display: block` `<span>` caption immediately followed by the value as a
@@ -133,6 +133,8 @@ pass on the wrong row).
 
 ## Related
 
+- [Reusable modal presentation](modal-presentation.md) — shared panel and action contract;
+  adoption is pending in [#1348](https://github.com/pyrycode/pyrycode-desktop/issues/1348).
 - [Channel List — the host row and its connection dots](channel-list-host-row.md) — the parent page:
   the row and pen this dialog opens from, `hostRowLabel`, and `renderServerTrees`.
 - [Add workspace dialog](add-workspace-dialog.md) (#1308) — the host row's other trailing control's

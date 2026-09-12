@@ -23,7 +23,7 @@ const HANDSHAKE_TIMEOUT = 45_000
 const SECRET_NAMES = [PAIRED_SERVER_NAME, DEVICE_STATIC_KEY_NAME, HOST_LABEL_NAME]
 
 async function observeStatus(app: ElectronApplication, page: Page, serverIds: string[]) {
-  const observer = await app.evaluateHandle(({ BrowserWindow }, { channel, serverIds }) => {
+  await app.evaluate(({ app, BrowserWindow }, { channel, serverIds }) => {
     const statuses = new Map<string, {
       type: string; code: string | null; lastFailure: string | null; authentications: number
     }>()
@@ -56,24 +56,48 @@ async function observeStatus(app: ElectronApplication, page: Page, serverIds: st
       }
       send(sentChannel, ...args)
     }
-    return {
+    Object.assign(app, { restartStatusObserver: {
       read: () => serverIds.map(id => statuses.get(id) ?? {
         type: 'unobserved', code: null, lastFailure: null, authentications: 0
-      })
-    }
+      }),
+      dispose: () => { contents.send = send }
+    } })
   }, { channel: DAEMON_EVENT_CHANNEL, serverIds })
   // Launch may authenticate before Playwright attaches. Replay comes from THIS
   // process's initially empty createLiveWindow cache, never persisted renderer data.
   // Process exit and new PID checks below make this a fresh-authentication proof.
   await page.reload()
-  return observer
+  // Keep observation in the main process and read through the application evaluator.
+  // Pairing can temporarily invalidate the inspector context on Electron 33.
+  return {
+    read: async () => {
+      try {
+        return await app.evaluate(({ app }) =>
+          (app as typeof app & { restartStatusObserver: { read(): Array<{
+            type: string; code: string | null; lastFailure: string | null; authentications: number
+          }> } }).restartStatusObserver.read())
+      } catch (error) {
+        // Inspector context replacement is not authentication evidence. Keep polling
+        // within the caller's deadline; all other errors must fail the test.
+        if (!(error instanceof Error) || !error.message.includes('Execution context was destroyed')) throw error
+        return serverIds.map(() => ({
+          type: 'inspection-unavailable', code: null, lastFailure: null, authentications: 0
+        }))
+      }
+    },
+    dispose: () => app.evaluate(({ app }) => {
+      const observed = app as typeof app & { restartStatusObserver?: { dispose(): void } }
+      observed.restartStatusObserver?.dispose()
+      delete observed.restartStatusObserver
+    })
+  }
 }
 
 type StatusObserver = Awaited<ReturnType<typeof observeStatus>>
 
 async function expectAuthenticated(observer: StatusObserver, host: number, stage: string) {
   await expect.poll(async () => {
-    const state = (await observer.evaluate(value => value.read()))[host]
+    const state = (await observer.read())[host]
     return { type: state.type, code: state.type === 'connected' ? null : state.code ?? state.lastFailure }
   }, { message: stage, timeout: HANDSHAKE_TIMEOUT }).toEqual({ type: 'connected', code: null })
 }
@@ -94,21 +118,17 @@ async function encryptedRecords(userDataDir: string) {
     readFile(join(userDataDir, 'secrets', `${Buffer.from(name).toString('base64url')}.bin`))))
 }
 
-async function expectOsEncryptedRecords(app: ElectronApplication) {
-  const readable = await app.evaluate(({ app, safeStorage }, names) => {
-    const { readFileSync } = require('node:fs')
-    const { join } = require('node:path')
+async function expectOsEncryptedRecords(app: ElectronApplication, userDataDir: string) {
+  // Only ciphertext crosses into the main process; decrypted bytes stay there.
+  // Electron's evaluator does not expose CommonJS require for filesystem reads.
+  const ciphertexts = (await encryptedRecords(userDataDir)).map(bytes => bytes.toString('base64'))
+  const readable = await app.evaluate(({ safeStorage }, ciphertexts) => {
     try {
-      return names.every(name => {
-        const file = `${Buffer.from(name).toString('base64url')}.bin`
-        const ciphertext = readFileSync(join(app.getPath('userData'), 'secrets', file))
-        // Decrypted bytes stay in the main process and are never returned or saved.
-        return safeStorage.decryptString(ciphertext).length > 0
-      })
+      return ciphertexts.every(bytes => safeStorage.decryptString(Buffer.from(bytes, 'base64')).length > 0)
     } catch {
       return false
     }
-  }, SECRET_NAMES)
+  }, ciphertexts)
   expect(readable, 'Every persisted record is decryptable by real safeStorage').toBe(true)
 }
 
@@ -157,14 +177,15 @@ test('real daemon authenticates saved OS-encrypted pairing after two full deskto
         }), 'Restart secondary')
         await expectAuthenticated(observer, 1, 'Initial secondary-peer handshake')
         await expectHosts(current.page, serverIds)
-        await expectOsEncryptedRecords(current.app)
+        await expectOsEncryptedRecords(current.app, current.userDataDir)
         const saved = await encryptedRecords(current.userDataDir)
 
         // An abnormal socket drop is retryable. No repair action or renderer reload
         // occurs between the baseline and the next genuine handshake event.
-        const beforeDrop = (await observer.evaluate(value => value.read()))[1].authentications
+        const beforeDrop = (await observer.read())[1].authentications
+        expect(beforeDrop, 'Observe a real secondary handshake before dropping its connection').toBeGreaterThan(0)
         secondaryRelay.dropClientLeg()
-        await expect.poll(async () => (await observer.evaluate(value => value.read()))[1].authentications,
+        await expect.poll(async () => (await observer.read())[1].authentications,
           { timeout: HANDSHAKE_TIMEOUT }).toBeGreaterThan(beforeDrop)
         await expectAuthenticated(observer, 1, 'Secondary peer automatically recovers a network drop')
 
@@ -187,7 +208,7 @@ test('real daemon authenticates saved OS-encrypted pairing after two full deskto
           observer = await observeStatus(current.app, current.page, serverIds)
           await expectAuthenticated(observer, 0, stage)
           await expectHosts(current.page, serverIds)
-          await expectOsEncryptedRecords(current.app)
+          await expectOsEncryptedRecords(current.app, current.userDataDir)
           const reloaded = await encryptedRecords(current.userDataDir)
           expect(reloaded.every((bytes, i) => bytes.equals(saved[i])), 'All saved records remain unchanged').toBe(true)
         }

@@ -120,9 +120,8 @@ describe('PairedShellView', () => {
       Reflect.deleteProperty(globalThis, 'window')
     })
 
-    // #670 AC5 again: `not.toContain(LIST_MARKER)` is the "Pair-another-server opens full screen over
-    // both panes" proof.
-    it('reuses the existing pairing screen and shows neither the list nor the settings (#152, AC2)', () => {
+    // Modal pairing retains its invoking Settings view underneath the dialog.
+    it('opens modal pairing over the invoking settings screen', () => {
       const markup = renderToStaticMarkup(
         <PairedShellView
           route="pairServer"
@@ -139,7 +138,8 @@ describe('PairedShellView', () => {
       )
       expect(markup).toContain(PAIRING_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
-      expect(markup).not.toContain(SETTINGS_MARKER)
+      expect(markup).toContain(SETTINGS_MARKER)
+      expect(markup).toContain('class="modal"')
     })
   })
 })

@@ -115,3 +115,12 @@ repair, cancellation to the invoking view and the unchanged success/retry flow.
 - Threat alignment: hostile content renders as escaped text, full fingerprint
   remains available for comparison. Disk theft and compromised relay protections
   continue through the existing safeStorage and Noise boundaries.
+
+## Revisions
+
+- Implementation found display-small and surface-variant tokens absent. Add only
+  their definitions to tokens.css (overlap check clean): Figma variable definitions
+  on verification resolve surface-variant to #42474e, on-surface-variant to #c2c7cf,
+  and display-small to 36px/44px, tracking 0, emphasized weight 500. Production scope
+  remains four files; no shared Modal change. The common e2e pairingArrival helper
+  needs a private modal flag for its Settings path; onboarding retains its old names.

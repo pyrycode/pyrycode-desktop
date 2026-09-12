@@ -20,6 +20,7 @@
   --color-surface-container-highest: #32353a;
   --color-scrim: #000000;
   --color-on-surface: #e0e2e8;
+  --color-surface-variant: #42474e; /* Figma pairing verification highlight. */
   --color-on-surface-variant: #c2c7cf;
   --color-primary: #9dcbfc;
   --color-inverse-primary: #32628d; /* M3 Schemes/Inverse Primary — the session-reset separator's two
@@ -96,6 +97,11 @@
   --text-display-large-tracking: -0.25px;
   --text-display-large-weight: 400;
 
+  /* M3 display-small emphasized, used for the complete pairing fingerprint. */
+  --text-display-small-size: 36px;
+  --text-display-small-line: 44px;
+  --text-display-small-tracking: 0px;
+  --text-display-small-weight-emphasized: 500;
   --text-headline-small-size: 24px;
   --text-headline-small-line: 32px;
   --text-headline-small-tracking: 0px;

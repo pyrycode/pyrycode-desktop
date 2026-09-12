@@ -127,6 +127,8 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   // pairServer route and the app-root pairing route render the SAME component (see the round-trip note).
   await page.getByRole('button', { name: 'Pair another server' }).click()
   await expect(pairingField).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
+  await expect(settings).toBeVisible()
 
   // 5. ⭐ pairServer → settings via Cancel (AC: Cancel returns to the Settings screen — the teardown proof).
   // A torn-down session would leave the app-root pairing screen with no Settings to return to; the Settings

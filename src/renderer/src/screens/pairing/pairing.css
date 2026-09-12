@@ -1,36 +1,4 @@
-/*
- * Pairing screen styles. The file serves TWO treatments at once, kept separable
- * rather than merged so the confirm phase can be lifted onto the page treatment in
- * one move once it has a frame of its own:
- *
- *   .pairing-page — the PASTE phase, from desktop's OWN Figma frame (node 103-2901,
- *     1280x1024), a full-window page sharing the welcome screen's skeleton (#665).
- *   .pairing-card — the reviewing/confirming/paired phases, still the mobile "Paste
- *     pairing code" dialog (node 19-54) stretched to the window. Untouched by #665;
- *     Juhana will draw a desktop frame for them later.
- *
- * The two are SIBLINGS, not overrides: neither undoes a property the other sets.
- * `.pairing` itself is reduced to what both share, and it stays on the root element
- * in EVERY phase because it is an e2e contract (see PairingScreen.tsx on
- * smoke.spec.ts:81).
- *
- * The reuse of the welcome frame is TOKEN-LEVEL AND VISUAL, never code-level: this
- * codebase has no shared cross-screen CSS at all (six per-screen stylesheets whose
- * only shared input is theme/tokens.css), so the page treatment is restated here
- * under its own class names rather than importing welcome.css or reaching for
- * .welcome__*. If the duplication across welcome / pairing / the eventual confirm
- * frame becomes painful once all three exist, that is a follow-up with three
- * consumers in hand — not a seam guessed at from one and a half.
- *
- * Every color/type/spacing value resolves to a theme token from theme/tokens.css.
- * The only literals are bare structural geometry, none of which is a theme value,
- * and they are exactly: 100%, flex: 1, the card's max-width, the field's 56/48/40px
- * boxes and its 24px glyph, the 1px active indicator, the glow's percentage
- * geometry, the two CTA rows' 56px height, the field fill's 0.72 opacity, the
- * footer's 0.55 opacity, and the M3 0.38 disabled opacity.
- */
-
-/* What both treatments share — and the class every outside consumer binds to. */
+/* Onboarding retains page/card treatments; in-app pairing uses a native modal. */
 .pairing {
   box-sizing: border-box;
   display: flex;
@@ -474,3 +442,64 @@
   opacity: 0.38;
   cursor: default;
 }
+
+/* Native dialog owns the top layer and inert background; Modal owns the panel. */
+.pairing-modal {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  width: 640px;
+  max-width: calc(100vw - 2 * var(--space-6));
+  max-height: none;
+  overflow: visible;
+}
+.pairing-modal::backdrop {
+  background: color-mix(in srgb, var(--color-scrim) 60%, transparent);
+}
+.pairing-modal p { margin: 0; }
+.pairing-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight-emphasized);
+}
+.pairing-modal__field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+.pairing-modal__field input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.pairing-modal__fingerprint {
+  padding: var(--space-4);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-variant);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-display-small-size);
+  line-height: var(--text-display-small-line);
+  letter-spacing: var(--text-display-small-tracking);
+  font-weight: var(--text-display-small-weight-emphasized);
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pairing-modal__explanation { text-align: center; }
+.pairing-modal__error { color: var(--color-error); }
+
+.pairing-modal:not([open]) { display: none; }

@@ -22,14 +22,15 @@ function freshCode(server: PairedServerHandle): string {
 async function fits(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => {
     const nodes = [document.documentElement, ...document.querySelectorAll(
-      '.paired-shell__recovery, .pairing, .pairing-page__hero, .pairing__fingerprint')]
+      '.modal, .pairing-modal__fingerprint')]
     return nodes.some(node => node.scrollWidth > node.clientWidth + 1)
   })
   expect(overflow).toBe(false)
+  await page.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded()
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport()
 }
 
-test('startup rejection before a list waits for manual repair, cancels and re-pairs beside the sidebar', async ({
+test('startup rejection before a list waits for manual repair, cancels and re-pairs in a modal', async ({
   launchPairedApp
 }, testInfo) => {
   let reject = false
@@ -48,7 +49,7 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
   try {
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 800, height: 800 })
-    const recovery = page.getByRole('region', { name: 'Repair pairing', exact: true })
+    const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(page.locator('.channel-list__host')).toHaveCount(2)
     await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
     await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
@@ -83,11 +84,11 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
     await expect(recovery).toBeVisible()
     await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(first.servers[0]))
     await page.getByRole('button', { name: 'Pair', exact: true }).click()
-    await expect(page.getByText('Confirm fingerprint', { exact: true })).toBeVisible()
+    await expect(page.getByRole('group', { name: 'Server key fingerprint', exact: true })).toBeVisible()
     await fits(page)
     await page.screenshot({ path: testInfo.outputPath('fingerprint-confirmation-800.png') })
     reject = false
-    await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+    await page.getByRole('button', { name: 'Pair', exact: true }).click()
     await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
     await expect(page.locator('.channel-list__row-open')).toHaveCount(1)
     await expect(recovery).toHaveCount(0)
@@ -123,7 +124,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   a.daemon.pushFrame(rejection())
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.locator('.conversation__banner')).toHaveCount(0)
   await page.getByPlaceholder('Message…').fill('Hello healthy host')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
@@ -133,7 +134,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
   await page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true }).click()
   await expect(page.getByText('Repair pairing: Alpha', { exact: true })).toBeVisible()
-  await expect(page.getByText(NOTICE, { exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true }).getByText(NOTICE, { exact: true })).toBeVisible()
   await expect(page.locator('.channel-list__host')).toHaveCount(4)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -144,7 +145,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await page.getByPlaceholder('Message…').fill('Keep the current draft')
   b.daemon.pushFrame(rejection())
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(4)
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   await expect(page.locator('.channel-list__host--failed')).toHaveCount(4)
@@ -155,21 +156,21 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   // A following visible frame is the barrier for the repeated failures.
   b.daemon.pushFrame(seedConversationsFrame({ ...SECOND_SEEDED_ROW, name: 'Failure barrier' }))
   await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Failure barrier' })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
   await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(a))
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await page.getByRole('button', { name: 'Pair', exact: true }).click()
   await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await expect(page.locator('.conversation')).toHaveCount(0)
   a.daemon.pushFrame(rejection())
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(4)
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.locator('.conversation')).toHaveCount(0)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
@@ -177,7 +178,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await page.locator('.settings__back').click()
   a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Navigation barrier' }))
   await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Navigation barrier' })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Repair host', exact: true })).toHaveCount(4)
 })
 
@@ -215,7 +216,7 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     }
     a.daemon.pushFrame(rejection())
     await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
-    const recovery = page.getByRole('region', { name: 'Repair pairing', exact: true })
+    const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(recovery).toHaveCount(0)
     await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
     await expect(page.locator('.conversation')).toBeVisible()
@@ -270,8 +271,13 @@ for (const destination of ['healthy thread', 'other recovery'] as const) {
         return result
       })
     }, PAIRING_CHANNEL)
-    await page.getByRole('button', { name: 'Confirm', exact: true }).click()
-    await expect(page.getByRole('button', { name: 'Confirming…', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: 'Pair', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Pair', exact: true })).toBeDisabled()
+    // A notification is asynchronous navigation, independent of blocked background input.
+    await app.evaluate(({ BrowserWindow }, channel) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(channel, { type: 'notificationActivated' })
+    }, DAEMON_EVENT_CHANNEL)
+    await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
     if (destination === 'healthy thread') {
       await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
       await page.getByPlaceholder('Message…').fill('Keep this newer draft')

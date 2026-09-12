@@ -194,3 +194,43 @@ describe('PairingScreen', () => {
     expect(() => renderToStaticMarkup(<PairingScreen bridge={bridge} />)).not.toThrow()
   })
 })
+
+describe('in-app modal presentation', () => {
+  const modal = (state: PairingState): string => renderToStaticMarkup(<PairingView
+    state={state} presentation="modal" onPasteChange={noop} onLabelChange={noop}
+    onSubmit={noop} onConfirm={noop} onCancel={noop} />)
+
+  it('uses shared chrome and exact field names without a credential form', () => {
+    const markup = modal({ phase: 'editing', paste: ' ', label: '', error: null })
+    expect(markup).toContain('class="modal"')
+    expect(markup).toContain('--modal-width:640px')
+    expect(markup).toContain('aria-label="Host name"')
+    expect(markup).toContain('aria-label="Close dialog"')
+    expect(markup).not.toContain('<form')
+    for (const input of inputTags(markup)) {
+      expect(input).not.toMatch(/\s(?:name|id)=/)
+      expect(input).toMatch(/autoComplete="off"/i)
+      expect(input).toMatch(/spellCheck="false"/i)
+    }
+    expect(markup).toMatch(/disabled="">Pair<\/button>/)
+  })
+
+  it('exposes the complete fingerprint in order and announces errors on retry', () => {
+    const fingerprint = 'AA:bb:01:&<>:long-unbroken-fingerprint'
+    const markup = modal({ phase: 'reviewing', paste: '', fingerprint })
+    expect(markup).toContain('AA:bb:01:&amp;&lt;&gt;:long-unbroken-fingerprint')
+    expect(markup).toContain('Verify that the code matches to ensure that you are connected to the correct host.')
+    const retry = modal({ phase: 'editing', paste: 'retained', label: 'Host', error: 'persist-failed' })
+    expect(retry).toContain('role="alert"')
+    expect(retry).toContain('value="retained"')
+    expect(retry).toContain('value="Host"')
+  })
+
+  it('disables both footer actions during each operation', () => {
+    for (const phase of ['submitting', 'confirming'] as const) {
+      const markup = modal({ phase, paste: 'code', fingerprint: 'actual' })
+      expect(markup).toMatch(/disabled="">Cancel<\/button>/)
+      expect(markup).toMatch(/disabled="">Pair<\/button>/)
+    }
+  })
+})

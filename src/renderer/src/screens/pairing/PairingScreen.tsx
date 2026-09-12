@@ -1,4 +1,5 @@
-import { useReducer, useRef } from 'react'
+import { useEffect, useReducer, useRef, type ReactNode } from 'react'
+import { Modal } from '../../components/Modal'
 import './pairing.css'
 import {
   initialPairingState,
@@ -11,13 +12,8 @@ import {
 } from './pairingState'
 import { MAX_HOST_LABEL_LENGTH, type PairingErrorReason } from '@shared/ipc/pairing'
 
-// The desktop pairing screen: paste the payload printed by `pyry pair --print`, review the
-// server-key fingerprint the background process derives, and confirm. The PASTE phase is drawn from
-// desktop's OWN Figma frame (node 103-2901, 1280x1024) — a full-window page sharing the welcome
-// screen's skeleton (#665). The reviewing/confirming phases still wear the mobile "Paste pairing
-// code" dialog card (19-54) stretched to the window; they are desktop-specific (the human
-// fingerprint-verify step mobile's paste path skipped, #53) and have no frame yet, so the flow looks
-// deliberately inconsistent between the two treatments until that design lands.
+// Onboarding keeps the full-page EntryPage and ReviewCard. In-app pairing uses
+// PairingModal around the same reducer and explicit confirmation/storage flow.
 //
 // SECRET HYGIENE. The pasted payload is a bearer token (mobile's PasteCodeDialog.kt:25-26 carries the
 // rule verbatim: it "must never reach Log.*"). It lives in reducer state, is handed opaquely to the
@@ -76,6 +72,8 @@ const PAIRING_COPY = {
 } as const
 
 export interface PairingViewProps {
+  presentation?: 'page' | 'modal'
+  context?: ReactNode
   state: PairingState
   onPasteChange: (paste: string) => void
   onLabelChange: (label: string) => void
@@ -94,6 +92,7 @@ export interface PairingViewProps {
  */
 export function PairingView(props: PairingViewProps): JSX.Element {
   const { state, onPasteChange, onLabelChange, onSubmit, onConfirm, onCancel } = props
+  if (props.presentation === 'modal') return <PairingModal {...props} />
   const isPaste = state.phase === 'editing' || state.phase === 'submitting'
   return (
     <div className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}>
@@ -122,6 +121,97 @@ export function PairingView(props: PairingViewProps): JSX.Element {
       )}
       {state.phase === 'paired' && <p className="pairing__success">Paired ✓</p>}
     </div>
+  )
+}
+
+/** Native top-layer ownership keeps the invoking screen mounted but inert. */
+function PairingModal(props: PairingViewProps): JSX.Element {
+  const { state, onCancel } = props
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const cancelRef = useRef(onCancel)
+  cancelRef.current = onCancel
+  const busy = state.phase === 'submitting' || state.phase === 'confirming'
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const invoker = document.activeElement
+    dialog.showModal()
+    dialog.querySelector<HTMLInputElement>('input')?.focus()
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        if (!busyRef.current) cancelRef.current()
+      } else if (event.key === 'Tab') {
+        const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled)'
+        ))
+        const first = controls[0]
+        const last = controls[controls.length - 1]
+        if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+          event.preventDefault()
+          last?.focus()
+        } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+          event.preventDefault()
+          first?.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+      dialog.close()
+      if (invoker instanceof HTMLElement && invoker.isConnected) invoker.focus()
+    }
+  }, [])
+  // Changing steps removes the field that held focus. Focus the verification action
+  // only on idle entry, never while a request is outstanding.
+  useEffect(() => {
+    if (state.phase === 'reviewing') {
+      dialogRef.current?.querySelector<HTMLButtonElement>('.modal__action--confirm')?.focus()
+    } else if (state.phase === 'editing') {
+      dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+    }
+  }, [state.phase])
+  const editing = state.phase === 'editing' || state.phase === 'submitting'
+  const cancel = (): void => { if (!busy) onCancel() }
+  return (
+    <dialog ref={dialogRef} className="pairing pairing-modal" role="presentation"
+      onCancel={event => { event.preventDefault(); cancel() }}>
+      <Modal title="Pair" width={640} onClose={cancel}
+        cancelAction={{ label: 'Cancel', disabled: busy, onClick: cancel }}
+        confirmAction={{ label: 'Pair', disabled: busy || state.phase === 'paired' ||
+          (editing && state.paste.trim() === ''),
+          onClick: editing ? props.onSubmit : props.onConfirm }}>
+        {props.context}
+        {editing && <>
+          <div className="pairing-modal__field">
+            <span aria-hidden="true">Pairing code</span>
+            <input type="text" aria-label="Pairing code" autoComplete="off" spellCheck={false}
+              value={state.paste} disabled={busy}
+              onChange={event => props.onPasteChange(event.target.value)} />
+          </div>
+          <div className="pairing-modal__field">
+            <span aria-hidden="true">Host name</span>
+            <input type="text" aria-label="Host name" autoComplete="off" spellCheck={false}
+              maxLength={MAX_HOST_LABEL_LENGTH} value={state.label ?? ''} disabled={busy}
+              onChange={event => props.onLabelChange(event.target.value)} />
+          </div>
+          {state.phase === 'editing' && state.error !== null &&
+            <p className="pairing-modal__error" role="alert">{ERROR_COPY[state.error]}</p>}
+        </>}
+        {(state.phase === 'reviewing' || state.phase === 'confirming') && <>
+          <div className="pairing-modal__fingerprint" role="group" aria-label="Server key fingerprint">
+            {state.fingerprint}
+          </div>
+          <p className="pairing-modal__explanation">
+            Verify that the code matches to ensure that you are connected to the correct host.
+          </p>
+        </>}
+      </Modal>
+    </dialog>
   )
 }
 
@@ -408,50 +498,77 @@ function ReviewCard({
 }
 
 export interface PairingScreenProps {
+  presentation?: 'page' | 'modal'
+  context?: ReactNode
   bridge?: PairingBridge // default: window.pyry (structurally assignable)
   onPaired?: () => void // fired once on successful confirm — the future navigation seam
   onCancel?: () => void // fired on cancel — the future dismiss/navigation seam
 }
 
 /**
- * Thin container — the untested React wiring (precedent: useDaemonEventBridge). Owns the reducer
- * and orchestrates the two one-shot IPC calls from user-interaction handlers (React's idiomatic
- * home for interaction side effects), so there is no useEffect and no StrictMode double-invoke
- * concern. In-flight re-entrancy is blocked at the view (disabled Pair/Confirm while
- * submitting/confirming); a dispatch after unmount is a harmless React-18 no-op.
+ * Owns reducer state and one-shot IPC calls. Synchronous busy guards prevent
+ * re-entry; stale submits are ignored, while authorized save completion still
+ * reaches the shell's generation-checked refresh callback after unmount.
  */
-export function PairingScreen({ bridge, onPaired, onCancel }: PairingScreenProps = {}): JSX.Element {
+export function PairingScreen({ bridge, onPaired, onCancel, presentation, context }: PairingScreenProps = {}): JSX.Element {
   const target: PairingBridge = bridge ?? window.pyry
   const [state, dispatch] = useReducer(pairingReducer, initialPairingState)
+
+  const busyRef = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  const diagnostic = (code: string): void => {
+    if (presentation === 'modal') window.pyry.sendDiagnostic({ event: 'pairing-modal', code })
+  }
 
   const handlePasteChange = (paste: string): void => dispatch({ type: 'paste-changed', paste })
 
   const handleLabelChange = (label: string): void => dispatch({ type: 'label-changed', label })
 
   const handleSubmit = (): void => {
-    if (state.phase !== 'editing') return
+    if (state.phase !== 'editing' || busyRef.current || state.paste.trim() === '') return
+    busyRef.current = true
+    diagnostic('submitting')
     const paste = state.paste // captured before the await — no check-then-act race
     dispatch({ type: 'submit' })
-    void runSubmit(target, paste).then((event) => dispatch(event))
+    void runSubmit(target, paste).then((event) => {
+      if (!mounted.current) {
+        diagnostic('submit-ignored')
+        return
+      }
+      busyRef.current = false
+      diagnostic(event.type === 'submit-failed' ? event.reason : 'reviewing')
+      dispatch(event)
+    })
   }
 
   const handleConfirm = (): void => {
-    if (state.phase !== 'reviewing') return
+    if (state.phase !== 'reviewing' || busyRef.current) return
+    busyRef.current = true
+    diagnostic('confirming')
     const label = state.label // captured before the await, as handleSubmit does with the paste
     dispatch({ type: 'confirm' })
     void runConfirm(target, label).then((event) => {
-      dispatch(event)
+      busyRef.current = false
+      diagnostic(event.type === 'confirm-failed' ? event.reason : 'paired')
+      if (mounted.current) dispatch(event)
       if (event.type === 'confirm-succeeded') onPaired?.()
     })
   }
 
   const handleCancel = (): void => {
+    if (busyRef.current) return
     dispatch({ type: 'cancel' })
     onCancel?.()
   }
 
   return (
     <PairingView
+      presentation={presentation}
+      context={context}
       state={state}
       onPasteChange={handlePasteChange}
       onLabelChange={handleLabelChange}

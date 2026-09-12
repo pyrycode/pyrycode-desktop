@@ -7,6 +7,7 @@ import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
 import { useQuestionBridge } from './store/questionBridge'
 import { useHistoryPageBridge } from './store/historyPageBridge'
+import { useChatHistoryWriter } from './store/chatHistoryWriter'
 import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
@@ -107,6 +108,7 @@ export function AppView(props: {
  * — one stable app-lifetime listener with no subscribe/unsubscribe churn as the route flips.
  */
 function App(): JSX.Element {
+  useChatHistoryWriter()
   useDaemonEventBridge()
   // #203: the timeline bridge is useDaemonEventBridge's twin — a second independent subscriber on the
   // one daemon-event channel (#202), folding the v2 structured stream into timelineStore. App-lifetime

@@ -55,7 +55,7 @@ None. A future restored slice needs explicit ownership installation before recor
 
 ## Documentation handoff
 
-Pending for the documentation stage: update `docs/knowledge/features/chat-history.md`, especially “Snapshot contract” and “Storage and concurrency”, to describe the wired observer, durable coverage, host attribution and quit-flush behavior, retaining the whole-collection I/O tradeoff and the #1339/#1340 integration boundaries (exact requirement from the refiner's Documentation handoff).
+Pending for the documentation stage (verbatim refiner handoff): “The documentation stage should update `docs/knowledge/features/chat-history.md` to describe the wired observer, durable coverage, host attribution and quit-flush behavior, retaining the whole-collection I/O tradeoff and the #1339/#1340 integration boundaries.” Relevant sections: “Snapshot contract” and “Storage and concurrency”.
 
 ## Security review
 
@@ -70,3 +70,7 @@ Pending for the documentation stage: update `docs/knowledge/features/chat-histor
 - Threat alignment: compromised renderer can request only validated operations for saved hosts, never obtain credentials or filesystem paths. Hostile daemon display text is data, never markup or logs. Disk theft remains covered by protected storage; restoration and explicit-removal lifecycle are deferred to #1339/#1340.
 
 **Reviewer:** builder self-review.
+
+## Revisions
+
+- 2026-09-12: the composer symbol in the reading list is `submitMessage` (the initial `attemptSend` name was a transcription error). Verification exposed a coalescing detail: compare the drained candidate with the last successful value as well as the latest queued value, so a burst that returns to the saved value issues no replacement. The record-level contract is unchanged.

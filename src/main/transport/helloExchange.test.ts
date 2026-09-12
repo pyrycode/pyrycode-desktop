@@ -221,3 +221,17 @@ describe('hello exchange — no console output anywhere (AC #4)', () => {
     }
   })
 })
+
+describe('parseHelloAck workspace root', () => {
+  const base = { protocol_version: 'v2', server_id: 'srv', conn_id: 'conn', capabilities: [] }
+  it.each(['/home/pyry/pyry-workspace', '/', '', 'relative'])('preserves string %s verbatim', (workspace_root) => {
+    expect(parseHelloAck(ackBytes({ ...base, workspace_root }))).toEqual({ ...base, workspace_root })
+  })
+  it('keeps an omitted root absent for older hosts', () => {
+    expect(parseHelloAck(ackBytes(base))).not.toHaveProperty('workspace_root')
+  })
+  it.each([null, 1, true, [], { private: 'do-not-echo' }])('rejects a present non-string root', (workspace_root) => {
+    expect(() => parseHelloAck(ackBytes({ ...base, workspace_root }))).toThrow(WireDecodeError)
+    expect(() => parseHelloAck(ackBytes({ ...base, workspace_root }))).not.toThrow('do-not-echo')
+  })
+})

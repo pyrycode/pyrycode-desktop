@@ -455,6 +455,7 @@ export interface HelloClientPayload {
 }
 
 export interface HelloAckPayload {
+  workspace_root?: string
   protocol_version: string
   server_id: string
   conn_id: string

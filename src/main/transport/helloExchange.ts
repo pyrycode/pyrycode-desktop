@@ -109,5 +109,8 @@ export function parseHelloAck(bytes: Uint8Array): HelloAckPayload {
     capabilities = [...raw]
   }
 
-  return { protocol_version, server_id, conn_id, capabilities }
+  return {
+    protocol_version, server_id, conn_id, capabilities,
+    ...('workspace_root' in payload ? { workspace_root: requireString(payload, 'workspace_root') } : {})
+  }
 }

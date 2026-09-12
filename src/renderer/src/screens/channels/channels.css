@@ -2254,24 +2254,8 @@
   font-weight: var(--text-body-medium-weight);
 }
 
-/* #1308 — the ADD WORKSPACE dialog: what the HOST row's hover plus opens. The Rename dialog's chrome
-   (102:498) once more, cloned from .edit-host* rather than from .create-channel*, because this is the
-   second dialog on this screen with a ROUND TRIP: the field freezes while the daemon is answering and a
-   failure line appears under it on a refusal, and that block already carries both.
-
-   A SEVENTH CLASS FAMILY rather than reusing .edit-host* or .create-channel*, the call #1180 and #1299
-   both made and it is not tidiness: Playwright locators run in strict mode, and `e2e/sidebar-host-edit`
-   and `e2e/sidebar-create-channel` scope to those two dialogs' classes, so a third dialog wearing either
-   set would JOIN their match sets and strict-violate rather than fail an assertion.
-
-   The max-height / overflow-y pair is kept from the source block, and it earns its place here for its own
-   reason rather than by inheritance: the one value this panel renders is an operator-typed absolute path
-   with no length bound, and it sits inside a single-line input that scrolls its own overflow — so the
-   HEIGHT risk is not the value but the panel's own content on a short window, which is exactly what the
-   pair bounds.
-
-   `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll column and covers the
-   window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+/* The host-row dialog owns the full-window overlay; Modal owns panel sizing and scrolling.
+   The overlay escapes the sidebar and sits above its sticky FAB. */
 .add-workspace-overlay {
   position: fixed;
   inset: 0;
@@ -2291,86 +2275,62 @@
   opacity: 0.4;
 }
 
-/* The centered M3 dialog panel: surface-container-high, 28px radius, 24px padding, a column with 16px
-   gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows. */
-.add-workspace {
+.add-workspace-overlay > .modal {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  width: 100%;
-  max-width: 360px;
-  max-height: 90%;
-  overflow-y: auto;
-  padding: var(--space-6);
-  background: var(--color-surface-container-high);
-  border-radius: var(--radius-lg);
-  color: var(--color-on-surface);
 }
 
-/* The headline-small title (102:499's treatment, reading "Add workspace"). margin: 0 resets the heading
-   default. */
-.add-workspace__title {
-  margin: 0;
-  color: var(--color-on-surface);
-  font-size: var(--text-headline-small-size);
-  line-height: var(--text-headline-small-line);
-  letter-spacing: var(--text-headline-small-tracking);
-  font-weight: var(--text-headline-small-weight);
-}
-
-/* The outlined field (102:500) — a bordered frame stacking the label over the input value. The wrapping
-   <label> makes the whole frame focus the input. 1px border is structural geometry (the file's carve-out).
-   Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal — the
-   .edit-host__field token-mapping precedent. */
 .add-workspace__field {
   display: flex;
   flex-direction: column;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-outline);
-  border-radius: var(--radius-xs);
+  gap: var(--space-2);
 }
 
-/* The field label (102:501) is M3 label-medium (12px); the theme has no label-medium token, so map to the
-   nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
 .add-workspace__label {
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
+  color: var(--color-on-primary-container);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight-emphasized);
 }
 
-/* The input value (102:502) — body-large, on-surface. Reset to a borderless field so the frame's border is
-   the only chrome; the label above supplies the field's meaning. */
+.add-workspace__detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc((var(--space-2) + var(--space-3)) / 2);
+  margin: 0;
+}
+
+.add-workspace__preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .add-workspace__input {
+  box-sizing: border-box;
   width: 100%;
-  padding: 0;
+  min-width: 0;
+  padding: var(--space-4);
   border: 0;
-  background: none;
-  outline: none;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
   color: var(--color-on-surface);
   font-family: var(--font-sans);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
-/* The frozen field while the create is outstanding (AC2) — and a rule .edit-host__input does NOT have,
-   added deliberately rather than copied over. That dialog's field is disabled for the tick an
-   `ipcRenderer.invoke` takes; this one's is disabled for as long as a daemon across the relay takes to
-   answer, which can be seconds and can be forever. A field that stays visually identical while refusing
-   every keystroke reads as a broken input, so it wears the same M3 38% disabled emphasis the actions do
-   (opacity, not a color literal — the #218 de-emphasis precedent). */
+.add-workspace__input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 .add-workspace__input:disabled {
   opacity: 0.38;
 }
 
-/* The failure line (AC3) — spec-added, not in the Figma, on .edit-host__error's recipe. It renders only on
-   a rejection, so the panel's own column gap owns its spacing and margin: 0 resets the <p> default. The
-   text is a client-owned constant; the rejection event is nullary, so nothing daemon-derived exists in the
-   renderer to reach it. */
 .add-workspace__error {
   margin: 0;
   color: var(--color-error);
@@ -2378,46 +2338,6 @@
   line-height: var(--text-body-medium-line);
   letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-medium-weight);
-}
-
-/* The action row (the Rename dialog's 19:19) — Cancel + Start chat both right-aligned (the node's
-   justify-end). 4px gap = --space-1. A flex container rather than two floated buttons, .edit-host__actions'
-   shape. */
-.add-workspace__actions {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  justify-content: flex-end;
-}
-
-/* The two text-button actions — the M3 dialog text-button treatment (pill, transparent fill,
-   --color-primary label, label-large), mirroring edit-host__save. */
-.add-workspace__cancel,
-.add-workspace__start {
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--text-label-large-size);
-  line-height: var(--text-label-large-line);
-  letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
-}
-
-.add-workspace__cancel:focus-visible,
-.add-workspace__start:focus-visible {
-  outline: 1px solid var(--color-outline);
-}
-
-/* Start chat disabled while the create is in flight or the trimmed path is not absolute (AC2). Cancel has
-   no disabled rule because it has no disabled state — it is the exit while a create hangs. The M3 38%
-   disabled emphasis (opacity, not a color literal) and a non-interactive cursor. */
-.add-workspace__start:disabled {
-  opacity: 0.38;
-  cursor: default;
 }
 
 

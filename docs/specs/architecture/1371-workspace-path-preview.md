@@ -77,3 +77,8 @@ None. The design context has no reduced opacity on the preview row; retain its f
 
 **Reviewer:** builder, self-review per `builder/security-review.md`
 **Date:** 2026-09-12
+
+## Revisions
+
+- Final consumer search found `e2e/host-conversation-list.spec.ts` using the old dialog selectors. Update only those selectors and run that focused spec to retain #1363's authoritative refresh proof. No production fan-out or contract change; the size remains below the plan's ceiling.
+- The live fixture seeds an unnamed chat. Compare the active row's element identity before and after each create, plus total chat count, instead of relying on differing titles; all created and seeded rows can read Untitled.

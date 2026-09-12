@@ -106,7 +106,7 @@ its unsent composer draft, rather than merely restoring its selected conversatio
 The background remains mounted but native dialog inertness blocks pointer and keyboard
 input, including sidebar navigation.
 
-Cancel, header close and Escape from either idle step send `pairServerCancelled` with
+Cancel, header close and Escape before saving or during post-save pending/failure states send `pairServerCancelled` with
 the captured `returnTo`. They preserve `activeConversationStore`, `paneKey`, held
 history and the mounted invoking view; the modal restores focus to the invoker when
 it remains available. Busy submission/confirmation rejects dismissal. Exiting unmounts
@@ -115,11 +115,12 @@ identity and rejection explanation inside the modal; changing targets changes th
 `PairingScreen` key. `pairingChangeDeps` stays a per-render object because its
 `returnToPairingOrigin` callback must read the current captured origin.
 
-An active flow's successful confirmation returns to `list` without clearing held state. Existing
+An active flow returns to `list` only after fresh authentication of the saved host, without clearing held state. Existing
 pairing confirmation saves by server ID; a same-server save replaces its credentials and moves that
 record to the end of saved order. Registry reconciliation reconnects that changed record without an
-app restart, leaving unchanged servers alone. The origin view remains mounted during pairing, so completion
+app restart, leaving unchanged servers alone. The origin view remains mounted during pairing, so successful persistence
 explicitly calls `loadServerInfo` to refresh saved order rather than relying on a sidebar remount.
+That refresh does not dismiss pairing or indicate authenticated completion.
 
 ### Host recovery and navigation lifetime
 
@@ -135,6 +136,22 @@ the other host settles offline. Repair remains available through the explicit co
 connection retries, Pair new host and initial setup with no saved hosts retain their existing behavior.
 The automatic-opening behavior introduced by [#1336](../../specs/architecture/1336-pairing-recovery.md)
 is implementation history, superseded by [#1354](../../specs/architecture/1354-explicit-host-repair.md).
+
+Onboarding, added-host pairing and manual repair share the
+[pairing screen's authentication observer](pairing-input-screen.md#authentication-observation).
+The main-retained identity returned by confirm selects a fresh per-host status; saving,
+relay reachability, another host's connection or a pre-confirmation connected status
+cannot complete the flow. The wait lasts at most 30 seconds after receiving save success
+or Retry. Absence and timeout offer Retry on the same saved host through the existing
+reconnect loop, without another save. Failures stay visible until user action; rejection
+instructs Cancel and explicit manual pairing with a fresh code. No replacement
+credentials are generated automatically.
+
+Post-save Cancel, modal close and Escape retain the saved host and the invoking
+conversation, draft and history. Unmount or a newer interaction disposes the observer's
+subscriptions and timer. `PairingScreen` refreshes saved-host information after an
+authorized save even if it has unmounted; this callback does not navigate. Only its
+live observer's authenticated completion reaches the shell.
 
 `pairingGeneration` fences completion navigation. Each initiating flow captures its generation;
 starting another flow, leaving pairing or unmounting the shell invalidates it. `onPairServerPaired`
@@ -152,9 +169,9 @@ Tests that need Settings must first dismiss idle repair. Scope rejection-copy as
 to the Pair dialog: the retained conversation can also display the same notice.
 Before asserting that repair is absent or a draft is unchanged, wait for the delivered status or a following visible frame. Repeated failures may leave the status label unchanged;
 a following frame proves delivery where an immediate absence assertion could pass too early.
-The delayed-confirmation tests hold the real handler's reply, then wait for the saved-order refresh
+The delayed-confirmation tests hold the real handler's reply, then wait for the screen's saved-order refresh
 before checking the newer draft or pairing input. Connection success alone would not prove that the
-obsolete callback had run. Static renderer tests cover status labels, failed-row styling, the named
+late save response had been processed. Static renderer tests cover status labels, failed-row styling, the named
 repair button and rejection notice; they cannot prove these effects or interleavings.
 
 ## The two-pane desktop shell (`pairedShell.css`, `src/main/index.ts`, #670)
@@ -362,7 +379,11 @@ AppView (conversation)
     Settings / Archive / Back -> leaveRecovery -> selected route
     pairing Cancel -> leaveRecovery -> captured origin
     pairing Confirm -> existing encrypted save -> registry reconciliation
-      -> saved-host refresh -> generation check -> list if still the initiating flow
+      -> saved-host refresh (also after unmount)
+      -> bounded selected-host authentication wait
+      -> authenticated once -> generation check -> list if still the initiating flow
+    verification failure -> sticky feedback -> Retry for absence/timeout, or Cancel
+    post-save Cancel -> dispose wait -> captured origin; saved host retained
     Settings explicit Unpair -> unpairServer -> scoped clear
       -> app-level pairing clear and pairing screen only when no servers remain
 ```

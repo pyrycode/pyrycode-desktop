@@ -63,17 +63,22 @@ drives a second pairing through the real UI — Settings → "Pair another serve
 top-level `daemon`/`forwarder` are unchanged and alias `servers[0]`'s, so all 54 pre-existing importers
 pass with no edits.
 
-With two servers paired, the app asks the second daemon *nothing*: every renderer command, including
-`requestConversations`, is bare (no `serverId`), and `createServerRouter`'s absent-id branch resolves
-only through `soleConnection()` — `null` once more than one connection is registered — so the command
-refuses `ambiguous-server`. Per-server addressing is #1070/#1085/#1086's work, not this one's. So the
-second daemon's seeded row arrives as a server-initiated push rather than a reply, and that push
-doubles as the second handshake's connected gate, since neither the daemon nor the app exposes one
-otherwise. See [E2E test harness — scenario history](e2e-harness-scenarios.md) for the full design
-reasoning, the departures from the first draft, and what this fixture deliberately still can't prove
-(two sidebar host rows — #1070's own AC1; the per-server connection **dots** half closed in
-[#1199](https://github.com/pyrycode/pyrycode-desktop/issues/1199), proved by
-`e2e/host-row-per-server.spec.ts` riding this same fixture).
+Each daemon's default reply builder returns its own seed: `SEEDED_ROW` for the first,
+`SECOND_SEEDED_ROW` for the second. After the second pairing, the fixture waits for two chat rows
+within `HANDSHAKE_TIMEOUT_MS`. Since [#1363](https://github.com/pyrycode/pyrycode-desktop/issues/1363),
+that second row must arrive through the [conversation-list bridge](conversation-list-store.md)'s
+addressed connection request and transport reply. The old repeated unsolicited seed push hid a
+missing production request; restoring it would let fixture setup pass while list loading was broken.
+`createServerRouter` still refuses an unaddressed request when several connections are registered.
+
+[`host-conversation-list.spec.ts`](../../../e2e/host-conversation-list.spec.ts) supplies a separate
+`conversationStateFake` per host and counts `list_conversations` envelopes on each transport.
+Initial rows require counts `[1, 1]`. After the second host goes offline, Add workspace on the first
+host creates a chat and triggers its re-list, advancing counts to `[2, 1]`. The test waits for the
+selected chat and workspace under the connected host before checking enabled Send for a valid
+draft, absent connection warnings and the other host still offline. Neither renderer-store row
+insertion nor an unsolicited list push supplies those rows: request/reply delivery is part of the
+proof, not just setup for a rendering assertion.
 
 ### Launch-fate diagnostics
 
@@ -150,7 +155,7 @@ and [recovery](conversation-shell-composer-status.md#stopped-turn-recovery).
 ## Related
 
 - [E2E test harness — scenario history](e2e-harness-scenarios.md) — the full chronological log this document was split from; every entry above from #93 onward has its detail there.
-- Spec: `docs/specs/architecture/1091-launch-against-two-fake-daemons.md` — the two-fake-daemon launch design: the `soleConnection()`/`ambiguous-server` finding that forces the second server's seeded row to arrive as a push rather than a reply, and the three departures (no-shared-substring row names, distinct per-server tokens, whole-handle payload building) the first draft surfaced.
+- Spec: `docs/specs/architecture/1091-launch-against-two-fake-daemons.md` — the original two-daemon design and its historical seed-push workaround. [Host-addressed conversation list lifecycle](../../specs/architecture/1363-host-conversation-list.md) replaces that workaround with request-driven rows.
 - Spec: `docs/specs/architecture/1127-launch-fate-diagnostic.md` — the launch-fate diagnostic design and its `ChildProcess`-capture-at-`watch()`-time revision.
 - [Window-presentation dev affordance](window-presentation-affordance.md) / [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) — the third `isPackaged`-false-first dev-only gate, letting a non-packaged build keep its window unshown; consumed by `desktopIsolation.ts` above.
 - [App shell (router)](app-shell.md) / [#80](../codebase/80.md) — `routeForStatus`, whose unpaired outcome the smoke test now asserts (`.pairing`).

@@ -51,51 +51,8 @@ function rowName(row: { name: string | null }): string {
   return row.name
 }
 
-// Fake-stack UI e2e for the SESSION-EXIT path back to the app-root pairing screen (#464, split from
-// #429). ONE affordance tears down a paired, connected thread and returns the operator to the app-root
-// `PairingScreen`: the terminal-error Re-pair escape hatch (#167), funnelling through `runUnpair` →
-// `onLastServerUnpaired()` → App-level `setRoute('pairing')`. Only the initial pairing happy path has
-// coverage otherwise; this exit path had none, so a routing regression could strand the operator on a
-// dead thread. Since #1163 that funnel is CONDITIONAL — it fires only when the erase left nothing
-// paired — so this first test is the last-server case and the second test below is the other half. Zero production code — the control already ships; this pins the exit behaviour. It adds two
-// test-only infra pieces (a fatal-close hook on the fake forwarder + exposing the forwarder on the
-// launcher handle) so the terminal-error path is reachable on the fake stack.
-//
-// #1061 took the second affordance. The two-phase Unpair control in the thread header (#166) drove the
-// same flip and had its own test here; that control and the bare `.conversation__header` row it owned
-// are deleted — the drawing's Content frame (Figma 106:3321) has no header row of any kind — so the
-// test went with it rather than being skipped. The property this spec exists to protect is unchanged
-// and still covered: the exit path back to pairing still reddens here if the routing breaks. Unpairing
-// a HEALTHY pairing has no entry point at all until a successor lands it on a host-level surface (it is
-// host-scoped, not conversation-scoped), to be settled with #1070 — an accepted gap, operator ruling
-// 2026-09-04, not something this spec should assert about.
-//
-// The app-root PairingScreen's `Pairing code` field is the unambiguous teardown proof: while on the
-// thread the top-level pairing route is NOT mounted (the exit flips the App route, unmounting
-// PairedShell entirely), so `[aria-label="Pairing code"]` has count 0; after the flip it is the sole
-// pairing surface, and its VISIBILITY is what proves the return-to-pairing. This is a top-level
-// App-route flip, not the in-shell pair-another route (#465), so there is no same-component ambiguity
-// to disambiguate here.
-//
-// That accessible name is the WHOLE locator (#664) — never the element type, never the card heading,
-// both of which #665's restyle changes. The same rule governs the re-pair affordance: #963 moved it into
-// the composer status row's error slot as the design's filled `Button small`, wearing `button-small
-// button-small--error`, and it is located by role + accessible name — that name being the button's full
-// visible label, `COMPOSER_REPAIR_BUTTON_COPY`, imported rather than retyped so a copy change cannot
-// leave this spec passing against a string nothing renders.
-//
-// #963 also gives this spec the row's GEOMETRY to prove, which no renderer spec can reach: the row is
-// 24 tall with the slot empty and 32 with the button in it, and the status group stays flush with the
-// row's bottom edge across that transition so the label does not move. `readStatusRowGeometry` reads all
-// three facts in one evaluate, and the same fatal close that surfaces the button is what drives the
-// transition — measured before it and after it, in one launch, so the two readings are comparable.
-//
-// SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM visibility /
-// enabled-state / count only; the pairing plumbing (synthetic token, fake static key) lives inside
-// launchPairedApp and is never echoed. No failure diagnostic serialises a token, key, pairing payload,
-// or close reason.
-
-test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-root pairing screen', async ({
+// Composer recovery preserves saved hosts; explicit removal is covered by the Settings specs.
+test('re-pair: a fatal relay close surfaces Re-pair, which opens recovery beside the sidebar', async ({
   launchPairedApp
 }) => {
   const { page, forwarder } = await launchPairedApp()
@@ -156,40 +113,12 @@ test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-ro
   expect(outline.style).not.toBe('none')
   expect(outline.width).not.toBe('0px')
 
-  // AC2 — clicking runs the same runUnpair flow → App `setRoute('pairing')` → app-root PairingScreen. No
-  // second clear path and no new IPC; this is #167's wiring, moved.
-  //
-  // #1163 made the flip CONDITIONAL on the refreshed collection coming back empty, so this launch —
-  // one paired server, now forgotten — is the LAST-SERVER case, and the assertion is unchanged for
-  // exactly that reason. The two-server case, where the flip must NOT happen, is the test below.
   await repair.click()
   await expect(pairingBox).toBeVisible()
+  await expect(page.locator('.paired-shell__recovery-notice')).toHaveCount(0)
 })
 
-// #1163: the same affordance against TWO paired servers. Re-pair now forgets only the server whose
-// conversation is open — through the per-server channel #1149 shipped — and the route flip that used to
-// follow every successful unpair is conditional on nothing being left paired. Before this slice,
-// recovering server A's dead connection erased server B's record too, dropped its live connection, ran
-// the thirteen-store clearPairingScopedState and threw the whole app back to the pairing screen. That
-// failure is entirely renderer-side and nothing in this repo can click, so this is the only tier that
-// can see it.
-//
-// THE ORDER OF THE THREE READS IS THE ARGUMENT, not a convenience. `pairingBox` has count 0 for the
-// whole launch, so asserting it first would pass before the unpair had even resolved — it cannot
-// distinguish "did not flip" from "has not flipped yet". The Settings-row read is what makes it
-// meaningful: it AUTO-WAITS for the first server's row to leave, so by the time it passes the erase has
-// demonstrably landed, and it could not have been reached at all from the pairing screen. Only then is
-// the absence of a flip a fact rather than a race.
-//
-// Row identity is read as the ARRAY FORM of `toHaveText` over `.settings__server-row-id`, never a text
-// filter: the fixture's two ids are 'fake-daemon' and 'fake-daemon-2', the first a SUBSTRING of the
-// second, and Playwright's `hasText` is a case-insensitive substring match. That is
-// `settings-per-server-unpair.spec.ts`'s own assertion, reused deliberately.
-//
-// SECRET HYGIENE, as above: every assertion reads DOM text, visibility or a small integer. A failure
-// diff can print a server id — which `serverInfoHandler` already vets as non-secret — never a payload,
-// a token, a key or a relay URL.
-test('re-pair with a second server paired forgets only its own, and stays in the paired shell', async ({
+test('re-pair with a second server preserves both hosts in the paired shell', async ({
   launchPairedApp
 }) => {
   const { page, servers } = await launchPairedApp({}, { secondServer: {} })
@@ -216,15 +145,10 @@ test('re-pair with a second server paired forgets only its own, and stays in the
   await expect(repair).toBeVisible()
   await repair.click()
 
-  // AC1 — exactly one record left, and it is the OTHER machine's. The Settings list is re-read from
-  // main by the unpair itself (`refreshServers`), so these rows are what main says, not a locally
-  // mutated copy.
+  await expect(pairingBox).toBeVisible()
   await page.getByRole('button', { name: 'Settings' }).click()
-  await expect(page.locator('.settings__server-row-id')).toHaveText([serverB.serverId])
+  await expect(page.locator('.settings__server-row-id')).toHaveText([serverA.serverId, serverB.serverId])
 
-  // AC2, first half — the app never left the paired shell. Meaningful here and nowhere earlier: the
-  // erase has landed (above), and the app-root pairing screen would have unmounted PairedShell
-  // entirely, so Settings could not have been opened from it.
   await expect(pairingBox).toHaveCount(0)
 
   // AC2, second half — the pairing-scoped clear did not run either. `clearAllConversations` is one of

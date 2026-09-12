@@ -402,11 +402,8 @@ const ariaLabelOf = (tag: string): string => {
 }
 
 describe('ChannelListView', () => {
-  it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
-    // #1070 left this posture EXACTLY as it was — the null-vs-loaded-zero tri-state is untouched, and it
-    // is the one state where a paired machine still draws no host row, because the sidebar has not yet
-    // been told whether there is anything to draw one beside.
-    const markup = render(null)
+  it('not-yet-loaded without saved hosts renders only the wrapper', () => {
+    const markup = render(null, null, [])
     expect(markup).toContain('aria-label="Conversations"')
     expect(markup).not.toContain('Channels')
     expect(markup).not.toContain('Chats')
@@ -686,11 +683,11 @@ describe('ChannelListView', () => {
       expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
     })
 
-    it('renders no host row when nothing is paired, or the list is not yet loaded (#1070)', () => {
+    it('renders no host row when nothing is paired', () => {
       // The rule that replaced "a tree with zero rows renders no host row". A host row is drawn from the
       // PAIRED-SERVER LIST now, not from the section's rows, so the two states without one are the
       // not-yet-loaded frame and a client with no machine paired — never a merely empty section.
-      expect(countOf(render(null), HOST_ROW_MARKER)).toBe(0)
+      expect(countOf(render(null, null, []), HOST_ROW_MARKER)).toBe(0)
       expect(countOf(render([], null, []), HOST_ROW_MARKER)).toBe(0)
       // And the row survives a section, and a whole list, holding nothing.
       expect(countOf(render([]), HOST_ROW_MARKER)).toBe(2)
@@ -1756,14 +1753,12 @@ describe('ChannelListView', () => {
       expect(countOf(markup, PAIR_NEW_HOST_MARKER)).toBe(2)
     })
 
-    it('renders no pill in the not-yet-loaded frame either (#1304)', () => {
-      expect(countOf(render(null), PAIR_NEW_HOST_PILL_MARKER)).toBe(0)
+    it('renders both header pills before the first list', () => {
+      expect(countOf(render(null), PAIR_NEW_HOST_PILL_MARKER)).toBe(2)
     })
 
-    it('renders no plus at all in the not-yet-loaded frame', () => {
-      // The headers themselves are withheld there (the tri-state's neutral first paint), so the control
-      // cannot appear without one — asserted rather than assumed, since it is a new element in that gate.
-      expect(countOf(render(null), PAIR_NEW_HOST_MARKER)).toBe(0)
+    it('renders both header plusses before the first list', () => {
+      expect(countOf(render(null), PAIR_NEW_HOST_MARKER)).toBe(2)
     })
 
     it('carries no untrusted text in any attribute of either control', () => {
@@ -1839,7 +1834,7 @@ describe('ChannelListView', () => {
     it('renders no dots where there is no host row (AC1)', () => {
       // Tracks the host row's own two no-row states since #1070, which are the not-yet-loaded frame and a
       // client with no machine paired — never a merely empty section, which now has a row and its dots.
-      expect(countOf(render(null), DOT_WRAPPER_MARKER)).toBe(0)
+      expect(countOf(render(null, null, []), DOT_WRAPPER_MARKER)).toBe(0)
       expect(countOf(render([], null, []), DOT_WRAPPER_MARKER)).toBe(0)
       expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(2)
     })
@@ -2315,4 +2310,13 @@ describe('HostConnectionDots (#718)', () => {
     const markup = dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))
     expect(markup.replace(/<[^>]*>/g, '')).toBe('')
   })
+})
+
+
+it('renders every saved host in both trees before the first list', () => {
+  const markup = render(null, null, [DEFAULT_SERVER, SECOND_SERVER])
+  expect(markup.split('class="channel-list__host"').length - 1).toBe(4)
+  expect(markup).toContain('Channels')
+  expect(markup).toContain('Chats')
+  expect(markup).not.toContain('channel-list__row-open')
 })

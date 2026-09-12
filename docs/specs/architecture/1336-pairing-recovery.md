@@ -89,3 +89,10 @@ Pending for the documentation stage: “The documentation stage updates the exis
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-12
+
+
+## Revisions
+
+- 2026-09-12: Build verification showed `DaemonErrorOutcome` also determines attachment-transfer failures. Keep its contract unchanged: `parseInboundMessage` instead adds optional `pairingReject: 'pairing-rejected'`, like its existing request-specific rejection categories. `onDriverEvent` consumes this separate category before correlation. The trust boundary and exact comparison remain unchanged; no attachment consumer needs modification.
+- 2026-09-12: Interaction proof requires navigation while another host is healthy to leave the outage latch armed for a later last-host failure. `leaveRecovery` consumes the latch only when no saved host is connected. Existing composer recovery and model-refusal tests now stage per-host attribution rather than a singular status.
+- 2026-09-12: Visual verification exposed the pane's wash intercepting an unpositioned recovery section and Vite inlining the supplied plug into a CSP-blocked data URL. Position the recovery section above its wash and serve the unchanged Figma SVG from `src/renderer/public/repair-plug.svg`; retain the existing CSP. The 800px Playwright case checks glyph loading and captures input and fingerprint confirmation.

@@ -648,6 +648,8 @@ export interface DaemonConnection {
  */
 function messageFor(code: string): string {
   switch (code) {
+    case 'pairing-rejected':
+      return 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
     case 'not-paired':
       return 'No paired pyrybox — pair a device to connect.'
     case 'malformed-hello-ack':
@@ -901,7 +903,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // write (the nextEnvelopeId / pendingSettings rationale).
   const pendingRetrievals = new Map<number, PendingRetrieval>()
 
+  // A later send/close failure must not erase this connection's authentication rejection.
+  let pairingRejected = false
+
   function emitFailed(code: string, message = messageFor(code)): void {
+    if (pairingRejected) {
+      code = 'pairing-rejected'
+      message = messageFor(code)
+    }
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
     // The single failure choke point (all five classifications) shadows onto the log — the static
     // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
@@ -1032,6 +1041,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           emitFailed('malformed-hello-ack')
           return
         }
+        pairingRejected = false
         emitDaemonEvent(sink, { type: 'connected', ack })
         // The load-bearing "Noise handshake finished" signal — event name only, never the ack bytes.
         // Distinct from #127's relay-open (the WS socket opening, which precedes the handshake).
@@ -1069,6 +1079,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             reassembler?.done(inbound.total)
             return
           case 'daemon-error': {
+            if (inbound.pairingReject === 'pairing-rejected') {
+              pairingRejected = true
+              failBundleStream()
+              failAttachmentTransfers()
+              failAttachmentRetrievals()
+              emitFailed('pairing-rejected')
+              return
+            }
             // Settings-rejection correlation takes PRECEDENCE over both co-consumers (#269). Correlate
             // the error to a pending set_session_settings request by Envelope.in_reply_to FIRST — the
             // confirmed-reply shape (#261) keyed off `daemon-error` instead of `session-settings-updated`.

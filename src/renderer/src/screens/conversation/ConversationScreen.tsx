@@ -18,7 +18,7 @@ import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
-import { sessionStore, useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
+import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 // #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
@@ -93,11 +93,8 @@ import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
-import { runUnpair, serverIdForOpenConversation } from './unpairAction'
-import { clearServerScopedState, serverScopedClearDeps } from '../../clearServerScopedState'
-import { conversationListStore, selectConversations } from '../../store/conversationListStore'
-import { serverInfoStore } from '../../store/serverInfoStore'
-import { loadServerInfo } from '../../store/serverInfoLoader'
+import { serverIdForOpenConversation } from './unpairAction'
+import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
 import { groupToolRows } from './groupToolRows'
@@ -184,9 +181,8 @@ export function selectOpenTimelineFor(
 }
 
 export interface ConversationScreenProps {
-  // The App route flip back to pairing (#166), mirroring PairingScreen's onPaired. Optional so the
-  // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
-  // clears + resets, it just doesn't navigate.
+  onRepairHost?: (serverId: string) => void
+  // Compatibility prop for existing embedders; repair now delegates through onRepairHost.
   onUnpaired?: () => void
   // #140: the shell's `back` dispatch — return from the thread to route `list`. #1064 deleted the
   // leading arrow that called it, and KEPT the prop: it is the screen's "am I mounted in the paired
@@ -198,7 +194,7 @@ export interface ConversationScreenProps {
 }
 
 export function ConversationScreen({
-  onUnpaired,
+  onRepairHost,
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
@@ -481,7 +477,7 @@ export function ConversationScreen({
             isRunning={isTurnRunning(phase)}
             trailing={
               <ComposerErrorSlotControl
-                onUnpaired={onUnpaired} onBack={onBack} onCommand={sendText}
+                onRepairHost={onRepairHost} onCommand={sendText}
               />
             }
           >
@@ -3187,7 +3183,7 @@ function Composer({
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
-  const status = useSessionStore(selectStatus)
+  const status = useOpenConnectionStatus()
   const { canSend } = composerAvailability(status)
   // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
@@ -3747,7 +3743,9 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
   if (!shouldShowBanner(status)) return null
   return (
     <p className="conversation__banner" role="status">
-      {CONNECTION_BANNER_COPY}
+      {status.type === 'error' && status.error.code === 'pairing-rejected'
+        ? 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
+        : CONNECTION_BANNER_COPY}
     </p>
   )
 }
@@ -3758,8 +3756,16 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 // wiring, no window.pyry dereference, no effects — a pure read). Unlike that control, whose visible
 // branches both need `error`, the banner's disconnected branch is a VISIBLE state, so the initial
 // (disconnected) store is enough to server-render the container's shown path.
+function useOpenConnectionStatus(): ConnectionStatus {
+  const openId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
+  const rows = useConversationListStore(selectConversations)
+  const serverId = serverIdForOpenConversation(rows, openId)
+  return useSessionStore(s => serverId === null ? initialSessionState.status
+    : selectStatusFor(serverId)(s) ?? initialSessionState.status)
+}
+
 function ConnectionBannerControl(): JSX.Element | null {
-  const status = useSessionStore(selectStatus)
+  const status = useOpenConnectionStatus()
   return <ConnectionBanner status={status} />
 }
 
@@ -3924,52 +3930,15 @@ export function ComposerErrorSlot({
 // ConversationScreen — that screen does not subscribe to sessionStore at all, and a read there would
 // re-render the whole screen, timeline included, on every connection-status change.
 //
-// handleRepair is RepairControl's body verbatim: the SAME clear-and-return-to-pairing flow as the manual
-// unpair (runUnpair), no second clear path and no new IPC. No confirm phase and no busy guard, for #167's
-// recorded reasons — the button only ever appears in an already-terminal error, so a confirm step is pure
-// friction, and it self-hides on both outcomes (ok → route unmounts the screen; error → the store lands
-// on code 'unpair', which the predicate excludes). runUnpair catches internally and never rejects, so the
-// floating promise is fired as a bare `void` and needs no `.then`. window.pyry is dereferenced only
-// inside the handler (interaction time), never during render, so a container smoke-render never touches
-// the bridge.
-//
-// #1163: it forgets ONE server — the one whose conversation is open — through the per-server channel,
-// and the route flip that follows is now conditional on nothing being left paired. Before that it called
-// a nullary `unpair()` that erased the whole collection, so recovering server A's dead connection also
-// forgot server B and dropped its live connection.
-//
-// THE TWO STORE READS THAT NAME THE SERVER HAPPEN AT INTERACTION TIME, through `getState()`, not as
-// subscriptions — the `conversationLastReadDeps` / `downloadAttachment` idiom. Subscribing would widen
-// this control's re-render footprint from `status` + `dispatch` to every conversation-list write, for a
-// value only the click needs. Reading them here also keeps `serverIdForOpenConversation` pure and
-// therefore unit-testable, including the ambiguity refusal a static render could never drive.
-//
-// `refreshServers` is the SAME loader the Settings mount fetch uses, so the refreshed rows and the "do
-// any records remain?" decision come from one read and cannot disagree — `runUnpairServer`'s contract,
-// reused rather than re-derived.
-//
-// Neither populated branch is reachable in a server render — zustand v5's useStore reads
-// getInitialState() there, which is `disconnected` — so both container tests stage that initial snapshot
-// with a getInitialState spy rather than a setState, which cannot reach a non-initial arm at all.
-//
-// #1196: it also drops the state the departed server authored, through the shared
-// `clearServerScopedState`. `onBack` is threaded in for its ONE effect — the return to the Channel List
-// when the erase leaves other servers paired. That case is unconditional here, unlike at the Settings
-// row: `serverIdForOpenConversation` names the server of the conversation ON SCREEN, so the chat this
-// control is mounted inside is always one of the departing machine's, and staying on it would leave the
-// operator reading a thread whose conversation has just been cleared. Optional and gated exactly like
-// `onUnpaired`, so a bare `<ConversationScreen />` outside the shell still navigates nowhere.
+// Repair delegates to the shell and preserves this host's saved credentials and held chats.
 function ComposerErrorSlotControl({
-  onUnpaired,
-  onBack,
+  onRepairHost,
   onCommand
 }: {
-  onUnpaired?: () => void
-  onBack?: () => void
+  onRepairHost?: (serverId: string) => void
   onCommand: (command: string) => boolean
 }): JSX.Element | null {
-  const status = useSessionStore(selectStatus)
-  const dispatch = useSessionStore((s) => s.dispatch)
+  const status = useOpenConnectionStatus()
   // #1321: the usage-limit reading for the conversation ON SCREEN, plus the instant it is read at. Two
   // more narrow-slice subscriptions on the control that already owns this slot, rather than a fourth
   // container mounted beside it — the slot holds one occupant at a time, so the priority has to be
@@ -4027,8 +3996,9 @@ function ComposerErrorSlotControl({
     const currentOffer = currentId === undefined ? undefined : conversationTimelineStore.getState().timelines.get(currentId)?.timeline.refusalOffer
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
+    const serverId = serverIdForOpenConversation(selectConversations(conversationListStore.getState()), currentId ?? null)
     if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer || currentOffer.changeId !== undefined ||
-        sessionStore.getState().status.type !== 'connected' || !isAddressableSessionId(currentSession) ||
+        serverId === null || sessionStore.getState().statuses.get(serverId)?.type !== 'connected' || !isAddressableSessionId(currentSession) ||
         [...currentWrites.pending.values()].some(change => change.field === 'model')) return
     changeSetting({ sessionId: currentSession, sendCommand: window.pyry.sendCommand,
       dispatch: event => {
@@ -4047,29 +4017,7 @@ function ComposerErrorSlotControl({
       selectConversations(conversationListStore.getState()),
       open === null ? null : open.id
     )
-    void runUnpair(
-      {
-        unpairServer: window.pyry.unpairServer,
-        refreshServers: () =>
-          loadServerInfo(window.pyry.serverInfo, serverInfoStore.getState().setServers),
-        // The prop App bound to `applyPairingChange(deps, 'unpaired')`, whose contract is now honoured
-        // rather than assumed: reaching it means nothing is paired any more, so it may run the
-        // thirteen-store clear and flip the route.
-        onLastServerUnpaired: () => onUnpaired?.(),
-        // #1196: the OTHER arm — servers remain, so the app stays in the paired shell and only the
-        // departed machine's state goes. The clear set and its store wiring live in
-        // `clearServerScopedState`; this site supplies only the nav, which is the one effect the two
-        // callers legitimately differ on. Spread rather than re-listed, so the Settings row and this
-        // control can never enumerate two different clear sets (AC4).
-        clearServerScopedState: (departedServerId) =>
-          clearServerScopedState(
-            { ...serverScopedClearDeps, navigateToList: () => onBack?.() },
-            departedServerId
-          ),
-        dispatch
-      },
-      serverId
-    )
+    if (serverId !== null) onRepairHost?.(serverId)
   }
 
   return (
@@ -4260,7 +4208,8 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
     case 'disconnected':
       return { category: 'down', label: 'Pyrycode Offline' }
     case 'error':
-      return { category: 'down', label: 'Pyrycode Offline' }
+      return { category: 'down', label: status.error.code === 'pairing-rejected'
+        ? 'Pyrycode Pairing rejected' : 'Pyrycode Offline' }
   }
 }
 

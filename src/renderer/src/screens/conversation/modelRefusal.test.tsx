@@ -6,6 +6,7 @@ import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationTimelineStore, createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { sessionStore } from '../../store/sessionStore'
+import { conversationListStore } from '../../store/conversationListStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
 
 afterEach(() => vi.restoreAllMocks())
@@ -28,9 +29,15 @@ it.each([{ changeId: 'held' }, { rejected: true }])('renders retained recovery s
     }
   })
   vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
-    ...sessionStore.getInitialState(), status: {
+    ...sessionStore.getInitialState(), statuses: new Map([['s', {
       type: 'connected', ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
-    }
+    }]])
+  })
+  vi.spyOn(conversationListStore, 'getInitialState').mockReturnValue({
+    ...conversationListStore.getInitialState(), conversations: [{
+      id: 'a', serverId: 's', cwd: '', name: 'A', is_promoted: false, is_archived: false,
+      last_message_ts: '', last_used_at: '', workspace_label: null
+    }]
   })
   vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
     ...sessionIdStore.getInitialState(), sessionId: 'addressable'

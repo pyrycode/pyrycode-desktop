@@ -9836,3 +9836,38 @@ describe('refusal forwarding', () => {
     connection.stop()
   })
 })
+
+
+describe('pairing rejection lifetime', () => {
+  it('preserves rejection through generic failures, isolates hosts and clears on reconnect', async () => {
+    const a = build({ serverId: 'host-a' })
+    const b = build({ serverId: 'host-b' })
+    a.connection.start()
+    b.connection.start()
+    await tick()
+    for (const ctx of [a, b]) {
+      ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    }
+    a.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({
+      id: 3, type: 'error', ts: FIXED_TS,
+      payload: { code: 'auth.invalid_token', message: TOKEN, retryable: false }
+    }) })
+    a.drivers[0].emit({ type: 'error', reason: 'outbound-frame-encode-failed' })
+    a.drivers[0].emit({ type: 'terminal', code: 1006, reason: TOKEN })
+    const failures = emitted(a.sink).filter(event => event.type === 'failed')
+    expect(failures).toHaveLength(3)
+    expect(failures.every(event => event.type === 'failed' &&
+      event.error.code === 'pairing-rejected' && event.error.message ===
+      'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
+    )).toBe(true)
+    expect(JSON.stringify(stampedEvents(a.sink))).not.toContain(TOKEN)
+    expect(emitted(b.sink).at(-1)?.type).toBe('connected')
+    a.connection.reconnect()
+    await tick()
+    a.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    a.drivers[1].emit({ type: 'error', reason: 'outbound-frame-encode-failed' })
+    expect(emitted(a.sink).at(-1)).toMatchObject({ type: 'failed', error: { code: 'outbound-frame-encode-failed' } })
+    a.connection.stop()
+    b.connection.stop()
+  })
+})

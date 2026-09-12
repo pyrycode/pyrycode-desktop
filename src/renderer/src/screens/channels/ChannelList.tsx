@@ -129,7 +129,8 @@ export function ChannelList({
   onOpen,
   onOpenSettings,
   onOpenArchive,
-  onPairNewHost
+  onPairNewHost,
+  onRepairHost
 }: {
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
@@ -139,6 +140,7 @@ export function ChannelList({
   // it to the same `onOpenPairServer` that drives Settings' "Pair another server" row: one act, one
   // handler, and the container decides where cancel lands from the route rather than from the caller.
   onPairNewHost: () => void
+  onRepairHost?: (serverId: string) => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   // The client-owned default workspace (#403), read reactively so the FAB always closes over the current
@@ -271,6 +273,7 @@ export function ChannelList({
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
+        onRepairHost={onRepairHost}
         onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
         // #1178 — the SECOND caller of the shipped constructor, and the whole of the wiring: it already
         // took the cwd as a required parameter, so the FAB's client-owned default and the workspace
@@ -465,8 +468,7 @@ export function ChannelList({
 /**
  * The pure view. Always returns a stable `aria-label="Conversations"` root (the test hook, present in
  * every state); content varies with the conversation store's tri-state AND the paired-server list:
- *  - `conversations === null` (not-yet-loaded) → the wrapper only, no headers, no rows, no empty state
- *    (the neutral first-paint posture, like #203's Timeline returning null on empty).
+ *  - `conversations === null` (not-yet-loaded) → saved hosts and headers, with no conversation rows.
  *  - loaded, but nothing to draw — no paired server AND no active row → the wrapper only.
  *  - anything to draw → BOTH section headers and the divider, unconditionally, each header followed by
  *    one host row per paired server in pairing order (#1070).
@@ -482,6 +484,7 @@ export function ChannelListView({
   onOpenSettings,
   onOpenArchive,
   onPairNewHost,
+  onRepairHost,
   onNewConversation,
   onCreateChat,
   onCreateChannel,
@@ -518,6 +521,7 @@ export function ChannelListView({
   // It travels one hop further than `onOpenSettings` — which stops here — because `renderBody` is what
   // draws the headers and hands it to each of them.
   onPairNewHost: () => void
+  onRepairHost?: (serverId: string) => void
   onNewConversation: () => void
   // #1178 — start a chat in the named workspace, the sidebar's first create that is not the client's
   // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
@@ -575,6 +579,7 @@ export function ChannelListView({
         onEditWorkspace,
         onEditHost,
         onAddWorkspace,
+        onRepairHost,
         onSaveAsChannel,
         onRename
       )}
@@ -863,15 +868,19 @@ export function HostRow({
   label,
   serverId,
   onAddWorkspace,
-  onEditHost
+  onEditHost,
+  failed = false,
+  onRepair
 }: {
+  failed?: boolean
+  onRepair?: () => void
   label: string
   serverId: string
   onAddWorkspace?: () => void
   onEditHost?: () => void
 }): JSX.Element {
   return (
-    <div className="channel-list__host">
+    <div className={failed ? "channel-list__host channel-list__host--failed" : "channel-list__host"}>
       <svg
         className="channel-list__host-icon"
         viewBox="0 0 24 24"
@@ -884,7 +893,12 @@ export function HostRow({
       </svg>
       <span className="channel-list__host-label">{label}</span>
       <HostConnectionDotsControl serverId={serverId} />
-      {onEditHost && (
+      {failed && onRepair && (
+        <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
+          <span className="channel-list__host-repair-icon" aria-hidden="true" />
+        </button>
+      )}
+      {!failed && onEditHost && (
         // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
         // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
         // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
@@ -925,7 +939,7 @@ export function HostRow({
           </span>
         </button>
       )}
-      {onAddWorkspace && (
+      {!failed && onAddWorkspace && (
         // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
         // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
         // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, and since #1190
@@ -1001,15 +1015,20 @@ export function HostRow({
 function HostRowControl({
   serverId,
   onEditHost,
-  onAddWorkspace
+  onAddWorkspace,
+  onRepairHost
 }: {
+  onRepairHost?: (serverId: string) => void
   serverId: string
   onEditHost: (serverId: string, seedLabel: string) => void
   onAddWorkspace: (serverId: string) => void
 }): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
+  const status = useSessionStore(selectStatusFor(serverId))
   return (
     <HostRow
+      failed={status?.type === 'error'}
+      onRepair={onRepairHost ? () => onRepairHost(serverId) : undefined}
       label={hostRowLabel(hostLabel)}
       serverId={serverId}
       onEditHost={() => onEditHost(serverId, hostRowEditSeed(hostLabel))}
@@ -1545,6 +1564,7 @@ function renderServerTrees(
   // plus's accessible name is a compile-time constant inside `HostRow` and is deliberately NOT a prop
   // (#1185's security decision, which stands), so there is no per-tree label to carry.
   onAddWorkspace: (serverId: string) => void,
+  onRepairHost: ((serverId: string) => void) | undefined,
   // #1178, reshaped by #1179 — the trailing create control this tree draws on each of its workspace
   // rows, or `undefined` for a tree that offers none. OPTIONAL and trailing, which is what carries the
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
@@ -1614,6 +1634,7 @@ function renderServerTrees(
             serverId={server.serverId}
             onEditHost={onEditHost}
             onAddWorkspace={onAddWorkspace}
+            onRepairHost={onRepairHost}
           />
           {workspaceGroups(server.rows)}
         </Fragment>
@@ -1744,14 +1765,13 @@ function renderBody(
   // above it: every host row draws the plus, and both of a machine's two rows open the same dialog for the
   // same machine. The container turns it into dialog state; nothing is sent until the dialog's Start chat.
   onAddWorkspace: (serverId: string) => void,
+  onRepairHost: ((serverId: string) => void) | undefined,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
-  // Not-yet-loaded: neither rows nor chrome (distinct from loaded-zero, per #208). Stays the first check
-  // to preserve the null-vs-loaded-zero tri-state, which #1070 did not touch.
-  if (conversations === null) return null
+  // A view-only empty list leaves the store's not-yet-loaded meaning intact while saved hosts render.
   // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
-  const { channels, discussions } = partitionActive(conversations)
+  const { channels, discussions } = partitionActive(conversations ?? [])
   // NOTHING TO DRAW — no paired machine and no active row. This one gate replaces both `length > 0`
   // section gates AND the `No conversations yet` paragraph #1070 deleted, and it is decided from the
   // ACTIVE partition rather than the raw store count, so a store holding only archived rows still counts
@@ -1794,7 +1814,7 @@ function renderBody(
           onOpen={() => onOpen(c)}
           onRename={() => onRename(c)}
         />
-      ), onEditHost, onAddWorkspace, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
+      ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
         // so the pattern reads identically to the create beside it and the label constant stays
         // module-local to this file.
@@ -1820,7 +1840,7 @@ function renderBody(
           onOpen={() => onOpen(d)}
           onSaveAsChannel={() => onSaveAsChannel(d)}
         />
-      ), onEditHost, onAddWorkspace, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
+      ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
     </>
   )

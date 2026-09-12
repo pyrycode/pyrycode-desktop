@@ -678,6 +678,7 @@ export type InboundDaemonMessage =
       kind: 'daemon-error'
       inReplyTo?: number
       outcome: DaemonErrorOutcome
+      pairingReject?: 'pairing-rejected'
       // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` string `outcome` is
       // and by the same comparand idiom — see HistoryRejectReason for why it is a second field rather
       // than five members added to that union.
@@ -4104,6 +4105,8 @@ export function parseInboundMessage(
         kind: 'daemon-error',
         inReplyTo: envelope.in_reply_to,
         outcome,
+        pairingReject: isRecord(envelope.payload) && envelope.payload.code === 'auth.invalid_token'
+          ? 'pairing-rejected' : undefined,
         historyReject,
         systemPromptReject
       }

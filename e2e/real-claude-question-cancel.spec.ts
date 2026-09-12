@@ -119,7 +119,7 @@ const META_SELECTOR = '.bubble__meta'
 // --- The panel surface, fake-tier-proven by #921 ------------------------------
 // Located by STRUCTURE only: the questions, headers and option labels are all CLAUDE-SUPPLIED over the
 // real stack, so none of them can be spelled into this file.
-const PANEL = '.question-panel'
+const PANEL = '.question-panel:not(.permission-panel)'
 // The focus question's own text. Its presence is what makes "at least one question" falsifiable rather
 // than implied by the panel being on screen.
 const QUESTION_TEXT = '.question-panel__question'
@@ -255,18 +255,13 @@ async function findArtefacts(root: string, base: string): Promise<string[]> {
   return entries.filter((entry) => entry.includes(base))
 }
 
-/**
- * Answer the relayed permission dialog "allow" (verbatim from real-claude-permission-modal.spec.ts,
- * #432). Over the real stack the affirmative label and which option is default are DAEMON-SUPPLIED, so
- * neither is known ahead of time: the affirmative is matched by a start-anchored, case-insensitive regex
- * scoped INSIDE the dialog (the `^…\b` anchor keeps it off a decline like "No, and tell Claude…"), and
- * the client-owned `Confirm` sub-step is clicked iff a non-default choice raised it.
- */
+// Choose an affirmative supplied permission row, Continue, then Confirm if non-default.
 async function answerAllow(dialog: Locator): Promise<void> {
   await dialog
-    .getByRole('button', { name: /^(yes|allow|approve|accept|grant)\b/i })
+    .locator('.question-panel__option').filter({ hasText: /^(yes|allow|approve|accept|grant)\b/i })
     .first()
     .click()
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
   const confirm = dialog.getByRole('button', { name: 'Confirm', exact: true })
   if ((await confirm.count()) > 0) await confirm.click()
 }
@@ -285,9 +280,8 @@ type DriveState = {
  *
  *   - THE ALLOW ARM. Any permission dialog raised after the refusal is answered allow, which is what
  *     makes the artefact absence non-vacuous — a claude that guessed an answer and pressed on genuinely
- *     COULD have produced the artefact. `page.getByRole('dialog')` cannot collide with the question
- *     panel: QuestionPanel deliberately renders no `role="dialog"` (it draws in the input area rather
- *     than as a modal), and nothing in this drive opens any of the app's other dialogs.
+ *     COULD have produced the artefact. Permission and questionnaire locators are disjoint even
+ *     though both presentations now share questionnaire classes in the input area.
  *   - THE RE-ASK ARM. A panel that comes BACK is a re-asked batch, refused again — without it a re-ask
  *     parks the turn on the ten-minute approval window instead of failing usefully. It can only see a
  *     genuine re-ask because the drive waits for the first refusal's optimistic clear before this helper
@@ -297,7 +291,7 @@ type DriveState = {
  * throw inside one is a signal worth surfacing rather than a race to paper over.
  */
 async function serviceInterruptions(page: Page, panel: Locator, state: DriveState): Promise<void> {
-  const dialog = page.getByRole('dialog').first()
+  const dialog = page.locator('.permission-panel').first()
   if (state.allowedDialogs.length < MAX_ALLOWED_MODALS && (await dialog.count()) > 0) {
     state.allowedDialogs.push(bounded((await dialog.innerText()).trim(), TEXT_LOG_CAP))
     await answerAllow(dialog)

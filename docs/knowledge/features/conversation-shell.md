@@ -60,7 +60,14 @@ showing `description` + `taskType` only. Split from #568 alongside #582 (truncat
 \#583 (latest patch, shipped); visual design is #580's. See [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 below.
 
-The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)); the held-option marker is scoped to the exact prompt it was selected on via the prompt's `modalId`, closing a same-class-prompt collision ([#511](../codebase/511.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](conversation-shell-permission-modal.md#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) below.
+Permission and trust requests use the open chat's bottom input panel since
+[#1356](https://github.com/pyrycode/pyrycode-desktop/issues/1356). The oldest outstanding request for
+that chat takes precedence over a waiting questionnaire, retaining its picks, Other text and active
+question, and the composer's typed draft. A row selection sends nothing; Continue sends the supplied
+default or opens Back/Confirm for a non-default. Chat history and the sidebar remain usable, and
+rejection feedback stays in normal flow in its originating chat. The existing modal bridge and
+answer/cancel commands remain in use. See [Permission panel](conversation-shell-permission-modal.md)
+and [Questionnaire placement](conversation-shell-question-panel.md#composer-placement).
 
 ## How it works
 
@@ -75,7 +82,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Tool row layout](conversation-shell-tool-row-layout.md) — Map only. The later redraw of the tool row: the shell command code block, the full-width bordered row, the header's groups and run routing, and the expanded body's own drawing (field values and result), split across six documents.
 - [Conversation surfaces and modals](conversation-shell-conversation-and-modals.md) — Surfaces that act on the conversation as a whole rather than on one turn. Now a map itself: the interactive flip + thread cutover, the queued backlog, and screen-snapshot history stayed here; three larger topics split out on 2026-09-02 (below).
 - [Actions menu and reader cutover](conversation-shell-actions-menu-and-reader-cutover.md) — The composer's Actions menu and the per-conversation timeline reader cutover.
-- [Modals](conversation-shell-modals.md) — The permission/trust modal (with its rejection surface) and the question panel.
+- [Modals](conversation-shell-modals.md) — The permission/trust panel (with its rejection surface) and the questionnaire in the input area.
 - [Session boundaries and channel info](conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row and the Channel Info sheet, with its Rename/Archive/Delete actions.
 - [Message bubble](conversation-shell-message-bubble.md) — The later redraw of the message bubble itself: the desktop `Message` shape, the meta row and its copy control.
 - [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the history-walk trigger band that asks for older content at the top.

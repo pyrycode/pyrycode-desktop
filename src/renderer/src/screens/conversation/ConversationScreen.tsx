@@ -111,6 +111,7 @@ import { RunConfigSections } from './RunConfigSections'
 import { SystemPromptSection } from './SystemPromptSection'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
+import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
 import {
   useQuestionBatchStore,
@@ -547,10 +548,6 @@ export function ConversationScreen({
           onClose={() => setPanelOpen(false)}
         />
       )}
-      {/* #224: the interactive permission/trust modal — the last child so it overlays the whole
-          conversation surface (the StatusSheet placement). Renders null until an outstanding prompt
-          exists, so the layout is unchanged today (inert until #179 flips `interactive`). */}
-      <PermissionModal />
     </div>
   )
 }
@@ -3578,8 +3575,8 @@ function Composer({
  * — the guard sits before the match — so `[]` never reaches `outstanding`, even though the wire type admits
  * it. WHICH of them is drawn has been the operator's choice since #915; see the slot below.
  *
- * A fragment, not a wrapper element: the conversation column's flex layout is unchanged, and the panel
- * takes the slot the collapsed composer vacates.
+ * The questionnaire wrapper is hidden only during permission coverage. Keeping it mounted preserves
+ * its active question while the composer independently retains the draft beneath both request types.
  */
 export function ComposerSlot({
   conversationId,
@@ -3595,23 +3592,23 @@ export function ComposerSlot({
   const batch = useQuestionBatchStore((s) =>
     conversationId === null ? undefined : selectBatchFor(conversationId)(s)
   )
+  const hasPermission = useModalStore((s) =>
+    conversationId !== null && selectHasOutstandingFor(conversationId)(s)
+  )
   return (
     <Composer
-      phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined}
+      phase={phase} onMessageSent={onMessageSent} covered={hasPermission || batch !== undefined}
       beforeComposer={(sendText) => (
         <>
           {statusArea?.(sendText)}
-          {/* KEYED ON THE NONCE (#915), which is a remount instruction and not decoration. The slot holds the
-              question the operator is looking at in component state, and it stays mounted while ANY batch is
-              up — so a batch retired and replaced by a different one for this conversation would otherwise
-              carry the retired batch's position into a list that never had it. React strips `key` from props,
-              so the unguessable value reaches no attribute, no DOM node and no log; it only tells React to
-              rebuild the leaf, which re-seeds its state to the first question. Same-nonce RE-DELIVERY keeps
-              this key unchanged by design — see the clamp in QuestionPanelSlot, which is what covers it. */}
-          {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
+          <PermissionModal conversationId={conversationId} />
+          {/* Keep the active question mounted while permission temporarily takes precedence. */}
           {batch && (
-            <div className="composer__footer">
-              <ComposerModelMenu conversationId={conversationId} />
+            <div hidden={hasPermission}>
+              <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />
+              <div className="composer__footer">
+                <ComposerModelMenu conversationId={conversationId} />
+              </div>
             </div>
           )}
         </>

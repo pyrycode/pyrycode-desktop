@@ -1265,6 +1265,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // outstanding (the documented, accepted double-fire on the rare overlap).
             const rejectedModalId = outstandingAnswers.shift()
             if (rejectedModalId !== undefined) {
+              deps.diagnosticLog?.event({ event: 'modal-answer-rejected' })
               emitDaemonEvent(sink, { type: 'modalAnswerRejected', modalId: rejectedModalId })
             }
             return
@@ -2116,6 +2117,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             emitDaemonEvent(sink, { type: 'conversationDeleted', id: inbound.conversationDeleted.id })
             return
           case 'modal-shown':
+            deps.diagnosticLog?.event({ event: 'modal-shown' })
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
             // precedent — parseModalOption already stripped each option to `{ id, label }`, nothing to
@@ -2179,6 +2181,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'modal-dismissed': {
+            deps.diagnosticLog?.event({ event: 'modal-dismissed' })
             // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a
             // DISMISSAL carries none — `modal_shown` does carry one and rides it across as of #871).
             // `outcome` is an opaque string carried verbatim. A fresh literal, never a spread.
@@ -3169,7 +3172,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A modal resolution has no consumer to fail.
-    if (driver === null) return
+    if (driver === null) {
+      deps.diagnosticLog?.event({ event: 'modal-answer-failed', code: 'unavailable' })
+      return
+    }
     try {
       // Mint the token into a FRESH literal naming exactly the three modeled fields — never a spread
       // of `payload`. This is the deterministic net that ignores a renderer-smuggled `answer_token`:
@@ -3190,16 +3196,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // `error` that will never come back. Drained by the matching modal_dismissed (accept) or
       // dequeued by a daemon `error` (reject); reset on each dial().
       outstandingAnswers.push(payload.modal_id)
+      deps.diagnosticLog?.event({ event: 'modal-answer-sent' })
     } catch {
-      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
-      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
-      // no event (classify-don't-forward, inherited #62).
+      // Classify the failure without exposing the caught object or any request content.
+      deps.diagnosticLog?.event({ event: 'modal-answer-failed', code: 'send-failed' })
     }
   }
 
   function cancelModal(payload: ModalCancelPayload): void {
     // The send twin: inert no-op when not connected (see send's guard rationale).
-    if (driver === null) return
+    if (driver === null) {
+      deps.diagnosticLog?.event({ event: 'modal-cancel-failed', code: 'unavailable' })
+      return
+    }
     try {
       // Fresh literal naming only `modal_id` — strips any smuggled extra field so nothing beyond the
       // one modeled field crosses the wire (#235's pinned shape; no stale ADR-025 leakage).
@@ -3210,9 +3219,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'modal-cancel-sent' })
     } catch {
-      // Never throw out of the module (parity #490): the caught object is DROPPED
-      // (classify-don't-forward, inherited #62).
+      // Classify the failure without exposing the caught object or any request content.
+      deps.diagnosticLog?.event({ event: 'modal-cancel-failed', code: 'send-failed' })
     }
   }
 

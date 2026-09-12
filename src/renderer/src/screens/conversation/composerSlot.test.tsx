@@ -3,6 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createQuestionBatchStore, type QuestionBatchStore } from '../../store/questionBatchStore'
 import { createQuestionPicksStore, type QuestionPicksStore } from '../../store/questionPicksStore'
 import type { Question } from '../../store/questionBatches'
+import { createModalStore, type ModalStore } from '../../store/modalStore'
+
+const permissionStore = createModalStore()
+vi.mock('../../store/modalStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/modalStore')>()),
+  useModalStore: <T,>(selector: (s: ModalStore) => T): T => selector(permissionStore.getState())
+}))
 
 // #906: the composer slot's container — does an outstanding batch put the panel where the composer was,
 // and does the covered composer survive?
@@ -61,6 +68,7 @@ const render = (conversationId: string | null): string =>
 
 // `reconnected` is each store's own clear-everything arm, so the reset needs no reach into internals.
 beforeEach(() => {
+  permissionStore.getState().dispatch({ type: 'reset' })
   batchStore.getState().dispatch({ type: 'reconnected' })
   picksStore.getState().dispatch({ type: 'reconnected' })
 })
@@ -73,6 +81,19 @@ const pick = (questionBatchId: string): void => {
 }
 
 describe('ComposerSlot', () => {
+  it('gives current-chat permission precedence while retaining the questionnaire subtree', () => {
+    show(OPEN, [question('Waiting question')])
+    permissionStore.getState().dispatch({ type: 'shown', conversationId: OPEN, modalId: 'permission',
+      class: 'trust', title: 'Trust workspace', prompt: 'Explain trust',
+      options: [{ id: 'exit', label: 'Exit' }], defaultOptionId: 'exit' })
+    const markup = render(OPEN)
+    expect(markup).toContain('permission-panel')
+    expect(markup).toContain('Waiting question')
+    expect(markup.match(/hidden=""/g)).toHaveLength(2)
+    expect(render(OTHER)).not.toContain('permission-panel')
+    expect(render(null)).not.toContain('permission-panel')
+  })
+
   it('renders the composer untouched when no batch is outstanding', () => {
     const markup = render(OPEN)
     expect(markup).toContain('class="composer"')

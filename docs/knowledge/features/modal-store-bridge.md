@@ -185,10 +185,13 @@ crosses. The arm's producer is a main-side FIFO correlation window in
 The translated `rejected` event feeds a new, `outstanding`-orthogonal `ModalState.rejections: readonly
 string[]` slice — arrival-ordered, de-duplicated `modalId`s — reduced by two new `ModalEvent` arms,
 `rejected` (append, dedup) and the local-only `rejectionDismissed` (remove, dispatched by the user
-clicking a dismiss control, never by the bridge). [`RejectionSurfaceView`](conversation-shell-permission-modal.md#rejection-surface-249)
-renders the stack as a transient banner at the modal host. See [Modal-prompt
-model](modal-prompt-model.md) for the full reducer contract and [#249 codebase
-notes](../codebase/249.md) for the render design.
+clicking a dismiss control, never by the bridge). The reducer also records known conversation ownership
+in `rejectionOwners`, copied from outstanding/resolved records when rejection arrives. That ownership
+survives reconnect with its feedback, independently of resolved-prompt suppression.
+[`PermissionModal`](conversation-shell-permission-modal.md#rejection-surface-249) filters the IDs by
+the open chat before passing them to `RejectionSurfaceView`. Banners occupy normal flow above the
+input area and never cover the composer or questionnaire. The bridge's content-free event remains
+unchanged; see [Modal-prompt model](modal-prompt-model.md) for the reducer contract.
 
 ## Related
 

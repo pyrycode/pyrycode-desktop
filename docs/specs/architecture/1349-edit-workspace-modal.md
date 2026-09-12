@@ -55,3 +55,16 @@ Pending for the documentation stage: update `docs/knowledge/features/edit-worksp
 ## Open questions
 
 None.
+
+## Revisions
+
+- Built-app testing exposed the existing multi-host refresh defect tracked by #1363:
+  `requestConversationList` drops the event origin and sends an ambiguous request.
+  Keep production changes inside the planned dialog/caller scope. Preserve the
+  failing two-host row-refresh assertion as a skipped test linked to #1363, and
+  separately prove exact host routing and one rename per click in an active browser
+  test. Full two-host row refresh acceptance remains pending that fix.
+- The multi-host launch fixture pushes its own default second row after pairing;
+  replace that transport seed with the same-path scenario before exercising the pen.
+  Keyboard testing traverses the existing sidebar tab sequence before the modal,
+  preserving the current focus policy.

@@ -1,4 +1,6 @@
-import { test, expect } from './fixtures/launchPairedApp'
+import { mkdirSync } from 'node:fs'
+import { decodeEnvelope } from '../src/main/transport/codec'
+import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import type { ConversationSummary } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
@@ -114,7 +116,7 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   const penGlyphs = page.locator('.channel-list__workspace-edit-icon')
   const plusGlyphs = page.locator('.channel-list__workspace-create-icon')
   const actions = page.locator('.channel-list__actions')
-  const dialog = page.locator('.edit-workspace')
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
   const nameField = page.locator('.edit-workspace__input')
 
   // --- 1. THE OPENING POSITIVE READ, and the reason this drive proves anything. The Channels tree's
@@ -185,20 +187,15 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   await pens.first().click()
   await expect(dialog).toBeVisible()
 
-  // AC4: the field holds the row's CURRENT label on open, and one line under it shows the full `cwd`.
-  // The path is read as rendered TEXT — the assertion that would fail if the value had been routed into
-  // an attribute instead, and the first surface in this app that shows a workspace path at all.
   await expect(nameField).toHaveValue(OLD_LABEL)
-  await expect(page.locator('.edit-workspace__path')).toHaveText(WORKSPACE_CWD)
-  // AC4's clause about the pen and the dialog carrying neither value in an attribute, checked on the
-  // live DOM rather than on a server render: no element inside the open dialog has a `title`, and none
-  // has an `aria-label` (the dialog is named by its title element, through `aria-labelledby`).
+  await expect(dialog.getByRole('textbox', { name: 'Workspace name (optional):' })).toHaveCount(1)
+  await expect(dialog.locator('.edit-workspace__path')).toHaveCount(0)
+  await expect(dialog).not.toContainText(WORKSPACE_CWD)
   expect(await dialog.locator('[title]').count()).toBe(0)
-  expect(await dialog.locator('[aria-label]').count()).toBe(0)
-
-  // AC4: Save refuses a blank name to the user's face, before any command exists.
+  expect(await dialog.locator('.modal__close img').evaluate(
+    (el: HTMLImageElement) => el.naturalWidth)).toBe(28)
   await nameField.fill('   ')
-  await expect(page.locator('.edit-workspace__save')).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeEnabled()
 
   // --- 9. AC5: type the new name, press Save, and every workspace row for that `cwd` — in BOTH trees —
   // reads it after the round trip. Every hop ran for real: had the command been dropped, mis-routed, or
@@ -206,7 +203,7 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   // OLD_LABEL. Nothing relaunched and no row was patched locally — the daemon's reply only triggered the
   // re-request whose answer landed this text. ---
   await nameField.fill(NEW_LABEL)
-  await page.locator('.edit-workspace__save').click()
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(workspaceLabels).toHaveText([NEW_LABEL, NEW_LABEL], {
     timeout: ROUNDTRIP_TIMEOUT_MS
@@ -222,4 +219,161 @@ test('the workspace row’s pen hides at rest, opens an Edit workspace dialog, a
   // AC2's last clause: the pen is a SIBLING of the disclosure button, never a child, so the click never
   // reached the fold's handler.
   expect(await workspaceRow.getAttribute('aria-expanded')).toBe('true')
+})
+
+
+test('optional resets, dismissal, keyboard controls and constrained modal layout', async ({ launchPairedApp }) => {
+  const fake = conversationStateFake({ conversations: [SEED] })
+  const renames: unknown[] = []
+  const { page } = await launchPairedApp({ buildReplyFrames: (frame) => {
+    const env = decodeEnvelope(frame)
+    if (env.type === 'rename_workspace') renames.push(env.payload)
+    return fake(frame)
+  } })
+  const labels = page.locator('.channel-list__workspace-label')
+  const pen = page.getByRole('button', { name: EDIT_WORKSPACE_NAME }).first()
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
+  const field = dialog.getByRole('textbox', { name: 'Workspace name (optional):' })
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  await expect(labels).toHaveText([OLD_LABEL])
+  await page.setViewportSize({ width: 800, height: 600 })
+  await pen.focus()
+  await pen.press('Enter')
+  await expect(dialog).toBeVisible()
+  // Existing focus remains on the pen; traverse intervening sidebar controls.
+  for (let i = 0; i < 40; i += 1) {
+    await page.keyboard.press('Tab')
+    if (await dialog.getByRole('button', { name: 'Close dialog' }).evaluate(
+      el => el === document.activeElement)) break
+  }
+  await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(field).toBeFocused()
+  await field.fill('Abandoned draft')
+  await field.press('Escape')
+  await expect(dialog).toBeVisible()
+  await page.locator('.edit-workspace-overlay__scrim').click({ position: { x: 4, y: 4 } })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await pen.click()
+  await expect(field).toHaveValue(OLD_LABEL)
+  await field.fill('Another abandoned draft')
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(renames).toEqual([])
+
+  for (const reset of ['', '   ', FOLDER_SEGMENT]) {
+    await pen.click()
+    await expect(field).toHaveValue(OLD_LABEL)
+    await field.fill(reset)
+    const before = renames.length
+    await ok.click()
+    await expect(labels).toHaveText([FOLDER_SEGMENT])
+    await expect(dialog).toHaveCount(0)
+    expect(renames.length).toBe(before + 1)
+    expect(renames.at(-1)).toEqual({ path: WORKSPACE_CWD, label: null })
+    await pen.click()
+    await expect(field).toHaveValue(FOLDER_SEGMENT)
+    await field.fill(OLD_LABEL)
+    await field.press('Tab')
+    await page.keyboard.press('Tab')
+    await expect(ok).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(labels).toHaveText([OLD_LABEL])
+  }
+
+  await pen.click()
+  await field.fill('x'.repeat(129))
+  await expect(ok).toBeDisabled()
+  await field.fill(OLD_LABEL)
+  await expect(ok).toBeEnabled()
+  const captures = '/tmp/builder-1349-visual'
+  mkdirSync(captures, { recursive: true })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await field.evaluate(el => el.blur())
+  expectAbout((await boxOf(dialog, 'modal')).width, 640)
+  await page.screenshot({ path: captures + '/normal.png' })
+  await page.setViewportSize({ width: 800, height: 600 })
+  expectAbout((await boxOf(dialog, 'modal')).width, 640)
+  await page.screenshot({ path: captures + '/minimum-width.png' })
+  await page.setViewportSize({ width: 800, height: 200 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(800)
+  expect(await dialog.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true)
+  await ok.focus()
+  await expect(ok).toBeInViewport()
+  expect(await dialog.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  await page.screenshot({ path: captures + '/short-window.png' })
+  await page.keyboard.press('Shift+Tab')
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(dialog).toHaveCount(0)
+})
+
+// Shared refresh drops the event origin; re-enable after https://github.com/pyrycode/pyrycode-desktop/issues/1363.
+test.skip('blocked on #1363 — identical paths on two hosts refresh only the clicked host', async ({ launchPairedApp }) => {
+  const first = conversationStateFake({ conversations: [SEED] })
+  const secondSeed = { ...SEED, id: 'second-seed', is_promoted: false, workspace_label: 'Other host label' }
+  const second = conversationStateFake({ conversations: [secondSeed] })
+  const counts = [0, 0]
+  const counting = (fake: typeof first, index: number) => (frame: Uint8Array) => {
+    if (decodeEnvelope(frame).type === 'rename_workspace') counts[index] += 1
+    return fake(frame)
+  }
+  const { page, servers } = await launchPairedApp(
+    { buildReplyFrames: counting(first, 0) },
+    { secondServer: { buildReplyFrames: counting(second, 1) } }
+  )
+  // The multi-host launcher pushes its default second row after pairing.
+  // Replace that fixture seed with this scenario's same-path row.
+  await servers[1].daemon.pushFrame(seedConversationsFrame(secondSeed))
+  const labels = page.locator('.channel-list__workspace-label')
+  const pens = page.getByRole('button', { name: EDIT_WORKSPACE_NAME })
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
+  await expect(labels).toHaveText([OLD_LABEL, 'Other host label'])
+  await pens.nth(1).click()
+  await expect(dialog.getByRole('textbox')).toHaveValue('Other host label')
+  await dialog.getByRole('textbox').fill('Second host renamed')
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(labels).toHaveText([OLD_LABEL, 'Second host renamed'])
+  expect(counts).toEqual([0, 1])
+  await pens.first().click()
+  await expect(dialog.getByRole('textbox')).toHaveValue(OLD_LABEL)
+  await dialog.getByRole('textbox').fill('First host renamed')
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(labels).toHaveText(['First host renamed', 'Second host renamed'])
+  expect(counts).toEqual([1, 1])
+})
+
+
+test('both workspace pens send exactly one rename to their selected host', async ({ launchPairedApp }) => {
+  const secondSeed = { ...SEED, id: 'second-seed', is_promoted: false }
+  const requests: unknown[][] = [[], []]
+  const recording = (seed: ConversationSummary, index: number) => {
+    const fake = conversationStateFake({ conversations: [seed] })
+    return (frame: Uint8Array) => {
+      const env = decodeEnvelope(frame)
+      if (env.type === 'rename_workspace') requests[index].push(env.payload)
+      return fake(frame)
+    }
+  }
+  const { page, servers } = await launchPairedApp(
+    { buildReplyFrames: recording(SEED, 0) },
+    { secondServer: { buildReplyFrames: recording(secondSeed, 1) } }
+  )
+  await servers[1].daemon.pushFrame(seedConversationsFrame(secondSeed))
+  await expect(page.locator('.channel-list__workspace-label')).toHaveText([OLD_LABEL, OLD_LABEL])
+  const pens = page.getByRole('button', { name: EDIT_WORKSPACE_NAME })
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
+  // No reply is awaited by the dialog. The request payloads prove routing independently
+  // of the shared refresh regression tracked in the skipped test above.
+  for (const index of [1, 0]) {
+    await pens.nth(index).click()
+    await dialog.getByRole('textbox').fill('  Routed name  ')
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect.poll(() => requests[index].length).toBe(1)
+    await expect(dialog).toHaveCount(0)
+    expect(requests[index]).toEqual([{ path: WORKSPACE_CWD, label: 'Routed name' }])
+  }
+  expect(requests.map(values => values.length)).toEqual([1, 1])
 })

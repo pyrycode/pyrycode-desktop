@@ -141,9 +141,9 @@ test('real daemon relabels a workspace driven from the Edit workspace dialog, vi
   const workspaceLabels = page.locator('.channel-list__workspace-label')
   const renameControl = page.locator('.channel-list__rename')
   const editWorkspace = page.getByRole('button', { name: EDIT_WORKSPACE_NAME })
-  const dialog = page.locator('.edit-workspace')
+  const dialog = page.getByRole('dialog', { name: 'Edit workspace' })
   const nameField = page.locator('.edit-workspace__input')
-  const saveAction = page.locator('.edit-workspace__save')
+  const saveAction = dialog.getByRole('button', { name: 'OK', exact: true })
 
   // --- Readiness gate: the PROMOTED seed's Rename pencil renders only after the whole chain — handshake
   // complete → session `connected` → the auto-fired `list_conversations` returned the seeded row → it

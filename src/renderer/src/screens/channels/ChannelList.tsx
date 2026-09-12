@@ -212,13 +212,11 @@ export function ChannelList({
   const [createChannelName, setCreateChannelName] = useState('')
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
-  // at once and no mutual-exclusion logic is needed. `editWorkspaceCwd` is the WORKSPACE being renamed
-  // — the group key the clicked pen closed over — and holding it HERE is what keeps that daemon-asserted
-  // path out of every component below `renderServerTrees`; the dialog receives it as a display string
-  // and as the send's `path`, and as nothing else. `editWorkspaceName` is the controlled field, seeded
-  // on every open with the row's CURRENT label (this being an edit, not a create), so a reopen after a
-  // Cancel starts from what the row actually reads rather than from the abandoned draft.
-  const [editWorkspaceCwd, setEditWorkspaceCwd] = useState<string | null>(null)
+  // at once. Hold the exact path and clicked host together until dismissal.
+  const [editWorkspaceTarget, setEditWorkspaceTarget] = useState<{
+    cwd: string
+    serverId: string | undefined
+  } | null>(null)
   const [editWorkspaceName, setEditWorkspaceName] = useState('')
   // The Edit-host dialog's own per-interaction cells (#1299), independent of the four above for their
   // stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open at once
@@ -293,8 +291,8 @@ export function ChannelList({
         // from the group's CURRENT label — which is the daemon-held `workspace_label` when there is one
         // and the folder segment otherwise, resolved by `groupByWorkspace` and indistinguishable here
         // on purpose (AC4 asks for "the row's current label", which is exactly what the row renders).
-        onEditWorkspace={(cwd, label) => {
-          setEditWorkspaceCwd(cwd)
+        onEditWorkspace={(cwd, label, serverId) => {
+          setEditWorkspaceTarget({ cwd, serverId })
           setEditWorkspaceName(label)
         }}
         // #1299 — the host row's pen OPENS A DIALOG and writes nothing: the machine is fixed by the row
@@ -359,28 +357,19 @@ export function ChannelList({
           }}
         />
       )}
-      {/* #1180 — gated on an explicit `!== null` and NEVER on truthiness, for #1179's stated reason
-          one dialog up: an empty-string `cwd` would collapse into "no dialog open" under a truthy
-          test. It is unreachable today because `renderServerTrees` withholds the pen from the
-          unknown-workspace group, whose key IS the empty string — and writing the check this way is
-          what keeps that withhold load-bearing for one reason rather than two. */}
-      {editWorkspaceCwd !== null && (
+      {editWorkspaceTarget !== null && (
         <EditWorkspaceDialogView
           name={editWorkspaceName}
-          // The held `cwd`, handed down as a DISPLAY STRING. The view renders it as an escaped child
-          // and nothing else — no attribute of the dialog derives from it (the module's own header
-          // states the full sink list).
-          path={editWorkspaceCwd}
           onNameChange={setEditWorkspaceName}
-          // Cancel closes and sends nothing (AC4). The next open re-seeds both cells from the row, so
-          // there is nothing to clear here.
-          onCancel={() => setEditWorkspaceCwd(null)}
+          onCancel={() => setEditWorkspaceTarget(null)}
           onSave={() => {
-            // Fire-and-forget, then close (AC5). `window.pyry` is dereferenced HERE, at interaction
-            // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
-            // the helper trims the name and decides the `null`.
-            requestRenameWorkspace(window.pyry.sendCommand, editWorkspaceCwd, editWorkspaceName)
-            setEditWorkspaceCwd(null)
+            requestRenameWorkspace(
+              window.pyry.sendCommand,
+              editWorkspaceTarget.cwd,
+              editWorkspaceName,
+              editWorkspaceTarget.serverId
+            )
+            setEditWorkspaceTarget(null)
           }}
         />
       )}
@@ -540,7 +529,7 @@ export function ChannelListView({
   // dialog cannot disagree with the row about what the workspace is called. Neither is inspected here;
   // both travel verbatim. Like `onCreateChannel` it does NOT send a command — the dialog's Save does,
   // once a name has been typed.
-  onEditWorkspace: (cwd: string, label: string) => void
+  onEditWorkspace: (cwd: string, label: string, serverId: string | undefined) => void
   // #1299 — open the Edit host dialog for the named machine. REQUIRED for its three siblings' reason: a
   // defaulted prop would let a future caller silently render a sidebar whose host pen opens nothing, which
   // is precisely the state #1185 shipped and this ticket ends. It takes the server id AND that machine's
@@ -1576,10 +1565,10 @@ function renderServerTrees(
   // difference, which is why its label is one constant rather than two. `onEdit` takes the group's
   // `cwd` AND its resolved label, so the caller states exactly what crosses this seam — the path the
   // rename will name, and the string the dialog's field is seeded from.
-  edit?: { readonly label: string; readonly onEdit: (cwd: string, label: string) => void }
+  edit?: { readonly label: string; readonly onEdit: (cwd: string, label: string, serverId: string | undefined) => void }
 ): JSX.Element {
   const { servers, unattributed } = groupByServer(serverIds, rows)
-  const workspaceGroups = (serverRows: readonly SidebarRow[]): JSX.Element[] =>
+  const workspaceGroups = (serverRows: readonly SidebarRow[], serverId?: string): JSX.Element[] =>
     // `key={group.key}` pins the fold's IDENTITY as well as its position: a group whose rows change
     // (renamed, added, archived) or whose position moves keeps its instance and its fold, because React
     // reconciles by key and not by index. A group that leaves the list is unmounted and its fold is
@@ -1620,7 +1609,7 @@ function renderServerTrees(
         edit={
           edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY
             ? undefined
-            : { label: edit.label, onEdit: () => edit.onEdit(group.key, group.label) }
+            : { label: edit.label, onEdit: () => edit.onEdit(group.key, group.label, serverId) }
         }
       >
         {group.rows.map(renderRow)}
@@ -1636,7 +1625,7 @@ function renderServerTrees(
             onAddWorkspace={onAddWorkspace}
             onRepairHost={onRepairHost}
           />
-          {workspaceGroups(server.rows)}
+          {workspaceGroups(server.rows, server.serverId)}
         </Fragment>
       ))}
       {workspaceGroups(unattributed)}
@@ -1756,7 +1745,7 @@ function renderBody(
   // #1180 — open the Edit-workspace dialog for a named workspace. Handed to BOTH trees, unlike the two
   // creates above it: this is the one trailing control that is not a per-tree difference. The container
   // turns it into dialog state; nothing is sent until the dialog's Save.
-  onEditWorkspace: (cwd: string, label: string) => void,
+  onEditWorkspace: (cwd: string, label: string, serverId: string | undefined) => void,
   // #1299 — open the Edit host dialog for a named machine. Handed to BOTH trees, like `onEditWorkspace`
   // above it: every host row draws the pen, and both of a machine's two rows open the same dialog for the
   // same machine. The container turns it into dialog state; nothing is written until the dialog's Save.

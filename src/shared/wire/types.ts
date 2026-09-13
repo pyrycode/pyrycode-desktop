@@ -1569,7 +1569,7 @@ export interface WireModalOption {
 /**
  * Inbound `modal_shown` event (daemon → client). Mirrors the daemon's ModalShownPayload field-for-field
  * (SSOT #701, ADR 0009), wire order `conversation_id, modal_id, class, title, prompt, options,
- * default_option_id` — all always present (no `omitempty`). The permission/trust prompt `claude` raises
+ * default_option_id` — those fields are always present. The permission/trust prompt `claude` raises
  * during an interactive session (surfaced once #179 flips `interactive` on).
  *
  * `conversation_id` (pyrycode#1065, #870) is an **OUTBOUND routing/scoping key only**: the daemon asserts
@@ -1594,6 +1594,17 @@ export interface ModalShownPayload {
   prompt: string
   options: WireModalOption[]
   default_option_id: string
+  /** Opaque JSON display context, independent of reason_type. Narrow before rendering;
+   * never merge object keys into application state, use as authority, or log its content. */
+  reason?: unknown
+  /** Open category and display text; never authorization, filesystem inputs, attributes or logs. */
+  reason_type?: string
+  blocked_path?: string
+  description?: string
+  default_to_no?: boolean
+  /** Session-rule display offer, optional for older daemons. Rules retain source order.
+   * The daemon owns grant validation; these strings must never be echoed as answer authority. */
+  always_allow?: { offered: boolean; rules: string[] }
 }
 
 /**
@@ -1613,7 +1624,7 @@ export interface ModalDismissedPayload {
 /**
  * Outbound `modal_answer` request body (client → daemon) — the user's choice resolving an outstanding
  * modal. Mirrors the daemon's ModalAnswerPayload field-for-field (SSOT protocol-mobile.md § Modal (v2),
- * #701, ADR 0009), wire order `modal_id, option_id, answer_token` — all always present (no `omitempty`).
+ * #701, ADR 0009), required fields `modal_id, option_id, answer_token`, plus optional `always_allow`.
  * The OUTBOUND counterpart to the inbound `modal_shown`/`modal_dismissed` above (this is the frame the
  * desktop sends back). **`modal_id` is the sole correlation key — NO `conversation_id` rides an ANSWER**
  * (the daemon resolves `modal_id` against its own outstanding-modal state, ADR 0009). One does ride the
@@ -1630,6 +1641,8 @@ export interface ModalAnswerPayload {
   modal_id: string
   option_id: string
   answer_token: string
+  /** Request the daemon's retained session rules on an authorized allow. Absent/false adds no grant. */
+  always_allow?: boolean
 }
 
 /**

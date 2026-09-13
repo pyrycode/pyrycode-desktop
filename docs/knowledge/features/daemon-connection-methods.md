@@ -238,7 +238,7 @@ this method serves.
 **`answerQuestions(payload)`/`refuseQuestions(payload)` were added in
 [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)** — the resolution half of the question
 vertical, one dial after [#919](https://github.com/pyrycode/pyrycode-desktop/issues/919) landed the
-builders with no caller. Both are **`send` twins, not `answerModal`'s consumer-failing twin**: a
+builders with no caller. Both share `answerModal`'s send mechanics: a
 resolution has no consumer to fail, so each is an inert no-op when `driver === null`, sharing the one
 `nextEnvelopeId` counter, never throwing (parity #490). Both mint a fresh `answer_token` via the
 existing `mintToken` seam — **unlike the modal pair, both question frames carry a token**, so both
@@ -329,3 +329,34 @@ not tell from a true one. `connectionRegistry.ts`'s `viewOf` gained one delegate
 tsc-only break shape as #1165's/#1217's/#1222's additions. Ships with no renderer sender and no render
 consumer — #1231 fires the ask and stores the reply, #1078 renders it; all four exhaustive bridges take
 a dormant no-op arm. See [System prompt send](system-prompt-send.md) for the full contract.
+
+## Modal answers and cancellation
+
+`answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>)` receives the
+[validated answer command](command-channel.md#modal-answer-validation). It builds
+a fresh payload containing `modal_id`, `option_id`, a main-minted `answer_token`
+(`randomUUID()` through the `mintToken` seam), and `always_allow` only when that key
+is present. Both true and false reach `modal_answer` unchanged; omission stays
+absent. False or absence requests no additional permission. An authorized allow
+with true asks the daemon to apply only its retained offered rules to the session.
+
+`buildModalAnswer` serializes the supplied payload verbatim, so widening the wire
+type alone cannot carry a new field through this sender. Keep the named-field
+rebuild: renderer-supplied tokens, rules, destinations, conversation IDs and other
+extras are discarded. The [inbound offer and reason](inbound-message-decode.md#optional-permission-context)
+are display context, never fields to echo as grant authority.
+
+The composition root routes by `modal_id` through `routeModal`, using ownership
+recorded from trusted host-stamped modal events. Renderer destinations cannot
+reroute an answer. Successful sends enter `outstandingAnswers`; build/send failures
+leave no pending entry. Dismissal drains that modal, a rejection uses the existing
+FIFO, and redial clears it; see [request correlation and diagnostics](daemon-connection-correlation.md).
+`cancelModal` still sends only `{ modal_id }`, with no token or grant Boolean.
+Both methods return without sending when no driver is available and retain static,
+content-free lifecycle/failure diagnostics.
+
+The permission-contract tests in `daemonConnection.test.ts` feed raw commands
+through `onCommand` and decode the fake driver's output. Exact payload checks cover
+true, false and absence, minted tokens and forged extras; two-host routing,
+rejection correlation and cancellation run through the same path. A builder-only
+test would pass even if main silently omitted `always_allow`.

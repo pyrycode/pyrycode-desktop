@@ -27,6 +27,7 @@ import type {
   WireModalClass,
   WireModalSource,
   WireModalOption,
+  ModalShownPayload,
   WireQuestion,
   WireSlashCommand,
   WireModelOption,
@@ -982,6 +983,13 @@ type BaseDaemonEvent =
       prompt: string
       options: readonly WireModalOption[]
       defaultOptionId: string
+      /** Untrusted JSON/text for display only; no attributes, paths, authority or logs. */
+      reason?: unknown
+      reasonType?: string
+      blockedPath?: string
+      description?: string
+      defaultToNo?: boolean
+      alwaysAllow?: ModalShownPayload['always_allow']
     }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
   // The question-batch arm (#885) — one whole batch of the clarifying questions claude's

@@ -2138,7 +2138,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               title: inbound.modalShown.title,
               prompt: inbound.modalShown.prompt,
               options: inbound.modalShown.options,
-              defaultOptionId: inbound.modalShown.default_option_id
+              defaultOptionId: inbound.modalShown.default_option_id,
+              // Presence survives IPC: an omitted field must not become an own undefined property.
+              ...('reason' in inbound.modalShown ? { reason: inbound.modalShown.reason } : {}),
+              ...('reason_type' in inbound.modalShown ? { reasonType: inbound.modalShown.reason_type } : {}),
+              ...('blocked_path' in inbound.modalShown ? { blockedPath: inbound.modalShown.blocked_path } : {}),
+              ...('description' in inbound.modalShown ? { description: inbound.modalShown.description } : {}),
+              ...('default_to_no' in inbound.modalShown ? { defaultToNo: inbound.modalShown.default_to_no } : {}),
+              ...('always_allow' in inbound.modalShown ? { alwaysAllow: inbound.modalShown.always_allow } : {})
             })
             return
           case 'question-shown':
@@ -3167,7 +3174,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       return
     }
     try {
-      // Mint the token into a FRESH literal naming exactly the three modeled fields — never a spread
+      // Mint the token into a fresh literal naming only modeled fields — never a spread
       // of `payload`. This is the deterministic net that ignores a renderer-smuggled `answer_token`:
       // the minted value always wins, and no stale ADR-025 field can leak (#235's pinned shape).
       const bytes = buildModalAnswer({
@@ -3176,7 +3183,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         payload: {
           modal_id: payload.modal_id,
           option_id: payload.option_id,
-          answer_token: mintToken()
+          answer_token: mintToken(),
+          ...('always_allow' in payload ? { always_allow: payload.always_allow } : {})
         }
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id

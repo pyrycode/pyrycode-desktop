@@ -4,7 +4,7 @@ The **untrusted→trusted boundary for a decrypted daemon message**. The [Noise 
 
 Introduced in [#68](../codebase/68.md). It fills the last no-op arm the [daemon connection](daemon-connection.md) left behind — [#62](../codebase/62.md) wired the handshake-status path but left the inbound-message arm a `// TODO`. This ticket produces the `messageReceived` / `messagesReceived` events that feed the already-complete renderer pipeline: the [daemon-event channel](daemon-event-channel.md) ([#18](../codebase/18.md)) carries them, the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md)) translates them into `SessionAction`s, and the [session store](session-store.md) ([#2](../codebase/2.md)) appends them (deduped by `message_id`, arrival order preserved).
 
-Extended additively twenty-six times since, most recently [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)'s `history_page` decode (conversation scroll-back's answer half). The full chronological, kind-by-kind account — what each ticket added, which helper it introduced or reused, and what the consumer arm did with the result — lives in [Extension history](inbound-message-decode-history.md), split out 2026-09-02 once that history alone had grown past the size cap.
+The decoder also handles interactive events, permission prompts and request replies. The chronological account of earlier extensions lives in [Extension history](inbound-message-decode-history.md); current field contracts and failure behavior are documented below and in the linked topics.
 
 See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
@@ -60,6 +60,50 @@ request-specific rejection fields, but [the connection](daemon-connection.md#pai
 consumes authentication rejection before request correlation. Decoder tests pin the exact comparison
 and ensure private daemon text cannot appear in the result.
 
+### Optional permission context
+
+`parseModalShownPayload` preserves the seven required `ModalShownPayload` fields
+and accepts these optional additions from [Modal (v2)](https://github.com/pyrycode/pyrycode/blob/main/docs/protocol-mobile.md#modal-v2):
+
+| Wire field | `modalShown` IPC field | Accepted value when present |
+|---|---|---|
+| `reason` | `reason` | Any JSON value, held as `unknown` |
+| `reason_type` | `reasonType` | Any string, including unknown categories |
+| `blocked_path` | `blockedPath` | String |
+| `description` | `description` | String |
+| `default_to_no` | `defaultToNo` | Boolean |
+| `always_allow` | `alwaysAllow` | Object with required Boolean `offered` and string array `rules` |
+
+Presence is independent for every field. A category neither requires nor interprets
+`reason`; null, arrays, objects, empty strings, zero and false survive intact.
+The decoder retains reason object keys, including `__proto__` and `constructor`,
+as opaque JSON data. Consumers must narrow before display and never merge those
+keys into application state. JSON parsing and the existing plaintext cap bound
+this path; there is no recursive reason normalization or additional size limit.
+
+The offer preserves every rule in source order, including the unavailable
+`{ offered: false, rules: [] }` shape. Current daemons send it on every modal;
+accepting omission keeps older payloads and fixtures valid. Unknown payload and
+offer keys are tolerated but filtered by named-field reconstruction; keys within
+`reason` are retained. A malformed declared string, Boolean, offer or rule element
+throws `WireDecodeError` and drops the entire frame, with no partial modal event.
+The connection remains usable for the next valid frame.
+
+`createDaemonConnection` copies each optional field by name only when present,
+preserving absence through IPC instead of creating own properties holding
+`undefined`. Modal/conversation IDs and the trusted host stamp keep their existing
+roles. These values are untrusted display context, never filesystem inputs,
+attributes, authorization or log content. Session grants remain daemon-owned;
+see [modal answer carriage](daemon-connection-methods.md#modal-answers-and-cancellation).
+The [renderer translator](modal-store-bridge.md#the-translator--binding-srcrenderersrcstoremodalbridgets)
+still omits this context from its store; reason display and session-offer controls
+are separate consumers tracked by #1408 and #1409.
+
+Decoder tests cover complete JSON values and declared-shape rejection. Connection
+tests drive encoded frames through that decoder to the IPC sink and use exact
+property assertions: a parser-only test cannot catch an omitted event projection,
+and a value-only check cannot distinguish absence from an own `undefined` field.
+
 ### Optional stopped-turn reports
 
 `TurnEndPayload` in `src/shared/wire/types.ts` carries optional `outcome`, `is_error`,
@@ -94,8 +138,8 @@ so decoding never truncates the identifier Switch back must send unchanged.
 
 Ticket carries `security-sensitive`; the architect's security-review verdict is **PASS**. This is the "hostile daemon response" trust boundary — decrypted bytes from a relay peer on an internet-exposed surface.
 
-- **A single explicit boundary.** `payload: unknown` never escapes `parseInboundMessage`; downstream holds narrowed payloads and explicitly carried envelope metadata. For example, live `turnEnd.daemonTs` carries the envelope timestamp for the history/live join; its report strings remain display-only.
-- **Fail-closed on required shapes.** Malformed / oversized / unparseable frames, mistyped required fields, unknown `role`, non-array `messages`, or one bad element in a message chunk drop the frame. Optional stopped-turn reports are independently discarded as described above.
+- **A single explicit boundary.** The outer `payload: unknown` never escapes `parseInboundMessage`; downstream holds narrowed payloads and explicitly carried envelope metadata. Permission `reason` deliberately remains opaque JSON requiring consumer narrowing. For example, live `turnEnd.daemonTs` carries the envelope timestamp for the history/live join; its report strings remain display-only.
+- **Fail-closed on declared shapes.** Malformed / oversized / unparseable frames, mistyped required fields, unknown `role`, non-array `messages`, or one bad element in a message chunk drop the frame. Present malformed permission-context fields also drop the frame; optional stopped-turn reports are independently discarded as described above.
 - **Content-free-log by construction, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Since [#130](../codebase/130.md) the module *does* log — but only a content-free record (type + `seq` + length + one-way hash), never a payload byte or a decoded field: the modeled arms log a static type literal, the unmodeled arm a **capped** peer type, and every record's `hash` is a full-frame BLAKE2s digest implicitly salted by the server-assigned `id`/`ts`/`message_id` (so the log can't confirm a guessed message). Pinned by a six-method `console`-spy (still green — #130 logs via the injected sink, never `console`), an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value, and an AC4 test asserting the serialized log line contains the hash but **neither** planted secret. Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
 - **Bounded per-frame work.** The size cap makes work O(size) with size capped; a `message_chunk` array is inherently small (each complete message > 60 bytes, cap 65519) and aborts on the first bad element. A hostile daemon cannot flood an unbounded frame; deep-nesting JSON fails closed via the codec's `RangeError` catch.
 

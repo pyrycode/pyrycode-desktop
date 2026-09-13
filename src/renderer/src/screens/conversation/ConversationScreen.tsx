@@ -184,6 +184,7 @@ export function selectOpenTimelineFor(
 }
 
 export interface ConversationScreenProps {
+  savedTimelineTarget?: { serverId: string; conversationId: string }
   onRepairHost?: (serverId: string) => void
   // Compatibility prop for existing embedders; repair now delegates through onRepairHost.
   onUnpaired?: () => void
@@ -197,6 +198,7 @@ export interface ConversationScreenProps {
 }
 
 export function ConversationScreen({
+  savedTimelineTarget,
   onRepairHost,
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
@@ -226,7 +228,21 @@ export function ConversationScreen({
     () => selectOpenTimelineFor(openConversationId),
     [openConversationId]
   )
-  const openTimeline = useConversationTimelineStore(selectOpenTimeline)
+  const heldTimeline = useConversationTimelineStore(selectOpenTimeline)
+  // Active metadata can be reseeded from the wire; the clicked saved coordinates remain client-owned.
+  const selectedHost = savedTimelineTarget?.conversationId === openConversationId
+    ? savedTimelineTarget.serverId
+    : activeConversation !== null && 'serverId' in activeConversation &&
+      typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
+  const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
+  const ownOfflineSlice = offline && heldSlice?.serverId === selectedHost ? heldSlice : undefined
+  const openTimeline = offline && ownOfflineSlice === undefined ? null : heldTimeline
+  const localStatus = ownOfflineSlice?.localRead ?? (ownOfflineSlice === undefined ? 'loading' : 'loaded')
+  const coverage = ownOfflineSlice?.history?.status === 'loaded'
+    ? ownOfflineSlice.history : ownOfflineSlice?.restored?.coverage
+  const olderSaved = offline && localStatus === 'loaded' &&
+    !(coverage && 'atStart' in coverage && coverage.atStart)
   // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
   // every read site (conversationTimelineStore.ts:44-49) because it collapses "nothing is held for this
   // conversation" into "observed, nothing in the thread" with no type error and no failing test; the
@@ -384,6 +400,7 @@ export function ConversationScreen({
           so the banner is now the first thing under the overflow menu's gate; nothing else in this
           region moved. */}
       <ConnectionBannerControl />
+      {offline && <SavedTimelineNotice status={localStatus} empty={items.length === 0} />}
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
@@ -404,7 +421,7 @@ export function ConversationScreen({
           daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
           an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
           the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
-      <Timeline
+      {(!offline || items.length > 0) && <Timeline
         key={openConversationId}
         items={items}
         scrollPin={scrollPin}
@@ -412,7 +429,9 @@ export function ConversationScreen({
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
         firstRowKey={-prependedRows}
-        queued={queuedBacklog}
+        queued={offline ? EMPTY_QUEUED : queuedBacklog}
+        olderSaved={olderSaved}
+        saved={offline}
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
@@ -421,7 +440,7 @@ export function ConversationScreen({
             dispatchFor: dispatchTimelineFor
           })
         } : undefined}
-      />
+      />}
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
           #496's compaction and #317's stall each mounted their own null-at-rest bubble block here until
@@ -903,12 +922,23 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
+export function SavedTimelineNotice({ status, empty }: {
+  status: 'loading' | 'loaded' | 'failed'; empty: boolean
+}): JSX.Element {
+  const text = status === 'failed' ? 'Could not read saved messages on this device.'
+    : status === 'loading' ? 'Loading saved messages…'
+      : empty ? 'No messages are saved on this device.' : 'Offline. Showing saved messages.'
+  return <p className="conversation__banner" role="status">{text}</p>
+}
+
 export function Timeline({
   items,
   scrollPin,
   queued,
   onDropQueued,
-  firstRowKey = 0
+  firstRowKey = 0,
+  olderSaved = false,
+  saved = false
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
@@ -918,6 +948,8 @@ export function Timeline({
    *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
    *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
   firstRowKey?: number
+  olderSaved?: boolean
+  saved?: boolean
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
@@ -946,6 +978,7 @@ export function Timeline({
   if (rows.length === 0) return <EmptyThread />
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
+      {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
       {projection.map((group) => {
         const row = rows[group.index]
         if (!row) return null
@@ -954,14 +987,14 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued}
-            inProgress={group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
           <ToolRow
             item={row.item}
             group={group.count > 0 ? {
               count: group.count,
-              running: group.running
+              running: !saved && group.running
             } : undefined}
             expansion={{
               expanded: expandedTools.has(key),

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
+  SavedTimelineNotice,
   MessageThread,
   Timeline,
   ThinkingIndicator,
@@ -43,7 +44,7 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
-import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
+import { createConversationTimelineStore, conversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
@@ -5201,4 +5202,46 @@ describe('model rejection in the mounted status row', () => {
 it('disables the held running-turn interrupt when sending is unavailable', () => {
   const markup = renderToStaticMarkup(<ComposerSendButton isRunning canSend={false} onSend={() => {}} onInterrupt={() => {}} />)
   expect(markup).toContain('disabled=""')
+})
+
+describe('saved timeline notices', () => {
+  it('keeps explicit saved coordinates after metadata reseeding and rejects another host held under the same id', () => {
+    const reset = stageOpenConnection({ type: 'disconnected' })
+    const store = createConversationTimelineStore()
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
+    try {
+      for (const serverId of ['a', 'b']) {
+        store.getState().beginLocalTimelineRead(serverId, 'open')!.complete({ version: 1, kind: 'timeline',
+          serverId, conversationId: 'open', items: [{ kind: 'userText', text: `${serverId} saved copy` }],
+          prependedRows: 0, coverage: { status: 'unknown' } })
+        const html = render()
+        if (serverId === 'a') expect(html).toContain('a saved copy')
+        else {
+          expect(html).not.toContain('b saved copy')
+          expect(html).not.toContain('No messages are saved on this device.')
+        }
+      }
+    } finally { held.mockRestore(); reset() }
+  })
+  it('does not render a streaming cursor from an unfinished saved reply', () => {
+    const html = renderToStaticMarkup(<Timeline saved items={[{ kind: 'assistantText', turnId: 'partial', text: 'saved' }]} />)
+    expect(html).toContain('saved')
+    expect(html).not.toContain('bubble__cursor')
+  })
+  it('distinguishes local failure, pending and saved-empty results', () => {
+    const render = (status: 'loading' | 'loaded' | 'failed', empty: boolean) =>
+      renderToStaticMarkup(<SavedTimelineNotice status={status} empty={empty} />)
+    expect(render('failed', true)).toContain('Could not read saved messages on this device.')
+    expect(render('failed', true)).not.toContain('No messages are saved')
+    expect(render('loading', true)).toContain('Loading saved messages…')
+    expect(render('loaded', true)).toContain('No messages are saved on this device.')
+    expect(render('loaded', false)).toContain('Offline. Showing saved messages.')
+  })
+  it('puts the saved coverage notice before rows without a history action', () => {
+    const html = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'saved row' }]} olderSaved />)
+    expect(html).toContain('Older messages require a connection.')
+    expect(html.indexOf('Older messages require a connection.')).toBeLessThan(html.indexOf('saved row'))
+    expect(renderToStaticMarkup(<Timeline items={[]} />)).not.toContain('Older messages require')
+  })
 })

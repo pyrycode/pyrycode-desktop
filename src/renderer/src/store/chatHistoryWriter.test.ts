@@ -30,6 +30,30 @@ const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 
 describe('chat history recording', () => {
+  it('adopts explicit restored ownership and coverage without saving restoration or eviction', async () => {
+    const h = harness()
+    h.list()
+    await h.writer.flush()
+    h.save.mockClear()
+    h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete({
+      version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', prependedRows: 4,
+      items: [{ kind: 'assistantText', turnId: 'turn', text: 'saved' }],
+      coverage: { status: 'received', cursor: 'old', atStart: true }
+    })
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    h.delta(' later')
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ serverId: 'a', snapshot: {
+      items: [{ text: 'saved later' }], prependedRows: 4,
+      coverage: { status: 'received', cursor: 'old', atStart: true }
+    } }])
+    h.save.mockClear()
+    for (let i = 0; i < 10; i++) h.timelines.getState().markViewed(String(i))
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+  })
+
   it('coalesces received lists in order and ignores restoration, empty startup and unchanged values', async () => {
     const h = harness()
     await h.writer.flush()

@@ -75,6 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
+import { parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HistoryRequestFailure } from '@shared/ipc/events'
@@ -166,7 +167,13 @@ export type HistoryRequestState =
  * three-reading table below stand unedited, and the by-reference survivor copy in the two rebuild
  * helpers still hands back the identical slice object and therefore the identical `TimelineState`.
  */
+type SavedTimeline = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
+
 export interface ConversationSlice {
+  serverId?: string
+  localRead?: 'loading' | 'loaded' | 'failed'
+  /** Explicit admission evidence for the writer; never a received event. */
+  restored?: Pick<SavedTimeline, 'serverId' | 'coverage'>
   timeline: TimelineState
   history: HistoryRequestState | null
   /**
@@ -327,6 +334,11 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   // `subscribeTimeline`'s own #756/#1013 reason: a required parameter cascades over every existing call
   // site, an optional one over none. Absent means this event contributes no key, which is the correct
   // reading for an arm the emit did not stamp and the fail-open default everywhere else.
+  beginLocalTimelineRead: (serverId: string, conversationId: string) => {
+    complete: (snapshot: SavedTimeline | null) => void
+    fail: () => void
+    cancel: () => void
+  } | null
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
   markHistoryRequested: (conversationId: string) => void
@@ -496,7 +508,7 @@ function withHistory(
   const held = state.timelines.get(conversationId)
   if (held === undefined) return state
   const next = new Map(state.timelines)
-  next.set(conversationId, { ...held, history })
+  next.set(conversationId, { ...held, history, localRead: undefined })
   return { timelines: next }
 }
 
@@ -548,13 +560,58 @@ function tailKey(timelines: ReadonlyMap<string, ConversationSlice>): string | un
  * `init` is trusted test input and is not re-checked.
  */
 export function createConversationTimelineStore(
-  init: ConversationTimelineState = initialConversationTimelineState
+  init: ConversationTimelineState = initialConversationTimelineState,
+  receiptHost: () => string | null | undefined = () => undefined
 ) {
-  return createStore<ConversationTimelineStore>((set) => ({
+  function receivedSlice(held: ConversationSlice | undefined): ConversationSlice | undefined {
+    if (held === undefined) return undefined
+    const origin = receiptHost()
+    const base = typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin
+      ? emptySlice : held
+    return { ...base, serverId: typeof origin === 'string' ? origin : base.serverId, localRead: undefined }
+  }
+  return createStore<ConversationTimelineStore>((set, get) => ({
     ...init,
+    beginLocalTimelineRead: (serverId, conversationId) => {
+      const held = get().timelines.get(conversationId)
+      if (held?.serverId === serverId &&
+        (held.localRead !== undefined || held.timeline.items.length > 0)) return null
+      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading' }
+      set(s => ({ timelines: withSliceAtTail(s.timelines, conversationId, pending) }))
+      const settle = (replacement: ConversationSlice | null): void => {
+        set(s => {
+          if (s.timelines.get(conversationId) !== pending) return s
+          const timelines = new Map(s.timelines)
+          if (replacement === null) timelines.delete(conversationId)
+          else timelines.set(conversationId, replacement)
+          return { timelines }
+        })
+      }
+      return {
+        complete: value => {
+          if (get().timelines.get(conversationId) !== pending) return
+          try {
+            const snapshot = parseChatHistorySnapshot(value ?? {
+              version: 1, kind: 'timeline', serverId, conversationId,
+              items: [], prependedRows: 0, coverage: { status: 'unknown' }
+            })
+            if (snapshot.kind !== 'timeline' || snapshot.serverId !== serverId ||
+              snapshot.conversationId !== conversationId) {
+              settle({ ...pending, localRead: 'failed' })
+              return
+            }
+            settle({ ...emptySlice, serverId, localRead: 'loaded', restored: { serverId, coverage: snapshot.coverage },
+              timeline: { ...initialTimelineState, items: snapshot.items },
+              prependedRows: snapshot.prependedRows })
+          } catch { settle({ ...pending, localRead: 'failed' }) }
+        },
+        fail: () => settle({ ...pending, localRead: 'failed' }),
+        cancel: () => settle(null)
+      }
+    },
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
-        const held = s.timelines.get(conversationId)
+        const held = receivedSlice(s.timelines.get(conversationId))
         if (held === undefined) {
           // A live reading can only update a retained call; it cannot create or evict a slice.
           if (event.type === 'toolProgress') return s
@@ -574,6 +631,7 @@ export function createConversationTimelineStore(
           const created = reduceTimeline(initialTimelineState, event)
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
+              serverId: receiptHost() ?? undefined,
               timeline: created,
               history: null,
               prependedRows: 0,
@@ -623,11 +681,12 @@ export function createConversationTimelineStore(
     prependHistoryFor: (conversationId, items) =>
       set((s) => {
         if (items.length === 0) return s
-        const held = s.timelines.get(conversationId)
+        const held = receivedSlice(s.timelines.get(conversationId))
         if (held === undefined) {
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: { ...initialTimelineState, items },
+              serverId: receiptHost() ?? undefined,
               history: null,
               // A page drew these rows, the live lane did not, so there is no live key to seed: the
               // join's whole premise is that a key names something the operator has ALREADY seen.
@@ -727,7 +786,10 @@ export function createConversationTimelineStore(
 }
 
 /** App-wide singleton — the one source of truth #756 writes, #757 clears and #758 reads. */
-export const conversationTimelineStore = createConversationTimelineStore()
+export const conversationTimelineStore = createConversationTimelineStore(
+  initialConversationTimelineState,
+  () => typeof window === 'undefined' ? undefined : window.pyry?.chatHistoryReceipt?.()?.serverId
+)
 
 /** Narrow-slice React binding for #758. Selecting a single conversation's slice avoids cross-facet
  *  re-renders. */

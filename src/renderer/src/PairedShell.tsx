@@ -1,4 +1,5 @@
 import './pairedShell.css'
+import { readSavedTimeline } from './store/savedTimelineRestorer'
 import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
@@ -306,6 +307,7 @@ export function PairedShellView(props: {
    *  not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
    *  error rather than a silent `undefined`. See the container's `paneKey` state for why it is a prop. */
   paneKey: string | null
+  savedTimelineTarget?: { serverId: string; conversationId: string }
   onOpen: (conversation: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -343,6 +345,7 @@ export function PairedShellView(props: {
             <div className="paired-shell__pane">
               {visibleRoute === 'thread' ? (
                 <ConversationScreen
+                  savedTimelineTarget={props.savedTimelineTarget}
                   key={props.paneKey}
                   onRepairHost={props.onRepairHost}
                   onBack={props.onBack}
@@ -387,6 +390,18 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
   }), [])
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
+  const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
+
+  useEffect(() => {
+    const off = activeConversationStore.subscribe((state, previous) => {
+      if (state.activeConversation?.id !== previous.activeConversation?.id) localRead.current?.cancel()
+    })
+    return () => { off(); localRead.current?.cancel() }
+  }, [])
+  useEffect(() => {
+    if (route !== 'thread') localRead.current?.cancel()
+  }, [route])
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
   // nav reducer. The two paths that activate a conversation are BOTH right here
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
@@ -444,6 +459,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // composer draft. Re-key it on the minted id.
   useConversationCreatedNav((created, serverId) => {
+    localRead.current?.cancel()
+    setSavedTimelineTarget(undefined)
     cancelCreatedInitialization.current?.()
     leaveRecovery()
     activateConversation(activateDeps, created)
@@ -536,6 +553,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   return (
     <PairedShellView
       route={route}
+      savedTimelineTarget={savedTimelineTarget}
       pairingOrigin={pairServerReturn}
       paneKey={paneKey}
       recoveryServerId={recoveryServerId}
@@ -554,7 +572,16 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // thread's screen-local state from following the operator into the new one.
       onOpen={(conversation) => {
         leaveRecovery()
+        localRead.current?.cancel()
+        setSavedTimelineTarget(undefined)
         activateConversation(activateDeps, conversation)
+        if ('serverId' in conversation && typeof conversation.serverId === 'string' &&
+          sessionStore.getState().statuses.get(conversation.serverId)?.type !== 'connected') {
+          setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
+          localRead.current = readSavedTimeline({
+            timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
+          }, conversation.serverId, conversation.id)
+        }
         setPaneKey(conversation.id)
         dispatch({ type: 'open' })
       }}

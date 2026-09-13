@@ -98,6 +98,16 @@ export function createChatHistoryWriter(deps: {
     for (const [id, slice] of state.timelines) {
       const before = previous.timelines.get(id)
       if (slice === before) continue
+      if (slice.localRead === 'loading') {
+        forgetComparison(id)
+        observations.delete(id)
+        continue
+      }
+      if (slice.restored !== undefined && slice.restored !== before?.restored && slice.localRead === 'loaded') {
+        forgetComparison(id)
+        observations.set(id, { owner: slice.restored.serverId, coverage: slice.restored.coverage })
+        continue
+      }
       const items = slice.timeline.items
       const previousItems = before?.timeline.items ?? []
       const changed = items !== previousItems

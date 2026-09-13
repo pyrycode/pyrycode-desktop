@@ -137,11 +137,17 @@ export function translateConversationCreated(
  */
 export function subscribeConversationCreated(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  onCreated: (created: ConversationCreatedPayload) => void
+  onCreated: (created: ConversationCreatedPayload, serverId?: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const created = translateConversationCreated(event)
-    if (created !== null) onCreated(created)
+    if (created === null) return
+    // Only the main-process stamp identifies the creating host, never a payload field.
+    if ('serverId' in event && typeof event.serverId === 'string') {
+      onCreated(created, event.serverId)
+    } else {
+      onCreated(created)
+    }
   })
 }
 
@@ -185,7 +191,7 @@ export function subscribeConversationCreateRejected(
  * stays server-renderable.
  */
 export function useConversationCreatedNav(
-  onCreated: (created: ConversationCreatedPayload) => void
+  onCreated: (created: ConversationCreatedPayload, serverId?: string) => void
 ): void {
   const onCreatedRef = useRef(onCreated)
   useEffect(() => {
@@ -193,8 +199,8 @@ export function useConversationCreatedNav(
   })
   useEffect(
     () =>
-      subscribeConversationCreated(window.pyry.onDaemonEvent, (created) =>
-        onCreatedRef.current(created)
+      subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) =>
+        onCreatedRef.current(created, serverId)
       ),
     []
   )

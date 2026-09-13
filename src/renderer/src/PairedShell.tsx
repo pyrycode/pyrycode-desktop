@@ -1,5 +1,5 @@
 import './pairedShell.css'
-import { connectedConversationHostNow } from './screens/conversation/conversationActionAvailability'
+import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
@@ -392,6 +392,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // it on the way out. In-app pairing now preserves the background subtree, so
   // both this identity and the composer's local draft survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
+  const cancelCreatedInitialization = useRef<(() => void) | null>(null)
+  useEffect(() => () => cancelCreatedInitialization.current?.(), [])
   // #1303 — WHERE CANCELLING THE PAIRING FLOW PUTS THE OPERATOR BACK: the route this shell was on when
   // the flow was opened. Screen-local beside `paneKey` and for its reasons (ADR 0006) — never a store,
   // never persisted, never sent over IPC — and it dies with the shell on unpair, which is correct, since
@@ -436,9 +438,13 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // #670: the FAB's create is a conversation switch too when a thread is already open — `open` is
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // composer draft. Re-key it on the minted id.
-  useConversationCreatedNav((created) => {
+  useConversationCreatedNav((created, serverId) => {
+    cancelCreatedInitialization.current?.()
     leaveRecovery()
     activateConversation(activateDeps, created)
+    cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
+      created.id, serverId, activateDeps.requestConversationConfig
+    )
     setPaneKey(created.id)
     dispatch({ type: 'open' })
   })

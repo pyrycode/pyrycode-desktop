@@ -270,6 +270,16 @@ box text and — via `composer-actions.spec.ts`'s `captureOutbound` idiom — th
 `innerWidth`, not a `<=` a short panel would satisfy for free), and ten filler rows behind a bare `/`
 prove the 10-row cap actually scrolls rather than compresses.
 
+For mid-session replacement, keep the draft and conversation unchanged between pushed lists and
+wait for a row unique to the second list before checking exact filtered rows or removed entries.
+An already-visible row cannot prove delivery of the replacement frame; another keystroke could mask
+a missing subscription update. The replacement regression's negative control withholds that frame
+and fails at the new-row assertion. After completing a new entry, assert the completed draft and
+closed panel before checking the outbound capture. See [PR #1400](https://github.com/pyrycode/pyrycode-desktop/pull/1400)
+and [verification evidence](development-verification.md#evidence-that-cannot-pass-too-early).
+This proves the mounted client consumes a replacement [store snapshot](slash-command-list-store.md);
+fake-frame coverage does not establish a live daemon refresh producer or `commands_changed` support.
+
 Code review PASS — see [PR #959](https://github.com/pyrycode/pyrycode-desktop/pull/959). Two SHOULD
 FIX findings, both addressed in the same PR before merge: `ComposerOptionsPanelOption`'s doc comment
 now states `label` may carry untrusted text (above), and the clamp extraction preserves the `resize`

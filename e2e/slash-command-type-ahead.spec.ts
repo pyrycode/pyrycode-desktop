@@ -25,8 +25,7 @@ import type {
 // nothing the client sends provokes it — so it goes out through daemon.pushFrame rather than through
 // buildReplyFrames, which only answers outbound envelopes (the tool-row / permission-modal convention).
 //
-// ONE test() block, ONE launch, ONE continuous drive — the paired-shell-navigation shape: each launch pays
-// a full handshake and no step here mutates persistent state.
+// Each test uses one launch and one continuous drive; no step mutates persistent state.
 //
 // SECRET HYGIENE (the sibling specs' rule, carried verbatim): every assertion reads DOM text, roles,
 // geometry and counts, plus the decoded outbound's `text` — which is a slash command the operator just
@@ -88,14 +87,14 @@ const COMMANDS: WireSlashCommand[] = [
 
 /** One unsolicited `slash_command_list` frame for the seeded conversation. Sealed via the production
  *  encoder, so the decode this exercises is the shipped one. */
-function slashCommandListFrame(): Uint8Array {
+function slashCommandListFrame(commands: WireSlashCommand[] = COMMANDS): Uint8Array {
   return encodeEnvelope({
     id: PUSH_ENVELOPE_ID,
     type: 'slash_command_list',
     ts: FIXED_TS,
     payload: {
       conversation_id: SEEDED_ROW.id,
-      commands: COMMANDS,
+      commands,
       dropped_commands: 0
     } satisfies SlashCommandListPayload
   })
@@ -134,6 +133,45 @@ const panelOf = (page: Page): Locator =>
 /** The row wearing the highlight — `aria-current`, which this control uses for it because DOM focus never
  *  leaves the message box and the shipped :focus-visible outline therefore never paints. */
 const highlightedRow = (panel: Locator): Locator => panel.locator('[aria-current="true"]')
+
+test('a second published list replaces the open menu without another keystroke', async ({
+  launchPairedApp
+}) => {
+  const { sent, buildReplyFrames } = captureOutbound()
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+  const box = page.getByPlaceholder('Message…')
+  const panel = panelOf(page)
+  const listA = [command({ name: 'clear' }), command({ name: 'compact' })]
+  const listB = [
+    command({ name: 'inspect' }),
+    command({ name: 'check' }),
+    command({ name: 'model' }),
+    command({ name: 'commit' })
+  ]
+
+  daemon.pushFrame(slashCommandListFrame(listA))
+  await box.fill('/c')
+  await expect(panel.getByRole('menuitem')).toHaveText(['/clear', '/compact'], {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  await expect(box).toHaveValue('/c')
+
+  daemon.pushFrame(slashCommandListFrame(listB))
+  // Await a B-only row before absence assertions; A must not satisfy the delivery barrier.
+  await expect(panel.getByRole('menuitem', { name: '/check', exact: true })).toBeVisible({
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  await expect(box).toHaveValue('/c')
+  await expect(panel.getByRole('menuitem')).toHaveText(['/check', '/commit', '/inspect'])
+  await expect(panel.getByRole('menuitem', { name: '/clear', exact: true })).toHaveCount(0)
+  await expect(panel.getByRole('menuitem', { name: '/compact', exact: true })).toHaveCount(0)
+
+  await expect(highlightedRow(panel)).toHaveText('/check')
+  await box.press('Enter')
+  await expect(box).toHaveValue('/check')
+  await expect(panel).toBeHidden()
+  expect(sent).toHaveLength(0)
+})
 
 test('typing a slash opens the published menu; Enter completes, a second Enter sends (AC1-AC5)', async ({
   launchPairedApp

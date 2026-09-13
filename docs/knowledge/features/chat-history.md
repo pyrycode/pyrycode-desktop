@@ -12,7 +12,8 @@ including unavailable and pairing-rejected hosts. Opening a saved chat restores 
 timeline on demand whether its host is connected or unavailable. Restored rows remain
 readable through reconnect and subsequent same-host receipts continue saving.
 Downloads require explicit upward thread input, including after reconnect;
-explicit host/conversation removal integration remains separate.
+explicit Forget/Unpair removes the host's saved content after credential removal.
+Conversation-removal integration remains separate.
 Observing, saving, flushing and restoration add no history requests.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
@@ -41,6 +42,25 @@ store for the app lifetime, sharing the existing secure store and paired-server
 store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
 on the fixed `pyry:chat-history` channel; `PyryApi` carries its type into the window.
 Reads and replacements need no handshake.
+
+The callable handler also exposes main-only `clearServer(serverId, clearCredentials)`.
+The composition root supplies it to the existing unpair handler: credential erasure
+and protected `removeServer` run in the same queue as history membership checks and
+storage operations. Earlier admitted work finishes before removal. Each history
+request captures a host generation at admission; a matched credential erase advances
+that generation before releasing the queue, even if history cleanup fails. Requests
+queued behind removal with the old generation return `unknown-host`, including after
+same-server re-pairing. Fresh requests still require saved-host membership. Calling
+renderer `removeServer` after erasing credentials cannot replace this coordination:
+it would fail membership validation.
+
+A credential erase that throws or matches no record leaves history and the generation
+untouched. After a matched erase, cleanup failure or a thrown cleanup error preserves
+the successful credential outcome, so label cleanup, connection teardown and the
+unpaired-state transition continue. `history-unpair-cleanup` records only static
+`ok` or `failed`; successful unpair alone does not establish successful history deletion.
+Successful cleanup removes the list and every timeline for that `server` identity,
+including omitted timelines, while preserving other hosts' equal conversation ids.
 
 Every request has `operation` and `serverId`. Additional fields are operation-specific:
 
@@ -272,8 +292,26 @@ received change continues recording under that owner with the restored coverage;
 conflicting list claims still refuse recording. Receipt-stamped holder mutations
 start from an empty slice when the supplying host differs, preventing mixed-host
 rows; they do not bypass the writer's ownership refusal.
-Failed requests and rejected pairings do not delete saved content. Received empty
+Failed requests, network failure and rejected or expired pairings do not delete saved
+content. Opening/cancelling repair and successful same-server repair retain timelines
+and never enter the explicit removal lifecycle. Missing or partial lists are not
+timeline-deletion signals; received lists still replace the saved list. Received empty
 lists/pages and cancellation of an observed echo remain valid durable changes.
+
+[`runUnpairServer`](../../../src/renderer/src/screens/settings/unpairServerAction.ts)
+begins the renderer-local [removal lifecycle](../../../src/renderer/src/store/chatHistoryRemoval.ts)
+before invoking main and settles it before refreshing identities. While pending,
+writers pause draining that host and allow other hosts' buffered work to proceed.
+Failure resumes the paused snapshots. Success discards pending snapshots and comparison
+state, invalidates observation ownership and prevents an in-flight completion from
+repopulating deduplication state, including when main reported cleanup failure.
+
+Successful settlement also clears every held timeline stamped with that host's
+`serverId`, including omitted, restored and pending-read slices; other host-stamped
+slices survive. Enumerating only the latest list misses retained timelines. Resetting
+ownership alone would block later receipts, while restoring ownership over old rows
+would save erased text again. Clearing the actual slices invalidates pending local
+reads and lets fresh receipts after same-session re-pairing save only fresh content.
 
 ### Admission limits
 
@@ -329,7 +367,7 @@ attach an error to a newer list or a cleared host.
 | Error code | Meaning |
 | --- | --- |
 | `invalid-request` | Request validation failed, including an unsupported version supplied for replacement. |
-| `unknown-host` | The handler found no saved pairing for `serverId`. |
+| `unknown-host` | No saved pairing exists, or removal invalidated the request's admission generation. |
 | `membership-unavailable` | The saved-host lookup threw. |
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
 | `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1. Malformed version values are `unreadable`. |
@@ -348,7 +386,8 @@ exception.
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
 `history-writer-started`, `history-writer-result`, `history-flushed`,
-`history-list-restore` and `history-timeline-restore` (static lifecycle/result codes).
+`history-list-restore`, `history-timeline-restore` and `history-unpair-cleanup`
+(static lifecycle/result codes).
 They include no requests, coordinates, message content, keys, storage paths or
 caught errors. Successful reads return the declared chat content; error replies
 contain only their static classification.
@@ -420,8 +459,11 @@ work or background pruning is involved.
 
 ### Window close and app quit
 
-`writer.stop()` unsubscribes both stores, cancels the timer and drains buffered
-and in-flight updates. Main defers normal window close and `before-quit` teardown
+`writer.stop()` unsubscribes both stores and removal notifications, waits for
+already-started removals to settle, then cancels the timer and drains buffered
+and in-flight updates. Unsubscribing alone could acknowledge close before failed
+unpair resumes its buffered snapshots. Settlement cannot schedule a new timer after
+stop. Main defers normal window close and `before-quit` teardown
 until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
 `flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
 submitted history operations before resuming close/quit. App quit stops the
@@ -470,6 +512,17 @@ successful coverage, attribution refusal and capture before eleven-chat eviction
 Cancellation regressions must include later live content and retained coverage;
 checking only echo addition or its immediate removal misses a writer that has
 silently stopped recording the held chat.
+
+Removal regressions hold membership checks and protected writes, then use fresh
+storage instances to verify absent lists and omitted timelines, stale admission
+rejection, other-host preservation and fresh saves after re-pairing. Writer tests
+also hold removal through shutdown for both outcomes.
+[`chat-history-removal.test.ts`](../../../e2e/chat-history-removal.test.ts) combines
+receipt-stamped holders, the real scoped-clear selector and protected storage.
+Its same-session re-pair must save only fresh text for an omitted timeline. Manually
+clearing all timelines or restarting before re-pairing masks the retained-slice bug.
+The recording Playwright scenario re-pairs before restart, then checks persistence
+after restart and no added history downloads.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host

@@ -1791,23 +1791,7 @@
   outline-offset: 2px;
 }
 
-/* #1179 — the Create-channel dialog, the fourth dialog in this chrome and the second in this file. No
-   node of its own is drawn: verified against the Figma on 2026-09-08, the Desktop page's Dialogs
-   section holds Rename, Save as Channel, Create Folder and Paste Code only. So the block below mirrors
-   .rename-conversation* (Figma 102:498) declaration for declaration — which is exactly what that block
-   already does to .save-as-channel*, and its own header records the precedent — with the Create Folder
-   dialog's (102:528) Cancel / Create action pair. Reading both nodes confirms the borrow is sound: the
-   two shipped dialogs are identical in overlay, scrim, panel, field and action row, and differ only in
-   the title, the field label and the second action's word.
-
-   A SEPARATE CLASS FAMILY rather than reusing .rename-conversation*, and the reason is not tidiness:
-   Playwright locators run in strict mode, and `e2e/conversation-create-rename.spec.ts` scopes to the
-   Rename dialog's own classes. A second dialog wearing them would join that spec's match set and
-   strict-violate rather than fail an assertion — the guard `WorkspaceRow`'s header states for the
-   sidebar, applied to a dialog. AC5 also requires that spec to pass unedited.
-
-   `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll column and covers
-   the window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+/* Create-channel placement; shared Modal owns the panel, header and actions. */
 .create-channel-overlay {
   position: fixed;
   inset: 0;
@@ -1818,8 +1802,6 @@
   padding: var(--space-4);
 }
 
-/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
-   40% via opacity (not a color literal) — the rename-conversation-overlay__scrim idiom. */
 .create-channel-overlay__scrim {
   position: absolute;
   inset: 0;
@@ -1827,109 +1809,81 @@
   opacity: 0.4;
 }
 
-/* The centered M3 dialog panel: surface-container-high, 28px radius, 24px padding, a column with 16px
-   gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows; max-height +
-   overflow keep a long typed name scrolling inside the panel rather than overflowing it. */
-.create-channel {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  width: 100%;
-  max-width: 360px;
-  max-height: 90%;
-  overflow-y: auto;
-  padding: var(--space-6);
-  background: var(--color-surface-container-high);
-  border-radius: var(--radius-lg);
-  color: var(--color-on-surface);
-}
-
-/* The headline-small title (102:499's treatment, reading "Create channel"). margin: 0 resets the
-   heading default. */
-.create-channel__title {
-  margin: 0;
-  color: var(--color-on-surface);
-  font-size: var(--text-headline-small-size);
-  line-height: var(--text-headline-small-line);
-  letter-spacing: var(--text-headline-small-tracking);
-  font-weight: var(--text-headline-small-weight);
-}
-
-/* The outlined Name field (102:500) — a bordered frame stacking the label over the input value. The
-   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
-   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal —
-   the .rename-conversation__field token-mapping precedent. */
 .create-channel__field {
   display: flex;
   flex-direction: column;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-outline);
-  border-radius: var(--radius-xs);
+  gap: var(--space-2);
 }
 
-/* The field label (102:501) is M3 label-medium (12px); the theme has no label-medium token, so map to
-   the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
 .create-channel__label {
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
-}
-
-/* The input value (102:502) — body-large, on-surface. Reset to a borderless field so the frame's border
-   is the only chrome; the label above supplies the field's meaning. */
-.create-channel__input {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--color-on-surface);
-  font-family: var(--font-sans);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
-}
-
-/* The action row (102:533) — Cancel + Create both right-aligned (the node's justify-end). 4px gap =
-   --space-1. */
-.create-channel__actions {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  justify-content: flex-end;
-}
-
-/* The two text-button actions (102:534/102:536) — the M3 dialog text-button treatment (pill,
-   transparent fill, --color-primary label, label-large), mirroring rename-conversation__save. */
-.create-channel__cancel,
-.create-channel__create {
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
   font-size: var(--text-label-large-size);
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
-  font-weight: var(--text-label-large-weight);
+  font-weight: var(--text-label-large-weight-emphasized);
 }
 
-.create-channel__cancel:focus-visible,
-.create-channel__create:focus-visible {
-  outline: 1px solid var(--color-outline);
+.create-channel__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-on-primary) 41%, transparent);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
-/* Create disabled while the name is blank (AC2) — the M3 38% disabled emphasis (opacity, not a color
-   literal — the #218 de-emphasis precedent) and a non-interactive cursor. */
-.create-channel__create:disabled {
+.create-channel__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--color-on-surface);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  letter-spacing: var(--text-label-medium-tracking);
+  font-weight: var(--text-label-medium-weight-emphasized);
+}
+
+.create-channel__option span {
+  padding-top: calc(var(--space-1) / 2);
+}
+
+.create-channel__option input {
+  appearance: none;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: var(--space-5);
+  height: var(--space-5);
+  margin: 0;
+  border: 2px solid var(--color-tertiary);
+  border-radius: var(--radius-full);
+  padding: calc(var(--space-1) - 1px);
+  background-clip: content-box;
+}
+
+.create-channel__option input:checked {
+  background-color: var(--color-tertiary);
+}
+
+.create-channel__input:focus-visible,
+.create-channel__option input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.create-channel__input:disabled,
+.create-channel__option input:disabled {
   opacity: 0.38;
-  cursor: default;
+}
+
+.create-channel__error {
+  margin: 0;
+  color: var(--color-error);
 }
 
 /* Workspace dialog placement; Modal owns the panel and scrolling. */

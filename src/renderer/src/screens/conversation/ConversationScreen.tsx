@@ -238,11 +238,11 @@ export function ConversationScreen({
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
-  const ownOfflineSlice = offline && heldSlice?.serverId === selectedHost ? heldSlice : undefined
-  const openTimeline = offline && ownOfflineSlice === undefined ? null : heldTimeline
-  const localStatus = ownOfflineSlice?.localRead ?? (ownOfflineSlice === undefined ? 'loading' : 'loaded')
-  const coverage = ownOfflineSlice?.coverage ?? (ownOfflineSlice?.history?.status === 'loaded'
-    ? ownOfflineSlice.history : ownOfflineSlice?.restored?.coverage)
+  const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
+  const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
+  const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
+  const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
+    ? ownSlice.history : ownSlice?.restored?.coverage)
   const olderSaved = offline && localStatus === 'loaded' &&
     !(coverage && 'atStart' in coverage && coverage.atStart)
   // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
@@ -322,7 +322,7 @@ export function ConversationScreen({
   )
   const queuedBacklog = useQueueStore(selectOpenBacklog)
   // A disconnect retains received queues; a local read cannot borrow the id-only queue cache.
-  const visibleQueued = offline && (ownOfflineSlice === undefined || ownOfflineSlice.localRead !== undefined)
+  const visibleQueued = selectedHost !== null && (ownSlice === undefined || ownSlice.localRead !== undefined)
     ? EMPTY_QUEUED : queuedBacklog
   // #1213: the two timeline writes the queued-row drop needs, so cancelling a message takes its optimistic
   // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
@@ -405,7 +405,9 @@ export function ConversationScreen({
           so the banner is now the first thing under the overflow menu's gate; nothing else in this
           region moved. */}
       <ConnectionBannerControl />
-      {offline && <SavedTimelineNotice status={localStatus} empty={items.length === 0} />}
+      {(offline || (selectedHost !== null && (localStatus !== 'loaded' ||
+        (ownSlice?.localRead === 'loaded' && items.length === 0)))) &&
+        <SavedTimelineNotice status={localStatus} empty={items.length === 0} />}
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
@@ -436,7 +438,7 @@ export function ConversationScreen({
         firstRowKey={-prependedRows}
         queued={visibleQueued}
         olderSaved={olderSaved}
-        saved={offline}
+        saved={offline || ownSlice?.localRead !== undefined}
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
           if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {

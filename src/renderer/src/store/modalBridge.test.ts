@@ -49,6 +49,19 @@ const listing =
     new Set(ids)
 
 describe('translateModalEvent — the owned arms', () => {
+  it.each(['plain reason', { checks: [false, 0, null] }, null, false, 0])('preserves optional permission context: %j', (reason) => {
+    const context = { reason, reasonType: 'classifier', blockedPath: '/workspace/file',
+      description: 'Additional context', defaultToNo: false }
+    expect(translateModalEvent({ ...modalShown, ...context }, noConversations)).toMatchObject(context)
+  })
+
+  it('does not manufacture absent context properties', () => {
+    const translated = translateModalEvent(modalShown, noConversations)
+    for (const key of ['reason', 'reasonType', 'blockedPath', 'description', 'defaultToNo']) {
+      expect(translated).not.toHaveProperty(key)
+    }
+  })
+
   it('modalShown → a ModalEvent shown with the same fields, a fresh object', () => {
     const translated = translateModalEvent(modalShown, noConversations)
     expect(translated).toEqual({

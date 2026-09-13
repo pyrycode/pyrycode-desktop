@@ -95,7 +95,12 @@ export function translateModalEvent(
         title: event.title,
         prompt: event.prompt,
         options: event.options,
-        defaultOptionId: event.defaultOptionId
+        defaultOptionId: event.defaultOptionId,
+        ...('reason' in event ? { reason: event.reason } : {}),
+        ...('reasonType' in event ? { reasonType: event.reasonType } : {}),
+        ...('blockedPath' in event ? { blockedPath: event.blockedPath } : {}),
+        ...('description' in event ? { description: event.description } : {}),
+        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {})
       }
     case 'modalDismissed':
       return { type: 'dismissed', modalId: event.modalId, outcome: event.outcome, source: event.source }

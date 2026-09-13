@@ -82,3 +82,7 @@ Pending for documentation stage: update `docs/knowledge/features/conversation-sh
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+- 2026-09-13: Browser proof clarified the Back focus assertion: React reuses the Back/Cancel native button, so keyboard Back naturally retains focus on Cancel even without a focus effect. The test holds focus on the chat control while dispatching Back to detect an unwanted effect independently of native focus retention. The long-content typing scenario remains unhinted because spaces on an initially focused Cancel deliberately cancel; the dedicated hinted scenario proves that cancellation behavior. No production contract change.

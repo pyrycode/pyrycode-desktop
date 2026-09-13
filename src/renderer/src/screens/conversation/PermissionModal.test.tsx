@@ -64,6 +64,49 @@ const PROMPT: ModalPrompt = {
 }
 
 describe('PermissionModalView — the outstanding permission/trust prompt', () => {
+  it('keeps the context-free presentation without empty secondary rows', () => {
+    expect(renderView(PROMPT)).not.toContain('permission-panel__context')
+  })
+
+  it.each([
+    [{ reason: 'Needs review' }, 'Reason: Needs review'],
+    [{ reasonType: 'classifier' }, 'The auto classifier could not approve this'],
+    [{ reasonType: 'rule' }, 'A permission rule asks'],
+    [{ reasonType: 'classifier', reason: 'Uncertain' }, 'The auto classifier could not approve this: Uncertain'],
+    [{ reasonType: 'rule', reason: 'Review rule' }, 'A permission rule asks: Review rule'],
+    [{ reasonType: 'future-category', reason: 'Keep this' }, 'Reason type: future-category: Keep this'],
+    [{ reasonType: 'future-category' }, 'Reason type: future-category'],
+    [{ reason: null }, 'Reason: null'],
+    [{ reason: false }, 'Reason: false'],
+    [{ reason: 0 }, 'Reason: 0'],
+    [{ reason: { checks: [false, 0, null] } }, 'Reason: {&quot;checks&quot;:[false,0,null]}']
+  ])('renders independent category and meaningful reason for %j', (context, expected) => {
+    const markup = renderView({ ...PROMPT, ...context })
+    expect(markup).toContain('permission-panel__context-text')
+    expect(markup).toContain(expected)
+  })
+
+  it.each([{ description: 'Review description' }, { blockedPath: '/workspace/report' },
+    { description: 'Review description', blockedPath: '/workspace/report' }])('shows description/path without inferring reason: %j', (context) => {
+    const markup = renderView({ ...PROMPT, ...context })
+    for (const value of Object.values(context)) expect(markup).toContain(`>${value}</p>`)
+    expect(markup).not.toContain('Reason:')
+    expect(markup).not.toContain('A permission rule asks')
+  })
+
+  it('renders every context field as escaped text, never an attribute or markup', () => {
+    const text = '<img src=x onerror="alert(1)">'
+    const markup = renderView({ ...PROMPT, reason: { nested: text }, reasonType: text,
+      description: text, blockedPath: text, defaultToNo: true })
+    expect(markup).not.toContain('<img src=x')
+    expect(markup.match(/&lt;img/g)).toHaveLength(4)
+    expect(markup).not.toContain(' title=')
+    expect(markup).not.toContain(' href=')
+    expect(markup).not.toContain('checked=""')
+    expect(markup).toContain('disabled=""')
+    expect(markup).toContain('Deny<span class="permission-panel__default"> Default</span>')
+  })
+
   it('renders the title and prompt text (AC2)', () => {
     const markup = renderView(PROMPT)
     expect(markup).toContain('Allow file write')

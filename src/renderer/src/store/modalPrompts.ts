@@ -30,6 +30,12 @@ export interface ModalPrompt {
   prompt: string
   options: readonly ModalOption[]
   defaultOptionId: string
+  /** Untrusted display context; never answer authority, attributes, paths or logs. */
+  reason?: unknown
+  reasonType?: string
+  blockedPath?: string
+  description?: string
+  defaultToNo?: boolean
 }
 
 /**
@@ -61,6 +67,11 @@ export type ModalEvent =
       prompt: string
       options: readonly ModalOption[]
       defaultOptionId: string
+      reason?: unknown
+      reasonType?: string
+      blockedPath?: string
+      description?: string
+      defaultToNo?: boolean
     }
   // `outcome`/`source` are carried for the follow-up consumer (a resolution toast) but NOT consulted
   // by the reduce — only `modalId` drives the clear — mirroring threadTimeline's carried-but-unused `seq`.
@@ -266,7 +277,12 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
         title: event.title,
         prompt: event.prompt,
         options: event.options,
-        defaultOptionId: event.defaultOptionId
+        defaultOptionId: event.defaultOptionId,
+        ...('reason' in event ? { reason: event.reason } : {}),
+        ...('reasonType' in event ? { reasonType: event.reasonType } : {}),
+        ...('blockedPath' in event ? { blockedPath: event.blockedPath } : {}),
+        ...('description' in event ? { description: event.description } : {}),
+        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {})
       }
       // Re-delivery of a still-outstanding id: replace in place from the RE-DELIVERED fields
       // (match-and-replace takes the latest) — position + length preserved, no duplicate append.

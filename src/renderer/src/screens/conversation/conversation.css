@@ -3916,6 +3916,24 @@
   text-overflow: clip;
 }
 
+.permission-panel__context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.permission-panel__context-text {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .permission-panel__default {
   margin-left: var(--space-2);
   color: var(--color-tertiary);

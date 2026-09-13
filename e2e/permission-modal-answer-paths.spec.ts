@@ -45,6 +45,68 @@ const openChat = async (page: Page, name: string): Promise<void> => {
   await expect(rowFor(page, name).locator('.channel-list__row-open')).toHaveAttribute('aria-current', 'true')
 }
 
+test('permission context and initial Cancel focus preserve deliberate keyboard response gates', async ({ launchPairedApp }) => {
+  const captured: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const panel = panelFor(page)
+  const chat = rowFor(page, SEEDED_ROW.name!).locator('.channel-list__row-open')
+  for (const hint of [{}, { default_to_no: false }]) {
+    const id = 'Unhinted ' + Object.keys(hint).length
+    await chat.focus()
+    daemon.pushFrame(shown(id, hint))
+    await expect(panel).toContainText(id)
+    await expect(chat).toBeFocused()
+    daemon.pushFrame(dismissed(id))
+    await expect(panel).toHaveCount(0)
+  }
+
+  daemon.pushFrame(shown('Review file access', { reason: 'The command accesses a protected file.',
+    reason_type: 'classifier', description: 'Review the requested operation before continuing.',
+    blocked_path: '/workspace/reports/summary.json', default_to_no: true }))
+  await expect(panel).toContainText('The auto classifier could not approve this: The command accesses a protected file.')
+  await expect(panel).toContainText('Review the requested operation before continuing.')
+  await expect(panel).toContainText('/workspace/reports/summary.json')
+  await expect(action(panel, 'Cancel')).toBeFocused()
+  await expect(action(panel, 'Continue')).toBeDisabled()
+  await expect(panel.getByRole('radio', { checked: true })).toHaveCount(0)
+  await page.screenshot({ path: '/tmp/builder-1408-context-normal.png', animations: 'disabled' })
+  await page.keyboard.press('Enter')
+  await expect.poll(() => resolutions(captured, 'Review file access', 'modal_cancel')).toBe(1)
+  expect(resolutions(captured, 'Review file access')).toBe(0)
+
+  const hintedDefault = { default_to_no: true, default_option_id: 'allow', reason: false }
+  daemon.pushFrame(shown('Supplied affirmative default', hintedDefault))
+  await expect(action(panel, 'Cancel')).toBeFocused()
+  await expect(panel).toContainText('Reason: false')
+  const defaultRadio = panel.getByRole('radio', { name: 'Allow Default', exact: true })
+  await defaultRadio.press('Space')
+  daemon.pushFrame(shown('Supplied affirmative default', { ...hintedDefault, description: 'Updated context' }))
+  await expect(panel).toContainText('Updated context')
+  await expect(defaultRadio).toBeFocused()
+  await defaultRadio.press('Enter')
+  await expect(action(panel, 'Continue')).toBeEnabled()
+  expect(resolutions(captured, 'Supplied affirmative default')).toBe(0)
+  await action(panel, 'Continue').press('Enter')
+  await expect.poll(() => resolutions(captured, 'Supplied affirmative default', 'modal_answer', 'allow')).toBe(1)
+
+  daemon.pushFrame(shown('Nondefault response', { default_to_no: true, reason_type: 'rule' }))
+  await expect(action(panel, 'Cancel')).toBeFocused()
+  await panel.getByRole('radio', { name: 'Allow', exact: true }).press('Space')
+  await action(panel, 'Continue').press('Enter')
+  await expect(action(panel, 'Confirm')).toBeVisible()
+  expect(resolutions(captured, 'Nondefault response')).toBe(0)
+  // Back/Cancel reuse a native button; hold focus elsewhere to detect an unwanted focus effect.
+  await chat.focus()
+  await action(panel, 'Back').dispatchEvent('click')
+  await expect(panel.getByRole('radio', { name: 'Allow', exact: true })).toBeChecked()
+  await expect(chat).toBeFocused()
+  await action(panel, 'Continue').press('Enter')
+  await action(panel, 'Confirm').press('Enter')
+  await expect.poll(() => resolutions(captured, 'Nondefault response', 'modal_answer', 'allow')).toBe(1)
+  expect(captured.filter(e => ['question_answer', 'send_message'].includes(e.type))).toHaveLength(0)
+})
+
 test('permission and trust require selection then Continue; confirmation, cancel and remote dismissal advance FIFO', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
@@ -125,7 +187,7 @@ test('chat-scoped FIFO and rejection feedback survive optimistic removal, switch
   rows.push(OTHER)
   daemon.pushFrame(frame('conversations', { conversations: rows }))
   const panel = panelFor(page)
-  daemon.pushFrame(shown('Other first', { conversation_id: OTHER.id }))
+  daemon.pushFrame(shown('Other first', { conversation_id: OTHER.id, reason: 'Other chat context', default_to_no: true }))
   await expect(rowFor(page, OTHER.name).getByRole('img', { name: 'Input required' })).toBeVisible()
   await expect(rowFor(page, SEEDED_ROW.name!).locator('.channel-list__row-open')).toHaveAttribute('aria-current', 'true')
   await expect(panel).toHaveCount(0)
@@ -136,9 +198,12 @@ test('chat-scoped FIFO and rejection feedback survive optimistic removal, switch
   await action(panel, 'Continue').click()
   await openChat(page, OTHER.name)
   await expect(panel).toContainText('Other first')
+  await expect(panel).toContainText('Reason: Other chat context')
+  await expect(action(panel, 'Cancel')).toBeFocused()
   await expect(action(panel, 'Continue')).toBeDisabled()
   await openChat(page, SEEDED_ROW.name!)
   await expect(panel).toContainText('Open first')
+  await expect(panel).not.toContainText('Other chat context')
   await expect(action(panel, 'Continue')).toBeDisabled()
   await choose(panel, 'Deny')
   await action(panel, 'Continue').click()
@@ -196,7 +261,9 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
     'A complete explanation must wrap and remain reachable. '.repeat(160) + 'FINAL EXPLANATION'
   const allowLabel = `Allow writing ${longPath}`
   daemon.pushFrame(shown('Long permission', {
-    prompt: longText, options: [OPTIONS[0], { id: 'allow', label: allowLabel }]
+    prompt: longText, options: [OPTIONS[0], { id: 'allow', label: allowLabel }],
+    reason: 'A long permission reason. '.repeat(100), reason_type: 'rule',
+    description: 'Additional details. '.repeat(100), blocked_path: longPath
   }))
   const panel = panelFor(page)
   await expect(panel).toBeVisible()
@@ -215,7 +282,8 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   expect(captured.filter((e) => ['send_message', 'question_answer', 'modal_answer'].includes(e.type))).toHaveLength(0)
   const scroll = panel.locator('.permission-panel__content')
   const expectNoHorizontalOverflow = async (): Promise<void> => {
-    for (const element of [scroll, panel.locator('.permission-panel__explanation')]) {
+    for (const element of [scroll, panel.locator('.permission-panel__explanation'),
+      ...await panel.locator('.permission-panel__context-text').all()]) {
       const width = await element.evaluate((el) => ({ client: el.clientWidth, scroll: el.scrollWidth }))
       expect.soft(width.scroll).toBeLessThanOrEqual(width.client)
     }
@@ -226,6 +294,13 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await expect(action(panel, 'Cancel')).toBeInViewport()
   await expect(action(panel, 'Continue')).toBeInViewport()
   await page.screenshot({ path: '/tmp/builder-1356-rework-permission-long.png', animations: 'disabled' })
+  await panel.locator('.permission-panel__context').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '/tmp/builder-1408-context-long.png', animations: 'disabled' })
+  await expect(panel.locator('.permission-panel__context-text').last()).toHaveText(longPath)
+  await panel.locator('.permission-panel__context-text').last().scrollIntoViewIfNeeded()
+  await expect(action(panel, 'Cancel')).toBeInViewport()
+  await expect(action(panel, 'Continue')).toBeInViewport()
+  await page.screenshot({ path: '/tmp/builder-1408-context-path.png', animations: 'disabled' })
   await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await choose(panel, 'Allow writing')
   await action(panel, 'Continue').click()
@@ -235,6 +310,7 @@ test('permission coverage retains draft, questionnaire picks, Other and active q
   await expect(action(panel, 'Back')).toBeInViewport()
   await expect(action(panel, 'Confirm')).toBeInViewport()
   await page.screenshot({ path: '/tmp/builder-1356-rework-permission-confirm.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-1408-context-confirm.png', animations: 'disabled' })
   expect(resolutions(captured, 'Long permission')).toBe(0)
   await action(panel, 'Back').click()
   await choose(panel, 'Deny')

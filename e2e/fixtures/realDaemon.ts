@@ -24,14 +24,21 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // only real-stack e2e). Every future tier-2/tier-3 real-* spec (real-daemon-actions, real-claude
 // interrupt/queue, permission modal) imports this instead of re-transcribing the daemon recipe. This is a
 // PURE MOVE: the spawn recipe (binary resolution, skip-gating, seedRegistry, spawn args, waitForDaemonReady,
-// process-group reap) is unchanged — real-claude.spec.ts staying green is the proof.
+// process-group reap) was unchanged at extraction time — real-claude.spec.ts staying green is the proof.
+//
+// #1413 changed the setup ORDER (and only the order plus the socket contract — no spec body moved): the
+// registry seed still lands before `spawn`, but the device mint now runs AFTER the daemon is up and its
+// control socket is dialable, because upstream pyrycode#2393 made bare `pyry pair` a running-service
+// operation that dials the selected service and has the live daemon mint. The tier therefore now requires
+// a daemon carrying pyrycode#2393. See the comments at `seedRegistry`'s call, at `socketPath`, and at the
+// mint itself for the three halves of that contract.
 //
 // It spawns a freshly-paired REAL `pyry` daemon running real claude, bridged to the built Electron window
 // through #251's content-blind routing relay (startFakeRoutingRelay); the daemon sits on the relay's
 // /v1/server leg, the app dials /v1/client. The fixture chain relay → daemon → page forces LIFO teardown
 // (page → daemon → relay): the app closes FIRST so its supervisor cannot churn-reconnect on the daemon/relay
 // drop. The daemon fixture wraps `use()` in try/finally so its detached subprocess (pyry + its real-claude
-// grandchild, reaped as a process GROUP) and its two temp dirs are reaped on setup failure, test failure,
+// grandchild, reaped as a process GROUP) and its temp HOME are reaped on setup failure, test failure,
 // AND success — no orphaned child, no leaked temp dir.
 //
 // #439 adds a claude-less spawn MODE via the `spawnClaude` option (default true = the original behavior
@@ -63,6 +70,13 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // Control socket must be dialable shortly after spawn (mirrors #854's waitForReady).
 const DAEMON_READY_TIMEOUT_MS = 10_000
 const PAIR_TIMEOUT_MS = 15_000
+
+// The daemon instance this fixture runs, named once (#1413). It is passed as `-pyry-name` to BOTH the
+// spawn and the mint, and it is what the daemon's own resolver turns into the control-socket path
+// `$HOME/.pyry/<name>.sock` and the instance registry directory `$HOME/.pyry/<name>/`. Those four uses
+// were four independent 'test' literals until upstream pyrycode#2393 made the socket path load-bearing
+// for the mint; drift between them IS the defect this ticket repaired, so the coupling is structural now.
+const DAEMON_INSTANCE_NAME = 'test'
 
 // The seeded bootstrap POOL id (any valid v4 shape; it only has to match between the two registry files).
 // Reused from #854's liveBootstrapUUID for fidelity. Real claude still writes its transcript at its own
@@ -166,7 +180,7 @@ export type RealDaemonFixtures = {
 // Local fixtures (this file only — the shared electronApp.ts stays scenario-agnostic per #40). The chain
 // relay → daemon → page forces LIFO teardown (page → daemon → relay): the app closes FIRST so its
 // supervisor cannot churn-reconnect on the daemon/relay drop, exactly as #94 enforces. The daemon fixture
-// wraps `use()` in try/finally so its subprocess + temp dirs are reaped on setup failure, test failure,
+// wraps `use()` in try/finally so its subprocess + temp HOME are reaped on setup failure, test failure,
 // AND success — no orphaned real-claude child, no leaked temp dir.
 export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   // Additive option fixtures. Defaults preserve the existing behavior byte-for-byte: real-claude.spec.ts
@@ -276,19 +290,27 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
     }
 
     // --- Resource creation, tracked so `cleanup` reaps everything on any exit path. ---
+    // #1413 dropped the separate socket temp dir: the control socket now lives INSIDE daemonHome, which
+    // this recursive `rm` already reaps, so tracking it separately would have been a resource nothing
+    // creates. Everything this fixture makes is either the process group or a child of daemonHome.
     let daemonHome: string | null = null
-    let socketDir: string | null = null
     let child: ChildProcess | null = null
     const cleanup = async (): Promise<void> => {
       if (child !== null) await reapDaemon(child)
       if (daemonHome !== null) await rm(daemonHome, { recursive: true, force: true })
-      if (socketDir !== null) await rm(socketDir, { recursive: true, force: true })
     }
 
     try {
       // Two isolations, two dirs: the daemon HOME (fresh registry + empty claude sessions dir) is separate
       // from the app's --user-data-dir (guaranteed-unpaired start, owned by the page fixture).
-      daemonHome = await mkdtemp(join(tmpdir(), 'pyry-daemon-'))
+      //
+      // A SHORT `/tmp` BASE IS MANDATORY, not cosmetic (#1413, inheriting pyrycode#860). The daemon's
+      // control socket is `$HOME/.pyry/<name>.sock`, so the 104-byte macOS `sun_path` limit now binds on
+      // the HOME rather than on a separate socket dir. Measured 2026-09-13: `os.tmpdir()` on this machine
+      // yields an 83-byte socket path — it binds, but the margin is the machine's TMPDIR, not a property
+      // of this code; `/tmp` yields 39. `realpathSync` handles the /tmp → /private/tmp symlink exactly as
+      // it already handled /var/folders → /private/var/folders (see the trust seed below).
+      daemonHome = await mkdtemp('/tmp/pyry-daemon-')
       const workdir = join(daemonHome, 'work')
       await mkdir(workdir, { recursive: true, mode: 0o700 })
       // #1283 — where the SEEDED conversation lives, which is `workdir` itself unless a spec moved it.
@@ -358,17 +380,19 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         PYRY_MOBILE_V2: '1'
       }
 
-      // Pair BEFORE the daemon starts (mints the bearer token + responder static pubkey, writes the
-      // registry the daemon loads at startup). `-pyry-name=test` → registry dir <home>/.pyry/test/.
-      const pairStdout = await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions)
-      const pairFields = decodePairFields(pairStdout)
-
-      // Seed the binding BEFORE spawn (the registry loads once at startup, no reload): bind 'default' →
-      // the bootstrap pool session so router.Route('default') resolves and the reply stream binds.
+      // Seed the binding BEFORE spawn — and it must stay before spawn for a reason that is now DIFFERENT
+      // from the mint's (#1413): the registry is read once at daemon startup with no reload, whereas the
+      // device mint lands in the RUNNING daemon's own state and so must come after. Binds the seeded
+      // conversation to the bootstrap pool session, so the router resolves it and the reply stream binds.
       await seedRegistry(daemonHome, seedCwd, seedPromoted)
 
-      socketDir = await mkdtemp('/tmp/pyry-sock-')
-      const socketPath = join(socketDir, 'pyry.sock')
+      // Where the daemon's control socket lands. NOT passed as `-pyry-socket`: the daemon derives this
+      // path from `-pyry-name`, and `pyry pair` derives its dial path from the same flag in the same
+      // binary, so listen and dial agree structurally instead of by an equality this fixture asserts
+      // between its own `join` and the daemon's resolver. The value is computed here for ONE purpose —
+      // the readiness dial below — so a future change to the daemon's naming convention reddens as a loud
+      // `waitForDaemonReady` timeout rather than as a silent mint against a socket nothing listens on.
+      const socketPath = join(daemonHome, '.pyry', `${DAEMON_INSTANCE_NAME}.sock`)
 
       // What `-pyry-claude` points at. Claude-spawning mode: the resolved real `claude` (narrowed here,
       // its sole consumer — no `!`). Claude-less mode (#439): a harness-owned no-op executable written
@@ -390,8 +414,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       }
 
       const args = [
-        `-pyry-socket=${socketPath}`,
-        '-pyry-name=test',
+        // No `-pyry-socket` (#1413): see socketPath above — the name alone decides where it listens.
+        `-pyry-name=${DAEMON_INSTANCE_NAME}`,
         `-pyry-claude=${claudeArg}`,
         '-pyry-idle-timeout=0',
         `-pyry-workdir=${workdir}`,
@@ -432,10 +456,22 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
       await waitForDaemonReady(child, socketPath)
 
+      // Mint the device credential FROM THE RUNNING DAEMON (#1413). Upstream pyrycode#2393 turned bare
+      // `pyry pair` into a running-service operation: it resolves the service named by `-pyry-name`, dials
+      // that service's control socket, and the live daemon mints. Before this it ran ahead of `spawn` and
+      // aborted the whole tier in setup with `connect: no such file or directory`. It does NOT need the
+      // relay leg up — probed 2026-09-13, the mint succeeded while the daemon was still failing to dial a
+      // deliberately dead relay URL — so `waitForDaemonReady` (the control socket) is the right gate.
+      //
+      // A mint failure here leaves a live daemon, which the `finally` below reaps on this path exactly as
+      // it does on every other: `cleanup` was registered before the `try` and `child` is already assigned.
+      const pairStdout = await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions)
+      const pairFields = decodePairFields(pairStdout)
+
       // --- Capability gating (#933): the ONE skip that necessarily lands AFTER resource creation.
       // Every skip above fires before anything is created, so a skip can never leak a resource. This
       // one cannot: reading what the daemon SUPPORTS requires the daemon to be running. It is safe
-      // anyway — the `finally` below reaps the process group and both temp dirs on every exit path,
+      // anyway — the `finally` below reaps the process group and the temp HOME on every exit path,
       // skip included — but the ordering is the exception to this file's rule, so it is stated here
       // rather than left to be rediscovered.
       //
@@ -563,9 +599,15 @@ function resolvePyryBin(): string | null {
 }
 
 /**
- * Run `pyry pair` under the isolated HOME + cred env and resolve its stdout. `pyry pair` is offline (no
- * control socket). Rejects on non-zero exit / launch failure / timeout — NEVER echoing stdout, which
- * carries the pairing token; only the (content-free, #62) stderr is surfaced.
+ * Run `pyry pair` under the isolated HOME + cred env and resolve its stdout. Since upstream pyrycode#2393
+ * this is a RUNNING-SERVICE operation, not an offline one: `-pyry-name` selects the service, the command
+ * dials that service's control socket at `$HOME/.pyry/<name>.sock`, and the live daemon mints — so the
+ * caller must have spawned the daemon and awaited its readiness first (#1413).
+ *
+ * Rejects on non-zero exit / launch failure / timeout — NEVER echoing stdout, which carries the pairing
+ * token; only the (content-free, #62) stderr is surfaced. That rule is unchanged by the reorder: probed
+ * 2026-09-13, a successful mint writes the payload to stdout and leaves stderr empty, and a failing one
+ * writes only the service name and socket path there.
  */
 function runPyryPair(
   pyryBin: string,
@@ -573,7 +615,7 @@ function runPyryPair(
   allowRemotePermissions: boolean
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const pairArgs = ['pair', '-pyry-name=test', '--name=realclaude-e2e']
+    const pairArgs = ['pair', `-pyry-name=${DAEMON_INSTANCE_NAME}`, '--name=realclaude-e2e']
     // #483/T9 — grant this device the remote-permission answer capability (default OFF, per #702).
     if (allowRemotePermissions) pairArgs.push('--allow-remote-permissions')
     const child = spawn(pyryBin, pairArgs, { env })
@@ -656,7 +698,13 @@ async function seedRegistry(
   cwd: string,
   isPromoted: boolean
 ): Promise<void> {
-  const regDir = join(daemonHome, '.pyry', 'test')
+  const regDir = join(daemonHome, '.pyry', DAEMON_INSTANCE_NAME)
+  // `mode: 0o700` is LOAD-BEARING, not hygiene (#1413). The daemon refuses to start on a key directory
+  // laxer than 0700 — `keys: … insecure key directory mode`, raised at relay start before it ever binds
+  // its socket. This used to be incidental because the offline `pyry pair` created the directory first;
+  // now this call runs before the daemon, so it is what satisfies the check. Probed by hand 2026-09-13:
+  // the same spawn under a 0755 registry dir dies at startup. `recursive: true` applies the mode to
+  // `.pyry` as well as to `.pyry/<name>`.
   await mkdir(regDir, { recursive: true, mode: 0o700 })
 
   const sessionsJson =

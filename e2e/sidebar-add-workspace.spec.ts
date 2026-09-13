@@ -3,6 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import { MAX_PLAINTEXT_BYTES } from '../src/shared/wire/types'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import type { ConversationSummary, RenameWorkspacePayload } from '../src/shared/wire/types'
 
 // Mounted creation lifecycle, using real Noise/IPC and request-driven conversation list replies.
 
@@ -46,7 +47,7 @@ test('the host row’s plus starts a chat in a typed folder, and the workspace a
   const hostLabel = hostRows.first().locator('.channel-list__host-label')
   const plus = page.locator('.channel-list__host-add')
   const dialog = page.locator('.add-workspace-overlay .modal')
-  const pathField = page.locator('.add-workspace__input')
+  const pathField = page.locator('.add-workspace__input:not(.add-workspace__name)')
   const start = page.locator('.add-workspace-overlay .modal__action--confirm')
   const cancel = page.locator('.add-workspace-overlay .modal__action--cancel')
   const workspaceLabels = page.locator('.channel-list__workspace-label')
@@ -138,7 +139,7 @@ test('a refused create leaves the dialog open with the failure line and draws no
   const hostLabel = page.locator('.channel-list__host').first().locator('.channel-list__host-label')
   const plus = page.locator('.channel-list__host-add')
   const dialog = page.locator('.add-workspace-overlay .modal')
-  const pathField = page.locator('.add-workspace__input')
+  const pathField = page.locator('.add-workspace__input:not(.add-workspace__name)')
   const start = page.locator('.add-workspace-overlay .modal__action--confirm')
   const error = page.locator('.add-workspace__error')
   const workspaceLabels = page.locator('.channel-list__workspace-label')
@@ -214,7 +215,7 @@ async function openWorkspace(app: PairedApp): Promise<void> {
   const host = app.page.locator('.channel-list__host').first()
   await host.hover()
   await host.locator('.channel-list__host-add').click()
-  await app.page.locator('.add-workspace__input').fill(NEW_FOLDER)
+  await app.page.locator('.add-workspace__input:not(.add-workspace__name)').fill(NEW_FOLDER)
 }
 
 async function freezeTime(app: PairedApp): Promise<void> {
@@ -224,6 +225,186 @@ async function freezeTime(app: PairedApp): Promise<void> {
 
 const TIMEOUT_COPY = 'Could not confirm completion within 30 seconds. The chat may still appear.'
 const OFFLINE_COPY = 'Connect this host before starting a chat'
+
+function controlledNames(conversations?: ConversationSummary[], confirmed = NEW_FOLDER) {
+  const state = conversationStateFake({ conversations })
+  const creates: unknown[] = []
+  const renames: Uint8Array[] = []
+  let holdCreate = false
+  let created: Uint8Array[] = []
+  return {
+    creates, renames,
+    holdCreate() { holdCreate = true },
+    reply(bytes: Uint8Array): Uint8Array[] {
+      const request = decodeEnvelope(bytes)
+      if (request.type === 'rename_workspace') { renames.push(bytes); return [] }
+      if (request.type !== 'create_conversation') return state(bytes)
+      creates.push(request.payload)
+      // Model the daemon resolving a different actual folder, including in its stored list.
+      const payload = request.payload as { cwd: string; name: null; is_promoted: boolean }
+      created = state(encodeEnvelope({ ...request, payload: { ...payload, cwd: confirmed } }))
+      return holdCreate ? [] : created
+    },
+    releaseCreate(app: PairedApp) { created.forEach(frame => app.daemon.pushFrame(frame)) },
+    confirm(app: PairedApp, index = renames.length - 1) {
+      state(renames[index]).forEach(frame => app.daemon.pushFrame(frame))
+    },
+    reject(app: PairedApp) {
+      app.daemon.pushFrame(encodeEnvelope({ id: 90, type: 'error', ts: '2026-09-13T00:00:00Z',
+        in_reply_to: decodeEnvelope(renames[renames.length - 1]).id,
+        payload: { code: 'server.rejected', message: 'private daemon detail', retryable: false } }))
+    }
+  }
+}
+
+const nameField = '.add-workspace__name'
+const folderField = '.add-workspace__input:not(.add-workspace__name)'
+const confirmButton = '.add-workspace-overlay .modal__action--confirm'
+const namingFailure = 'The chat was created. Could not save the workspace name. Edit it and retry, or leave it blank to finish.'
+
+test('optional name uses the confirmed folder and refreshes only its host, even for an explicit fallback', async ({ launchPairedApp }) => {
+  const confirmed = '/remote/actual/ledger-service'
+  const first = controlledNames(undefined, confirmed)
+  const second = conversationStateFake({ conversations: [{ ...SECOND_SEEDED_ROW, cwd: confirmed, workspace_label: 'Other host' }] })
+  const app = await launchPairedApp({ buildReplyFrames: first.reply }, { secondServer: { buildReplyFrames: second } })
+  await openWorkspace(app)
+  const { page } = app
+  await page.locator(nameField).fill('  ' + NEW_FOLDER_LABEL + '  ')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => first.renames.length).toBe(1)
+  expect(first.creates).toEqual([{ cwd: NEW_FOLDER, name: null, is_promoted: false }])
+  expect(decodeEnvelope(first.renames[0]).payload).toEqual({ path: confirmed, label: NEW_FOLDER_LABEL })
+  await expect(page.locator(nameField)).toBeDisabled()
+  await expect(page.locator(folderField)).toBeDisabled()
+  await expect(page.locator('output')).toHaveText(confirmed)
+  await page.locator(confirmButton).evaluate((button: HTMLButtonElement) => { button.click(); button.click() })
+  first.releaseCreate(app)
+  await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
+  expect(first.creates).toHaveLength(1)
+  expect(first.renames).toHaveLength(1)
+  first.confirm(app)
+  await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: NEW_FOLDER_LABEL })).toHaveCount(1)
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Other host' })).toHaveCount(1)
+})
+
+test('blank names preserve existing shared labels and the UTF-16 boundary gates submission', async ({ launchPairedApp }) => {
+  const fake = controlledNames([{ ...SECOND_SEEDED_ROW, id: 'only-seed', cwd: NEW_FOLDER, workspace_label: 'Existing shared name' }])
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  const { page } = app
+  for (const blank of ['', '   ']) {
+    await openWorkspace(app)
+    await expect(page.locator(nameField)).toHaveValue('')
+    await page.locator(nameField).fill('😀'.repeat(64) + 'x')
+    await expect(page.locator(confirmButton)).toBeDisabled()
+    await page.locator(nameField).fill('  ' + '😀'.repeat(64) + '  ')
+    await expect(page.locator(confirmButton)).toBeEnabled()
+    await page.locator(nameField).fill(blank)
+    await page.locator(confirmButton).click()
+    await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+    await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Existing shared name' })).toHaveCount(1)
+  }
+  expect(fake.creates).toHaveLength(2)
+  expect(fake.renames).toHaveLength(0)
+})
+
+test('rejection and deadline allow naming-only retry and isolate foreign, unsolicited and stale results', async ({ launchPairedApp }) => {
+  const fake = controlledNames()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  await app.app.evaluate(({ ipcMain }) => {
+    const attempts: string[] = []
+    ;(globalThis as typeof globalThis & { workspaceAttempts: string[] }).workspaceAttempts = attempts
+    ipcMain.on('pyry:command', (_event, command) => {
+      if (command.type === 'renameWorkspace') attempts.push(command.attemptId)
+    })
+  })
+  await freezeTime(app)
+  await openWorkspace(app)
+  const { page } = app
+  await page.locator(nameField).fill('First name')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => fake.renames.length).toBe(1)
+  fake.reject(app)
+  await expect(page.locator('.add-workspace__error')).toHaveText(namingFailure)
+  await expect(page.locator(folderField)).toBeDisabled()
+  await page.locator(nameField).fill('Corrected name')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => fake.renames.length).toBe(2)
+  // An unsolicited update still refreshes rows but cannot finish the form.
+  const payload = decodeEnvelope(fake.renames[1]).payload as RenameWorkspacePayload
+  app.daemon.pushFrame(encodeEnvelope({ id: 91, type: 'workspace_updated', ts: '2026-09-13T00:00:00Z', payload }))
+  const attemptId = await app.app.evaluate(() =>
+    (globalThis as typeof globalThis & { workspaceAttempts: string[] }).workspaceAttempts[1])
+  expect(attemptId).toBeTruthy()
+  for (const serverId of [SECOND_SERVER_ID, undefined, null, '', 42]) {
+    await mainEvent(app, { type: 'workspaceRenameResult', serverId, attemptId, outcome: 'confirmed' })
+  }
+  await mainEvent(app, { type: 'workspaceRenameResult', serverId: FIRST_SERVER_ID, attemptId: 'unrelated', outcome: 'rejected' })
+  fake.confirm(app, 0)
+  fake.releaseCreate(app)
+  await page.clock.runFor(29_999)
+  await expect(page.locator(nameField)).toBeDisabled()
+  await page.clock.runFor(1)
+  await expect(page.locator('.add-workspace__error')).toContainText('Could not confirm the workspace name within 30 seconds')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => fake.renames.length).toBe(3)
+  fake.confirm(app, 1)
+  await expect(page.locator('.channel-list__workspace-label').filter({ hasText: 'Corrected name' })).toHaveCount(1)
+  await expect(page.locator(nameField)).toBeDisabled()
+  fake.confirm(app, 2)
+  await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+  expect(fake.creates).toHaveLength(1)
+  expect(fake.renames).toHaveLength(3)
+})
+
+test('naming connection loss retains the chat and blank finishes without another rename', async ({ launchPairedApp }) => {
+  const fake = controlledNames()
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  await openWorkspace(app)
+  const { page } = app
+  await page.locator(nameField).fill('Name')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => fake.renames.length).toBe(1)
+  await mainEvent(app, { type: 'disconnected', serverId: FIRST_SERVER_ID })
+  await expect(page.locator('.add-workspace__error')).toContainText('Connect this host to retry')
+  await expect(page.locator(confirmButton)).toBeDisabled()
+  await expect(page.locator(folderField)).toBeDisabled()
+  await expect(page.locator(nameField)).toBeEnabled()
+  await page.locator(nameField).fill('  ')
+  await page.locator(confirmButton).click()
+  await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+  await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
+  expect(fake.creates).toHaveLength(1)
+  expect(fake.renames).toHaveLength(1)
+})
+
+for (const phase of ['creating', 'naming'] as const) {
+  for (const exit of ['Cancel', 'Close dialog']) {
+    test(`${exit} during ${phase} removes the naming transition and late waits`, async ({ launchPairedApp }) => {
+      const fake = controlledNames()
+      if (phase === 'creating') fake.holdCreate()
+      const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+      await freezeTime(app)
+      await openWorkspace(app)
+      const { page } = app
+      await page.locator(nameField).fill('Dismissed name')
+      await page.locator(confirmButton).click()
+      await expect.poll(() => fake.creates.length).toBe(1)
+      if (phase === 'naming') await expect.poll(() => fake.renames.length).toBe(1)
+      await page.getByRole('button', { name: exit, exact: true }).click()
+      fake.releaseCreate(app)
+      if (phase === 'naming') fake.confirm(app)
+      await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
+      await page.clock.runFor(30_000)
+      await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+      await openWorkspace(app)
+      await expect(page.locator(nameField)).toHaveValue('')
+      await expect(page.locator('.add-workspace__error')).toHaveCount(0)
+      expect(fake.renames).toHaveLength(phase === 'creating' ? 0 : 1)
+      expect(fake.creates).toHaveLength(1)
+    })
+  }
+}
 
 test('a missing selected-host status withholds entry while another host stays connected', async ({ launchPairedApp }) => {
   const fake = controlledCreates()
@@ -258,7 +439,7 @@ test('connection state gates an open form and loss during submission ends waitin
       error: { code: 'transport', message: 'Connection unavailable', retryable: true } })
     await expect(start).toBeDisabled()
     await expect(page.locator('.channel-list__host').first().locator('.channel-list__host-add')).toHaveCount(0)
-    await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
+    await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toHaveValue(NEW_FOLDER)
     await expect(page.locator('.add-workspace__error')).toHaveText(OFFLINE_COPY)
     await start.evaluate((button: HTMLButtonElement) => button.click())
     expect(fake.count()).toBe(0)
@@ -268,12 +449,12 @@ test('connection state gates an open form and loss during submission ends waitin
   await expect(start).toBeEnabled()
   await start.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); button.click() })
   await expect.poll(fake.count).toBe(1)
-  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toBeDisabled()
   await start.evaluate((button: HTMLButtonElement) => { button.click(); button.click() })
   app.forwarder.dropClientLeg()
   await expect(page.locator('.add-workspace__error')).toHaveText(OFFLINE_COPY)
-  await expect(page.locator('.add-workspace__input')).toBeEnabled()
-  await page.screenshot({ path: '/tmp/builder-1371-disconnected.png' })
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toBeEnabled()
+  await page.screenshot({ path: '/tmp/builder-1372-disconnected.png' })
   await expect(start).toBeEnabled({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await page.clock.runFor(30_000)
   expect(fake.count()).toBe(1)
@@ -291,7 +472,7 @@ test('host-isolated results, uncertain deadline and late success keep the existi
   await freezeTime(app)
   await app.page.setViewportSize({ width: 800, height: 600 })
   await openWorkspace(app)
-  await app.page.screenshot({ path: '/tmp/builder-1371-ready-800.png' })
+  await app.page.screenshot({ path: '/tmp/builder-1372-ready-800.png' })
   const { page } = app
   await page.locator('.add-workspace-overlay .modal__action--confirm').click()
   await expect.poll(fake.count).toBe(1)
@@ -310,18 +491,18 @@ test('host-isolated results, uncertain deadline and late success keep the existi
       last_used_at: '2026-09-12T00:00:00Z', workspace_label: null
     } })
   }
-  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toBeDisabled()
   await expect(page.locator('.add-workspace__error')).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/builder-1371-pending-800.png' })
+  await page.screenshot({ path: '/tmp/builder-1372-pending-800.png' })
   await page.clock.runFor(29_999)
-  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toBeDisabled()
   await page.clock.runFor(1)
   await expect(page.locator('.add-workspace__error')).toHaveText(TIMEOUT_COPY)
-  await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toHaveValue(NEW_FOLDER)
   await expect(page.locator('.add-workspace-overlay .modal__action--confirm')).toBeEnabled()
   await expect(page.locator('.add-workspace-overlay .modal__action--cancel')).toBeEnabled()
   expect(fake.count()).toBe(1)
-  await page.screenshot({ path: '/tmp/builder-1371-timeout-800.png' })
+  await page.screenshot({ path: '/tmp/builder-1372-timeout-800.png' })
   fake.release(app)
   await expect(page.locator('.add-workspace-overlay .modal')).toHaveCount(0)
   await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
@@ -343,12 +524,12 @@ test('server rejection permits an explicit retry whose wait survives the old dea
   await page.clock.runFor(20_000)
   fake.reject(app)
   await expect(page.locator('.add-workspace__error')).toHaveText(ERROR_COPY)
-  await expect(page.locator('.add-workspace__input')).toHaveValue(NEW_FOLDER)
-  await page.screenshot({ path: '/tmp/builder-1371-rejection.png' })
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toHaveValue(NEW_FOLDER)
+  await page.screenshot({ path: '/tmp/builder-1372-rejection.png' })
   await page.locator('.add-workspace-overlay .modal__action--confirm').click()
   await expect.poll(fake.count).toBe(2)
   await page.clock.runFor(10_000)
-  await expect(page.locator('.add-workspace__input')).toBeDisabled()
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toBeDisabled()
   await expect(page.locator('.add-workspace__error')).toHaveCount(0)
   fake.release(app)
   await expect(page.locator('.add-workspace-overlay .modal')).toHaveCount(0)
@@ -363,12 +544,12 @@ test('local build failure ends busy immediately and pending cancellation removes
   await openWorkspace(app)
   const { page } = app
   const oversized = '/' + 'p'.repeat(MAX_PLAINTEXT_BYTES)
-  await page.locator('.add-workspace__input').fill(oversized)
+  await page.locator('.add-workspace__input:not(.add-workspace__name)').fill(oversized)
   await page.locator('.add-workspace-overlay .modal__action--confirm').click()
   await expect(page.locator('.add-workspace__error')).toHaveText(ERROR_COPY)
-  await expect(page.locator('.add-workspace__input')).toHaveValue(oversized)
+  await expect(page.locator('.add-workspace__input:not(.add-workspace__name)')).toHaveValue(oversized)
   expect(fake.count()).toBe(0)
-  await page.locator('.add-workspace__input').fill(NEW_FOLDER)
+  await page.locator('.add-workspace__input:not(.add-workspace__name)').fill(NEW_FOLDER)
   await page.locator('.add-workspace-overlay .modal__action--confirm').click()
   await expect.poll(fake.count).toBe(1)
   await expect(page.locator('.add-workspace-overlay .modal__action--cancel')).toBeEnabled()
@@ -417,9 +598,9 @@ test('each host resolves its own greeting base and sends exactly the previewed d
     await row.locator('.channel-list__host-add').click()
     const dialog = page.getByRole('dialog', { name: 'Add workspace' })
     await expect(dialog.locator('.add-workspace__detail').first()).toHaveText('Host:' + label)
-    await expect(dialog.locator('.add-workspace__input')).toBeFocused()
+    await expect(dialog.locator('.add-workspace__input:not(.add-workspace__name)')).toBeFocused()
     await expect(dialog.locator('.add-workspace__preview')).toBeEmpty()
-    await dialog.getByRole('textbox').fill('  my-project  ')
+    await dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' }).fill('  my-project  ')
     const destination = base + '/my-project'
     await expect(dialog.locator('output')).toHaveText(destination)
     await dialog.getByRole('button', { name: 'OK', exact: true }).click()
@@ -438,11 +619,11 @@ test('shared modal keeps keyboard exits and scrolling reachable at normal and sh
   await plus.focus()
   await page.keyboard.press('Enter')
   const dialog = page.getByRole('dialog', { name: 'Add workspace' })
-  await expect(dialog.getByRole('textbox')).toBeFocused()
-  await dialog.getByRole('textbox').fill('my-project')
+  await expect(dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' })).toBeFocused()
+  await dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' }).fill('my-project')
   await expect(dialog.locator('output')).toHaveText('/home/pyry/pyry-workspace/my-project')
   await expect(dialog.locator('.modal__close img')).toHaveJSProperty('naturalWidth', 28)
-  await page.screenshot({ path: '/tmp/builder-1371-normal-1280x800.png' })
+  await page.screenshot({ path: '/tmp/builder-1372-normal-1280x800.png' })
   await page.keyboard.press('Escape')
   await expect(dialog).toBeVisible()
   await page.locator('.add-workspace-overlay__scrim').click({ position: { x: 5, y: 5 } })
@@ -454,17 +635,17 @@ test('shared modal keeps keyboard exits and scrolling reachable at normal and sh
 
   await plus.focus()
   await page.keyboard.press('Enter')
-  await expect(dialog.getByRole('textbox')).toHaveValue('')
-  await dialog.getByRole('textbox').fill('parent/' + 'nested-project-'.repeat(12))
+  await expect(dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' })).toHaveValue('')
+  await dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' }).fill('parent/' + 'nested-project-'.repeat(12))
   await page.setViewportSize({ width: 800, height: 240 })
   await expect(dialog.locator('output')).toContainText('/home/pyry/pyry-workspace/parent/')
-  await page.screenshot({ path: '/tmp/builder-1371-short-800x240.png' })
+  await page.screenshot({ path: '/tmp/builder-1372-short-800x240.png' })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   const ok = dialog.getByRole('button', { name: 'OK', exact: true })
   await ok.focus()
   await page.keyboard.press('Enter')
   await expect.poll(fake.count).toBe(1)
-  await expect(dialog.getByRole('textbox')).toBeDisabled()
+  await expect(dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' })).toBeDisabled()
   const close = dialog.getByRole('button', { name: 'Close dialog' })
   await close.focus()
   await page.keyboard.press('Enter')
@@ -473,9 +654,45 @@ test('shared modal keeps keyboard exits and scrolling reachable at normal and sh
   fake.release(app)
   await plus.focus()
   await page.keyboard.press('Enter')
-  await expect(dialog.getByRole('textbox')).toHaveValue('')
+  await expect(dialog.getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' })).toHaveValue('')
   await expect(dialog.locator('.add-workspace__error')).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   expect(fake.count()).toBe(1)
+})
+
+test('a local rename build failure leaves the created chat usable and retries naming only', async ({ launchPairedApp }) => {
+  const confirmed = '/' + 'p'.repeat(MAX_PLAINTEXT_BYTES - 800)
+  const fake = controlledNames(undefined, confirmed)
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  await openWorkspace(app)
+  const { page } = app
+  // JSON escaping makes this valid 128-code-unit name exceed the wire cap beside the long cwd.
+  await page.locator(nameField).fill('\u0001'.repeat(128))
+  await page.locator(confirmButton).click()
+  await expect(page.locator('.add-workspace__error')).toHaveText(namingFailure)
+  await expect(page.locator(OPEN_ROW)).toHaveText(UNTITLED)
+  await expect(page.locator(folderField)).toBeDisabled()
+  expect(fake.creates).toHaveLength(1)
+  expect(fake.renames).toHaveLength(0)
+  await page.locator(nameField).fill('Short name')
+  await page.locator(confirmButton).click()
+  await expect.poll(() => fake.renames.length).toBe(1)
+  expect(decodeEnvelope(fake.renames[0]).payload).toEqual({ path: confirmed, label: 'Short name' })
+  fake.confirm(app)
+  await expect(page.locator('.add-workspace-overlay')).toHaveCount(0)
+  expect(fake.creates).toHaveLength(1)
+})
+
+test('an unavailable rename route rejects the identified attempt with its selected-host stamp', async ({ launchPairedApp }) => {
+  const { page } = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const result = await page.evaluate(() => new Promise(resolve => {
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'workspaceRenameResult') { off(); resolve(event) }
+    })
+    window.pyry.sendCommand({ type: 'renameWorkspace', serverId: 'missing-host', attemptId: 'missing-route',
+      payload: { path: '/remote', label: 'Name' } })
+  }))
+  expect(result).toEqual({ type: 'workspaceRenameResult', serverId: 'missing-host',
+    attemptId: 'missing-route', outcome: 'rejected' })
 })

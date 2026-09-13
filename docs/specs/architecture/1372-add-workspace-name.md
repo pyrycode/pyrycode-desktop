@@ -127,3 +127,14 @@ implemented for this consumer.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+2026-09-13 — Implementation retained the planned contract. Existing input styles and
+the stateful conversation fake already supply the presentation and authoritative
+rename refresh, so neither needs modification. The existing
+`e2e/host-conversation-list.spec.ts` folder selector now uses its accessible label
+to distinguish it from the added name input. A blank name after creation can finish
+even while disconnected, since that action sends no command. The focused browser
+suite also proves a local rename build failure using a long confirmed remote folder
+and a valid name whose JSON escaping exceeds the wire cap; retry sends only a rename.

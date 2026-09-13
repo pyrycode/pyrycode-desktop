@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { createSecureStore, type SecretEncryption, type SecretPersistence } from './secureStore'
 import { fileSecretPersistence } from './fileSecretPersistence'
 import { createChatHistoryStore } from './chatHistoryStore'
+import { createChatHistoryHandler } from './chatHistoryHandler'
 import { createDiagnosticLog } from './diagnosticLog'
 
 const roots: string[] = []
@@ -31,6 +32,52 @@ async function setup() {
 }
 
 describe('protected chat history storage', () => {
+  it('explicit removal follows held writes, removes omitted timelines and cannot be undone by queued old saves', async () => {
+    const h = await setup()
+    const paired = new Set(['a', 'b'])
+    const handler = createChatHistoryHandler({ store: h.store, log: { event: () => {} }, pairedServers: {
+      loadById: async server => paired.has(server) ? { server, relay: '', token: '', server_static_pubkey: '' } : null
+    } })
+    for (const snapshot of [list(), timeline(), timeline('a', 'omitted'), list('b'), timeline('b')]) {
+      expect(await handler(null, replace(snapshot))).toEqual({ status: 'ok' })
+    }
+    await handler(null, replace(list('a', [])))
+    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'omitted' }))
+      .toMatchObject({ status: 'stored' })
+    let release = () => {}
+    let started = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const writing = new Promise<void>(resolve => { started = resolve })
+    h.persistence.write = async (name, bytes) => { started(); await held; await h.disk.write(name, bytes) }
+    const oldWrite = handler(null, replace(timeline('a', 'chat', 'held old text')))
+    await writing
+    let cleared = false
+    const removing = handler.clearServer('a', async id => {
+      cleared = true
+      paired.delete(id)
+      return { matched: true, remaining: 1 }
+    })
+    const stale = handler(null, replace(timeline('a', 'chat', 'queued old text')))
+    expect(cleared).toBe(false)
+    release()
+    expect(await oldWrite).toEqual({ status: 'ok' })
+    await removing
+    paired.add('a')
+    expect(await stale).toEqual({ status: 'error', code: 'unknown-host' })
+    for (const request of [{ operation: 'readList', serverId: 'a' },
+      { operation: 'readTimeline', serverId: 'a', conversationId: 'chat' },
+      { operation: 'readTimeline', serverId: 'a', conversationId: 'omitted' }]) {
+      expect(await h.fresh().execute(request)).toEqual({ status: 'missing' })
+    }
+    expect(await h.fresh().execute({ operation: 'readList', serverId: 'b' }))
+      .toEqual({ status: 'stored', snapshot: list('b') })
+    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'b', conversationId: 'chat' }))
+      .toEqual({ status: 'stored', snapshot: timeline('b') })
+    expect(await handler(null, replace(timeline('a', 'chat', 'fresh receipt')))).toEqual({ status: 'ok' })
+    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' }))
+      .toEqual({ status: 'stored', snapshot: timeline('a', 'chat', 'fresh receipt') })
+  })
+
   it('round-trips fresh-instance lists and partial timelines, separates hosts and keeps credentials', async () => {
     const h = await setup()
     await h.secureStore.set('paired-server', new TextEncoder().encode('credential'))

@@ -1,8 +1,8 @@
 // The per-server unpair interaction's decision logic (#1162) — framework-free and React-free,
 // co-located with the Settings screen and mirroring `unpairAction.ts` / `composerSend.ts`: the
-// effects are injected so the helper is a pure, deterministic function tested with plain spies (no
-// React, no store, no Electron). `ServerRowControl` is thin glue over this — the per-row confirm
-// phase is screen-local useState, but the erase→refresh→maybe-route branching lives here where a
+// effects are injected, with a renderer-local history lifecycle notification around the invoke.
+// It is tested with plain spies (no React or Electron). The per-row confirm phase stays in
+// `ServerRowControl`'s local state, but the erase→refresh→maybe-route branching lives here where a
 // server-render test can't drive an async click.
 //
 // A SIBLING of `runUnpair`, deliberately not a widened version of it. `runUnpair`'s error arm
@@ -18,9 +18,10 @@
 // dep shape first.
 import type { UnpairResult } from '@shared/ipc/unpair'
 import type { ServerInfoValue } from '../../store/serverInfoStore'
+import { beginChatHistoryRemoval } from '../../store/chatHistoryRemoval'
 
 /**
- * The three effects runUnpairServer performs, injected to keep it pure:
+ * The injected UI effects, in addition to the renderer-local history removal lifecycle:
  *  - `unpairServer`         — window.pyry.unpairServer in the container: erases exactly the named
  *                             record in main, through the per-server channel #1149 shipped.
  *  - `refreshServers`       — re-read the paired collection and write the server-info store,
@@ -92,14 +93,17 @@ export async function runUnpairServer(
   deps: UnpairServerDeps,
   serverId: string
 ): Promise<'ok' | 'error'> {
+  const settleHistory = beginChatHistoryRemoval(serverId)
   let result: UnpairResult
   try {
     result = await deps.unpairServer(serverId)
   } catch {
+    settleHistory(false)
     // A rejected invoke never reaches the window: coerce to the same error outcome as result:error.
     return 'error'
   }
 
+  settleHistory(result.result === 'ok')
   if (result.result !== 'ok') return 'error'
 
   const remaining = await deps.refreshServers()

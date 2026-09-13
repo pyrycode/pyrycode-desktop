@@ -74,3 +74,7 @@ None.
 
 **Reviewer:** builder self-review using `builder/security-review.md`.
 **Date:** 2026-09-13
+
+## Revisions
+
+- During implementation, shutdown testing showed that a paused writer could acknowledge close before a failed unpair resumed its buffered snapshots. `stop` now unsubscribes, waits for already-started removal settlements, then flushes; settlement cannot schedule a new timer after stop. A held-removal test proves both success and failure. The coordinator exposes two functions (subscribe and begin), within the export budget.

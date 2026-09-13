@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { runUnpairServer, type UnpairServerDeps } from './unpairServerAction'
 import type { UnpairResult } from '@shared/ipc/unpair'
 import type { ServerInfoValue } from '../../store/serverInfoStore'
+import { subscribeChatHistoryRemoval } from '../../store/chatHistoryRemoval'
 
 // runUnpairServer is a pure, React-free helper (the runUnpair / composerSend precedent): its three
 // effects — the per-server unpair invoke, the server-info refresh, and the App route flip — are
@@ -29,6 +30,25 @@ function deps(
 }
 
 describe('runUnpairServer', () => {
+  it('settles history before refreshing identities and resumes it on every failure', async () => {
+    const order: string[] = []
+    const off = subscribeChatHistoryRemoval(id => {
+      order.push(`begin:${id}`)
+      return removed => { order.push(removed ? 'removed' : 'retained') }
+    })
+    try {
+      const d = deps({ refreshServers: async () => { order.push('refresh'); return [SURVIVOR] } })
+      await runUnpairServer(d, 'host')
+      expect(order).toEqual(['begin:host', 'removed', 'refresh'])
+      order.length = 0
+      d.unpairServer.mockResolvedValueOnce({ result: 'error' })
+      await runUnpairServer(d, 'host')
+      d.unpairServer.mockRejectedValueOnce(new Error('private'))
+      await runUnpairServer(d, 'host')
+      expect(order).toEqual(['begin:host', 'retained', 'begin:host', 'retained'])
+    } finally { off() }
+  })
+
   it('erases exactly the named server, once (AC1)', async () => {
     const d = deps()
 

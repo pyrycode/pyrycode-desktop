@@ -1,6 +1,7 @@
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame, type PairedApp } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ChatHistoryResult } from '../src/shared/chatHistory'
+import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
@@ -9,6 +10,83 @@ const entry = (i: number) => ({ id: i, type: 'message', ts, payload: {
   conversation_id: SEEDED_ROW.id, message_id: `old-${i}`, role: 'user', text: `loaded history ${i}` } })
 const snapshotText = (result: ChatHistoryResult): string => result.status === 'stored' && result.snapshot.kind === 'timeline'
   ? result.snapshot.items.map((i) => 'text' in i ? i.text : '').join('|') : ''
+
+test('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
+  test.setTimeout(90_000)
+  const commands: string[] = []
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    commands.push(env.type)
+    return env.type === 'list_conversations' ? [seedConversationsFrame()] : []
+  } }, { secondServer: { buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : [] } })
+  const serverId = first.servers[0].serverId
+  const otherId = first.servers[1].serverId
+  const read = (page: PairedApp['page'], host = serverId, conversationId = SEEDED_ROW.id) =>
+    page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
+      { serverId: host, conversationId })
+  const freshCode = () => Buffer.from(JSON.stringify({ server: serverId,
+    relay: `${first.forwarder.url}/v1/client`, token: 'synthetic-repair-token',
+    server_static_pubkey: Buffer.from(first.daemon.staticPublicKey).toString('base64') })).toString('base64url')
+  await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'before-forget', seq: 0, text: 'saved before removal' }))
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: 'omitted-chat', turn_id: 'omitted', seq: 0, text: 'unlisted saved timeline' }))
+  await expect.poll(async () => snapshotText(await read(first.page))).toBe('saved before removal')
+  await expect.poll(async () => snapshotText(await read(first.page, serverId, 'omitted-chat'))).toBe('unlisted saved timeline')
+  const saved = await read(first.page)
+  if (saved.status !== 'stored' || saved.snapshot.kind !== 'timeline') throw new Error('Expected saved timeline')
+  expect(await first.page.evaluate(({ serverId, snapshot }) => window.pyry.chatHistory({ operation: 'replaceTimeline',
+    serverId, conversationId: snapshot.conversationId, snapshot: { ...snapshot, serverId } }),
+  { serverId: otherId, snapshot: saved.snapshot })).toEqual({ status: 'ok' })
+
+  first.forwarder.closeClientLeg(4401)
+  await first.page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+  await first.page.locator('[aria-label="Pairing code"]').fill(freshCode())
+  await first.page.getByRole('button', { name: 'Pair', exact: true }).click()
+  await expect(first.page.getByRole('group', { name: 'Server key fingerprint', exact: true })).toBeVisible()
+  await first.page.getByRole('button', { name: 'Pair', exact: true }).click()
+  await expect(first.page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
+  expect(await read(first.page)).toEqual(saved)
+  expect(await read(first.page, serverId, 'omitted-chat')).toMatchObject({ status: 'stored' })
+  expect(commands).not.toContain('request_history')
+  await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('saved before removal')
+
+  await first.page.clock.install({ time: new Date('2026-09-13T00:00:00Z') })
+  await first.page.clock.pauseAt(new Date('2026-09-13T00:00:01Z'))
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'before-forget', seq: 1, text: ' buffered stale tail' }))
+  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('buffered stale tail')
+  expect(await read(first.page)).toEqual(saved)
+  await first.page.getByRole('button', { name: 'Settings', exact: true }).click()
+  const row = first.page.locator('.settings__server-row').filter({ has: first.page.locator('.settings__server-row-id', { hasText: new RegExp(`^${serverId}$`) }) })
+  await row.getByRole('button', { name: 'Unpair', exact: true }).click()
+  await row.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await expect(first.page.locator('.settings__server-row-id')).toHaveText([otherId])
+  await first.page.clock.runFor(500)
+  expect(await read(first.page)).toEqual({ status: 'error', code: 'unknown-host' })
+  expect(snapshotText(await read(first.page, otherId))).toBe('saved before removal')
+  await first.app.close()
+
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await pairAnotherServerFromSettings(second.page, freshCode())
+  await expect(second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true })).toBeVisible()
+  expect(await read(second.page)).toEqual({ status: 'missing' })
+  expect(await read(second.page, serverId, 'omitted-chat')).toEqual({ status: 'missing' })
+  expect(snapshotText(await read(second.page, otherId))).toBe('saved before removal')
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'after-forget', seq: 0, text: 'fresh after re-pair' }))
+  await expect.poll(async () => snapshotText(await read(second.page))).toBe('fresh after re-pair')
+  expect(commands).not.toContain('request_history')
+  await second.app.close()
+  const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  expect(snapshotText(await read(third.page))).toBe('fresh after re-pair')
+  expect(await read(third.page, serverId, 'omitted-chat')).toEqual({ status: 'missing' })
+  expect(snapshotText(await read(third.page, otherId))).toBe('saved before removal')
+})
 
 async function observeCommands(app: PairedApp) {
   const cdp = await app.page.context().newCDPSession(app.page)

@@ -572,7 +572,8 @@ app.whenReady().then(() => {
   // once nothing remained, which was the best a single un-keyed slot allowed. Still erase-only:
   // `clearFor` carries no read, so no label text is materialised in that module either.
   const unregisterUnpairServer = registerUnpairServerHandler(ipcMain, {
-    store: pairedServerStore,
+    store: { clearServer: serverId => historyHandler.clearServer(serverId,
+      id => pairedServerStore.clearServer(id)) },
     onUnpaired: () => registry.reconcile(),
     hostLabel: hostLabelStore
   })

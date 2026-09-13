@@ -125,7 +125,8 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
   await page.locator('.channel-list__row-open').filter({ hasText: 'Server two chat' }).click()
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
-  await expect(page.locator('.conversation__banner')).toHaveCount(0)
+  // Local-storage copy is expected; another host's failure must add no connection warning.
+  await expect(page.locator('.conversation__banner')).toHaveText(['No messages are saved on this device.'])
   await page.getByPlaceholder('Message…').fill('Hello healthy host')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')

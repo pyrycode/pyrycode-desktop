@@ -16,6 +16,36 @@ const deferred = () => {
 }
 
 describe('local timeline admission', () => {
+  it('retains host-stamped local echoes on reopen without admitting them to another host', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchLocalEcho('a', 'chat', {
+      type: 'userText', text: 'composed here', messageId: 'local'
+    })
+    const held = store.getState().timelines.get('chat')
+    expect(held?.serverId).toBe('a')
+    expect(store.getState().beginLocalTimelineRead('a', 'chat')).toBeNull()
+    expect(store.getState().timelines.get('chat')).toBe(held)
+    const other = store.getState().beginLocalTimelineRead('b', 'chat')!
+    expect(store.getState().timelines.get('chat')?.timeline.items).toEqual([])
+    other.complete(snapshot('b'))
+    expect(store.getState().timelines.get('chat')?.timeline.items).toEqual(snapshot('b').items)
+  })
+
+  it('local echoes replace a differently owned slice and invalidate a pending local read', () => {
+    const store = createConversationTimelineStore()
+    store.getState().beginLocalTimelineRead('b', 'chat')!.complete(snapshot('b'))
+    store.getState().dispatchLocalEcho('a', 'chat', {
+      type: 'userText', text: 'own echo', messageId: 'local'
+    })
+    expect(store.getState().timelines.get('chat')?.timeline.items).toMatchObject([{ text: 'own echo' }])
+    const pending = store.getState().beginLocalTimelineRead('b', 'chat')!
+    store.getState().dispatchLocalEcho('b', 'chat', {
+      type: 'userText', text: 'newer echo', messageId: 'new'
+    })
+    pending.complete(snapshot('b'))
+    expect(store.getState().timelines.get('chat')?.timeline.items).toMatchObject([{ text: 'newer echo' }])
+  })
+
   it('installs only durable rows, preserving order, coverage and row identity metadata', () => {
     const store = createConversationTimelineStore()
     const read = store.getState().beginLocalTimelineRead('a', 'chat')!

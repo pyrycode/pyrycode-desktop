@@ -568,8 +568,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
         localRead.current?.cancel()
         setSavedTimelineTarget(undefined)
         activateConversation(activateDeps, conversation)
-        if ('serverId' in conversation && typeof conversation.serverId === 'string' &&
-          sessionStore.getState().statuses.get(conversation.serverId)?.type !== 'connected') {
+        if ('serverId' in conversation && typeof conversation.serverId === 'string') {
           setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
           localRead.current = readSavedTimeline({
             timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic

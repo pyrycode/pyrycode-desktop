@@ -96,11 +96,14 @@ and explicit repair entry; rejection never navigates away or opens repair automa
 Cancelling manual repair returns to reading with the mounted draft intact. See
 [recovery lifetime](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
 Saved chats also [restore timelines on demand](chat-history.md#received-state-admission-and-ownership)
-while their host is unavailable. The shell retains clicked host/conversation
+whether their host is connected or unavailable. The shell retains clicked host/conversation
 coordinates through metadata refreshes and pending reads through repair-modal
 cancellation. Offline rows keep copying and scrolling without history/configuration
 requests. Saved rendering suppresses cursors and grouped-tool running labels even
-when durable rows are partial.
+when durable rows are partial, including after reconnect. Connected opening and
+reconnect remove offline notices without reviving saved working state; new live
+receipts resume normal rendering. Pending, failed and empty local-read notices can
+still appear while connected because they describe local storage, not connectivity.
 
 Received queue rows remain readable on disconnect with disabled drop controls.
 Pending, failed and restored local slices must not borrow the conversation-id-only

@@ -317,6 +317,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
     fail: () => void
     cancel: () => void
   } | null
+  dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
   markHistoryRequested: (conversationId: string, serverId?: string) => void
@@ -590,6 +591,22 @@ export function createConversationTimelineStore(
         cancel: () => settle(null)
       }
     },
+    dispatchLocalEcho: (serverId, conversationId, event) =>
+      set(s => {
+        const held = s.timelines.get(conversationId)
+        // Only explicitly owned rows can join a local send; never adopt id-only content.
+        const base = held?.serverId === serverId ? held : emptySlice
+        const slice: ConversationSlice = {
+          ...base, serverId, localRead: undefined,
+          timeline: reduceTimeline(base.timeline, event)
+        }
+        if (held === undefined) {
+          return { timelines: withNewSliceAtHead(s.timelines, conversationId, slice) }
+        }
+        const timelines = new Map(s.timelines)
+        timelines.set(conversationId, slice)
+        return { timelines }
+      }),
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
         const held = receivedSlice(s.timelines.get(conversationId))

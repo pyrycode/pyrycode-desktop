@@ -43,6 +43,11 @@ restoration never activates a conversation or dispatches navigation. Teardown
 cancels pending admission handles. See [saved-list restoration and stale-read
 admission](chat-history.md#received-state-admission-and-ownership).
 
+Opening a host-stamped sidebar row invokes saved-timeline restoration regardless of
+connection status. Explicit clicked coordinates survive active metadata refresh;
+reconnect preserves restored rows and their recording ownership. See
+[timeline admission and cancellation](chat-history.md#received-state-admission-and-ownership).
+
 - The paired region now enters at a **list** view — the [Channel List home screen](channel-list.md)
   (two-tier Channels/Chats, [#141](../codebase/141.md); the non-promoted tier read "Recent
   discussions" until the desktop-design relabel, [#709](../codebase/709.md)) — instead of the single

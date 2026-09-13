@@ -269,3 +269,120 @@ test('local list read failures stay beside the saved host', async ({ launchPaire
   await page.setViewportSize({ width: 800, height: 800 })
   await page.screenshot({ path: '/tmp/builder-1387-local-error-800.png', animations: 'disabled' })
 })
+
+test('saved coverage survives offline restart, reconnect, live receipts and connected reopening', async ({ launchPairedApp }) => {
+  test.setTimeout(90_000)
+  let unavailable = false
+  let drop: () => void = () => {}
+  const cursors: unknown[] = []
+  const newPayload = { conversation_id: SEEDED_ROW.id, turn_id: 'after-reconnect', seq: 0, text: 'New same-host reply' }
+  const observe = async (app: PairedApp['app']) => {
+    await app.evaluate(({ ipcMain }) => {
+      ;(globalThis as any).__continuityCommands = []
+      ipcMain.on('pyry:command', (_event, command) => (globalThis as any).__continuityCommands.push(command))
+    })
+  }
+  const count = (app: PairedApp['app']) => app.evaluate(() =>
+    (globalThis as any).__continuityCommands.filter((c: any) => c.type === 'requestHistory').length)
+  const settle = (page: PairedApp['page']) => page.evaluate(() => new Promise<void>(resolve =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const read = (page: PairedApp['page']) => page.evaluate(conversationId => window.pyry.chatHistory({
+    operation: 'readTimeline', serverId: 'fake-daemon', conversationId
+  }), SEEDED_ROW.id)
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (unavailable) { drop(); return [] }
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type !== 'request_history') return []
+    cursors.push(env.payload.cursor)
+    return [frame('history_page', { entries: env.payload.cursor === '' ? [entry(1)] : [
+      { id: 99, type: 'assistant_delta', ts, payload: newPayload }, entry(0)],
+    cursor: env.payload.cursor === '' ? 'saved-cursor' : 'advanced-cursor', at_start: false }, env.id)]
+  } }, { onLaunched: observe })
+  drop = () => first.forwarder.dropClientLeg()
+  await settle(first.page)
+  expect(await count(first.app)).toBe(0)
+  await first.page.locator('.conversation__thread').focus()
+  await first.page.keyboard.press('Home')
+  await expect(first.page.locator('.bubble')).toHaveCount(1)
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'saved-partial', seq: 0, text: 'Restored partial reply' }))
+  await expect.poll(() => read(first.page)).toMatchObject({ status: 'stored', snapshot: {
+    coverage: { status: 'received', cursor: 'saved-cursor', atStart: false } } })
+  await expect.poll(async () => snapshotText(await read(first.page))).toContain('Restored partial reply')
+  await first.app.close()
+  unavailable = true
+
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir, onLaunched: observe })
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await expect(second.page.locator('.bubble')).toHaveCount(2)
+  await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
+  await expect(second.page.getByText('Older messages require a connection.', { exact: true })).toBeVisible()
+  expect(await count(second.app)).toBe(0)
+  unavailable = false
+  await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
+  await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toHaveCount(0)
+  await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
+  await expect(second.page.locator('.bubble')).toHaveCount(2)
+  await settle(second.page)
+  expect(await count(second.app)).toBe(0)
+  await second.page.setViewportSize({ width: 800, height: 800 })
+  await second.page.screenshot({ path: '/tmp/builder-1395-reconnected-800.png', animations: 'disabled' })
+  await first.daemon.pushFrame(frame('assistant_delta', newPayload))
+  await expect(second.page.locator('.bubble')).toHaveCount(3)
+  await expect(second.page.locator('.bubble__cursor')).toHaveCount(1)
+  await expect.poll(async () => snapshotText(await read(second.page))).toContain('New same-host reply')
+  await second.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+  await second.page.locator('.conversation__thread').focus()
+  await second.page.keyboard.press('Home')
+  await expect(second.page.locator('.bubble')).toHaveCount(4)
+  expect(cursors).toEqual(['', 'saved-cursor'])
+  expect(await count(second.app)).toBe(1)
+  await expect.poll(() => read(second.page)).toMatchObject({ status: 'stored', snapshot: {
+    prependedRows: 2, coverage: { status: 'received', cursor: 'advanced-cursor', atStart: false } } })
+  const saved = await read(second.page)
+  expect(snapshotText(saved)).toBe('loaded history 0|loaded history 1|Restored partial reply|New same-host reply')
+  await second.app.close()
+
+  // Hold the actual protected read result, leaving the real writer and all other operations intact.
+  const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir, onLaunched: async app => {
+    await observe(app)
+    await app.evaluate(({ ipcMain }) => {
+      const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+      if (!original) throw new Error('Missing chat history handler')
+      ipcMain.removeHandler('pyry:chat-history')
+      ipcMain.handle('pyry:chat-history', async (event, request) => {
+        const result = await original(event, request)
+        if (request.operation !== 'readTimeline') return result
+        return new Promise(resolve => { (globalThis as any).__releaseContinuityRead = () => resolve(result) })
+      })
+    })
+  } })
+  await expect(third.page.getByRole('img', { name: 'Pyrycode Connected', exact: true }).first()).toBeVisible()
+  await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect.poll(() => third.app.evaluate(() => typeof (globalThis as any).__releaseContinuityRead)).toBe('function')
+  await expect(third.page.getByText('Loading saved messages…', { exact: true })).toBeVisible()
+  await third.page.locator('.conversation__thread').focus()
+  await third.page.keyboard.press('Home')
+  await settle(third.page)
+  expect(await count(third.app)).toBe(0)
+  await third.app.evaluate(() => (globalThis as any).__releaseContinuityRead())
+  await expect(third.page.locator('.bubble')).toHaveCount(4)
+  await expect(third.page.locator('.bubble__cursor')).toHaveCount(0)
+  await expect(third.page.getByText('Offline. Showing saved messages.', { exact: true })).toHaveCount(0)
+  await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(third.page.locator('.bubble')).toHaveCount(4)
+  await settle(third.page)
+  expect(await count(third.app)).toBe(0)
+  expect(await third.page.locator('.bubble').allTextContents()).toEqual([
+    expect.stringContaining('loaded history 0'), expect.stringContaining('loaded history 1'),
+    expect.stringContaining('Restored partial reply'), expect.stringContaining('New same-host reply')])
+  await third.page.setViewportSize({ width: 1280, height: 800 })
+  await third.page.screenshot({ path: '/tmp/builder-1395-connected-1280.png', animations: 'disabled' })
+  await third.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+  await third.page.locator('.conversation__thread').focus()
+  await third.page.keyboard.press('ArrowUp')
+  await expect.poll(() => count(third.app)).toBe(1)
+  expect(cursors).toEqual(['', 'saved-cursor', 'advanced-cursor'])
+})

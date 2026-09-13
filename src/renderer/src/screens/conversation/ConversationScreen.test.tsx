@@ -5207,6 +5207,30 @@ it('disables the held running-turn interrupt when sending is unavailable', () =>
 })
 
 describe('saved timeline notices', () => {
+  it.each([false, true])('isolates saved rows and suppresses partial working state (connected=%s)', connected => {
+    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } } : { type: 'disconnected' })
+    const store = createConversationTimelineStore(undefined, () => 'host')
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
+    try {
+      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
+        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
+        prependedRows: 0, coverage: { status: 'unknown' } })
+      const html = render()
+      expect(html).toContain('Saved partial')
+      expect(html).not.toContain('bubble__cursor')
+      expect(html).not.toContain('aria-label="Assistant working"')
+      expect(html.includes('Offline. Showing saved messages.')).toBe(!connected)
+      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
+      expect(render()).toContain('New live reply')
+      expect(render().includes('bubble__cursor')).toBe(connected)
+      store.getState().beginLocalTimelineRead('other', 'open')!.complete({ version: 1, kind: 'timeline',
+        serverId: 'other', conversationId: 'open', items: [{ kind: 'userText', text: 'Other host secret' }],
+        prependedRows: 0, coverage: { status: 'unknown' } })
+      expect(render()).not.toContain('Other host secret')
+    } finally { held.mockRestore(); reset() }
+  })
+
   it.each([false, true])('keeps held queues readable offline but excludes them from restored slices (restored=%s)', (restored) => {
     const reset = stageOpenConnection({ type: 'disconnected' })
     const store = createConversationTimelineStore(undefined, () => 'a')

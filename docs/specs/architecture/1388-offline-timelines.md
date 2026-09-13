@@ -73,4 +73,6 @@ Pending for the documentation stage: update `docs/knowledge/features/chat-histor
 
 ## Revisions
 
+- 2026-09-13 (verifier rework): `ConversationScreen` retains received queue rows on disconnect with their existing disabled drop controls. Pending, failed and restored local slices cannot borrow the conversation-id-only queue cache. The pairing-recovery reload test waits for B's saved list before reload and uses a newly named A row as its receipt barrier: saved B rows may correctly survive without a status replay. Navigation, rejection and repair assertions remain intact.
+
 - 2026-09-13: `reseededActiveConversation` deliberately projects wire fields, so the saved host cannot rely on an incidental extra field surviving active metadata refresh. `PairedShell` retains the clicked saved coordinates and passes them explicitly to the conversation view; metadata-only refreshes do not cancel reads. Pending results still have no selection write. Saved rendering also suppresses the tail cursor and grouped-tool running labels, which are derived from row shape rather than transient store state.

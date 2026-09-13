@@ -319,6 +319,9 @@ export function ConversationScreen({
     [openConversationId]
   )
   const queuedBacklog = useQueueStore(selectOpenBacklog)
+  // A disconnect retains received queues; a local read cannot borrow the id-only queue cache.
+  const visibleQueued = offline && (ownOfflineSlice === undefined || ownOfflineSlice.localRead !== undefined)
+    ? EMPTY_QUEUED : queuedBacklog
   // #1213: the two timeline writes the queued-row drop needs, so cancelling a message takes its optimistic
   // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
   // through (#756) — the flat store for the open thread, the keyed holder for the conversation it was sent
@@ -421,7 +424,7 @@ export function ConversationScreen({
           daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
           an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
           the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
-      {(!offline || items.length > 0) && <Timeline
+      {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
         scrollPin={scrollPin}
@@ -429,7 +432,7 @@ export function ConversationScreen({
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
         firstRowKey={-prependedRows}
-        queued={offline ? EMPTY_QUEUED : queuedBacklog}
+        queued={visibleQueued}
         olderSaved={olderSaved}
         saved={offline}
         onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {

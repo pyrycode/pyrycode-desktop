@@ -66,6 +66,7 @@ import { conversationListStore } from '../../store/conversationListStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
+import { queueStore } from '../../store/queueStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -5205,6 +5206,24 @@ it('disables the held running-turn interrupt when sending is unavailable', () =>
 })
 
 describe('saved timeline notices', () => {
+  it.each([false, true])('keeps held queues readable offline but excludes them from restored slices (restored=%s)', (restored) => {
+    const reset = stageOpenConnection({ type: 'disconnected' })
+    const store = createConversationTimelineStore(undefined, () => 'a')
+    if (restored) {
+      store.getState().beginLocalTimelineRead('a', 'open')!.complete(null)
+    } else {
+      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'Held reply' })
+    }
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const queue = vi.spyOn(queueStore, 'getInitialState').mockReturnValue({
+      ...queueStore.getInitialState(), backlogs: new Map([['open', [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13' }]]])
+    })
+    try {
+      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
+      expect(html.includes('Held queued work')).toBe(!restored)
+      if (!restored) expect(html).toMatch(/class="queued-row__drop"[^>]*disabled=""/)
+    } finally { queue.mockRestore(); held.mockRestore(); reset() }
+  })
   it('keeps explicit saved coordinates after metadata reseeding and rejects another host held under the same id', () => {
     const reset = stageOpenConnection({ type: 'disconnected' })
     const store = createConversationTimelineStore()

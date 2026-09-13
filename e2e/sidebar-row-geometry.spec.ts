@@ -407,7 +407,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // proves the same thing — and neither is hovered first, which is the same unedited-spec path AC4
   // promises the nine shipped callers. ---
   await save.first().click()
-  await expect(page.locator('.save-as-channel-overlay')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Save as channel', exact: true })).toBeVisible()
 })
 
 test('a Channels row holds the Rename control inside the same 24px row', async ({

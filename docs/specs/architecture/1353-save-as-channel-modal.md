@@ -72,3 +72,15 @@ Pending for documentation stage: update `docs/knowledge/features/save-as-channel
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+### 2026-09-13 — verifier selector regression rework
+
+The verifier confirmed two obsolete overlay selectors in `paired-shell-card.spec.ts` and
+`sidebar-row-geometry.spec.ts` fail on this implementation and pass on the merge base.
+Update the paired-shell selector and expected hit-test ancestor to `create-channel-overlay`,
+preserving the proof that the overlay receives hits outside the sidebar. The row-geometry
+check identifies the opened modal by its dialog role and Save as channel accessible name.
+No production or design contract changes. Run both affected fake-transport specs and build;
+the dispatcher retains the full-suite gate.

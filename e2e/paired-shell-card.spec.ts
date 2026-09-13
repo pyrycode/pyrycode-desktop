@@ -253,7 +253,7 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   expect(emptyCard.radii).toEqual(Array(4).fill(`${CARD_RADIUS_PX}px`))
   expect(await pane.evaluate((el) => el.children.length)).toBe(0)
 
-  // --- 6. The channel-list overlays still escape the sidebar (AC5). .save-as-channel-overlay is
+  // --- 6. The channel-list overlays still escape the sidebar (AC5). .create-channel-overlay is
   // `position: fixed` ON PURPOSE — .channel-list is the overflow-y: auto scroll column, so an absolute
   // overlay would scroll with the rows — and the card's `overflow: hidden` must not take that away. A
   // fixed box is not clipped by an overflow ancestor, but that is the claim, not the evidence.
@@ -263,14 +263,14 @@ test('paired shell: both panes draw the card, the backdrop draws the glow, and n
   // clipped-away region from it. The point is over the CHAT PANE, far outside the sidebar's 400px column,
   // so a clipped overlay would leave the pane itself on top and this reads `blocked by`. ---
   await page.locator('.channel-list__save').first().click()
-  const overlay = page.locator('.save-as-channel-overlay')
+  const overlay = page.locator('.create-channel-overlay')
   await expect(overlay).toBeVisible()
   expect(
     await hitAt(
       page,
       paneBox.x + paneBox.width / 2,
       paneBox.y + paneBox.height / 2,
-      '.save-as-channel-overlay'
+      '.create-channel-overlay'
     )
-  ).toBe('.save-as-channel-overlay')
+  ).toBe('.create-channel-overlay')
 })

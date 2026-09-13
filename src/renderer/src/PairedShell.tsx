@@ -399,9 +399,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     })
     return () => { off(); localRead.current?.cancel() }
   }, [])
-  useEffect(() => {
-    if (route !== 'thread') localRead.current?.cancel()
-  }, [route])
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
   // nav reducer. The two paths that activate a conversation are BOTH right here
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
@@ -429,6 +426,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // the pairing screen, which only the `openPairServer` that writes this cell puts up — so the seed
   // states which behaviour to preserve rather than being a fallback anything relies on.
   const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
+  useEffect(() => {
+    // Pairing retains its origin view; only leaving that thread cancels its read.
+    const retainedRoute = route === 'pairServer' ? pairServerReturn : route
+    if (retainedRoute !== 'thread') localRead.current?.cancel()
+  }, [route, pairServerReturn])
   const [recoveryServerId, setRecoveryServerId] = useState<string | null>(null)
   const pairingGeneration = useRef(0)
   const activePairingGeneration = pairingGeneration.current

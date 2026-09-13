@@ -192,6 +192,58 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
 })
 
+test('pending saved reading survives opening and cancelling host repair', async ({ launchPairedApp }) => {
+  const launched = await launchPairedApp()
+  const { app, page, daemon, forwarder, servers } = launched
+  const text = 'Saved reply after repair cancellation'
+  await daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'repair-read', seq: 0, text
+  }))
+  const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
+    operation: 'readTimeline', serverId, conversationId
+  }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
+  await expect.poll(async () => snapshotText(await read())).toBe(text)
+  const saved = await read()
+  forwarder.closeClientLeg(4401)
+  await expect(page.getByRole('button', { name: 'Pairing error - Re-pair' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: SEEDED_ROW.name!, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Repair host', exact: true }).first()).toBeVisible()
+
+  // Hold the real saved result at the IPC boundary until repair has been cancelled.
+  await app.evaluate(({ ipcMain }, saved) => {
+    ipcMain.removeHandler('pyry:chat-history')
+    ipcMain.handle('pyry:chat-history', (_event, request) => {
+      if (request.operation !== 'readTimeline') return { status: 'error', code: 'unreadable' }
+      return new Promise(resolve => { (globalThis as any).__releaseSavedRead = () => resolve(saved) })
+    })
+  }, saved)
+  // Observe renderer IPC before host routing can discard an offline command.
+  await app.evaluate(({ ipcMain }) => {
+    (globalThis as any).__offlineCommands = []
+    ipcMain.on('pyry:command', (_event, command) => {
+      (globalThis as any).__offlineCommands.push(command)
+    })
+  })
+  const outbound = () => app.evaluate(() => (globalThis as any).__offlineCommands)
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(page.getByText('Loading saved messages…', { exact: true })).toBeVisible()
+  await expect.poll(() => app.evaluate(() => typeof (globalThis as any).__releaseSavedRead)).toBe('function')
+  await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
+  await app.evaluate(() => (globalThis as any).__releaseSavedRead())
+  const reply = page.locator('.bubble[data-thread-role="assistant"]')
+  await expect(reply).toContainText(text)
+  await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await reply.getByRole('button', { name: 'Copy message' }).click()
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(text)
+  await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  expect(await outbound()).toEqual([])
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+})
+
 test('local list read failures stay beside the saved host', async ({ launchPairedApp }) => {
   const { app, page, daemon, forwarder } = await launchPairedApp()
   await daemon.close()

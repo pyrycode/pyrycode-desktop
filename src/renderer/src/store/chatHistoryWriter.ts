@@ -1,11 +1,13 @@
 import { useEffect } from 'react'
 import type { StoreApi } from 'zustand/vanilla'
 import { parseChatHistorySnapshot, type ChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import { conversationListStore, type ConversationListStore } from './conversationListStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 
+type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
 type TimelineSnapshot = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
 type Receipt = { type: string; serverId: string | null | undefined }
 type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'] }
@@ -14,15 +16,17 @@ type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'
 export function createChatHistoryWriter(deps: {
   lists: Pick<StoreApi<ConversationListStore>, 'getState' | 'subscribe'>
   timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
+  subscribeEvents?: (listener: (event: StampedDaemonEvent) => void) => () => void
   receipt: () => Receipt | null
   write: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
   log: (event: RendererDiagnosticEvent) => void
   schedule: (run: () => void) => () => void
 }) {
-  const pending = new Map<string, ChatHistorySnapshot>()
+  const pending = new Map<string, ChatHistorySnapshot | ConversationRemoval>()
   const seen = new Map<string, string>()
   const saved = new Map<string, string>()
   const observations = new Map<string, Observation>()
+  const deleted = new Map<string, Set<string>>()
   const localEchoes = new WeakSet<object>()
   const paused = new Map<string, number>()
   const generations = new Map<string, number>()
@@ -43,6 +47,11 @@ export function createChatHistoryWriter(deps: {
   }
 
   function capture(value: ChatHistorySnapshot): void {
+    const removed = deleted.get(value.serverId)
+    if (value.kind === 'timeline' && removed?.has(value.conversationId)) return
+    if (value.kind === 'list' && removed !== undefined) {
+      value = { ...value, conversations: value.conversations.filter(row => !removed.has(row.id)) }
+    }
     let snapshot: ChatHistorySnapshot
     try { snapshot = parseChatHistorySnapshot(value) } catch { report('invalid-snapshot'); return }
     const key = keyFor(snapshot)
@@ -60,6 +69,17 @@ export function createChatHistoryWriter(deps: {
       const [key, snapshot] = next
       const generation = generations.get(snapshot.serverId)
       pending.delete(key)
+      if ('operation' in snapshot) {
+        try {
+          const result = await deps.write(snapshot)
+          report(result.status === 'ok' ? 'conversation-removed' : result.status === 'error' ? result.code : 'remove-failed')
+        } catch { report('ipc-failed') }
+        for (const comparisonKey of [key, JSON.stringify([snapshot.serverId, 'list', null])]) {
+          seen.delete(comparisonKey)
+          saved.delete(comparisonKey)
+        }
+        continue
+      }
       const encoded = JSON.stringify(snapshot)
       const request: ChatHistoryRequest = snapshot.kind === 'list'
         ? { operation: 'replaceList', serverId: snapshot.serverId, snapshot }
@@ -159,6 +179,22 @@ export function createChatHistoryWriter(deps: {
         items: [...items], prependedRows: slice.prependedRows, coverage })
     }
   })
+  const offEvents = deps.subscribeEvents?.(event => {
+    if (stopped || event.type !== 'conversationDeleted') return
+    const { serverId, id } = event
+    if (typeof serverId !== 'string') { report('unknown-ownership'); return }
+    const ids = deleted.get(serverId) ?? new Set<string>()
+    ids.add(id)
+    deleted.set(serverId, ids)
+    const key = JSON.stringify([serverId, 'timeline', id])
+    // Replace buffered timeline content with a removal in the same serial drain.
+    pending.delete(key)
+    for (const snapshot of pending.values()) {
+      if (!('operation' in snapshot) && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
+    }
+    pending.set(key, { operation: 'removeConversation', serverId, conversationId: id })
+    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+  })
   const offRemoval = subscribeChatHistoryRemoval(serverId => {
     paused.set(serverId, (paused.get(serverId) ?? 0) + 1)
     let done = () => {}
@@ -166,6 +202,7 @@ export function createChatHistoryWriter(deps: {
     removals.add(settlement)
     return removed => {
       if (removed) {
+        deleted.delete(serverId)
         generations.set(serverId, (generations.get(serverId) ?? 0) + 1)
         for (const [key, snapshot] of pending) if (snapshot.serverId === serverId) pending.delete(key)
         for (const key of seen.keys()) {
@@ -199,7 +236,7 @@ export function createChatHistoryWriter(deps: {
   deps.log({ event: 'history-writer-started' })
   return { flush, stop: () => {
     stopped = true
-    offLists(); offTimelines(); offRemoval()
+    offLists(); offTimelines(); offRemoval(); offEvents?.()
     return Promise.all([...removals]).then(flush)
   } }
 }
@@ -207,6 +244,7 @@ export function createChatHistoryWriter(deps: {
 export function useChatHistoryWriter(): void {
   useEffect(() => {
     const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
+      subscribeEvents: window.pyry.onDaemonEvent,
       receipt: window.pyry.chatHistoryReceipt, write: window.pyry.chatHistory, log: window.pyry.sendDiagnostic,
       schedule: (run) => { const timer = setTimeout(run, 200); return () => clearTimeout(timer) } })
     const off = window.pyry.onChatHistoryFlush(writer.stop)

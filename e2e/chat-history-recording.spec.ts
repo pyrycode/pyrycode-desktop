@@ -11,6 +11,76 @@ const entry = (i: number) => ({ id: i, type: 'message', ts, payload: {
 const snapshotText = (result: ChatHistoryResult): string => result.status === 'stored' && result.snapshot.kind === 'timeline'
   ? result.snapshot.items.map((i) => 'text' in i ? i.text : '').join('|') : ''
 
+test('confirmed deletion removes saved content through restart without waiting for a list refresh', async ({ launchPairedApp }) => {
+  const commands: string[] = []
+  let deleteReplyTo: number | undefined
+  let confirmed = false
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    commands.push(env.type)
+    if (env.type === 'delete_conversation') { deleteReplyTo = env.id; return [] }
+    return env.type === 'list_conversations' && !confirmed ? [seedConversationsFrame()] : []
+  } }, { secondServer: { buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : [] } })
+  const { page, app, daemon } = first
+  const serverId = first.servers[0].serverId
+  const otherId = first.servers[1].serverId
+  const read = (page: PairedApp['page'], host = serverId, conversationId = SEEDED_ROW.id) =>
+    page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
+      { serverId: host, conversationId })
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'deleted-turn', seq: 0, text: 'saved before confirmed deletion' }))
+  await daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: 'surviving-chat', turn_id: 'survivor-turn', seq: 0, text: 'same-host saved peer' }))
+  await expect.poll(async () => snapshotText(await read(page))).toBe('saved before confirmed deletion')
+  await expect.poll(async () => snapshotText(await read(page, serverId, 'surviving-chat'))).toBe('same-host saved peer')
+  const saved = await read(page)
+  if (saved.status !== 'stored' || saved.snapshot.kind !== 'timeline') throw new Error('Missing seed timeline')
+  expect(await page.evaluate(({ serverId, snapshot }) => window.pyry.chatHistory({ operation: 'replaceTimeline',
+    serverId, conversationId: snapshot.conversationId, snapshot: { ...snapshot, serverId } }),
+  { serverId: otherId, snapshot: saved.snapshot })).toEqual({ status: 'ok' })
+  // Observe the real operation's successful result, not just the command or renderer disappearance.
+  await app.evaluate(({ ipcMain }) => {
+    const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+    if (!original) throw new Error('Missing chat history handler')
+    ;(globalThis as any).__conversationRemovals = 0
+    ipcMain.removeHandler('pyry:chat-history')
+    ipcMain.handle('pyry:chat-history', async (event, request) => {
+      const result = await original(event, request)
+      if (request.operation === 'removeConversation' && result.status === 'ok') {
+        (globalThis as any).__conversationRemovals++
+      }
+      return result
+    })
+  })
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Channel info' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(page.getByText('Delete this conversation permanently? This cannot be undone.')).toBeVisible()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect.poll(() => deleteReplyTo).toBeDefined()
+  expect(snapshotText(await read(page))).toBe('saved before confirmed deletion')
+  expect(await app.evaluate(() => (globalThis as any).__conversationRemovals)).toBe(0)
+  confirmed = true
+  await daemon.pushFrame(frame('conversation_deleted', { id: SEEDED_ROW.id }, deleteReplyTo))
+  await expect.poll(() => app.evaluate(() => (globalThis as any).__conversationRemovals)).toBe(1)
+  expect(await read(page)).toEqual({ status: 'missing' })
+  expect(await page.evaluate(serverId => window.pyry.chatHistory({ operation: 'readList', serverId }), serverId))
+    .toMatchObject({ status: 'stored', snapshot: { conversations: [] } })
+  expect(snapshotText(await read(page, serverId, 'surviving-chat'))).toBe('same-host saved peer')
+  expect(snapshotText(await read(page, otherId))).toBe('saved before confirmed deletion')
+  await app.close()
+  await daemon.close()
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  expect(await read(second.page)).toEqual({ status: 'missing' })
+  expect(await second.page.evaluate(serverId => window.pyry.chatHistory({ operation: 'readList', serverId }), serverId))
+    .toMatchObject({ status: 'stored', snapshot: { conversations: [] } })
+  expect(snapshotText(await read(second.page, serverId, 'surviving-chat'))).toBe('same-host saved peer')
+  expect(snapshotText(await read(second.page, otherId))).toBe('saved before confirmed deletion')
+  expect(commands.filter(c => c === 'request_history')).toEqual([])
+})
+
 test('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
   test.setTimeout(90_000)
   const commands: string[] = []

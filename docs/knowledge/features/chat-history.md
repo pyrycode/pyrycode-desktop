@@ -13,7 +13,8 @@ timeline on demand whether its host is connected or unavailable. Restored rows r
 readable through reconnect and subsequent same-host receipts continue saving.
 Downloads require explicit upward thread input, including after reconnect;
 explicit Forget/Unpair removes the host's saved content after credential removal.
-Conversation-removal integration remains separate.
+Confirmed conversation deletion removes that host/conversation's saved timeline
+and list entry.
 Observing, saving, flushing and restoration add no history requests.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
@@ -298,11 +299,24 @@ and never enter the explicit removal lifecycle. Missing or partial lists are not
 timeline-deletion signals; received lists still replace the saved list. Received empty
 lists/pages and cancellation of an observed echo remain valid durable changes.
 
+Confirmed `conversationDeleted` delivery is an explicit deletion signal. The writer
+subscribes through `window.pyry.onDaemonEvent` and captures the main-stamped
+`serverId` and confirmed `id` synchronously before queuing `removeConversation`.
+Store observation alone misses this event: the list bridge only requests a separate
+refresh, and the synchronous receipt context carries no deleted id. Removal runs
+even without a held timeline or matching list entry, independently of selection or
+the refresh response. Missing supplying-host context reports `unknown-ownership`
+and never borrows the active host. Other conversations on that host and equal ids
+on other hosts remain saved. Sending a delete command without confirmation, including
+rejection or network failure, removes no saved timeline. Persistence removal does
+not itself change renderer display state.
+
 [`runUnpairServer`](../../../src/renderer/src/screens/settings/unpairServerAction.ts)
 begins the renderer-local [removal lifecycle](../../../src/renderer/src/store/chatHistoryRemoval.ts)
 before invoking main and settles it before refreshing identities. While pending,
 writers pause draining that host and allow other hosts' buffered work to proceed.
-Failure resumes the paused snapshots. Success discards pending snapshots and comparison
+Failure resumes the paused operations and retains conversation-deletion suppression.
+Success discards pending operations, the host's deleted-id set and comparison
 state, invalidates observation ownership and prevents an in-flight completion from
 repopulating deduplication state, including when main reported cleanup failure.
 
@@ -397,6 +411,14 @@ recording; they never dispatch connection failures or disable the live chat.
 The drain remains usable for later changed content. A failed save is not an
 automatic retry loop for an unchanged snapshot.
 
+Conversation cleanup reports `history-writer-result: conversation-removed` only
+after storage returns `status: 'ok'`. Classified failures report their static error
+code, unexpected results report `remove-failed`, and thrown IPC failures report
+`ipc-failed`, without coordinates or exception text. Failed removal preserves the
+protected store's prior content and retains stale-save suppression; daemon
+confirmation alone does not prove local cleanup succeeded. There is no automatic
+removal retry, but another confirmed receipt can retry it.
+
 ## Storage and concurrency
 
 ### Buffered replacements
@@ -414,6 +436,16 @@ holder eviction with their original coordinates. Eviction drops observation and
 comparison metadata, never the pending save or the disk record. The eleventh
 received conversation can therefore evict the first before its timer runs without
 losing the first conversation's captured snapshot.
+
+Confirmed deletion shares this serial drain with replacements. It discards the
+exact timeline's buffered replacement, filters its entry from buffered host lists
+without reordering peers, and waits behind any already in-flight write. A per-host
+deleted-id set suppresses subsequent timeline captures and filters delayed list
+captures for the writer's lifetime, including retained holder mutations and shutdown.
+Stale captures therefore cannot overwrite the queued removal or recreate successfully
+removed records. Each removal attempt clears comparison state for that timeline and
+host list; removal itself is not skipped by replacement deduplication. Successful
+unpair resets suppression for fresh same-server re-pairing.
 
 ### Protected collection
 
@@ -459,9 +491,11 @@ work or background pruning is involved.
 
 ### Window close and app quit
 
-`writer.stop()` unsubscribes both stores and removal notifications, waits for
-already-started removals to settle, then cancels the timer and drains buffered
-and in-flight updates. Unsubscribing alone could acknowledge close before failed
+`writer.stop()` unsubscribes both stores, daemon events and host-removal notifications,
+waits for already-started host removals to settle, then cancels the timer and drains
+buffered and in-flight replacements and confirmed conversation removals in order.
+Deletion suppression remains active throughout the flush. Unsubscribing alone
+could acknowledge close before failed
 unpair resumes its buffered snapshots. Settlement cannot schedule a new timer after
 stop. Main defers normal window close and `before-quit` teardown
 until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
@@ -523,6 +557,16 @@ Its same-session re-pair must save only fresh text for an omitted timeline. Manu
 clearing all timelines or restarting before re-pairing masks the retained-slice bug.
 The recording Playwright scenario re-pairs before restart, then checks persistence
 after restart and no added history downloads.
+
+Conversation-deletion regressions hold real protected-store list and timeline writes,
+deliver confirmation with buffered and later stale captures, and await flush/stop
+before fresh-instance reads. They check both removed records, same-host peers and
+another host's equal id. Empty/partial lists and eviction must retain timelines;
+failed cleanup must preserve content without a success diagnostic. The recording
+Playwright test holds confirmation after the delete command, proves retention, then
+waits for the actual `removeConversation` result to be `ok` before asserting absence
+and restarting. Renderer disappearance or an early missing read cannot prove cleanup
+or ordering; the scenario withholds list refresh responses throughout deletion.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host

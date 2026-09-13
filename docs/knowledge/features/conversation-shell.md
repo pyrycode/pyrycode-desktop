@@ -85,7 +85,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Modals](conversation-shell-modals.md) — The permission/trust panel (with its rejection surface) and the questionnaire in the input area.
 - [Session boundaries and channel info](conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row and the Channel Info sheet, with its Rename/Archive/Delete actions.
 - [Message bubble](conversation-shell-message-bubble.md) — The later redraw of the message bubble itself: the desktop `Message` shape, the meta row and its copy control.
-- [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the history-walk trigger band that asks for older content at the top.
+- [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the user-input demand band and preservation of reading position across prepends.
 
 The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 ### Held reading and host availability
@@ -125,11 +125,11 @@ conversation's current owner; folder creation explicitly targets that server. A 
 result observed offline is consumed without changing workspace, so reconnect cannot
 replay the mutation. Recent-workspace data mounts only while available.
 
-Opening held chats still activates local state and records viewing, but returns before
-history, run-configuration, model-list or system-prompt request helpers. Scrolling checks
-availability before the older-history helper, preserving fetch eligibility for a later
-connected opening or scroll. The run-configuration sheet gates both its data mount and
-the effect's current-state request. File-button gates alone are insufficient: thumbnails
+Offline opening still activates local state and records viewing, but returns before
+run-configuration, model-list or system-prompt request helpers. Opening never requests
+history, even while connected. Qualifying upward thread input checks availability
+before the history helper; reconnect alone cannot retry a page. The run-configuration
+sheet gates both its data mount and the effect's current-state request. File-button gates alone are insufficient: thumbnails
 retrieve on mount too. An offline thumbnail mount shows the existing unavailable-image
 state without requesting or retrying on reconnect; already-rendered images retain their
 normal release-on-unmount lifetime.
@@ -186,14 +186,10 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
   is ever shown: a task leaves the list only by no longer appearing in the next roster, never by an
   explicit "done" render. Stale-list-after-reconnect is a known, out-of-scope limitation shared with the
   store itself (#569, blocked on a daemon change) — the panel does not paper over it.
-- **Thread scroll pin** ([#601](../codebase/601.md), built on the dormant `isAtBottom` helper from
-  [#600](../codebase/600.md)) — `.conversation__thread` stays pinned to the bottom while new content
-  arrives, only if the operator was already there, and — since [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)
-  — a scroll back to the top, while the owning host is connected, asks the daemon for history and keeps the reader's place
-  while it lands above them. Split out to its own document once the family (send-forces-pin #602,
-  re-entry #603, the two known-latency-gap `ResizeObserver` fixes #1009/#1049, the late-thumbnail
-  anchoring case #1046, and the walk's own trigger band and scroll-event cascade #1260) grew past the
-  size cap. See [Thread scroll pin](conversation-shell-scroll-pin.md).
+- **Thread scroll pin** keeps new content at the bottom only while following.
+  Qualifying upward user input near the top requests one history page while the
+  owning host is connected. Stable row keys, native nonzero anchoring and measured
+  zero-offset compensation preserve the reader's place. See [Thread scroll pin](conversation-shell-scroll-pin.md).
 
 ## Related
 

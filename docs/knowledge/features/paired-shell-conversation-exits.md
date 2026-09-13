@@ -488,7 +488,8 @@ inert footer until one of those edges eventually fired. Since pyrycode#2085 the 
 is what makes asking immediately on open worth doing.
 
 `ActivateConversationDeps` gains a **seventh, required** member, called **last** and **outside** the
-id-change gate — so every activation asks, including a re-open of the chat already open:
+id-change gate. Every activation reaches it, including re-opening the same chat;
+requests require the unique owning host to be connected:
 
 ```
 previous = getActiveConversation()
@@ -499,18 +500,17 @@ markViewed(conversation.id)                 // #786, unchanged
 requestConversationConfig(conversation.id)  // #1166, new — outside the gate, last (#1231 widened its body)
 ```
 
-**One member firing three requests, not three members.** `PairedShell`'s `activateDeps.requestConversationConfig`
-arrow calls `requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)`, then
-`requestModelList(window.pyry.sendCommand, conversationId)`, and since
-[#1231](https://github.com/pyrycode/pyrycode-desktop/issues/1231) a third,
-`requestSystemPrompt(window.pyry.sendCommand, conversationId)` — three visibly different named calls,
-no branch, no local state. All three are one act (re-ask for what `clearSessionId` just invalidated),
-they always fire together, and none is meaningful for the footer without the others; folding them into
-one member also holds this interface at three identical `(conversationId: string) => void` members
-rather than five (see the cross-wire note above). All three sends are fire-and-forget and all three
-replies are whole-value replaces landing through app-lifetime subscribers already listening
-(`subscribeRunConfig`/`subscribeModelList`/`subscribeSystemPrompt`), so the calls need no ordering
-between them and a duplicate ask (a re-open landing beside an edge-driven refresh) costs nothing.
+`PairedShell.activateDeps.requestConversationConfig` checks current unique ownership and
+host status before run-configuration, model-list, system-prompt and first-history helpers.
+Offline activation still records local viewing but consumes no history-fetch eligibility.
+Connected configuration replies land through app-lifetime subscribers already listening.
+
+Creation confirmation can arrive before its list row. The shell preserves local activation
+and waits for the creating host's first authoritative list update before initializing once.
+The main-stamped origin constrains the wait; only unique matching list ownership and current
+connected status authorize requests. Disconnect, active-chat change, replacement creation
+or unmount cancels it, with no reconnect replay. Ordinary held opening installs no wait.
+See [created-chat initialization](conversation-shell.md#created-chat-initialization).
 
 **`requestSystemPrompt`'s absence costs more than the other two's.** `runConfigReceived` and
 `modelListReceived` are also pushed unsolicited on other edges, so a dropped ask there costs freshness

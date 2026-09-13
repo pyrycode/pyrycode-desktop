@@ -7,9 +7,11 @@ export function RenameConversationDialogView({
   name,
   onNameChange,
   onCancel,
-  onSave
+  onSave,
+  available = true
 }: {
   name: string
+  available?: boolean
   onNameChange: (next: string) => void
   onCancel: () => void
   onSave: () => void
@@ -22,7 +24,7 @@ export function RenameConversationDialogView({
         title="Rename"
         width={640}
         cancelAction={{ label: 'Cancel', onClick: onCancel }}
-        confirmAction={{ label: 'OK', onClick: onSave, disabled: blank }}
+        confirmAction={{ label: 'OK', onClick: onSave, disabled: blank || !available }}
         onClose={onCancel}
       >
         <label className="rename-conversation__field">

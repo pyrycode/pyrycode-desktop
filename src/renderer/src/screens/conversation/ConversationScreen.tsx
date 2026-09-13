@@ -13,6 +13,7 @@ import {
   type UIEventHandler
 } from 'react'
 import './conversation.css'
+import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
@@ -214,6 +215,7 @@ export function ConversationScreen({
   // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
+  const actionsAvailable = useConversationActionAvailability(openConversationId)
   // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
   // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
   // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
@@ -388,7 +390,7 @@ export function ConversationScreen({
       <WorkspaceChip
         conversation={activeConversation}
         isEmpty={items.length === 0}
-        onChange={() => setPickerOpen(true)}
+        onChange={actionsAvailable ? () => setPickerOpen(true) : undefined}
       />
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
@@ -411,14 +413,14 @@ export function ConversationScreen({
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
         firstRowKey={-prependedRows}
         queued={queuedBacklog}
-        onDropQueued={(queuedMsgId, messageId) => {
-          if (openConversationId === null) return
+        onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
+          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
             sendCommand: window.pyry.sendCommand,
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
           })
-        }}
+        } : undefined}
       />
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
@@ -503,7 +505,7 @@ export function ConversationScreen({
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
               Renders nothing (DOM order immaterial); #188 renders the held values here. */}
-          <RunConfigData />
+          {actionsAvailable && <RunConfigData />}
           {/* #188: the read-only Model / Effort / YOLO sections, reading the held snapshot.
               #975: the conversation id goes down as a prop off the `activeConversation` slice already
               read above (the ComposerSlot / BackgroundTaskPanel idiom), because the Model rows now come
@@ -824,7 +826,9 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
         // total functions of it. The deps object dereferences `window.pyry` inside its own arrow bodies,
         // so nothing is touched during render and the static renderer tier — where no handler ever fires
         // — is unaffected.
-        requestOlderHistory(historyAskDeps, conversationId, isNearTop(metrics))
+        if (connectedConversationHostNow(conversationId) !== null) {
+          requestOlderHistory(historyAskDeps, conversationId, isNearTop(metrics))
+        }
       }
     },
     // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate
@@ -1113,11 +1117,17 @@ function BubbleMeta({
 // Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
+  const conversationId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
+  const available = useConversationActionAvailability(conversationId)
   return (
     <button
       type="button"
       className="bubble__file"
-      onClick={() => downloadAttachment(attachmentDownloadDeps, attachment)}
+      disabled={!available}
+      onClick={() => {
+        if (connectedConversationHostNow(conversationId) === null) return
+        downloadAttachment(attachmentDownloadDeps, attachment)
+      }}
     >
       {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.
           The markup this renders is BYTE-IDENTICAL to the transcription that stood here: the component
@@ -1171,6 +1181,7 @@ function QueuedRowDrop({
       type="button"
       className="queued-row__drop"
       aria-label={DROP_QUEUED_LABEL}
+      disabled={!onDropQueued}
       onClick={() => onDropQueued?.(queued.queuedMsgId, queued.messageId)}
     >
       <svg
@@ -2955,6 +2966,7 @@ function ChannelInfoSheet({
   // is the controlled field, seeded from the conversation's displayed title on open. Both reset for free
   // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
+  const available = useConversationActionAvailability(conversation?.id ?? null)
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
@@ -2981,7 +2993,7 @@ function ChannelInfoSheet({
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button
         // (AC1). Seed the field via titleFor so a null-name conversation prefills with 'Untitled' (AC2).
         onRename={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
                 setRenameName(titleFor(conversation.name))
@@ -2991,9 +3003,10 @@ function ChannelInfoSheet({
         // #366: Archive dispatches then closes (no dialog — unlike Rename). Supplied only for a non-null
         // conversation (AC1). `window.pyry` is dereferenced only inside this callback (AC4).
         onArchive={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
+                if (connectedConversationHostNow(conversation.id) === null) return
                 requestArchiveConversation(window.pyry.sendCommand, conversation.id)
                 onClose()
               }
@@ -3002,12 +3015,13 @@ function ChannelInfoSheet({
         // traffic, AC2); it is supplied only for a non-null conversation (AC1), mirroring onArchive's
         // gating. onDeleteConfirm dispatches then closes — `window.pyry` is dereferenced ONLY here (AC5).
         // onDeleteCancel dismisses with no wire effect (AC3).
-        onDelete={conversation === null ? undefined : () => setDeleteConfirmOpen(true)}
+        onDelete={conversation === null || !available ? undefined : () => setDeleteConfirmOpen(true)}
         deleteConfirmPending={deleteConfirmOpen}
         onDeleteConfirm={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
+                if (connectedConversationHostNow(conversation.id) === null) return
                 requestDeleteConversation(window.pyry.sendCommand, conversation.id)
                 onClose()
               }
@@ -3024,9 +3038,11 @@ function ChannelInfoSheet({
       {renameOpen && conversation !== null && (
         <RenameConversationDialogView
           name={renameName}
+          available={available}
           onNameChange={setRenameName}
           onCancel={() => setRenameOpen(false)}
           onSave={() => {
+            if (connectedConversationHostNow(conversation.id) === null) return
             requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
             setRenameOpen(false)
           }}
@@ -3106,6 +3122,7 @@ export function ComposerSendButton({
         type="button"
         className="composer__send"
         aria-label={INTERRUPT_LABEL}
+        disabled={!canSend}
         onClick={onInterrupt}
         // #1072: the SECOND Escape binding, and it is not optional. Chromium focuses a <button> on click
         // and nothing in the composer moves focus back (`handleSubmit` only clears the text), so after a
@@ -3237,7 +3254,7 @@ function Composer({
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    if (!canSend) return false
+    if (!canSend || connectedConversationHostNow(activeConversationId) === null) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not
@@ -3283,18 +3300,9 @@ function Composer({
     if (sendText(text)) setText('')
   }
 
-  // #1218: the Actions menu's New session row. It shares NOTHING with `sendText` above on purpose —
-  // Reset session sends `/clear` as ordinary message text and this asks the daemon to kill claude and
-  // spawn a fresh one, so there is no shared gate, no optimistic echo and no text to clear.
-  //
-  // It takes `activeConversationId`, the SAME expression the send reads, which is what stops the two
-  // ever naming different chats; `sendNewSession` refuses a null or empty id and sends nothing, so the
-  // composer footer rendering with no conversation open is a no-op rather than a command naming none.
-  // `window.pyry` is dereferenced only here, at interaction time — never during render, where it does
-  // not exist under renderToStaticMarkup. No `canSend` gate: that axis decides whether a MESSAGE can be
-  // sent, main's `newSession` arm is already inert when nothing is connected, and a second copy of the
-  // gate in this menu is the drift ComposerActionsMenu's header refuses.
+  // New session uses its own command, with the same current-owner gate as message sends.
   const startNewSession = (): void => {
+    if (connectedConversationHostNow(activeConversationId) === null) return
     sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
   }
 
@@ -3359,7 +3367,9 @@ function Composer({
       // #1092: `activeConversationId` is the SAME expression the send and `startNewSession` read,
       // which is what stops the three ever naming different chats; `sendInterrupt` refuses a null or
       // empty id and sends nothing.
-      sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+      if (connectedConversationHostNow(activeConversationId) !== null) {
+        sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+      }
       return
     }
     // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
@@ -3450,9 +3460,10 @@ function Composer({
           isRunning={isTurnRunning(phase)}
           canSend={canSend}
           onSend={handleSubmit}
-          onInterrupt={() =>
+          onInterrupt={() => {
+            if (connectedConversationHostNow(activeConversationId) === null) return
             sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
-          }
+          }}
         />
         {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
             item of this row and moves neither the box nor the button; `null` when the type-ahead is

@@ -150,6 +150,15 @@ describe('translateConversationCreated', () => {
 })
 
 describe('subscribeConversationCreated', () => {
+  it('forwards the main stamp separately from the creation payload', () => {
+    const bridge = fakeBridge()
+    const onCreated = vi.fn()
+    subscribeConversationCreated(bridge.onDaemonEvent, onCreated)
+    const event = { type: 'conversationCreated' as const, conversation: created, serverId: 'owner' }
+    bridge.emit(event)
+    expect(onCreated).toHaveBeenCalledWith(created, 'owner')
+  })
+
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
     subscribeConversationCreated(bridge.onDaemonEvent, vi.fn())

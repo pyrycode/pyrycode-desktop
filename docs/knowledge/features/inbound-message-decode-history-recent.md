@@ -116,7 +116,9 @@ ever reaches a log line. Ships with a real consumer immediately: [daemon
 connection](daemon-connection.md)'s new `pendingHistoryRequests` correlation map attributes each page
 to the conversation its request named and emits `historyPageReceived`/`historyRequestFailed`, but all
 four exhaustive renderer bridges (`daemonEventBridge`/`timelineBridge`/`modalBridge`/`questionBridge`)
-null both arms — `timelineBridge`'s dormantly, the other three permanently. Architect (builder)
+intentionally null both arms. The independent `historyPageBridge.ts` consumes both:
+received pages update rows and coverage, while failures settle request state for
+[user-demand paging and explicit Retry](request-history-send.md#the-one-fact-that-shapes-every-piece). Architect (builder)
 self-review PASS, no MUST FIX findings.
 
 [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) added a twenty-seventh kind,
@@ -154,8 +156,9 @@ before logging so a malformed reply leaves no record; neither the prompt nor the
 log line, and `parseSystemPromptPayload`'s throw messages name the client-owned field constant only
 (`'malformed field: session_prompt_status'`), never the daemon's string. Ships with a real consumer
 immediately: [daemon connection](daemon-connection.md)'s new `pendingSystemPromptRequests` correlation
-map attributes each reply to the conversation its request named and emits `systemPromptReceived`, but
-all four exhaustive renderer bridges null the one arm — present only so each bridge's `assertNever`
+map attributes each reply to the conversation its request named and emits `systemPromptReceived`;
+the independent `systemPromptBridge.ts` consumes that event. All four unrelated
+exhaustive renderer bridges intentionally null the arm so each bridge's `assertNever`
 guard, which stringifies the whole event into an `Error` message, cannot become a second sink for the
 prompt text. Architect (builder) self-review PASS, no MUST FIX findings (one SHOULD FIX — the emitted
 `conversationId` must come from the correlation map and not the decoded payload — closed by a

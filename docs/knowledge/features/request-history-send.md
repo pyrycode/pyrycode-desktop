@@ -10,7 +10,8 @@ Introduced in [#1222](../codebase/1222.md), with payload decoding in #1227 and
 rendering in #1223. The former opening ask and scroll-event walk are now replaced
 by [user-demand paging](chat-history.md#received-state-admission-and-ownership):
 `requestOlderHistory` sends the same payload for first and subsequent pages only
-on qualifying upward input. Opening and reconnect send no history requests.
+on qualifying upward input or explicit Retry of a retryable failure. Opening and
+reconnect send no history requests.
 Successful coverage survives interruption; neither a failure's `retryable` flag
 nor page arrival starts an automatic retry.
 
@@ -28,6 +29,16 @@ outbound frame, never a string parsed off the network. This is exactly `pendingC
 argument for `session_settings` ([daemon connection — correlation](daemon-connection-correlation.md)),
 reused here rather than re-derived.
 
+Explicit Retry delegates to `requestOlderHistory` through `historyAskDeps`, so it
+uses the same correlation path with a fresh envelope id. Retained successful
+coverage supplies the failed page's exact opaque cursor (or `''` before any page);
+the page limit remains `0`. Rows, prepend metadata and coverage survive pending
+and failed requests. Synchronous pending state discards duplicate clicks and upward
+demand. Success applies the correlated page and clears failure; another failure
+replaces its retryability. See [history status](conversation-shell-composer-status.md#history-page-failure-and-retry)
+for display and activation gates. Fresh upward demand remains valid after either
+failure classification; opening, reconnect and page arrival never request a page.
+
 ## Where it lives
 
 | Piece | File | Role |
@@ -41,7 +52,7 @@ reused here rather than re-derived.
 | `requestHistory` delegate | `src/main/connectionRegistry.ts` | the stand-in's one added line |
 | `HistoryRequestFailure`, `HistoryTimelineEvent`, `HistoryTimelineEntry`, `historyPageReceived` / `historyRequestFailed` | `src/shared/ipc/events.ts` | the two `DaemonEvent` arms; the mirrored decoded-entry types (#1227) |
 | `DecodedHistoryEvent`, `DecodedHistoryEntry`, `DecodedHistoryPage`, `decodeHistoryEvent`, `decodeHistoryPage` | `src/main/transport/inboundMessage.ts` | the payload-decode stage (#1227) — see § Payload decode |
-| null arms | `timelineBridge.ts` / `daemonEventBridge.ts` / `modalBridge.ts` / `questionBridge.ts` | the four exhaustive bridges; `timelineBridge`'s dormant, the rest permanent |
+| null arms | `timelineBridge.ts` / `daemonEventBridge.ts` / `modalBridge.ts` / `questionBridge.ts` | intentional no-ops; the independent history bridge owns page and failure events |
 
 ## The wire types (`src/shared/wire/types.ts`)
 
@@ -377,13 +388,11 @@ path any more.
 - **The sixth member, `'unclassified'`, is not a hedge.** It is where a correlated `message.too_long`
   lands — the § *Page size* case above — so a correlated refusal always settles the outstanding ask
   rather than stalling a walk with no terminal.
-- **`retryable` is computed once, at the emit**, diverging deliberately from `DaemonErrorOutcome`'s
-  documented-not-computed posture: that type's retry flags live in two upstream files, so no single
-  client-side list could be right, where this verb's five codes are published in one section with
-  exactly one retryable member (`history.unavailable`). The consumer that would otherwise re-derive it
-  is the walk driver (#1260) — precisely where a wrong re-derivation becomes a self-inflicted retry
-  loop against a relay merely withholding the frame. [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
-  records it (`recordHistoryFailure`) and reads it nowhere, keeping this single emit the only computation.
+- **`retryable` is computed once, at the emit.** The published refusal codes have
+  one retryable member (`history.unavailable`); transport interruption and local
+  send failures also settle through the existing classified failure path.
+  `recordHistoryFailure` retains the flag. It gates the explicit Retry button,
+  never an automatic retry or fresh upward-demand paging.
 - **`conversationId` on both arms is client-owned**, carrying `runConfigReceived`'s provenance
   argument verbatim — see § The one fact above. It is a routing key, never rendered text, and reaches
   no log sink. The numeric `in_reply_to` it was resolved from is **not** carried.
@@ -398,24 +407,15 @@ path any more.
   filename, a cache key or a lookup path. `workspaceCwd` is the one worth remembering twice: a
   daemon-supplied filesystem path, never resolved, joined or opened by this client.
 
-The four exhaustive bridges (`timelineBridge`, `daemonEventBridge`, `modalBridge`, `questionBridge`)
-each gain two null arms — the compile-time guard doing its job. `daemonEventBridge`'s disposition is
-**permanent** (a replayed frame is never a `SessionAction`); `modalBridge`'s is **permanent** for the
-same reason a page may *carry* a stored `modal_shown` among its wire entries without *being* one —
-though since #1227 that's true only of the pre-decode wire page: the decode has no `modal_shown` arm at
-all, so one can no longer reach `modalBridge`'s switch in the first place; `questionBridge`'s is
-permanent on the same "not a question event" grounds. `timelineBridge`'s two arms **are still dormant —
-neither #1223 nor [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259) ever claimed them
-here.** Both draw a different way: a **fifth** independent subscriber ([history page
-bridge](conversation-timeline-store.md)) owns `historyPageReceived` (#1223) and, since #1259,
-`historyRequestFailed` too, on its own channel subscription — folding each page's entries through
-`translateTimelineEvent`'s *other* arms instead, the ones keyed by the entry's own `type`,
-`messageReceived` (#1223's actual new case) among them. **Stale comments, still open:** the
-`timelineBridge.ts` and `modalBridge.ts` prose at these two arms still describes the pre-decode shape and
-says "the mapping is #1223's" (`timelineBridge`: "that is the whole point of a history entry carrying a
-stored frame's `type` and `payload`"; `modalBridge`: "a page may CARRY a stored `modal_shown` among its
-entries") — flagged as a verifier NIT on PR #1228 and again as a SHOULD FIX on PR #1229; neither blocked
-ship, and neither has been fixed.
+The four exhaustive bridges (`timelineBridge`, `daemonEventBridge`, `modalBridge`,
+`questionBridge`) intentionally return null for both history events. These are
+not missing consumers: `historyPageBridge.ts` independently owns
+`historyPageReceived` and `historyRequestFailed`. It folds decoded entries through
+`translateTimelineEvent`, prepends rows, then records coverage, or settles failure
+through `recordHistoryFailure`. Pages cannot revive permission or question state.
+Likewise, `systemPromptReceived` belongs to the independent `systemPromptBridge.ts`
+([system-prompt state](system-prompt-send.md)), not these exhaustive bridges.
+Do not replace their null arms with duplicate consumers.
 
 ## Data flow
 
@@ -437,7 +437,8 @@ daemon → error frame (in_reply_to matches a pending history ask)
         reason: inbound.historyReject ?? 'unclassified', retryable }
       → non-matching / absent inReplyTo: falls through unchanged to the pre-existing daemon-error consumers
 
-→ DAEMON_EVENT_CHANNEL → all four exhaustive bridges: null (timelineBridge dormant, the other three permanent)
+→ DAEMON_EVENT_CHANNEL → historyPageBridge: apply page or record failure
+                       → four unrelated exhaustive bridges: intentional null
 ```
 
 ## Error handling
@@ -453,7 +454,7 @@ daemon → error frame (in_reply_to matches a pending history ask)
 | `requestHistory` (connection method) | `void` | Unavailable/unauthenticated and build/send failures emit `historyRequestFailed`; caught objects are discarded. No automatic retry. |
 | `case 'history-page'` (consumer) | `void` | Absent or unmatched `inReplyTo` → dropped silently. A hit → exactly one `historyPageReceived`. |
 | `case 'daemon-error'` (consumer, history tier) | `void` | A correlated refusal always settles the ask, including a code outside the five (`'unclassified'`). A miss falls through unchanged to the pre-existing `daemon-error` consumers. |
-| Window | — | Both arms stay dormant/permanent-null across the four exhaustive bridges. `historyPageReceived` and (since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)) `historyRequestFailed` are claimed outside them, by #1223's/#1259's fifth subscriber, `historyPageBridge.ts` — see § The `DaemonEvent` arms above. |
+| Window | — | Both arms remain intentional no-ops across the four unrelated exhaustive bridges. `historyPageReceived` and (since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)) `historyRequestFailed` are claimed outside them, by #1223's/#1259's fifth subscriber, `historyPageBridge.ts` — see § The `DaemonEvent` arms above. |
 
 ## Security properties
 
@@ -625,10 +626,7 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   FIX findings fixed before ship), and the `## Revisions` section recording the four departures from
   plan — `decodeHistoryPage` returning `{ page, skipped }` rather than a bare page, the 1200→800 fixture
   count, and the two Open Questions both resolving as planned.
-- [Conversation timeline store](conversation-timeline-store.md) — #1223, the render consumer. Draws a
-  page via a fifth independent channel subscriber, `historyPageBridge.ts`, not by claiming
-  `historyPageReceived` in `timelineBridge.ts` — see § The `DaemonEvent` arms above for why that arm
-  stays dormant and its stale comment stays open. [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
-  is the first sender, firing this ask once per conversation activation and claiming `historyRequestFailed`
-  on the same subscriber; see [Internals § The opening
-  ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the write paths.
+- [Conversation timeline store](conversation-timeline-store.md) — the render consumer:
+  `historyPageBridge.ts` independently applies pages and settles failures. Current
+  [user-demand paging](chat-history.md#received-state-admission-and-ownership)
+  replaces the former opening ask; explicit Retry uses the same request path.

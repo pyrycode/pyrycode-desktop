@@ -4,6 +4,7 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
 import { beginChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
 const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_promoted: false,
@@ -15,7 +16,10 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   let scheduled: (() => void) | undefined
   const log = vi.fn()
   const save = vi.fn(write)
+  let listener: (event: StampedDaemonEvent) => void = () => {}
+  const offEvents = vi.fn(() => { listener = () => {} })
   const writer = createChatHistoryWriter({ lists, timelines, write: save, log,
+    subscribeEvents: onEvent => { listener = onEvent; return offEvents },
     receipt: () => receipt, schedule: (run) => { scheduled = run; return () => { scheduled = undefined } } })
   const receive = (type: string, action: () => void, serverId: string | null = 'a') => {
     receipt = { type, serverId }
@@ -25,12 +29,60 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
     () => lists.getState().setConversations(ids.map(row), serverId), serverId)
   const delta = (text: string, id = 'chat', serverId: string | null = 'a') => receive('assistantDelta',
     () => timelines.getState().dispatchFor(id, { type: 'assistantDelta', turnId: 'turn', seq: 0, text }), serverId)
-  return { lists, timelines, writer, save, log, receive, list, delta, run: () => scheduled?.() }
+  return { lists, timelines, writer, save, log, receive, list, delta, offEvents,
+    event: (event: StampedDaemonEvent) => listener(event), run: () => scheduled?.() }
 }
 const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 
 describe('chat history recording', () => {
+  it('captures confirmed coordinates without a held timeline, list entry or selection', async () => {
+    const h = harness()
+    const event: StampedDaemonEvent = { type: 'conversationDeleted', serverId: 'a', id: 'unloaded' }
+    h.event(event)
+    event.serverId = 'b'
+    event.id = 'changed'
+    await h.writer.stop()
+    expect(h.save.mock.calls.map(([r]) => r)).toEqual([
+      { operation: 'removeConversation', serverId: 'a', conversationId: 'unloaded' }
+    ])
+    expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+    expect(h.offEvents).toHaveBeenCalledOnce()
+    h.event({ type: 'conversationDeleted', serverId: 'b', id: 'after-stop' })
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledOnce()
+  })
+
+  it('ignores missing origin and non-confirmation events', async () => {
+    const h = harness()
+    h.list()
+    h.delta('kept')
+    await h.writer.flush()
+    h.save.mockClear()
+    h.event({ type: 'conversationDeleted', serverId: null, id: 'chat' })
+    h.event({ type: 'conversationsReceived', serverId: 'a', conversations: [] })
+    h.receive('deleteConversation', () => {})
+    h.receive('error', () => {})
+    h.lists.getState().clearAllConversations()
+    h.timelines.getState().clearAllTimelines()
+    await h.writer.stop()
+    expect(h.save).not.toHaveBeenCalled()
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+  })
+
+  it.each(['error', 'throw'])('reports removal %s without success or content', async mode => {
+    const h = harness(async () => {
+      if (mode === 'throw') throw new Error('private detail')
+      return { status: 'error', code: 'remove-failed' }
+    })
+    h.event({ type: 'conversationDeleted', serverId: 'private host', id: 'private chat' })
+    await h.writer.stop()
+    expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result',
+      code: mode === 'throw' ? 'ipc-failed' : 'remove-failed' })
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+    expect(JSON.stringify(h.log.mock.calls)).not.toContain('private')
+  })
+
   it('pauses buffered host saves, discards them on removal and admits fresh re-pair receipts', async () => {
     const h = harness()
     h.list()
@@ -47,6 +99,26 @@ describe('chat history recording', () => {
     await h.writer.flush()
     expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'fresh' }] } }])
     await h.writer.stop()
+  })
+
+  it('retains deletion suppression on failed unpair and releases it for fresh re-pair', async () => {
+    const h = harness()
+    h.list()
+    h.delta('old')
+    h.event({ type: 'conversationDeleted', serverId: 'a', id: 'chat' })
+    await h.writer.flush()
+    const failed = beginChatHistoryRemoval('a')
+    failed(false)
+    h.delta(' stale')
+    h.list()
+    await h.writer.flush()
+    expect(timelineRequests(h)).toHaveLength(0)
+    const removed = beginChatHistoryRemoval('a')
+    removed(true)
+    h.list()
+    h.delta('fresh')
+    await h.writer.stop()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'fresh' }] } }])
   })
 
   it('resumes buffered history when credential removal fails', async () => {

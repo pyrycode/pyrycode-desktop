@@ -1,142 +1,219 @@
-import { test, expect } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, type PairedApp } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { ConversationSummary } from '../src/shared/wire/types'
 
-// #1179 — the plus on a Channels-tree workspace row, the dialog it opens, and what Create sends. Only
-// this tier can answer any of it: `vitest.config.ts` sets `environment: 'node'` and every renderer spec
-// is a `renderToStaticMarkup` string assertion, so `ChannelList.test.tsx` owns the markup (which tree
-// draws which control, its name, #1178's markers) and `CreateChannelDialog.test.tsx` owns the dialog's
-// own chrome. Everything below needs a running window — a click, a real focus, the disabled/enabled
-// transitions as characters arrive, and a round trip to the fake.
-//
-// A DEDICATED FILE rather than an addition to `sidebar-workspace-create.spec.ts`, which owns the CHATS
-// tree's plus and must pass with its existing assertions untouched (AC5). Its seed is a single
-// UNPROMOTED row, so its render has no Channels group at all and its strict
-// `.channel-list__workspace-create` locator still resolves to exactly one element even though both
-// trees now draw that class.
-//
-// ⭐ THE SEED IS PROMOTED AND ITS cwd IS NOT THE FAKE'S CREATE DEFAULT. That single choice makes all
-// THREE payload fields detectable by one number. `conversationStateFake` mints its created row from
-// `is_promoted: payload.is_promoted ?? false`, `name: payload.name` and
-// `cwd: payload.cwd ?? DEFAULT_CREATED_CWD` (`/fake/workspace`), and the sidebar files that row by
-// promotion and then by cwd. So a create sent with a null `cwd` mints a SECOND group, and one sent
-// with `is_promoted: false` mints a Chats group — either way `.channel-list__workspace` goes from 1 to
-// 2. Row count and thread-opening are both blind to that difference; this count is not.
-//
-// SECRET HYGIENE (the sibling specs' posture). Every assertion reads a number, a boolean, or the
-// client-owned name this drive typed itself. The seed's name and cwd are never asserted on; the seed
-// cwd is a fixed fake remote path, never resolved locally.
+const CWD = '/home/alex/projects/demo'
+const CANONICAL = '/home/alex/resolved/channels/release-planning/'
+const row = (id: string): ConversationSummary => ({ id, name: 'Seeded channel', cwd: CWD,
+  is_promoted: true, is_archived: false, workspace_label: null,
+  last_message_ts: '2026-09-13T00:00:00Z', last_used_at: '2026-09-13T00:00:00Z' })
+const dialogOf = (app: PairedApp) => app.page.getByRole('dialog', { name: 'Create channel', exact: true })
 
-// Not `/fake/workspace`. See the seed note above — this is half the non-vacuity guard; the seed being
-// promoted is the other half.
-const WORKSPACE_CWD = '/fake/second-brain'
+function controlled(id: string) {
+  const accepted = conversationStateFake({ conversations: [row(id)] })
+  const requests: ReturnType<typeof decodeEnvelope>[] = []
+  let frames: Uint8Array[] = []
+  return {
+    requests,
+    reply(bytes: Uint8Array): Uint8Array[] {
+      const request = decodeEnvelope(bytes)
+      if (request.type === 'create_workspace_folder' || request.type === 'create_conversation') {
+        requests.push(request)
+        if (request.type === 'create_conversation') frames = accepted(bytes)
+        return []
+      }
+      return accepted(bytes)
+    },
+    release(app: PairedApp, host = 0) {
+      frames.forEach(frame => app.servers[host].daemon.pushFrame(frame))
+      frames = []
+    },
+    folder(app: PairedApp, host = 0) {
+      app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 900, type: 'workspace_folder_created',
+        ts: '2026-09-13T00:00:00Z', in_reply_to: requests.at(-1)!.id, payload: { path: CANONICAL } }))
+    },
+    reject(app: PairedApp, host = 0) {
+      app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 901, type: 'error',
+        ts: '2026-09-13T00:00:00Z', in_reply_to: requests.at(-1)!.id,
+        payload: { code: 'server.rejected', message: 'private daemon detail', retryable: false } }))
+    }
+  }
+}
 
-// The two plus names, the operator's words rather than the screen's constants.
-const CREATE_CHANNEL_NAME = 'Create channel'
-const CREATE_CHAT_NAME = 'Create chat'
+async function event(app: PairedApp, value: object): Promise<void> {
+  await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
+  }, { channel: DAEMON_EVENT_CHANNEL, value })
+  // IPC delivery and the following renderer barrier establish a completed observation turn.
+  await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+}
 
-// The name this drive types. Client-owned, so it is safe to assert on — and it is what tells a create
-// that carried the name apart from one that sent `null`, which would render the "Untitled" placeholder.
-const CHANNEL_NAME = 'Release notes'
+async function open(app: PairedApp, index = 0) {
+  await app.page.getByRole('button', { name: 'Create channel', exact: true }).nth(index).click()
+  const dialog = dialogOf(app)
+  await expect(dialog.getByRole('textbox')).toBeFocused()
+  await expect(dialog.getByRole('textbox')).toHaveValue('')
+  await expect(dialog.getByLabel('Use shared scratch folder')).toBeChecked()
+  return dialog
+}
 
-const ROUNDTRIP_TIMEOUT_MS = 15_000
-
-const seed = (over: Partial<ConversationSummary>): ConversationSummary => ({
-  id: 'seed-conversation',
-  name: 'Seeded channel',
-  is_promoted: true,
-  is_archived: false,
-  cwd: WORKSPACE_CWD,
-  last_message_ts: '2026-07-07T12:00:00.000Z',
-  last_used_at: '2026-07-07T12:00:00.000Z',
-  workspace_label: null,
-  ...over
+// Real fake-transport round trips prove the outgoing host and payload; injected main events probe
+// renderer-only origin/stage guards that the transport would normally filter before delivery.
+test('default uses the exact workspace, keeps the name, retries rejection and opens confirmation', async ({ launchPairedApp }) => {
+  const fake = controlled('first-seed')
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  const dialog = await open(app)
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  await expect(ok).toBeDisabled()
+  await dialog.getByRole('textbox').fill('   ')
+  await expect(ok).toBeDisabled()
+  await dialog.getByRole('textbox').fill('Discarded')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await open(app)
+  await app.page.setViewportSize({ width: 1280, height: 800 })
+  await app.page.screenshot({ path: '/tmp/builder-1351-modal-1280.png' })
+  await app.page.setViewportSize({ width: 800, height: 600 })
+  await expect(dialog).toHaveCSS('width', '640px')
+  await app.page.screenshot({ path: '/tmp/builder-1351-modal-800.png' })
+  await app.page.setViewportSize({ width: 800, height: 260 })
+  expect(await dialog.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded()
+  await app.page.screenshot({ path: '/tmp/builder-1351-modal-short.png' })
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await app.page.setViewportSize({ width: 800, height: 600 })
+  await open(app)
+  await dialog.getByRole('textbox').fill(' Release planning ')
+  await ok.press('Enter')
+  await expect.poll(() => fake.requests.length).toBe(1)
+  expect(fake.requests[0]).toMatchObject({ type: 'create_conversation',
+    payload: { cwd: CWD, name: 'Release planning', is_promoted: true } })
+  await expect(dialog.getByRole('textbox')).toBeDisabled()
+  await expect(dialog.getByRole('radio').nth(0)).toBeDisabled()
+  await expect(dialog.getByRole('radio').nth(1)).toBeDisabled()
+  await expect(ok).toBeDisabled()
+  await ok.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/ignored' })
+  expect(fake.requests).toHaveLength(1)
+  fake.reject(app)
+  await expect(dialog.getByRole('alert')).toHaveText('Could not create that channel')
+  await app.page.screenshot({ path: '/tmp/builder-1351-rejected.png' })
+  await expect(ok).toBeEnabled()
+  await ok.click()
+  await expect.poll(() => fake.requests.length).toBe(2)
+  fake.release(app)
+  await expect(dialog).toHaveCount(0)
+  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
 })
 
-test('the Channels workspace plus opens a Create channel dialog that creates a named channel in that workspace', async ({
-  launchPairedApp
-}) => {
-  // ONE launch, ONE continuous drive (the sibling specs' shape): each launch pays a full handshake, and
-  // the ordering below is load-bearing throughout — every absence or unchanged-state assertion sits
-  // AFTER a positive, auto-waiting read of the same gesture's own effect.
-  //
-  // The stateful fake owns the list, so this seed fully replaces the fixture's default one. ONE row, so
-  // `launchPairedApp`'s strict `.channel-list__row-open` click still resolves; PROMOTED, so it renders
-  // under Channels — and so the Chats tree draws no group and no plus of its own.
-  const buildReplyFrames = conversationStateFake({ conversations: [seed({})] })
-  const { page } = await launchPairedApp({ buildReplyFrames })
-
-  const rows = page.locator('.channel-list__row')
-  const workspaceRow = page.locator('.channel-list__workspace')
-  const createChannel = page.getByRole('button', { name: CREATE_CHANNEL_NAME })
-  const createChat = page.getByRole('button', { name: CREATE_CHAT_NAME })
-  const dialog = page.locator('.create-channel')
-  const nameField = page.locator('.create-channel__input')
-  const createAction = page.locator('.create-channel__create')
-  const cancelAction = page.locator('.create-channel__cancel')
-
-  // --- 1. AC1: exactly one plus, in the accessibility tree at rest, named "Create channel". The Chats
-  // tree draws none, because a promoted-only list gives it no group — which is also what keeps
-  // `sidebar-workspace-create.spec.ts`'s mirror image single-match. ---
-  await expect(createChannel).toHaveCount(1)
-  await expect(createChat).toHaveCount(0)
-  await expect(rows).toHaveCount(1)
-  await expect(workspaceRow).toHaveCount(1)
+test('dedicated creates missing parents first and uses only the selected host canonical reply', async ({ launchPairedApp }) => {
+  const first = controlled('first-seed')
+  const second = controlled('second-seed')
+  const app = await launchPairedApp({ buildReplyFrames: first.reply },
+    { secondServer: { buildReplyFrames: second.reply } })
+  await expect(app.page.getByRole('button', { name: 'Create channel', exact: true })).toHaveCount(2)
+  const dialog = await open(app, 1)
+  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/idle' })
+  expect(second.requests).toHaveLength(0)
+  await dialog.getByRole('textbox').fill(' Release planning ')
+  // Native radio keyboard behavior: ArrowDown switches to dedicated.
+  await dialog.getByLabel('Use shared scratch folder').focus()
+  await app.page.keyboard.press('ArrowDown')
+  await expect(dialog.getByLabel('Create a dedicated channel folder')).toBeChecked()
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  await ok.click()
+  await expect.poll(() => second.requests.length).toBe(1)
+  expect(first.requests).toHaveLength(0)
+  expect(second.requests[0]).toMatchObject({ type: 'create_workspace_folder',
+    payload: { parent: CWD + '/channels', name: 'release-planning' } })
+  for (const serverId of [FIRST_SERVER_ID, undefined, null, '', 42]) {
+    await event(app, { type: 'workspaceFolderCreated', serverId, path: '/wrong' })
+    await event(app, { type: 'workspaceFolderRejected', serverId })
+  }
+  await event(app, { type: 'conversationCreateRejected', serverId: SECOND_SERVER_ID })
+  await event(app, { type: 'conversationCreated', serverId: SECOND_SERVER_ID, conversation: {
+    id: 'out-of-stage', name: null, is_promoted: false, cwd: CWD,
+    workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
+  await expect(dialog.getByRole('textbox')).toBeDisabled()
+  expect(second.requests).toHaveLength(1)
+  second.reject(app, 1)
+  await expect(dialog.getByRole('alert')).toHaveText('Could not create that folder')
+  expect(second.requests.filter(request => request.type === 'create_conversation')).toHaveLength(0)
+  await ok.click()
+  await expect.poll(() => second.requests.length).toBe(2)
+  second.folder(app, 1)
+  await expect.poll(() => second.requests.length).toBe(3)
+  expect(second.requests[2]).toMatchObject({ type: 'create_conversation',
+    payload: { cwd: CANONICAL, name: 'Release planning', is_promoted: true } })
+  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/duplicate' })
+  for (const serverId of [FIRST_SERVER_ID, undefined]) {
+    await event(app, { type: 'conversationCreateRejected', serverId })
+    await event(app, { type: 'conversationCreated', serverId, conversation: {
+      id: 'foreign', name: null, is_promoted: false, cwd: CWD,
+      workspace_label: null, last_used_at: '2026-09-13T00:00:00Z' } })
+  }
+  await expect(dialog).toBeVisible()
+  await expect(ok).toBeDisabled()
+  expect(second.requests).toHaveLength(3)
+  second.release(app, 1)
   await expect(dialog).toHaveCount(0)
+  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
+  expect(first.requests).toHaveLength(0)
+})
 
-  // --- 2. AC2: clicking the plus opens the dialog, titled and focused. Playwright counts an opacity-0
-  // element as visible and moves the pointer onto it before clicking, which hovers the row on the way,
-  // so no explicit hover is needed. ---
-  await createChannel.click()
-  await expect(dialog).toHaveCount(1)
-  await expect(page.locator('.create-channel__title')).toHaveText(CREATE_CHANNEL_NAME)
-  // The field is EMPTY and FOCUSED — the half a static render proves only as `autofocus=""`. React
-  // moves focus on mount, so this is the running window's confirmation of that declaration.
-  await expect(nameField).toBeFocused()
-  await expect(nameField).toHaveValue('')
-
-  // --- 3. AC2: Create is disabled while the name is blank or whitespace-only, and enables once real
-  // characters arrive. Three states read in sequence, so the transition itself is what is asserted
-  // rather than any one frame of it. ---
-  await expect(createAction).toBeDisabled()
-  await nameField.fill('   ')
-  await expect(createAction).toBeDisabled()
-  await nameField.fill(CHANNEL_NAME)
-  await expect(createAction).toBeEnabled()
-
-  // --- 4. AC2: Cancel closes the dialog and sends nothing. The close is read directly; that it SENT
-  // NOTHING is proven at the end of the drive instead, by the final row count being exactly 2 — a
-  // Cancel that fired a create would make it 3. So this needs no vacuous absence of its own. ---
-  await cancelAction.click()
+test('default creation on the first host cannot fall back to the most recently paired host', async ({ launchPairedApp }) => {
+  const first = controlled('first-seed')
+  const second = controlled('second-seed')
+  const app = await launchPairedApp({ buildReplyFrames: first.reply },
+    { secondServer: { buildReplyFrames: second.reply } })
+  // Each fake's generated IDs start at created-1; separate launches keep the navigation
+  // assertion independent of artificial cross-host ID collisions.
+  const dialog = await open(app, 0)
+  await dialog.getByRole('textbox').fill('First host channel')
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => first.requests.length).toBe(1)
+  expect(first.requests[0]).toMatchObject({ type: 'create_conversation',
+    payload: { cwd: CWD, name: 'First host channel', is_promoted: true } })
+  expect(second.requests).toHaveLength(0)
+  first.release(app)
   await expect(dialog).toHaveCount(0)
+  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('First host channel')
+})
 
-  // --- 5. AC2: reopening starts from an empty field. A POSITIVE read, and the one that proves the
-  // container re-seeds its state on open rather than keeping the typed name around. ---
-  await createChannel.click()
-  await expect(nameField).toHaveValue('')
 
-  // --- 6. AC3: Create sends one createConversation and closes the dialog. ---
-  await nameField.fill(CHANNEL_NAME)
-  await createAction.click()
-
-  // THE POSITIVE, AUTO-WAITING READS COME FIRST. Everything after them is an unchanged-state assertion,
-  // and each of those would pass before the round trip even resolved if it led (the #1123 rule): the
-  // group count is 1 at launch, the Chats plus count is 0, and the dialog is about to be gone anyway.
-  await expect(rows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  // …and the created channel's thread opened, carrying THE TYPED NAME. A create that sent `name: null`
-  // would render the client's "Untitled" placeholder here instead, so this is the `name` assertion.
-  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(CHANNEL_NAME)
-
+test('dismissal and disconnect abandon pending continuations, and a fresh opening resets choices', async ({ launchPairedApp }) => {
+  const fake = controlled('first-seed')
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply }, { secondServer: {} })
+  for (const closeName of ['Cancel', 'Close dialog']) {
+    const dialog = await open(app)
+    await dialog.getByRole('textbox').fill('Release planning')
+    await dialog.getByLabel('Create a dedicated channel folder').check()
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect.poll(() => fake.requests.length).toBe(closeName === 'Cancel' ? 1 : 2)
+    await dialog.getByRole('button', { name: closeName, exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+    expect(fake.requests.filter(request => request.type === 'create_conversation')).toHaveLength(0)
+  }
+  let dialog = await open(app)
+  await dialog.getByRole('textbox').fill('Release planning')
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => fake.requests.length).toBe(3)
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  fake.release(app)
+  await expect(app.page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText('Release planning')
   await expect(dialog).toHaveCount(0)
-
-  // ⭐ THE `cwd` AND `is_promoted` ASSERTION, AND THE ONLY ONE THAT CAN SEE EITHER. Both rows are in
-  // ONE group, so the create carried this group's key rather than `null` (which the fake resolves to
-  // its own `/fake/workspace`, minting a second group) AND landed in the Channels tree rather than the
-  // Chats one (which would mint a Chats group for the same cwd, also making it 2).
-  await expect(workspaceRow).toHaveCount(1)
-  // The promotion half read a second way, differently shaped: an unpromoted row would give the Chats
-  // tree a group, and that group would draw a "Create chat" plus.
-  await expect(createChat).toHaveCount(0)
-  // Still exactly two rows — which is the proof that the cancelled dialog in step 4 sent nothing.
-  await expect(rows).toHaveCount(2)
+  dialog = await open(app)
+  await dialog.getByRole('textbox').fill('Release planning')
+  await dialog.getByLabel('Create a dedicated channel folder').check()
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => fake.requests.length).toBe(4)
+  await event(app, { type: 'disconnected', serverId: FIRST_SERVER_ID })
+  await expect(dialog).toHaveCount(0)
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+  await event(app, { type: 'connected', serverId: FIRST_SERVER_ID, ack: { protocol_version: 1 } })
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+  expect(fake.requests).toHaveLength(4)
+  await expect(dialog).toHaveCount(0)
 })

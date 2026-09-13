@@ -36,7 +36,7 @@ test('pre-opened mutation dialogs cannot submit by keyboard after disconnection'
   const { page } = app
   const cases = [
     ['.channel-list__rename', '.rename-conversation__input', 'OK', 'renameConversation'],
-    ['.channel-list__workspace-create', '.create-channel__input', 'Create', 'createConversation'],
+    ['.channel-list__workspace-create', '.create-channel__input', 'OK', 'createConversation'],
     ['.channel-list__workspace-edit', '.edit-workspace__input', 'OK', 'renameWorkspace']
   ]
   for (const [entry, input, confirm, commandType] of cases) {
@@ -122,7 +122,7 @@ test('sidebar ownership follows the target in both open-chat directions', async 
     await commands.clear()
     await page.locator('.channel-list__workspace-create').click({ force: true })
     await page.locator('.create-channel__input').fill('Owned channel')
-    await page.getByRole('button', { name: 'Create', exact: true }).click()
+    await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createConversation').length).toBe(1)
     expect((await commands.read()).find(c => c.type === 'createConversation')).toMatchObject({
       serverId: online, payload: { cwd: onlineRow.cwd, is_promoted: true }

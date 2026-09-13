@@ -9,7 +9,7 @@ import {
   useDefaultWorkspaceStore,
   selectDefaultWorkspace
 } from '../../store/defaultWorkspaceStore'
-import { requestNewConversation, requestNewChannel } from '../../store/conversationCreatedBridge'
+import { requestNewConversation } from '../../store/conversationCreatedBridge'
 // #1199 reads BOTH legs per server. The app-wide `selectStatus` / `selectRelayLinkStatus` cells are
 // untouched in name, signature and value; the host row is simply no longer a reader of either.
 // `selectStatus` keeps four other consumers (the composer status row, the connection banner, the repair
@@ -77,7 +77,7 @@ import { isConversationUnread } from '../../store/conversationUnread'
 import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
-import { CreateChannelDialogView } from './CreateChannelDialog'
+import { CreateChannelDialog } from './CreateChannelDialog'
 // #1180 — the view and its send helper travel together, unlike #1179's split: this verb has exactly
 // one sender and no shipped twin to sit beside, which is `RenameConversationDialog`'s shape.
 import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspaceDialog'
@@ -205,14 +205,13 @@ export function ChannelList({
   // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
   const [renameRow, setRenameRow] = useState<SidebarRow | null>(null)
   const [renameName, setRenameName] = useState('')
-  // The Create-channel dialog's own per-interaction pair (#1179), independent of the two above for
+  // The Create-channel dialog's own per-interaction target (#1179), independent of the two above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
   // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
   // create in — the group key the clicked plus closed over — and holding it here is what keeps that
-  // daemon-asserted path out of the dialog view entirely. `createChannelName` is the controlled field,
+  // daemon-asserted path out of the dialog view entirely. The mounted dialog owns its draft,
   // seeded EMPTY on every open (there is no current name to seed from, this being a create).
   const [createChannelTarget, setCreateChannelTarget] = useState<{ cwd: string; serverId: string } | null>(null)
-  const [createChannelName, setCreateChannelName] = useState('')
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
   // at once. Hold the exact path and clicked host together until dismissal.
@@ -302,7 +301,6 @@ export function ChannelList({
         onCreateChannel={(cwd, serverId) => {
           if (!canMutateHost(serverId) || serverId === undefined) return
           setCreateChannelTarget({ cwd, serverId })
-          setCreateChannelName('')
         }}
         // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
         // clicked, and the new name still has to be typed. Both cells are seeded together, the field
@@ -363,20 +361,10 @@ export function ChannelList({
           unknown-workspace group, whose key IS the empty string — and writing the check this way is
           what keeps that withhold load-bearing for one reason rather than two. */}
       {createChannelTarget !== null && connected(createChannelTarget.serverId) && (
-        <CreateChannelDialogView
-          name={createChannelName}
-          onNameChange={setCreateChannelName}
-          // Cancel closes and sends nothing (AC2). The next open re-seeds the field, so there is
-          // nothing to clear here.
-          onCancel={() => setCreateChannelTarget(null)}
-          onCreate={() => {
-            // Fire-and-forget, then close (AC3). `window.pyry` is dereferenced HERE, at interaction
-            // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
-            // the helper trims the name.
-            if (!canMutateHost(createChannelTarget.serverId)) return
-            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelTarget.cwd, createChannelTarget.serverId)
-            setCreateChannelTarget(null)
-          }}
+        <CreateChannelDialog
+          cwd={createChannelTarget.cwd}
+          serverId={createChannelTarget.serverId}
+          onDismiss={() => setCreateChannelTarget(null)}
         />
       )}
       {editWorkspaceTarget !== null && connected(editWorkspaceTarget.serverId) && (

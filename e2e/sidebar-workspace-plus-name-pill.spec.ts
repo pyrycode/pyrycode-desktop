@@ -266,5 +266,5 @@ test('the workspace plus names itself in a pill on hover and on focus, inside th
   // break. The pill covers the whole 20px plus while showing, so `pointer-events: none` on it is the only
   // reason this click lands at all. ---
   await createChannel.click()
-  await expect(page.locator('.create-channel')).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(page.locator('.create-channel-overlay .modal')).toBeVisible({ timeout: TIMEOUT_MS })
 })

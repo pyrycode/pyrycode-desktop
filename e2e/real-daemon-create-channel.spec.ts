@@ -138,7 +138,7 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   const renameControl = page.locator('.channel-list__rename')
   const saveControl = page.locator('.channel-list__save')
   const createChannel = page.getByRole('button', { name: CREATE_CHANNEL_NAME })
-  const dialog = page.locator('.create-channel')
+  const dialog = page.locator('.create-channel-overlay .modal')
 
   // --- Readiness gate: the PROMOTED seed's Rename pencil renders only after the whole chain — handshake
   // complete → session `connected` → the auto-fired `list_conversations` returned the seeded row → it
@@ -169,7 +169,7 @@ test('real daemon creates a promoted, named channel in the requested workspace o
   // whitespace-only case are #1179's fake-tier claims and are not re-litigated here at 45s a launch; the
   // enabled read is kept only so a click cannot land on a disabled button and time out opaquely. ---
   await page.locator('.create-channel__input').fill(CHANNEL_NAME)
-  const createAction = page.locator('.create-channel__create')
+  const createAction = page.locator('.create-channel-overlay .modal__action--confirm')
   await expect(createAction).toBeEnabled()
   await createAction.click()
 

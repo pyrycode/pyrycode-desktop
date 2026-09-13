@@ -73,3 +73,9 @@ Pending for the documentation stage: update `docs/knowledge/features/create-chan
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+2026-09-13 — Source search found three existing interaction consumers of the old dialog classes or Create action label: `real-daemon-create-channel.spec.ts`, `sidebar-workspace-plus-name-pill.spec.ts` and `sidebar-offline-mutations.spec.ts`. Update their selectors to the shared Modal/OK contract; no production contract changes. Their files also passed the remote-branch overlap check. The real-daemon spec is not run by this builder; execution remains with the dispatcher.
+
+Final implementation remains within the size boundary: two production TypeScript files plus stylesheet, one new exported component, one production consumer and about 600 written lines including this plan and all test changes. Four focused create-channel interactions, six offline-mutation interactions, the workspace-plus interaction, 153 scoped unit tests and the build passed. Actual modal captures at `/tmp/builder-1351-modal-1280.png` (1280×800), `/tmp/builder-1351-modal-800.png` (800×600), `/tmp/builder-1351-modal-short.png` (800×260) and `/tmp/builder-1351-rejected.png` (800×600) were inspected against the design reference. Geometry, token colors, radio treatment and shared actions match; the focused empty state adds its accessibility focus ring and disables OK as required. Short-window scrolling keeps the actions reachable.

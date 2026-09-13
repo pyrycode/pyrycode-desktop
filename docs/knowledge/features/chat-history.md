@@ -11,8 +11,8 @@ history pages automatically. Saved lists restore into the sidebar on launch,
 including unavailable and pairing-rejected hosts. Opening a saved chat restores its
 timeline on demand whether its host is connected or unavailable. Restored rows remain
 readable through reconnect and subsequent same-host receipts continue saving.
-Downloads require explicit upward thread input, including after reconnect;
-explicit Forget/Unpair removes the host's saved content after credential removal.
+Downloads require explicit upward thread input or a retryable failed page's Retry
+action, including after reconnect; explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes that host/conversation's saved timeline
 and list entry.
 Observing, saving, flushing and restoration add no history requests.
@@ -154,7 +154,8 @@ Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
 
-History downloads require trusted upward wheel/trackpad input over the thread, or
+Apart from explicit Retry of a failed page, history downloads require trusted
+upward wheel/trackpad input over the thread, or
 ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
 within the existing 200px near-top band before that input scrolls. Input outside
 the band only scrolls locally; entering the band needs another qualifying input.
@@ -176,8 +177,13 @@ coverage. Main clears outstanding history correlations before emitting classifie
 failure events on connection drop, terminal/error, pairing rejection or explicit
 redial, including when no server failure reply arrived. Unavailable/build/send
 failures also settle immediately. This releases pending state without retrying:
-only new qualifying input while connected retries, from the retained cursor even
-when the server's failure classification is nonretryable. A partial history walk
+new qualifying upward input while connected can ask again from the retained cursor
+even when the server's failure classification is nonretryable. The separate
+[composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
+requires `retryable: true`, the displayed conversation and its connected owning host,
+and the same held failure at activation. It calls `requestOlderHistory` with the
+same cursor and `limit: 0`; pending state removes the failure affordance and rejects
+duplicate demand without changing rows or successful coverage. A partial history walk
 never restarts itself at the newest page. Offline scrolling only exposes held
 content. Host-stamped requests cannot borrow another host's cursor, and stale
 cross-host failures cannot settle its replacement slice.

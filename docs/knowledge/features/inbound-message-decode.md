@@ -199,8 +199,9 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   narrower (`requireRecord`), and the sibling `HistoryRejectReason` narrower widening the pre-existing
   `daemon-error` kind with an optional `historyReject` field. [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)
   is also this boundary's first ticket with a live consumer at ship time — [daemon
-  connection](daemon-connection.md)'s `pendingHistoryRequests` correlation map — though every renderer
-  bridge still nulls the two `DaemonEvent` arms it feeds. [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
+  connection](daemon-connection.md)'s `pendingHistoryRequests` correlation map. The independent
+  `historyPageBridge.ts` consumes `historyPageReceived` and `historyRequestFailed`;
+  the four unrelated exhaustive renderer bridges intentionally return null. [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
   followed up with a second stage in the same file: `decodeHistoryEvent`/`decodeHistoryPage` narrow each
   entry's *payload* (not just its envelope) against the same eleven live-lane parsers, so
   `HistoryEntry.payload` — opaque since #1222 — is now read by something. Not a new `InboundDaemonMessage`
@@ -214,8 +215,9 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   distinct states apart (absent / `''` / text) rather than collapsing to two.
   [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) is also this boundary's second
   ticket with a live consumer at ship time — [daemon connection](daemon-connection.md)'s new
-  `pendingSystemPromptRequests` correlation map — though every renderer bridge still nulls the one
-  `DaemonEvent` arm it feeds. Unlike every other kind in this file, the verb it answers has **no**
+  `pendingSystemPromptRequests` correlation map. The independent `systemPromptBridge.ts`
+  consumes `systemPromptReceived`; unrelated exhaustive bridges intentionally return null.
+  Unlike every other kind in this file, the verb it answers has **no**
   `daemon-error` counterpart to widen: `system_prompt` mints no wire error code at all.
 - [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312) extended it once more, additively:
   the `thinking_progress` kind, `parseThinkingProgressPayload` (`parseApiRetryPayload`'s shape scaled

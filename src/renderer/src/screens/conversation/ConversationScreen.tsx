@@ -35,6 +35,7 @@ import {
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
 import { historyAskDeps, requestOlderHistory } from '../../store/historyPageBridge'
+import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   activeConversationStore,
@@ -4017,13 +4018,15 @@ export function ComposerErrorSlot({
   onRepair,
   notice,
   recovery,
-  refusal
+  refusal,
+  history
 }: {
   status: ConnectionStatus
   onRepair: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
+  history?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -4048,7 +4051,17 @@ export function ComposerErrorSlot({
   // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
   // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
   // rule that an optional prop is the silent-omission hole a type cannot catch.
-  return status.type === 'connected' ? recovery ?? refusal ?? notice : null
+  return status.type === 'connected' ? recovery ?? refusal ?? notice ?? history ?? null : null
+}
+
+export function ComposerHistoryFailure({ retryable, onRetry }: {
+  retryable: boolean
+  onRetry: () => void
+}): JSX.Element {
+  return <div className="stopped-turn-recovery" role="status">
+    <span>Could not load older messages</span>
+    {retryable && <button type="button" className="button-small button-small--error" onClick={onRetry}>Retry</button>}
+  </div>
 }
 
 // The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
@@ -4086,6 +4099,15 @@ function ComposerErrorSlotControl({
   // produces a new map holding the same record.
   const open = useActiveConversationStore(selectActiveConversation)
   const nowSeconds = Math.floor(Date.now() / 1000)
+  const rows = useConversationListStore(selectConversations)
+  const historyHost = serverIdForOpenConversation(rows, open?.id ?? null)
+  const historyFailure = useConversationTimelineStore(s =>
+    selectHistoryFailure(open === null ? undefined : s.timelines.get(open.id), historyHost))
+  const retryHistory = (): void => {
+    if (open !== null && historyHost !== null && historyFailure !== null) {
+      retryHistoryPage(historyRetryDeps, open, historyHost, historyFailure)
+    }
+  }
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
@@ -4183,9 +4205,11 @@ function ComposerErrorSlotControl({
           </div>
         ) : (
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> :
-            <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
+            usageLimit === null ? null : <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
         )
       }
+      history={historyFailure === null ? null :
+        <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
     />
   )
 }

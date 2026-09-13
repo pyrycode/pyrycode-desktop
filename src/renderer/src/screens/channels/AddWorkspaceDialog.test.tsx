@@ -3,9 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AddWorkspaceDialogView, type AddWorkspaceStatus } from './AddWorkspaceDialog'
 
 const noop = (): void => {}
-function renderView(path: string, workspaceRoot?: string, status: AddWorkspaceStatus = 'idle', connected = true): string {
+function renderView(path: string, workspaceRoot?: string, status: AddWorkspaceStatus = 'idle', connected = true, name = '', confirmedFolder?: string): string {
   return renderToStaticMarkup(<AddWorkspaceDialogView path={path} workspaceRoot={workspaceRoot}
-    hostLabel="Test host" status={status} connected={connected}
+    name={name} confirmedFolder={confirmedFolder} onNameChange={noop} hostLabel="Test host" status={status} connected={connected}
     onPathChange={noop} onCancel={noop} onStart={noop} />)
 }
 const startDisabled = /modal__action--confirm"[^>]*disabled/
@@ -14,7 +14,7 @@ const cancelDisabled = /modal__action--cancel"[^>]*disabled/
 const preview = (markup: string): string => markup.match(/<output[^>]*>(.*?)<\/output>/)?.[1] ?? 'missing'
 
 describe('AddWorkspaceDialogView', () => {
-  it('opens a shared modal with a host label, one empty focused input and empty preview', () => {
+  it('opens a shared modal with a host label, two empty inputs with folder focused and empty preview', () => {
     const markup = renderView('')
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
@@ -24,7 +24,8 @@ describe('AddWorkspaceDialogView', () => {
     expect(markup).toContain('Test host')
     expect(markup).toContain('Workspace folder on the host (relative or absolute path):')
     expect(markup).toMatch(/add-workspace__input"[^>]*autofocus=""/)
-    expect(markup.split('<input').length - 1).toBe(1)
+    expect(markup.split('<input').length - 1).toBe(2)
+    expect(markup).toContain('Workspace name (optional):')
     expect(markup).toContain('value=""')
     expect(preview(markup)).toBe('')
     expect(markup).toMatch(startDisabled)
@@ -101,4 +102,14 @@ describe('AddWorkspaceDialogView', () => {
     expect(markup).not.toContain('title=')
     expect(markup).not.toMatch(/aria-label="[^"]*(Tom|host\/)/)
   })
+})
+
+it('admits trimmed names through 128 UTF-16 units and freezes the confirmed folder', () => {
+  expect(renderView('/a', undefined, 'idle', true, '  ' + '😀'.repeat(64) + '  ')).not.toMatch(startDisabled)
+  expect(renderView('/a', undefined, 'idle', true, '😀'.repeat(64) + 'x')).toMatch(startDisabled)
+  const fixed = renderView('/requested', undefined, 'rejected', true, 'corrected', '/confirmed')
+  expect(preview(fixed)).toBe('/confirmed')
+  expect(fixed).toMatch(inputDisabled)
+  expect(fixed).not.toMatch(startDisabled)
+  expect(fixed).toContain('The chat was created.')
 })

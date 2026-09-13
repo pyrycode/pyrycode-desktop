@@ -176,8 +176,8 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * beside a NULLABLE `label` — no secret — asking the daemon to rename a WORKSPACE, with a literal
  * `null` label meaning "clear it"; both are renderer-supplied text the daemon polices SERVER-side
  * (exact-`cwd` match, non-empty after trim, ≤128 characters), never a local path here; the daemon
- * replies with one `workspace_updated` correlated to the requester, which this client neither awaits
- * nor correlates — #1288's inbound path re-lists and the label arrives on that reply);
+ * replies with `workspace_updated`; an optional client-only attemptId requests an additive result.
+ * The inbound path always re-lists and the label arrives on that authoritative reply);
  * and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
@@ -309,7 +309,7 @@ export type RendererCommand =
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
   | { type: 'setSystemPrompt'; payload: SetSystemPromptPayload }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
-  | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string }
+  | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
@@ -504,7 +504,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // The createWorkspaceFolder arm's shape (#1289): a payload guard paired with the optional
       // server id, since a workspace label is not scoped to a conversation and carries no id to
       // route by.
-      return 'payload' in value && isRenameWorkspacePayload(value.payload) && hasValidServerId(value)
+      return 'payload' in value && isRenameWorkspacePayload(value.payload) && hasValidServerId(value) &&
+        (!('attemptId' in value) || (typeof value.attemptId === 'string' &&
+          value.attemptId.length > 0 && value.attemptId.length <= 128))
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.

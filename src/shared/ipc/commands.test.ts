@@ -1547,3 +1547,14 @@ describe('the server-scoped commands name their server (#1120)', () => {
     ).toBe(true)
   })
 })
+
+it('bounds optional workspace rename attempt identifiers', () => {
+  const command = { type: 'renameWorkspace', payload: { path: '/a', label: 'A' } }
+  for (const attemptId of ['', 'x'.repeat(129), null, 1, {}]) {
+    expect(isRendererCommand({ ...command, attemptId })).toBe(false)
+  }
+  for (const attemptId of ['a', 'x'.repeat(128)]) {
+    expect(isRendererCommand({ ...command, attemptId })).toBe(true)
+  }
+  expect(isRendererCommand(command)).toBe(true)
+})

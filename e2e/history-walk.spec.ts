@@ -164,17 +164,7 @@ function walkingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[
 const historyAsks = (captured: Envelope[]): RequestHistoryPayload[] =>
   captured.filter((e) => e.type === 'request_history').map((e) => e.payload as RequestHistoryPayload)
 
-/**
- * One scroll back into the band the walk fires from, alternating between two in-band offsets so that a
- * real DOM `scroll` event dispatches every time — assigning `scrollTop` a value it already holds fires
- * nothing, and the whole detector hangs on that event.
- *
- * Both offsets are inside `HISTORY_ASK_BAND_PX` and both are ABOVE zero. Above zero because zero is the
- * one offset at which Chromium suppresses scroll anchoring, so parking there would drive the walk from a
- * position no other test in this repo drives it from (`thread-scroll-pin.spec.ts` owns that case and its
- * viewport assertions). Programmatic rather than `mouse.wheel` for the sibling's reasons: it fires the
- * same event the production handler listens to, with no hover position and no smooth-scroll timing.
- */
+// Position the viewport, then issue a genuine upward input.
 const scrollBack = async (page: Page, offset: number): Promise<void> => {
   await page.locator('.conversation__thread').evaluate((el, top) => {
     el.scrollTop = top
@@ -188,23 +178,10 @@ const scrollBack = async (page: Page, offset: number): Promise<void> => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       })
   )
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('ArrowUp')
 }
 
-/**
- * Scroll back until the walk has asked with `cursor`.
- *
- * POLLING WITH A NUDGE INSIDE IT, rather than one scroll followed by a wait, and that is forced by the
- * design rather than by flake. Only a `loaded` reading asks: while the previous page is still in flight
- * the reading is `requested` and every scroll event correctly declines, so a single scroll can
- * legitimately produce nothing. Re-scrolling until the walk moves is what the operator does.
- *
- * ⭐ IT WAITS FOR A CURSOR, NOT FOR AN ASK COUNT, and the difference is a real behaviour rather than a
- * looser assertion. A page that does NOT push the reader out of the band leaves them still near the top,
- * and Chromium's anchoring adjustment is itself a scroll event — so a small page legitimately carries the
- * walk one step further with no second nudge, and a count-based barrier races that cascade (observed: the
- * short page's arrival fired the next ask before the barrier for its own could be read). The ordered
- * cursor list asserted at the end of the drive is what pins the sequence exactly, duplicates included.
- */
 async function walkBackUntilAskFor(
   page: Page,
   captured: Envelope[],
@@ -229,6 +206,7 @@ test('scrolling back walks the thread page by page and stops at the start of the
   const captured: Envelope[] = []
   const { page } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) })
 
+  await scrollBack(page, 0)
   const userBubbles = page.locator('.bubble[data-thread-role="user"]')
   const thread = page.locator('.conversation__thread')
 
@@ -266,15 +244,12 @@ test('scrolling back walks the thread page by page and stops at the start of the
   // daemon produces when it re-asks its own log at a smaller size to fit the envelope cap. It draws its
   // row AND leaves the walk running. ---
   //
-  // ADDRESSED BY TEXT, NEVER BY COUNT OR POSITION, for the reason the barrier above records: a small page
-  // can leave the reader still in the band, and the anchoring adjustment is itself a scroll event, so the
-  // NEXT page may already have landed by the time this line runs. `toHaveCount(OPENING_ENTRIES + 1)` and
-  // `userBubbles.first()` both encode a moment rather than a fact, and both were observed racing the
-  // cascade. A row identified by its own text is a fact that stays true.
+  // Receipt is settled before issuing another qualifying input; a short page never starts one.
   await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: SHORT_PAGE_TEXT })).toHaveCount(
     1,
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )
+  expect(historyAsks(captured)).toHaveLength(3)
   await walkBackUntilAskFor(page, captured, CURSOR_AFTER_SHORT)
 
   // --- AC3, the stop. The final page reports `at_start`, and every later scroll declines. ---

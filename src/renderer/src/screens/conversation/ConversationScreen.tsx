@@ -10,6 +10,8 @@ import {
   type ReactNode,
   type Ref,
   type RefObject,
+  type WheelEventHandler,
+  type KeyboardEventHandler,
   type UIEventHandler
 } from 'react'
 import './conversation.css'
@@ -239,8 +241,8 @@ export function ConversationScreen({
   const ownOfflineSlice = offline && heldSlice?.serverId === selectedHost ? heldSlice : undefined
   const openTimeline = offline && ownOfflineSlice === undefined ? null : heldTimeline
   const localStatus = ownOfflineSlice?.localRead ?? (ownOfflineSlice === undefined ? 'loading' : 'loaded')
-  const coverage = ownOfflineSlice?.history?.status === 'loaded'
-    ? ownOfflineSlice.history : ownOfflineSlice?.restored?.coverage
+  const coverage = ownOfflineSlice?.coverage ?? (ownOfflineSlice?.history?.status === 'loaded'
+    ? ownOfflineSlice.history : ownOfflineSlice?.restored?.coverage)
   const olderSaved = offline && localStatus === 'loaded' &&
     !(coverage && 'atStart' in coverage && coverage.atStart)
   // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
@@ -584,6 +586,8 @@ export function ConversationScreen({
 export interface ThreadScrollPin {
   ref: RefObject<HTMLDivElement>
   onScroll: UIEventHandler<HTMLDivElement>
+  onWheel: WheelEventHandler<HTMLDivElement>
+  onKeyDown: KeyboardEventHandler<HTMLDivElement>
 }
 
 /**
@@ -813,8 +817,24 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     }
   }, [])
 
+  const demandHistory = (el: HTMLDivElement): void => {
+    // Measure before the input scrolls: crossing into the band needs a new input.
+    if (connectedConversationHostNow(conversationId) === null) return
+    const nearTop = isNearTop({ scrollOffset: el.scrollTop,
+      viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
+    if (nearTop) following.current = false
+    requestOlderHistory(historyAskDeps, conversationId, nearTop)
+  }
+
   return {
     scrollPin: {
+      onWheel: (event) => {
+        if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
+      },
+      onKeyDown: (event) => {
+        if (event.isTrusted && event.target === event.currentTarget &&
+          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) demandHistory(event.currentTarget)
+      },
       ref,
       // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
       // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
@@ -828,13 +848,11 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
         // the write produced, so an event the operator caused in the same frame — a different offset —
         // re-measures normally. See `reassertPinnedToBottom` for the drift this was measured to fix.
         //
-        // #1260 HANGS THE HISTORY WALK'S DETECTOR ON THIS SAME EARLY RETURN, and that is not incidental:
-        // a write the pin made moved the view to the BOTTOM, so re-reading it as the operator scrolling
-        // back would be wrong for both readings, not just for the flag.
+        // Scroll events update only the local following flag; they never request history.
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
-        // Measured once, into the named fields, and handed to both readings. The mapping is the one thing
+        // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
         const metrics = {
@@ -843,14 +861,7 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
           contentHeight: el.scrollHeight
         }
         following.current = isAtBottom(metrics)
-        // #1260: the walk's ask. NO BRANCH HERE — every reading that declines does so inside
-        // `requestOlderHistory`, where a spy can reach it, and this handler stays a measurement plus two
-        // total functions of it. The deps object dereferences `window.pyry` inside its own arrow bodies,
-        // so nothing is touched during render and the static renderer tier — where no handler ever fires
-        // — is unaffected.
-        if (connectedConversationHostNow(conversationId) !== null) {
-          requestOlderHistory(historyAskDeps, conversationId, isNearTop(metrics))
-        }
+
       }
     },
     // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate
@@ -978,9 +989,10 @@ export function Timeline({
       below?.kind === 'toolCall' && below.denial === undefined && below.result?.isError && 'tool-group-row--error-below'
     ].filter(Boolean).join(' ')]
   }))
-  if (rows.length === 0) return <EmptyThread />
   return (
-    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
+    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
+      aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
+      {rows.length === 0 && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
       {projection.map((group) => {
         const row = rows[group.index]

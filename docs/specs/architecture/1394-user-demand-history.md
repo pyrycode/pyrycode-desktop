@@ -78,3 +78,11 @@ Pending for documentation stage: update `docs/knowledge/features/chat-history.md
 
 **Reviewer:** builder self-review per shared `builder/security-review.md`.
 **Date:** 2026-09-13
+
+## Revisions
+
+2026-09-13: The first Electron run showed `Timeline` returned `EmptyThread` before mounting its scroll region. Keep that empty content inside the same focusable region so empty-thread input reaches the handler. The region has a static accessible label and retains the browser's keyboard-focus indicator; no theme changes are needed. Static empty-region assertions now require exactly one region.
+
+The migration inventory also includes `e2e/offline-conversation-actions.spec.ts`: reconnect followed by reopening must still send zero history commands until a new upward key. `LaunchControl.onLaunched` installs the test's main IPC observer before pairing and activation. The held-prepend test sends its key at zero before parking the reading anchor, avoiding native key-scroll animation during measurement. No production contract changed from the design above.
+
+Verification: 976 focused unit tests and build passed. Fake-transport history input/reconnect, page sequence, recording/restoration, offline actions, tool groups and scroll pinning are the touched interaction gate. Reviewed `/tmp/builder-1394-thread-1280.png` at 1280×800 against the Figma reference: existing sidebar/thread/composer arrangement and message tokens remain; keyboard focus visibly outlines the thread. The live-daemon spec was migrated but its execution is pending with the dispatcher. Total work remains below the 800-line boundary across five production files.

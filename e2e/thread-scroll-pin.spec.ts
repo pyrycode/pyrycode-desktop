@@ -1302,6 +1302,9 @@ test('a page walked back above the reader leaves them looking at the same row', 
   const withheld = withheldWalk()
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: withheld.buildReplyFrames })
 
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
+
   // The opening page lands first, so the conversation holds a cursor and the walk has something to ask
   // with. Waiting for its row is what proves that happened rather than assuming it.
   await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: OPENING_HISTORY_TEXT }))
@@ -1316,6 +1319,12 @@ test('a page walked back above the reader leaves them looking at the same row', 
   await page.locator('.conversation__thread').evaluate((el, top) => {
     el.scrollTop = top
   }, parked)
+  await settleScrollEvent(page)
+  await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+  await settleScrollEvent(page)
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('ArrowUp')
+  await page.locator('.conversation__thread').evaluate((el, top) => { el.scrollTop = top }, parked)
   await settleScrollEvent(page)
 
   // The preconditions. The reader is where the test put them, that place is inside the band, it is NOT

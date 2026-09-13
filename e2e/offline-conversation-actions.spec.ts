@@ -154,6 +154,10 @@ test('offline opening does not consume first-history eligibility', async ({ laun
   // The fake's reconnect list can replace the injected row. Restore its stamped ownership.
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, held] })
   await app.page.getByRole('button', { name: held.name, exact: true }).click()
+  await settle(app)
+  expect((await read()).commands.filter(c => c.type === 'requestHistory')).toEqual([])
+  await app.page.locator('.conversation__thread').focus()
+  await app.page.keyboard.press('Home')
   await expect.poll(async () => (await read()).commands.filter(c => c.type === 'requestHistory' && c.payload.conversation_id === held.id).length).toBe(1)
 })
 

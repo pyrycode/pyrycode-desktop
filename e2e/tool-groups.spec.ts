@@ -19,6 +19,8 @@ test('interleaved subagents group, update while collapsed, and retain expansion 
     }
     return [seedConversationsFrame()]
   } })
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
   const use = (id: string, parent?: string, name = 'Agent') => daemon.pushFrame(frame('tool_use', payload(id, parent, name)))
   const resolve = (id: string) => daemon.pushFrame(frame('tool_result', {
     ...payload(id), is_error: false, result_summary: `result of ${id}`

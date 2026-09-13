@@ -234,3 +234,47 @@ Pending — owned by the documentation stage, not this PR.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+### 2026-09-13 — qualify the `real-daemon-add-workspace` textbox locator (a deliberate, narrow departure from AC4)
+
+**What drove it.** The dispatcher's authenticated real-claude gate on `c9da89b` executed 19 tests: 18
+passed, 1 failed. The one failure is `real-daemon-add-workspace.spec.ts`, at
+`dialog.getByRole('textbox')` — a strict-mode violation, because `AddWorkspaceDialog` now renders **two**
+labelled textboxes and the locator names neither. The gate stated outright that it made **no base
+comparison** and no same-tree re-run, so it attributed the failure to this branch by default.
+
+**Triage: not a regression from this change.** This PR's diff is `e2e/fixtures/realDaemon.ts` plus this
+plan; neither can make a dialog's locator ambiguous. The ambiguity is #1372's second input
+(`Workspace name (optional):`). The proof is the sibling spec for the *same* dialog:
+`sidebar-add-workspace.spec.ts` already uses the fully qualified
+`getByRole('textbox', { name: 'Workspace folder on the host (relative or absolute path):' })`. #1372
+updated the specs it saw redden — the default tier — and missed this one, because the real tier was
+**already dead at setup**, so the drift landed unseen. That is the "a green fixture hides a red tier"
+lesson this ticket's own PR recorded, now confirmed by direct evidence.
+
+**Why it is fixed here rather than deferred to #1414.** Three reasons, in order of weight:
+
+1. **§ Scope Discipline does not fire.** Its stated trigger is *"does fixing the failure require editing
+   production code outside the ticket's scope?"* — no. `AddWorkspaceDialog` is correct: both inputs are
+   `<label>`-wrapped with distinct accessible names. The repair is a test file, which the rule explicitly
+   excludes.
+2. **Deferring is circular.** #1414's spec cannot be demonstrated fixed until *this* fixture repair lands
+   — on `main` it dies at setup and never reaches line 38. So #1414 depends on #1413, not the reverse;
+   blocking this ticket on it parks both, and #1409 with them.
+3. **Deferring is also a closed loop in practice.** #1414 sits in **Inbox** (human triage, never
+   auto-dispatched), while the gate re-runs the *whole* tier — so while this spec is red, #1413 can never
+   clear the gate, and each cycle routes it straight back here with nothing new to do.
+
+**The departure, stated plainly.** AC4 reads "No coverage is lost: **no spec body changes**, and all 19
+`real-*.spec.ts` files still collect." One spec body changes — one line. AC4's stated *purpose* is
+preserved exactly: the change adds specificity and removes none, alters no assertion, and mirrors the
+canonical locator already used for this element verbatim. The semantics confirm the target independently
+— the spec fills the field, then asserts `output` equals `destination`, and the preview is driven by the
+path input, so the folder field is the only field it could have meant. The `name` input is left untouched
+and unasserted, exactly as before. This is flagged, not buried: it is called out in the PR body too, and
+scaling it back is the reviewer's call.
+
+**Scope held.** Five other specs use an unqualified `getByRole('textbox')`; all are in the default
+fake-transport tier, all green, none touched. No production code is touched. #1414 is closed by this PR.

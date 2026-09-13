@@ -4329,6 +4329,51 @@ describe('parseInboundMessage — modal_shown recognition (#201, additive)', () 
   })
 })
 
+describe('parseInboundMessage — permission context (#1407)', () => {
+  it.each([
+    {},
+    { reason_type: 'future-category' },
+    ...[null, false, true, 0, 42, '', 'explanation', [], [false, { nested: null }],
+      JSON.parse('{"__proto__":{"kept":true},"constructor":0,"extra":[1]}')
+    ].map((reason) => ({ reason })),
+    { reason: false, reason_type: 'future-category' },
+    { reason_type: '', blocked_path: '', description: '', default_to_no: false },
+    { blocked_path: '/private/path', description: 'private-description', default_to_no: true },
+    { always_allow: { offered: true, rules: ['Bash(git status)', 'Read', 'Bash()'] } },
+    { always_allow: { offered: false, rules: [] } }
+  ])('preserves presence and complete values: %j', (context) => {
+    const payload = { ...MODAL_SHOWN, ...context }
+    expect(parseInboundMessage(encodeModalShown(payload))).toStrictEqual({
+      kind: 'modal-shown', modalShown: payload
+    })
+  })
+
+  it('filters offer and payload extras while retaining keys inside reason', () => {
+    const reason = { extra: { rules: ['opaque'] } }
+    expect(parseInboundMessage(encodeModalShown({
+      ...MODAL_SHOWN, reason, extra: 'drop',
+      always_allow: { offered: true, rules: ['Read', 'Bash()'], destination: 'drop' }
+    }))).toStrictEqual({
+      kind: 'modal-shown',
+      modalShown: { ...MODAL_SHOWN, reason, always_allow: { offered: true, rules: ['Read', 'Bash()'] } }
+    })
+  })
+
+  it.each([
+    ...['reason_type', 'blocked_path', 'description'].flatMap((field) =>
+      [null, false, 1, [], {}].map((value) => ({ [field]: value }))),
+    ...[null, 0, 'false', [], {}].map((default_to_no) => ({ default_to_no })),
+    ...[null, false, [], 'offer', {}, { offered: true }, { rules: [] },
+      { offered: 'true', rules: [] }, { offered: null, rules: [] },
+      { offered: true, rules: null }, { offered: true, rules: 'Read' },
+      { offered: true, rules: ['Read', 42] }, { offered: false, rules: [null] }
+    ].map((always_allow) => ({ always_allow }))
+  ])('rejects malformed declared context: %j', (context) => {
+    expect(() => parseInboundMessage(encodeModalShown({ ...MODAL_SHOWN, ...context })))
+      .toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — modal_shown fail-closed (#201)', () => {
   it('throws when class is absent, a non-string, or a string outside the closed enum', () => {
     const bad: unknown[] = [

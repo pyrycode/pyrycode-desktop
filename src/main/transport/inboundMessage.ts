@@ -2595,7 +2595,7 @@ function parseModalOption(payload: unknown): WireModalOption {
 
 /**
  * Narrow an opaque payload into a ModalShownPayload (#201, #870). Fail-closed like parseTurnStatePayload,
- * scaled to seven fields plus a nested ordered array. The `class` closed-enum check is cloned from the
+ * with optional permission context and ordered options/rules. The `class` closed-enum check follows the
  * `role` / `state` idiom: it covers non-string and unknown-string alike, narrowing to WireModalClass
  * without a cast — a bare requireString would accept any string and defeat the closed-enum boundary
  * this slice exists to defend (there is NO `destructive` wire class, ADR 0009). `options` must be an
@@ -2606,8 +2606,8 @@ function parseModalOption(payload: unknown): WireModalOption {
  * that is a scoping concern for the consuming slice (#872); this decoder polices TYPE, not membership.
  * Fail-closed on it is decided, not open: the field shipped in pyrycode#1065, so a tolerant fallback
  * would only buy compatibility with a daemon that will never be run, at the cost of a silently
- * unattributed prompt. Returns exactly the seven known fields; unknown keys are tolerated but not
- * copied. Its messages name the failure CATEGORY only — never interpolating `title` / `prompt` /
+ * unattributed prompt. Returns only declared fields; unknown payload/offer keys are not copied.
+ * Opaque reason keys are preserved. Errors name only the failure category, never `title` / `prompt` /
  * `options[].label` / `modal_id` / `class` / `conversation_id` (untrusted content or the nonce).
  */
 function parseModalShownPayload(payload: unknown): ModalShownPayload {
@@ -2628,7 +2628,23 @@ function parseModalShownPayload(payload: unknown): ModalShownPayload {
   }
   const options = rawOptions.map(parseModalOption)
   const default_option_id = requireString(payload, 'default_option_id')
-  return { conversation_id, modal_id, class: cls, title, prompt, options, default_option_id }
+  const result: ModalShownPayload = {
+    conversation_id, modal_id, class: cls, title, prompt, options, default_option_id
+  }
+  // decodeEnvelope already parsed JSON. Preserve opaque reasons without traversal or truthiness checks.
+  if ('reason' in payload) result.reason = payload.reason
+  if ('reason_type' in payload) result.reason_type = requireString(payload, 'reason_type')
+  if ('blocked_path' in payload) result.blocked_path = requireString(payload, 'blocked_path')
+  if ('description' in payload) result.description = requireString(payload, 'description')
+  if ('default_to_no' in payload) result.default_to_no = requireBoolean(payload, 'default_to_no')
+  if ('always_allow' in payload) {
+    const offer = requireRecord(payload, 'always_allow')
+    result.always_allow = {
+      offered: requireBoolean(offer, 'offered'),
+      rules: requireStringArray(offer, 'rules')
+    }
+  }
+  return result
 }
 
 /**

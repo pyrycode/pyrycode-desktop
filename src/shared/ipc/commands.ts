@@ -43,7 +43,7 @@ import type {
 
 /**
  * The fields the renderer supplies to resolve a modal with an answer (#236): the `modal_id` +
- * chosen `option_id`, DERIVED from the wire `ModalAnswerPayload` with `answer_token` excluded —
+ * chosen `option_id` and optional `always_allow`, derived from `ModalAnswerPayload` without `answer_token` —
  * `Omit` ties the field names to the wire contract while making the token-exclusion a compile-time
  * guarantee (AC1: no member carries a token). The `answer_token` is minted MAIN-side by
  * daemonConnection.answerModal, exactly as `sendMessageCommand` leaves `message_id` minting to the
@@ -623,7 +623,8 @@ function isAttachmentIdList(value: unknown): value is string[] | undefined {
 
 /** The untrusted renderer→main boundary guard for the answerModal payload (#236) — the modal
  *  resolution's boundary check (why the command half is security-sensitive). Mirrors
- *  isSendMessagePayload: `modal_id` AND `option_id` string. Structural minimum — a smuggled
+ *  isSendMessagePayload: `modal_id` AND `option_id` string, and a present `always_allow` Boolean.
+ *  Explicit undefined is invalid: structured clone preserves the property. A smuggled
  *  `answer_token` is not rejected here (the main-side sender's fresh-literal construction ignores
  *  it), so this guard need not know about the token. Pure; never throws. */
 function isAnswerModalPayload(value: unknown): value is AnswerModalCommandPayload {
@@ -632,7 +633,8 @@ function isAnswerModalPayload(value: unknown): value is AnswerModalCommandPayloa
     'modal_id' in value &&
     typeof value.modal_id === 'string' &&
     'option_id' in value &&
-    typeof value.option_id === 'string'
+    typeof value.option_id === 'string' &&
+    (!('always_allow' in value) || typeof value.always_allow === 'boolean')
   )
 }
 

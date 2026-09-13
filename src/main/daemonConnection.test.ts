@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
+import { onCommand, type CommandSource } from './receiveCommand'
+import { createCorrelationRouter } from './correlationRouter'
 import {
   createDaemonConnection,
   type AttachmentRetrievalConsumer,
@@ -213,6 +215,7 @@ function build(
     mintToken?: () => string
     timing?: DaemonConnectionDeps['timing']
     serverId?: string | null
+    wrapSink?: (sink: DaemonEventSink) => DaemonEventSink
   } = {}
 ): {
   connection: DaemonConnection
@@ -224,7 +227,7 @@ function build(
   const factory = makeDriverFactory({ throwOnSend: overrides.throwOnSend })
   const deps: DaemonConnectionDeps = {
     ...stores,
-    sink,
+    sink: overrides.wrapSink?.(sink) ?? sink,
     // The server-origin binding (#1068). Defaults to null — what the composition root passes today —
     // so every pre-existing test keeps emitting exactly the events it always did, plus a null stamp
     // that `emitted()` below projects away. The origin tests override it.
@@ -3801,6 +3804,141 @@ describe('createDaemonConnection — queue_state stream (#292)', () => {
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — permission contract (#1407)', () => {
+  const base = {
+    conversation_id: 'private-chat', modal_id: 'private-modal', class: 'permission',
+    title: 'private-title', prompt: 'private-prompt', options: [{ id: 'allow_once', label: 'Allow' }],
+    default_option_id: 'allow_once'
+  }
+  const baseEvent = {
+    type: 'modalShown', serverId: 'paired-host', conversationId: base.conversation_id,
+    modalId: base.modal_id, class: base.class, title: base.title, prompt: base.prompt,
+    options: base.options, defaultOptionId: base.default_option_id
+  }
+
+  it.each([
+    [{}, {}],
+    [{ reason_type: 'private-future-category' }, { reasonType: 'private-future-category' }],
+    ...[null, false, true, 0, 42, '', 'private-reason', [], [false, { nested: null }],
+      JSON.parse('{"__proto__":{"kept":true},"constructor":0}')
+    ].map((reason) => [{ reason }, { reason }] as const),
+    [{ reason: 0, reason_type: '' }, { reason: 0, reasonType: '' }],
+    [{ blocked_path: '', description: '', default_to_no: false },
+      { blockedPath: '', description: '', defaultToNo: false }],
+    [{ blocked_path: 'private-path', description: 'private-description', default_to_no: true },
+      { blockedPath: 'private-path', description: 'private-description', defaultToNo: true }],
+    [{ always_allow: { offered: false, rules: [] } }, { alwaysAllow: { offered: false, rules: [] } }],
+    [{ always_allow: { offered: true, rules: ['private-rule-B', 'private-rule-A'], extra: 'drop' } },
+      { alwaysAllow: { offered: true, rules: ['private-rule-B', 'private-rule-A'] } }]
+  ] as const)('delivers exact context through decode and IPC: %j', async (context, expected) => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ serverId: 'paired-host', diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = stampedEvents(sink).length
+    drivers[0].emit({ type: 'message', plaintext: modalShownPlaintext({
+      ...base, ...context, extra: 'drop', serverId: 'forged-host'
+    }) })
+    expect(stampedEvents(sink).slice(before)).toStrictEqual([{ ...baseEvent, ...expected }])
+    expect(records).toContainEqual({ event: 'modal-shown' })
+    expect(JSON.stringify(records)).not.toMatch(/private-|forged-host|drop/)
+    connection.stop()
+  })
+
+  it('drops malformed context without a partial event and continues with the next valid modal', async () => {
+    const { connection, sink, drivers } = await reachConnected()
+    const before = emitted(sink).length
+    for (const context of [
+      { reason_type: null }, { blocked_path: [] }, { description: {} }, { default_to_no: 'true' },
+      { always_allow: null }, { always_allow: [] }, { always_allow: { offered: true } },
+      { always_allow: { rules: [] } }, { always_allow: { offered: 1, rules: [] } },
+      { always_allow: { offered: true, rules: ['Read', null] } }
+    ]) {
+      expect(() => drivers[0].emit({ type: 'message', plaintext: modalShownPlaintext({
+        ...base, reason: { retained: 'private-reason' }, ...context
+      }) })).not.toThrow()
+      expect(emitted(sink)).toHaveLength(before)
+    }
+    drivers[0].emit({ type: 'message', plaintext: modalShownPlaintext(base) })
+    expect(emitted(sink)).toHaveLength(before + 1)
+    expect(emitted(sink).at(-1)?.type).toBe('modalShown')
+    connection.stop()
+  })
+
+  it.each([{}, { always_allow: true }, { always_allow: false }])(
+    'carries validated answers through main, preserving correlation and cancellation: %j', async (choice) => {
+      const connections = new Map<string, DaemonConnection>()
+      const router = createCorrelationRouter({ connectionFor: (id) => connections.get(id) ?? null })
+      const { connection, sink, drivers } = build({ serverId: 'host-A', wrapSink: router.observe })
+      const other = build({ serverId: 'host-B', wrapSink: router.observe })
+      connections.set('host-A', connection)
+      connections.set('host-B', other.connection)
+      connection.start()
+      other.connection.start()
+      await tick()
+      drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      other.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+      drivers[0].emit({ type: 'message', plaintext: modalShownPlaintext(base) })
+      const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+      const off = onCommand(source, (command) => {
+        if (command.type === 'answerModal') router.routeModal(command.payload.modal_id)?.answerModal(command.payload)
+        if (command.type === 'cancelModal') router.routeModal(command.payload.modal_id)?.cancelModal(command.payload)
+      })
+      const receive = source.on.mock.calls[0][1]
+      const payload = { modal_id: 'private-modal', option_id: 'allow_once', ...choice }
+      receive({}, { type: 'answerModal', serverId: 'host-B', payload: {
+        ...payload, answer_token: 'forged', rules: ['forged'], destination: 'persistent',
+        conversation_id: 'forged', serverId: 'host-B', reason: { forged: true }
+      } })
+      expect(drivers[0].sent).toHaveLength(1)
+      expect(decodeEnvelope(drivers[0].sent[0])).toMatchObject({
+        type: 'modal_answer', id: 2, ts: FIXED_TS
+      })
+      expect(decodeEnvelope(drivers[0].sent[0]).payload).toStrictEqual({ ...payload, answer_token: 'test-token' })
+      receive({}, { type: 'cancelModal', payload: { modal_id: payload.modal_id, ...choice } })
+      expect(decodeEnvelope(drivers[0].sent[1])).toMatchObject({
+        type: 'modal_cancel', payload: { modal_id: payload.modal_id }
+      })
+      expect(decodeEnvelope(drivers[0].sent[1]).payload).toStrictEqual({ modal_id: payload.modal_id })
+      expect(other.drivers[0].sent).toHaveLength(0)
+      drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+      expect(emitted(sink).at(-1)).toEqual({ type: 'modalAnswerRejected', modalId: payload.modal_id })
+      expect(router.routeModal(payload.modal_id)).toBeNull()
+      off()
+      expect(source.removeListener).toHaveBeenCalledWith(source.on.mock.calls[0][0], receive)
+      connection.stop()
+      other.connection.stop()
+    }
+  )
+
+  it('rejects present non-Booleans at the command receiver without sending', async () => {
+    const { connection, drivers } = await reachConnected()
+    const source = { on: vi.fn(), removeListener: vi.fn() } satisfies CommandSource
+    const handler = vi.fn((command) => {
+      if (command.type === 'answerModal') connection.answerModal(command.payload)
+    })
+    const off = onCommand(source, handler)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const receive = source.on.mock.calls[0][1]
+      for (const always_allow of [undefined, null, 0, 1, 'private-true', [], {}, { offered: true, rules: [] }]) {
+        receive({}, { type: 'answerModal', payload: {
+          modal_id: 'private-modal', option_id: 'allow_once', always_allow
+        } })
+      }
+      expect(handler).not.toHaveBeenCalled()
+      expect(drivers[0].sent).toHaveLength(0)
+      expect(warn).toHaveBeenCalledTimes(8)
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('private-')
+    } finally {
+      warn.mockRestore()
+      off()
+      connection.stop()
+    }
   })
 })
 

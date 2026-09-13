@@ -792,6 +792,21 @@ describe('isRendererCommand', () => {
     ).toBe(true)
   })
 
+  it.each([true, false])('accepts and preserves always_allow=%s (#1407)', (always_allow) => {
+    const payload = { modal_id: 'md-1', option_id: 'allow_once', always_allow }
+    const command = answerModalCommand(payload)
+    expect(isRendererCommand(command)).toBe(true)
+    expect(command).toStrictEqual({ type: 'answerModal', payload })
+  })
+
+  it.each([undefined, null, 0, 1, '', 'true', [], {}, { offered: true, rules: [] }])(
+    'rejects a present non-Boolean always_allow=%j (#1407)', (always_allow) => {
+      expect(isRendererCommand({
+        type: 'answerModal', payload: { modal_id: 'md-1', option_id: 'allow_once', always_allow }
+      })).toBe(false)
+    }
+  )
+
   it('accepts an answerModal payload carrying an extra answer_token (mint is main-side, not rejected here) (#236)', () => {
     // The command TYPE structurally excludes answer_token (Omit), but the runtime guard is a
     // structural minimum: a smuggled answer_token still guards true. It is the main-side sender's

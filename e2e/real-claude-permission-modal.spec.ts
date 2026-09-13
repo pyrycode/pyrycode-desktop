@@ -15,7 +15,7 @@ const STALE_SECONDS = 1
 // Retain only routing/observation metadata, never whole events, transcripts, rules or answer tokens.
 type Drive = {
   created: { id: string; cwd: string }[]
-  modals: { conversationId: string; allowLabel: string | null }[]
+  modals: { conversationId: string; allowLabel: string | null; offered: boolean }[]
   completed: string[]
   sessions: Map<string, { id: string; received: number }>
   off: () => void
@@ -54,7 +54,8 @@ test('real claude session checkbox grants repeated Bash use only in the current 
       if (event.type === 'conversationCreated') drive.created.push({ id: event.conversation.id, cwd: event.conversation.cwd })
       if (event.type === 'modalShown' && event.class === 'permission') drive.modals.push({
         conversationId: event.conversationId,
-        allowLabel: event.options.find(option => option.id === 'allow_once')?.label ?? null
+        allowLabel: event.options.find(option => option.id === 'allow_once')?.label ?? null,
+        offered: event.alwaysAllow?.offered === true
       })
       if (event.type === 'turnEnd') drive.completed.push(event.conversationId)
       if (event.type === 'runConfigReceived' && event.sessionId) drive.sessions.set(event.conversationId, {
@@ -84,6 +85,10 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     expect(existsSync(witness)).toBe(false)
     await submit()
     await expect(panel).toBeVisible({ timeout: TURN_TIMEOUT_MS })
+    expect(await page.evaluate(id => (window as DriveWindow).permissionDrive.modals
+      .filter(modal => modal.conversationId === id).at(-1)?.offered, conversationId),
+    'The daemon must offer rules; the dedicated test binary requires upstream #2365, including the mixed-offer fix.'
+    ).toBe(true)
     const checkbox = panel.getByRole('checkbox', { name: "Don't ask again this session for:", exact: true })
     await expect(checkbox).toBeVisible()
     await expect(checkbox).not.toBeChecked()

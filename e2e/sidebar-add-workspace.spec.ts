@@ -47,7 +47,7 @@ test('the host row’s plus starts a chat in a typed folder, and the workspace a
   const hostLabel = hostRows.first().locator('.channel-list__host-label')
   const plus = page.locator('.channel-list__host-add')
   const dialog = page.locator('.add-workspace-overlay .modal')
-  const pathField = page.locator('.add-workspace__input:not(.add-workspace__name)')
+  const pathField = dialog.getByRole('textbox', { name: 'Workspace folder on the host', exact: false })
   const start = page.locator('.add-workspace-overlay .modal__action--confirm')
   const cancel = page.locator('.add-workspace-overlay .modal__action--cancel')
   const workspaceLabels = page.locator('.channel-list__workspace-label')

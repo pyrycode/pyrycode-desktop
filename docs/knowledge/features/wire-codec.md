@@ -80,6 +80,15 @@ Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interface
 
 ## Edge cases and limitations
 
+- **Envelope vocabulary needs a direct type assertion.** `Envelope.type` accepts
+  `EnvelopeType | string`, so constructing an envelope cannot prove that its name
+  belongs to the declared vocabulary. `conversation_deleted` was already parsed
+  and consumed while its union member was missing (#1247). In
+  `src/shared/wire/types.test.ts`, assign the literal directly to `EnvelopeType`
+  without a cast, following the `turn_state` and `conversation_deleted` tests.
+  Vitest alone can pass with the member absent; `npm run typecheck` checks this
+  file through `tsconfig.node.json`, and `npm run build` runs that check too.
+  See [test-tier evidence](development-verification.md#what-each-test-tier-proves).
 - **Strict base64, by canonical-form check.** Node's `Buffer.from(s, 'base64')` is **lenient on four axes** — it strips non-alphabet chars, accepts url-safe `-`/`_`, tolerates wrong length, and accepts non-canonical final quanta (`'YQ==garbage'` → only `'YQ=='`, no error; `'YR=='` → the same byte as `'YQ=='`). Any of those would let a malformed frame decode to a silently-truncated or off-contract value (violating AC #4). `base64StdDecode` replicates Go's strict `base64.StdEncoding` with **one comparison**: lenient-decode, then require `base64StdEncode(decoded) === data`. Node's encoder emits only canonical output, so every garbage-bearing, url-safe, wrong-length, or non-canonical-quantum input fails the equality and throws — **no truncation**. Decode accepts a value **iff** it is the canonical encoding of its own bytes. The empty string re-encodes to itself and stays valid.
 - **Decode fails closed.** `decodeInnerFrame` / `decodeEnvelope` throw `WireDecodeError` on: malformed base64 (above), malformed UTF-8 (`TextDecoder('utf-8', { fatal: true })` rejects invalid byte sequences rather than substituting U+FFFD), malformed JSON (every `JSON.parse` throw — `SyntaxError` *and* deep-nesting `RangeError` — is caught), a non-object top level, and a missing/mistyped required primitive. They never return a partial value.
 - **Forward-compatible decode.** Unknown / server-added keys are **tolerated** (e.g. an `ErrorPayload` with `retry_after_s`, or a `payload_encrypted` field) — decode does not throw and `payload` stays opaque. `decodeInnerFrame` tolerates **any** numeric `v` (it does not hard-reject a future version) but normalizes the returned `v` to the literal `2` — the inbound version is intentionally discarded, not preserved.

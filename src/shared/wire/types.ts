@@ -273,6 +273,7 @@ export type EnvelopeType =
   | 'archive_conversation'
   | 'unarchive_conversation'
   | 'delete_conversation'
+  | 'conversation_deleted'
   | 'rename_conversation'
   | 'change_workspace'
   // The write half of a conversation's system prompt (#1249) — phone → binary, map-dispatched by the

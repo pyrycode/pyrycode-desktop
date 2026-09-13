@@ -37,7 +37,8 @@ Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
 `stalled`, `apiRetry`, `compacting`, `localSendPending`, `thinkingTokens` and optional
 `latestTurnEnd`. The `ConversationSlice` wrapper also holds history-request state,
 the prepend count, live/history join keys, supplying `serverId`, local-read status
-and explicit restored host/coverage evidence. A key **absent** from the map means
+and explicit restored host/coverage evidence. Successful `coverage` lives separately
+from pending/failed `history`, so retries retain the last successful cursor. A key **absent** from the map means
 "nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
 **present, empty** slice ("observed; nothing in the thread yet"). `selectTimelineFor` preserves that
 distinction rather than collapsing it, the same three-way reading [background-task roster
@@ -234,8 +235,9 @@ boundary and transient reading with their slice.
 
 ## Edge cases and limitations
 
-- **History backfills rows only.** Reopening an evicted conversation can request history
-  through the [opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259).
+- **History backfills rows only.** Reopening an evicted conversation sends no history
+  request. New [upward user demand](chat-history.md#received-state-admission-and-ownership)
+  can request pages using the coverage then held or restored.
   An old stopped boundary can return; its live recovery reading cannot.
 - **Bounds slice count, not slice bytes.** `MAX_RETAINED_TIMELINES` caps how many conversations' threads
   are retained at once; it does not cap the size of any one thread. A hostile daemon inside an already-

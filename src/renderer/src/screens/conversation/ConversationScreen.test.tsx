@@ -1563,7 +1563,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain(`<button type="button" class="${COPY}" aria-label="${COPY_LABEL}"`)
     // Exactly one interactive element in the bubble — the control this ticket adds and nothing else.
     expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
-    expect(markup).not.toContain('tabindex')
+    expect(markup.match(/tabindex/g)).toHaveLength(1)
+    expect(markup).toContain('class="conversation__thread" aria-label="Conversation history" tabindex="0"')
   })
 
   it('keeps the message text out of the accessible name — the label is a client-owned constant', () => {
@@ -3168,10 +3169,10 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   // the click itself in e2e/), so these renders pass no handler at all — which is also the assertion that
   // `onDropQueued` really is optional and a handler-less render draws the control rather than throwing.
 
-  it('renders no thread region at all when both the timeline and the backlog are empty', () => {
+  it('keeps one focusable thread region when both timeline and backlog are empty', () => {
     // The empty-thread invitation, not a silent region: EmptyThread is a distinct surface.
     const markup = renderToStaticMarkup(<Timeline items={[]} queued={[]} />)
-    expect(markup).not.toContain('conversation__thread')
+    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
     expect(markup).not.toContain('queued-row__drop')
   })
 
@@ -4489,7 +4490,7 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(bubbleCount(markup)).toBe(0)
     expect(markup).not.toContain('data-thread-role')
-    expect(markup).not.toContain('conversation__thread')
+    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
   })
 
   // #277: the timeline view mounts against the empty timeline store (getInitialState items: []), so

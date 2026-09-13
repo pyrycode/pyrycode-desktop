@@ -42,9 +42,13 @@ test('records received content, drains buffered quit, and reads locally after re
   const serverId = servers[0].serverId
   const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(14)
   await expect.poll(async () => {
     await page.locator('.conversation__thread').evaluate((el) => { el.scrollTop = el.scrollTop === 1 ? 2 : 1 })
+    await page.locator('.conversation__thread').focus()
+    await page.keyboard.press('ArrowUp')
     return historyAsks
   }).toBe(2)
   await expect(page.locator('.bubble[data-thread-role="user"]').first()).toContainText('loaded history 0')
@@ -183,6 +187,8 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
   await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
   await expect.poll(() => commands.includes('request_history')).toBe(true)
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.screenshot({ path: '/tmp/builder-1387-mixed-1280.png', animations: 'disabled' })

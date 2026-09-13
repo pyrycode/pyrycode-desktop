@@ -1085,6 +1085,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               failBundleStream()
               failAttachmentTransfers()
               failAttachmentRetrievals()
+              abandonHistoryRequests()
               emitFailed('pairing-rejected')
               return
             }
@@ -1178,6 +1179,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (failedHistory !== undefined) {
                 pendingHistoryRequests.delete(inReplyTo)
                 const reason: HistoryRequestFailure = inbound.historyReject ?? 'unclassified'
+                deps.diagnosticLog?.event({ event: 'history-request-failed', code: reason })
                 emitDaemonEvent(sink, {
                   type: 'historyRequestFailed',
                   conversationId: failedHistory,
@@ -1382,6 +1384,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             const conversationId = pendingHistoryRequests.get(inReplyTo)
             if (conversationId === undefined) return
             pendingHistoryRequests.delete(inReplyTo)
+            deps.diagnosticLog?.event({ event: 'history-page-received' })
             // A fresh literal with named fields, never a spread of inbound.historyPage — so a future
             // decoder that grew a field cannot smuggle it across. snake→camel for `at_start` per this
             // channel's convention; `entries` and `cursor` keep their names and their values.
@@ -2402,6 +2405,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
+        abandonHistoryRequests()
         // The relay socket dropped with a retryable close (#328). This is the single classification
         // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
         // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
@@ -2420,6 +2424,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
+        abandonHistoryRequests()
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -2431,6 +2436,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
+        abandonHistoryRequests()
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -2633,42 +2639,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function failHistoryRequest(conversationId: string, code: string): void {
+    deps.diagnosticLog?.event({ event: 'history-request-failed', code })
+    emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
+      reason: 'unclassified', retryable: true })
+  }
+
+  function abandonHistoryRequests(): void {
+    const pending = [...pendingHistoryRequests.values()]
+    pendingHistoryRequests.clear()
+    for (const conversationId of pending) failHistoryRequest(conversationId, 'interrupted')
+  }
+
   function requestHistory(payload: RequestHistoryPayload): void {
-    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
-    // mid-bootstrap, or bootstrap-failed). A history request has no consumer to fail; one sent while
-    // disconnected simply produces no reply, and the walk re-asks on its next scroll.
-    if (driver === null) return
+    if (driver === null || !authenticated) {
+      failHistoryRequest(payload.conversation_id, 'unavailable')
+      return
+    }
+    if ([...pendingHistoryRequests.values()].includes(payload.conversation_id)) return
     try {
-      // Shares the one monotonic nextEnvelopeId with send / requestSessionSettings — no second counter
-      // — so ids stay unique across interleaved calls, which is what makes them usable as the
-      // correlation key below (the daemon correlates the history_page reply by in_reply_to).
-      //
-      // ONE local for the envelope id, read three times (the #1176 rule), so the id sent, the id
-      // counted and the id recorded can never be three different expressions. The three payload fields
-      // are forwarded to the builder, which rebuilds a fresh literal, so no renderer-supplied key
-      // reaches the wire. Nothing is logged: not the cursor, not the conversation id, and the catch
-      // below drops its caught object without adding a line.
       const envelopeId = nextEnvelopeId
-      const bytes = buildRequestHistory({
-        id: envelopeId,
-        ts: now(),
-        conversationId: payload.conversation_id,
-        cursor: payload.cursor,
-        limit: payload.limit
-      })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      const bytes = buildRequestHistory({ id: envelopeId, ts: now(),
+        conversationId: payload.conversation_id, cursor: payload.cursor, limit: payload.limit })
+      nextEnvelopeId += 1
       driver.sendMessage(bytes)
-      // Record AFTER the send, so a build or send that throws leaves no entry under an id the next
-      // request will re-mint. The value is the conversation this app named, held here and handed back
-      // when the reply lands — the page itself names none, so this is where that fact lives.
       pendingHistoryRequests.set(envelopeId, payload.conversation_id)
+      deps.diagnosticLog?.event({ event: 'history-request-sent' })
     } catch {
-      // Never throw out of the module (parity #490): a daemon-minted cursor is of unpublished length,
-      // so unlike the fixed-shape neighbours an over-cap envelope here is conceivable rather than
-      // merely theoretical, and driver.sendMessage can throw regardless. The caught object is DROPPED
-      // — it could echo the cursor (classify-don't-forward, inherited #62). NO RETRY, here or above:
-      // a retry against a relay withholding the reply is the self-inflicted spin requestModelList's
-      // catch forbids, and the walk's policy is #1224's to own.
+      failHistoryRequest(payload.conversation_id, 'build-or-send-failed')
     }
   }
 
@@ -3510,11 +3508,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
     // rationale, applied to the read leg.
     pendingConfigRequests.clear()
-    // Reset the history request correlation map (#1222): the pendingConfigRequests rationale applied to
-    // the walk. Without it the fresh connection's first page — which names no conversation of its own —
-    // would inherit the dead connection's, and the recycled envelope ids make that a live misdelivery
-    // rather than a theoretical one.
-    pendingHistoryRequests.clear()
+    abandonHistoryRequests()
     // Reset the system-prompt request correlation map (#1230): the pendingConfigRequests rationale
     // applied to the prompt read, and the consequence of skipping it is the worst of the three — a
     // reply inheriting a dead connection's conversation would report one conversation's stored prompt

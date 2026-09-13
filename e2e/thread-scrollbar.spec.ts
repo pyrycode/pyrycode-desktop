@@ -180,9 +180,8 @@ async function primeOverflowingThread(page: Page): Promise<void> {
  * row under it, and no row, bubble or message wrapper carries a click handler anyway (the copy affordance
  * is a dedicated `Copy message` button inside the bubble).
  *
- * This is also why AC2 says "after a click" rather than "with the thread focused": the element has no
- * `tabindex` and this ticket does not add one. Chromium routes the scroll keys to the nearest scrollable
- * ancestor of that starting point.
+ * The thread is keyboard-focusable for user-demand history paging. Clicking its padding focuses the
+ * scroll region itself, so native scroll keys and qualifying upward history demand share that target.
  */
 async function clickInsideThread(page: Page): Promise<void> {
   const box = await page.locator('.conversation__thread').boundingBox()
@@ -208,8 +207,8 @@ test('the overflowing thread draws no scrollbar while its neighbours keep theirs
 
   // --- AC3. Nothing else about the element moved. `overflow-anchor` unset computes `auto`, which is what
   // leaves Chromium's scroll anchoring on — the mechanism thread-scroll-pin.spec.ts's three thumbnail tests
-  // prove and which `overflow-anchor: none` would cost a measured 172px. The two null attributes are tab
-  // order and the accessibility tree: neither is touched here. ---
+  // prove and which `overflow-anchor: none` would cost a measured 172px. The thread participates in tab
+  // order for keyboard history demand and keeps its existing implicit role. ---
   const element = await page.locator('.conversation__thread').evaluate((el) => ({
     overflowY: getComputedStyle(el).getPropertyValue('overflow-y'),
     overflowAnchor: getComputedStyle(el).getPropertyValue('overflow-anchor'),
@@ -219,7 +218,7 @@ test('the overflowing thread draws no scrollbar while its neighbours keep theirs
   expect(element).toEqual({
     overflowY: 'auto',
     overflowAnchor: 'auto',
-    tabIndexAttribute: null,
+    tabIndexAttribute: '0',
     roleAttribute: null
   })
 })

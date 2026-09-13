@@ -121,33 +121,9 @@ import {
  */
 export const MAX_RETAINED_TIMELINES = 10
 
-/**
- * Where one conversation's OPENING HISTORY ASK stands (#1259) — held beside the timeline it describes,
- * inside the same slice, so it dies with it. Four readings, and the fourth is the absence of this value:
- *
- *   `null` / absent key  never asked — or asked, drawn, and then EVICTED. Those two are deliberately the
- *                        same reading, and that identity is the whole of #1259's AC3: a re-opened
- *                        conversation whose slice was evicted asks again and refills, where one that
- *                        still holds its page does not.
- *   `requested`          an ask is on the wire and has not been answered. Terminal against a relay that
- *                        withholds the frame, and that is deliberate — see `markHistoryRequested`.
- *   `loaded`             a page was served. `cursor` and `atStart` are carried AS SENT for the
- *                        scroll-back walk (#1260) and are read by nothing today.
- *   `failed`             the ask was refused. All six members of `HistoryRequestFailure` settle here
- *                        identically; nothing branches on `reason` in this file or in its consumer.
- *
- * `retryable` IS RECORDED AND NEVER READ HERE. Its docblock on `historyRequestFailed` is explicit that
- * the flag is computed at the single emit so a walk driver cannot re-derive it wrong into a retry loop
- * against a relay that is merely withholding a frame. Storing it keeps that one computation
- * authoritative; acting on it is #1260's, and there is no timer, no backoff and no automatic re-ask
- * anywhere in this slice.
- *
- * `cursor` IS OPAQUE AND IS NOT A CAPABILITY. It is stored verbatim and never parsed, never compared,
- * never concatenated, never a `Map` key, a lookup path, a filename or a log field — and never reused
- * across conversations, which holding it per-slice makes structural rather than a rule to remember. The
- * daemon merges its three cursor failure causes into one indistinguishable answer on purpose; the
- * repair for all three is restarting with an empty cursor, so there is nothing here to tell apart.
- */
+/** Transient page request state. Successful coverage lives separately on the slice,
+ * so failure or interruption never resets the next cursor. Cursors remain opaque
+ * payload values and never enter paths, URLs, React keys or diagnostics. */
 export type HistoryRequestState =
   | { status: 'requested' }
   | { status: 'loaded'; cursor: string; atStart: boolean }
@@ -176,6 +152,8 @@ export interface ConversationSlice {
   restored?: Pick<SavedTimeline, 'serverId' | 'coverage'>
   timeline: TimelineState
   history: HistoryRequestState | null
+  /** Last successful page coverage, independent of transient request status. */
+  coverage?: SavedTimeline['coverage']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -341,7 +319,7 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   } | null
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
-  markHistoryRequested: (conversationId: string) => void
+  markHistoryRequested: (conversationId: string, serverId?: string) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
   recordHistoryFailure: (
     conversationId: string,
@@ -503,12 +481,15 @@ function withoutHeldEchoes(
 function withHistory(
   state: ConversationTimelineState,
   conversationId: string,
-  history: HistoryRequestState
+  history: HistoryRequestState,
+  serverId?: string
 ): ConversationTimelineState {
   const held = state.timelines.get(conversationId)
-  if (held === undefined) return state
+  if (held === undefined || (serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId)) return state
+  const coverage = history.status === 'loaded'
+    ? { status: 'received' as const, cursor: history.cursor, atStart: history.atStart } : held.coverage
   const next = new Map(state.timelines)
-  next.set(conversationId, { ...held, history, localRead: undefined })
+  next.set(conversationId, { ...held, history, coverage, localRead: undefined })
   return { timelines: next }
 }
 
@@ -600,7 +581,7 @@ export function createConversationTimelineStore(
               settle({ ...pending, localRead: 'failed' })
               return
             }
-            settle({ ...emptySlice, serverId, localRead: 'loaded', restored: { serverId, coverage: snapshot.coverage },
+            settle({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
               timeline: { ...initialTimelineState, items: snapshot.items },
               prependedRows: snapshot.prependedRows })
           } catch { settle({ ...pending, localRead: 'failed' }) }
@@ -711,35 +692,25 @@ export function createConversationTimelineStore(
         })
         return { timelines: next }
       }),
-    // #1259 — the three request-state paths. Each replaces the slice's `history` half and touches its
-    // `timeline` half NOT AT ALL: the spread carries the held `TimelineState` across by reference, so a
-    // component reading this conversation's rows is not woken by an ask being marked or settled.
-    //
-    // ALL THREE ARE ABSENT-KEY NO-OPS, and that is a design decision rather than defensiveness. The
-    // reading has to die with the timeline it describes, so a slice minted by a history write alone
-    // would be a timeline-less holder outliving the thing it describes — and it would enter at the
-    // HEAD, making a conversation the daemon merely answered about the next eviction victim. It is also
-    // unreachable on the ask path (`activateConversation` calls `markViewed`, which creates the slice,
-    // before `requestConversationConfig`), and for a reply landing after an eviction the correct
-    // outcome is exactly "nothing is held, ask again on the next opening" (AC3). The guard returns the
-    // state OBJECT, so zustand's `Object.is` short-circuit fires and no subscriber wakes.
-    //
-    // NONE OF THE THREE RE-ORDERS THE MAP. They take `dispatchFor`'s key-present shape — clone the
-    // outer map, `set` the key, position preserved by rule 1 of the eviction invariant — because a
-    // history write is not a view: promoting on one would let the daemon's reply, rather than the
-    // operator's attention, decide which thread survives the bound.
-    markHistoryRequested: (conversationId) =>
-      set((s) => withHistory(s, conversationId, { status: 'requested' })),
-    // The page came back. `cursor` and `atStart` are carried AS SENT and never derived from each other:
-    // an empty cursor with `atStart` true is the terminal page's published shape, and a short page says
-    // nothing at all. Neither is read by this ticket — #1260's walk is their only future consumer.
+    // Requests preserve same-host rows and coverage without changing holder order.
+    // A different host starts with an empty slice; its cursor cannot come from the old host.
+    markHistoryRequested: (conversationId, serverId) =>
+      set((s) => {
+        const held = s.timelines.get(conversationId)
+        if (held === undefined) return s
+        const base = serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId
+          ? emptySlice : held
+        const timelines = new Map(s.timelines)
+        timelines.set(conversationId, { ...base, serverId: serverId ?? base.serverId,
+          history: { status: 'requested' }, localRead: undefined })
+        return { timelines }
+      }),
+    // Only a successful page advances coverage, even when it contains no drawable rows.
     recordHistoryPage: (conversationId, cursor, atStart) =>
       set((s) => withHistory(s, conversationId, { status: 'loaded', cursor, atStart })),
-    // The refusal. `reason` and `retryable` are COPIED, never branched on: all six members of
-    // `HistoryRequestFailure` settle a conversation identically — it stops asking and nothing is drawn
-    // — and `history-unavailable`'s retryability is recorded for #1260 rather than acted on here.
+    // Settle without retrying; the next qualifying user input decides whether to ask.
     recordHistoryFailure: (conversationId, reason, retryable) =>
-      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable })),
+      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable }, receiptHost() ?? undefined)),
     markViewed: (conversationId) =>
       set((s) => {
         if (tailKey(s.timelines) === conversationId) return s

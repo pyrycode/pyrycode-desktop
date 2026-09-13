@@ -2,32 +2,17 @@
 
 The **transport-only** half of conversation scroll-back: an outbound `request_history` ask, a decoded
 `history_page` reply, and the five published refusals reaching the window as a typed, correlated
-failure. A conversation opened today shows nothing that happened before this client connected — this
-slice teaches the desktop transport to ask the daemon's append-only on-disk log
-(pyrycode#2112/#2113/#2116) for one backward step of a walk over it, and stops there.
+failure. The daemon's append-only log supplies one page per request. The renderer's
+[history bridge](conversation-timeline-store.md) draws decoded pages independently
+of the live bridges, keeping the existing [history/live join](conversation-timeline-store-internals.md#the-historylive-join-1225).
 
-Introduced in [#1222](../codebase/1222.md), split from #1088. #1222 shipped the ask (unsent in production)
-and the envelope-level decode with an entry's `type`/`payload` still opaque; [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
-added the payload decode — see § Payload decode below — so `historyPageReceived.entries` now carries
-typed events, not stored pairs. [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223) is the
-render consumer: it draws a page through a **fifth** independent channel subscriber ([history page
-bridge](conversation-timeline-store.md)), not by claiming `historyPageReceived` inside this file's four
-exhaustive bridges — `timelineBridge`'s two arms stay dormant here (see § The `DaemonEvent` arms below),
-and `daemonEventBridge`/`modalBridge`/`questionBridge`'s stay permanently null. **[#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)
-is the first sender**, firing this ask once per conversation activation and claiming `historyRequestFailed`
-too — see [Conversation timeline store](conversation-timeline-store.md) for the opening-ask design and
-[Internals § The opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for the
-mechanics. **A page now joins the live stream** ([#1225](https://github.com/pyrycode/pyrycode-desktop/issues/1225),
-shipped) — see [Internals § The history/live
-join](conversation-timeline-store-internals.md#the-historylive-join-1225) for the (`type`, `ts`) key and
-the page-side filter. The scroll-back walk that reads the
-`cursor`/`atStart` #1259 records is [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)'s,
-shipped: a second asker, `requestOlderHistory`, sends the same `RequestHistoryPayload` shape from a second
-renderer call site once the reader scrolls back near the top of a thread that hasn't reached `at_start` —
-no new wire verb, no new frame type, nothing on this transport-only leg changed. `retryable` is still read
-nowhere; #1260 confirmed the reasoning that named it dormant (no timer, no backoff, no automatic re-ask)
-rather than building a reader for it. See [Conversation timeline store § Edge
-cases](conversation-timeline-store.md#edge-cases-and-limitations) for the walk itself.
+Introduced in [#1222](../codebase/1222.md), with payload decoding in #1227 and
+rendering in #1223. The former opening ask and scroll-event walk are now replaced
+by [user-demand paging](chat-history.md#received-state-admission-and-ownership):
+`requestOlderHistory` sends the same payload for first and subsequent pages only
+on qualifying upward input. Opening and reconnect send no history requests.
+Successful coverage survives interruption; neither a failure's `retryable` flag
+nor page arrival starts an automatic retry.
 
 Nearest shapes in the tree: `ddd9a0b` ([session settings send](session-settings-send.md), request +
 reply decode) is the full request-and-decode analogue; `e199833` (#1165, `requestModelList`) is the
@@ -329,7 +314,9 @@ than papered over: an *optional* field added on one side alone passes both check
 ## Correlation (`src/main/daemonConnection.ts`)
 
 A fifth correlation store, `pendingHistoryRequests: Map<number, string>` — envelope id → the
-conversation id the request named — sited beside `pendingConfigRequests` and following its every rule.
+conversation id the request named — sited beside `pendingConfigRequests`. Each
+connection admits at most one outstanding request per conversation, giving
+host/conversation isolation across connection instances.
 See [Daemon connection — correlation § Conversation-history correlation
 (#1222)](daemon-connection-correlation.md#conversation-history-correlation-1222) for the full
 walk-through; in outline:
@@ -351,11 +338,18 @@ walk-through; in outline:
   reason === 'history-unavailable'`, and returns before the reassembler/modal-FIFO fallbacks. Order
   among the tier's members is immaterial — an envelope id is minted once, so at most one store can
   hold it.
-- **Reset on `dial()`**, beside its four siblings — a fresh connection recycles envelope ids from 2, so
-  a surviving entry would attribute the new connection's first page to a dead one's conversation.
-- **No cap**, the same evidence-based, no-observed-failure posture every sibling store in this file
-  takes; an entry costs one number and one string, and the only way to accumulate them is this client
-  sending asks a daemon never answers.
+- **Clear before settling interruption.** `abandonHistoryRequests` snapshots the
+  pending conversations, clears correlations, then emits `historyRequestFailed`
+  (`reason: 'unclassified'`, `retryable: true`) for each. Drop, terminal/error,
+  pairing rejection and explicit `dial()` all use it. Generation and correlation
+  gates reject stale replies, while the renderer can retry on new user demand.
+  Clearing without settlement leaves the held renderer request permanently pending.
+- **Unavailable and build/send failures settle immediately.** A missing driver or
+  unauthenticated connection emits the same classified failure; caught objects
+  are discarded. Diagnostics use static `history-request-sent`,
+  `history-page-received` and `history-request-failed` events with static codes,
+  never ids, cursors, content or caught errors. No timer, queue or automatic retry
+  is introduced; the map has no additional global count cap.
 
 ## The `DaemonEvent` arms (`src/shared/ipc/events.ts`)
 
@@ -450,13 +444,13 @@ daemon → error frame (in_reply_to matches a pending history ask)
 
 | Layer | Result | Failure behaviour |
 |---|---|---|
-| `buildRequestHistory` | `Uint8Array` | May throw `WireEncodeError` (unpublished cursor length); the sole caller catches and drops — an over-cap ask fails closed as a dropped send. |
+| `buildRequestHistory` | `Uint8Array` | May throw `WireEncodeError` (unpublished cursor length); the sole caller discards the caught object and emits a classified request failure. |
 | `isRequestHistoryPayload` | `boolean` | A missing/mistyped field is rejected at the untrusted→trusted boundary; the command is dropped before reaching main logic. |
 | `parseHistoryPagePayload` / `parseHistoryEntry` | `HistoryPagePayload` | Throws `WireDecodeError` on any malformed shape — non-array `entries`, one bad element, a missing/mistyped field, a non-object entry `payload`. Never a partial page. |
 | `decodeHistoryPage` / `decodeHistoryEvent` (#1227) | `{ page: DecodedHistoryPage; skipped: number }` | Never throws. An entry of a type the timeline doesn't draw, or one whose payload fails its parser, is skipped (not counted as page failure); order preserved among survivors; an all-skipped page yields `entries: []`. |
 | `parseInboundMessage` | frame-level | An oversized frame throws before any parse (`MAX_PLAINTEXT_BYTES`); the consumer's existing `catch` drops it with no event, no log. |
 | `narrowHistoryRejectReason` | `HistoryRejectReason \| undefined` | Total; never throws. A non-record payload, an absent `code`, a non-string `code`, or an unrecognised one all yield `undefined` → `'unclassified'` at the IPC emit. |
-| `requestHistory` (connection method) | `void` | Inert no-op when `driver === null`. `try/catch` drops any thrown object silently — never logged, never forwarded, no retry. |
+| `requestHistory` (connection method) | `void` | Unavailable/unauthenticated and build/send failures emit `historyRequestFailed`; caught objects are discarded. No automatic retry. |
 | `case 'history-page'` (consumer) | `void` | Absent or unmatched `inReplyTo` → dropped silently. A hit → exactly one `historyPageReceived`. |
 | `case 'daemon-error'` (consumer, history tier) | `void` | A correlated refusal always settles the ask, including a code outside the five (`'unclassified'`). A miss falls through unchanged to the pre-existing `daemon-error` consumers. |
 | Window | — | Both arms stay dormant/permanent-null across the four exhaustive bridges. `historyPageReceived` and (since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259)) `historyRequestFailed` are claimed outside them, by #1223's/#1259's fifth subscriber, `historyPageBridge.ts` — see § The `DaemonEvent` arms above. |
@@ -532,8 +526,8 @@ both verified against the tree rather than taken on report; see below).
   entry payload, entry `type`, entry `id`, or reject string reaches a log line. `requestHistory`'s
   catch drops its caught object (classify-don't-forward).
 - **Threat model: malicious relay** — addressed. It is on-path and content-blind; a dropped page
-  produces an unanswered ask abandoned at the next `dial()`, and nothing retries, so a withholding
-  relay cannot induce a spin.
+  can leave an unanswered ask until connection interruption settles it. Only new
+  qualifying user input can retry, so withholding cannot induce a download spin.
 - **Threat model: hostile daemon** — the primary threat here, addressed. A forged page for an ask never
   sent is dropped by the correlation gate rather than attributed to the open conversation; a mangled
   one fails closed with no partial value; a forged reject settles at worst one outstanding ask with a

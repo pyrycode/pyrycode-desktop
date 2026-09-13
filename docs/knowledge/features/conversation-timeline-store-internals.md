@@ -176,62 +176,30 @@ hole silently.
 
 ## The opening ask (#1259)
 
-```ts
-export interface ConversationSlice {
-  timeline: TimelineState
-  history: HistoryRequestState | null
-}
-export type HistoryRequestState =
-  | { status: 'requested' }
-  | { status: 'loaded'; cursor: string; atStart: boolean }
-  | { status: 'failed'; reason: HistoryRequestFailure; retryable: boolean }
-```
+The original opening ask was removed by
+[#1394](https://github.com/pyrycode/pyrycode-desktop/issues/1394). The heading remains
+for existing links; the current policy is [user-demand paging](chat-history.md#received-state-admission-and-ownership).
+`PairedShell` no longer calls a history helper during activation.
 
-`conversationTimelineStore`'s map value widens from a bare `TimelineState` to this two-field slice — the
-request state that backfilled a conversation's timeline lives beside it instead of in a new store or a
-screen-level ref, so it dies with the timeline on eviction. `selectTimelineFor`'s signature is unchanged
-(projects `.timeline`, still `TimelineState | null`); a new `selectHistoryRequestFor` projects `.history`,
-its `?? null` collapsing "never opened" and "opened, then evicted" into the one reading that means ASK
-NOW — the whole of AC3.
+`ConversationSlice` owns transient `history` alongside successful `coverage`.
+`markHistoryRequested(id, serverId)` marks before send, preserving same-host rows
+and coverage; a differently owned slice starts empty. `recordHistoryPage` updates
+coverage only after page admission, even for an empty page. `recordHistoryFailure`
+retains coverage and rows, rejects a conflicting receipt host, and releases pending
+state without retrying. These request-state writes do not create absent slices or
+reorder the holder. Restoration seeds coverage through its explicit read handle.
 
-Three new write paths, each `set((s) => withHistory(s, id, …))` against a shared helper that clones only
-the slice's `history` half (leaving `timeline` by reference, so no timeline reader is woken) and no-ops on
-an absent key — a slice minted by a history write alone would be a timeline-less holder outliving the
-thing it describes:
+`requestOlderHistory(deps, conversationId, nearTop)` is the sole asker. It declines
+unaddressable ids, input outside the band, pending local reads/requests and received
+`atStart`. Otherwise it marks synchronously before sending the exact successful
+cursor, or `''` for unknown coverage, with `limit: 0`. The production dependency
+reads current host ownership on each invocation; no coverage is captured at mount.
 
-- `markHistoryRequested(id)` → `{ status: 'requested' }`, called by `requestOpeningHistory` before the send.
-- `recordHistoryPage(id, cursor, atStart)` → `{ status: 'loaded', cursor, atStart }`, called by
-  `useHistoryPageBridge` right after `prependHistoryFor` draws the page — draw first, so a page for a
-  since-evicted slice still finds a key to record against.
-- `recordHistoryFailure(id, reason, retryable)` → `{ status: 'failed', reason, retryable }`, called from
-  the new `settleFailure` arm below.
-
-None of the three re-orders the map or promotes the key: a daemon reply must not decide which conversation
-survives `MAX_RETAINED_TIMELINES`, only the operator's own `markViewed` does that.
-
-```ts
-export function requestOpeningHistory(deps: OpeningHistoryDeps, conversationId: string | null): void {
-  if (!conversationId) return
-  if (deps.getHeld(conversationId) !== null) return
-  deps.markRequested(conversationId)
-  deps.sendCommand({ type: 'requestHistory', payload: { conversation_id: conversationId, cursor: '', limit: 0 } })
-}
-```
-
-Fired from `PairedShell.tsx`'s `requestConversationConfig` — the fourth call there and the only gated one:
-`requestRunConfigSnapshot`/`requestModelList`/`requestSystemPrompt` are whole-value replaces that fire on
-every activation for free, but a duplicate history page *prepends*, so this call carries its own
-per-conversation gate rather than relying on the seam. Mark-before-send, both calls synchronous with no
-`await` between the read and the write, so no concurrent handler can interleave a second ask in. Every
-terminal reading (`requested`/`loaded`/`failed`) is non-null, which is what makes a retry loop structurally
-unreachable rather than merely absent — the one reading that asks is `null`.
-
-`subscribeHistoryPage` widens from one callback to two — `applyPage(conversationId, items, cursor,
-atStart)` and `settleFailure(conversationId, reason, retryable)` — claiming `historyRequestFailed` for the
-first time. The two parameter types (`readonly ThreadItem[]` vs `HistoryRequestFailure`) are mutually
-unassignable under `strictFunctionTypes`, so swapping them is a compile error, not a runtime bug. Every one
-of the six `HistoryRequestFailure` members reaches the same `recordHistoryFailure` call with no branch on
-`reason`.
+`subscribeHistoryPage` owns both page and failure events independently of the live
+bridges. Pages are drawn before recording successful coverage. All failure reasons
+settle identically; neither `reason` nor `retryable` initiates or prevents a later
+qualifying connected user request. Main also settles interrupted correlations, so
+abandonment without a server reply cannot leave the renderer permanently pending.
 
 ## The history/live join (#1225)
 
@@ -434,11 +402,12 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
    (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
     reconnected, or reset arm above, never by a fourth path of its own)
 
-opening a conversation ─(PairedShell's activateDeps.requestConversationConfig, #1259)→
-   requestOpeningHistory(openingHistoryDeps, conversationId)
-   → getHeld(conversationId) === null ?
-        markHistoryRequested(id) → sendCommand({type:'requestHistory', payload:{conversation_id:id, cursor:'', limit:0}})
-      : return   // `requested`/`loaded`/`failed` all short-circuit — every terminal reading is non-null
+trusted upward thread input near top, connected owner →
+   requestOlderHistory(historyAskDeps, conversationId, nearTop)
+   → pending local read/request or received atStart ? return
+     : markHistoryRequested(id, host)
+       → sendCommand(requestHistory, cursor: last successful cursor or '', limit: 0)
+   // Opening, scroll events, page settlement and reconnect do not initiate requests.
 
 served history page ─(#1222 ask + transport decode, #1227 per-entry decode)→ DaemonEvent{historyPageReceived,
    conversationId, entries: HistoryTimelineEntry[], cursor, atStart}

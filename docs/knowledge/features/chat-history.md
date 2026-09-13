@@ -10,8 +10,9 @@ The app records received lists, live timeline content, composer echoes and loade
 history pages automatically. Saved lists restore into the sidebar on launch,
 including unavailable and pairing-rejected hosts. Opening a saved chat while its
 host is unavailable restores its timeline on demand for scrolling and copying.
-[#1340](https://github.com/pyrycode/pyrycode-desktop/issues/1340) owns reconnect,
-scroll-trigger changes and explicit host/conversation removal integration.
+Downloads require explicit upward thread input, including after reconnect. Connected
+opening restoration remains [#1395](https://github.com/pyrycode/pyrycode-desktop/issues/1395);
+explicit host/conversation removal integration remains separate.
 Observing, saving, flushing and offline restoration add no history requests.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
@@ -83,7 +84,8 @@ Before the oldest saved row, the view shows “Older messages require a connecti
 unless coverage explicitly reports `atStart: true`; neither a short nor an empty
 saved snapshot proves completeness. This notice sends no request.
 
-The writer retains the last successful coverage beside each observed timeline.
+The holder retains successful `ConversationSlice.coverage` independently of transient
+`history`; the writer also retains it beside each observed timeline.
 `HistoryRequestState` alone is insufficient: `markHistoryRequested` and
 `recordHistoryFailure` replace its loaded cursor and `atStart`. A served page
 updates rows before `recordHistoryPage` publishes successful coverage; only that
@@ -128,6 +130,39 @@ rendering separately suppresses the streaming cursor and grouped-tool running la
 Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
+
+History downloads require trusted upward wheel/trackpad input over the thread, or
+ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
+within the existing 200px near-top band before that input scrolls. Input outside
+the band only scrolls locally; entering the band needs another qualifying input.
+The same focusable region contains empty and short threads, so first-page demand
+does not depend on overflow. Composer navigation, synthetic events, ordinary
+scroll events, mounting, resize, bottom pinning and prepend compensation send no
+history command. Launch, opening, restoration and reconnect do not request pages.
+
+`requestOlderHistory` reads successful coverage at demand time: unknown coverage
+uses `cursor: ''`, while received coverage uses the exact last successful cursor,
+including one restored from disk. Only `atStart: true` establishes completion;
+short, empty and all-undrawable pages do not. One request may be outstanding per
+host/conversation. Demand during a local read or pending request is discarded,
+not queued; settling either does not trigger a download. Remaining in the band
+after a response also requires new input. There is no timer or automatic walk.
+
+Requests and failures retain same-host rows, prepend metadata and successful
+coverage. Main clears outstanding history correlations before emitting classified
+failure events on connection drop, terminal/error, pairing rejection or explicit
+redial, including when no server failure reply arrived. Unavailable/build/send
+failures also settle immediately. This releases pending state without retrying:
+only new qualifying input while connected retries, from the retained cursor even
+when the server's failure classification is nonretryable. A partial history walk
+never restarts itself at the newest page. Offline scrolling only exposes held
+content. Host-stamped requests cannot borrow another host's cursor, and stale
+cross-host failures cannot settle its replacement slice.
+
+Page admission keeps the existing [history/live overlap filter](conversation-timeline-store-internals.md#the-historylive-join-1225)
+and row order. [Scroll compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
+preserves a surviving row at zero offset as well as through native nonzero
+anchoring; compensation itself cannot request another page.
 
 [`createSavedListRestorer`](../../../src/renderer/src/store/savedListRestorer.ts)
 mounts once in `PairedShell` and observes saved identities in `serverInfoStore`,
@@ -388,6 +423,17 @@ renderer buffers; atomic file replacement still protects the last complete
 collection. Flushing never adds a completion boundary to a partial answer.
 
 ## Testing
+
+[`historyDemand.test.ts`](../../../src/renderer/src/store/historyDemand.test.ts)
+checks unknown/restored/complete coverage, discarded pending demand, failure retry
+from the retained cursor and host isolation. Main connection tests cover abandoned
+requests and late replies. [`history-on-open.spec.ts`](../../../e2e/history-on-open.spec.ts)
+now tests explicit demand: its main IPC observer is installed before pairing and
+activation, so zero commands cannot be confused with commands discarded by host
+routing. Genuine wheel/keyboard input is compared with composer navigation,
+synthetic events and programmatic movement, including empty/short threads and
+reconnect. An empty page needs a later received live frame as a receipt barrier;
+row count alone cannot prove that the empty response has settled.
 
 [`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) exercises every
 current row shape, optional/empty values, coverage, nested field projection,

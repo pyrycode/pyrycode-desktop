@@ -20,7 +20,9 @@ describe('banner display surfaces', () => {
     expect(html.includes('claude-banner--warning')).toBe(level === 'warning')
     expect(html).toContain('session-delimiter__title claude-banner')
     if (level === 'future' || level === '__proto__') expect(html).not.toContain(level)
-    expect(html).not.toMatch(/data-thread-role|title=|aria-label=/)
+    const threadOpening = '<div class="conversation__thread" aria-label="Conversation history" tabindex="0">'
+    expect(html.startsWith(threadOpening)).toBe(true)
+    expect(html.slice(threadOpening.length)).not.toMatch(/data-thread-role|title=|aria-label=/)
   })
   it('hides info only from the timeline, including empty stopping reports', () => {
     const value = { ...report, level: 'info', text: '' }

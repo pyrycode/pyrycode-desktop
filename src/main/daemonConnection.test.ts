@@ -9186,6 +9186,34 @@ describe('createDaemonConnection — requestHistory (history page request/reply,
     expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
   })
 
+  it('keeps one history request per conversation and admits a retry after interruption', async () => {
+    const ctx = await requested()
+    const payload = { conversation_id: CONV, cursor: CURSOR, limit: 0 }
+    ctx.connection.requestHistory(payload)
+    expect(ctx.drivers[0].sent.map(decodeEnvelope).filter(e => e.type === 'request_history')).toHaveLength(1)
+    ctx.drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    ctx.connection.requestHistory(payload)
+    expect(ctx.drivers[0].sent.map(decodeEnvelope).filter(e => e.type === 'request_history')).toHaveLength(2)
+  })
+
+  it('settles abandoned history on explicit redial without a failure reply', async () => {
+    const ctx = await requested()
+    ctx.connection.reconnect()
+    await tick()
+    expect(emitted(ctx.sink).filter(e => e.type === 'historyRequestFailed')).toEqual([
+      { type: 'historyRequestFailed', conversationId: CONV, reason: 'unclassified', retryable: true }
+    ])
+  })
+
+  it('settles history on a socket drop and rejects its later reply', async () => {
+    const ctx = await requested()
+    ctx.drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, ctx.replyTo) })
+    expect(emitted(ctx.sink).filter(e => e.type === 'historyRequestFailed')).toHaveLength(1)
+    expect(emitted(ctx.sink).filter(e => e.type === 'historyPageReceived')).toEqual([])
+  })
+
   it('clears outstanding asks on reconnect, so a stale id cannot correlate on the new connection', async () => {
     // The fresh connection recycles envelope ids from 2, so a surviving entry would attribute the new
     // connection's first page to the dead one's conversation — a live misdelivery, not a theoretical one.

@@ -124,6 +124,8 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   // page: the conversation's log holds nothing yet. Nothing is asserted about that here — an empty page
   // and a refusal draw the same nothing, which is exactly why the proof has to be the refill below. ---
   await row.click()
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
@@ -184,6 +186,8 @@ test('a real daemon answers the opening history ask and the thread reopens holdi
   // asks again; the marker is in the daemon's log; and it can reach this thread by no other route —
   // nothing was sent, nothing streamed, and the optimistic echo died with the slice. ---
   await row.click()
+  await page.locator('.conversation__thread').focus()
+  await page.keyboard.press('Home')
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(markerBubble).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
 })

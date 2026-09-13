@@ -32,6 +32,11 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 ## What it does
 
+Conversation activation requests configuration only for a connected owner; it
+never requests history. First and subsequent history pages require new
+[upward thread input](chat-history.md#received-state-admission-and-ownership),
+including after reconnect or reopening an evicted conversation.
+
 The container mounts `createSavedListRestorer` for its lifetime, independently of
 route changes. Saved identities can populate the sidebar without a connected host;
 restoration never activates a conversation or dispatches navigation. Teardown

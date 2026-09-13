@@ -17,6 +17,9 @@ transport, or new store/wire code, so not security-sensitive.
 
 ## What it does
 
+Saved lists also populate these trees offline. Host-local read errors appear below
+the host, separate from connection dots and repair; see [local read failures](chat-history.md#results-and-failure-preservation).
+
 - Reads saved `serverIds` independently of `useConversationListStore(selectConversations)`.
   Every saved host renders in both trees even before a conversation list arrives. `renderBody`
   partitions `conversations ?? []` for display only: the store keeps `null` as **not-yet-loaded**.

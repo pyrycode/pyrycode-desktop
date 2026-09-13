@@ -1,6 +1,6 @@
 # Conversation list store
 
-The renderer's held copy of the daemon's live conversation list — a dedicated, unidirectional
+The renderer's held received or locally restored conversation lists — a dedicated, unidirectional
 Zustand store fed by a subscription binding that observes the [conversation list
 fetch](conversation-list-fetch.md)'s `conversationsReceived` event and drives the initial
 `list_conversations` request, so the Channel List screen (#141), the create-discussion affordance
@@ -43,6 +43,12 @@ export interface ConversationListState {
   byServer: ReadonlyMap<ConversationListOrigin, readonly ServerConversationSummary[]>
 }
 export type ConversationListStore = ConversationListState & {
+  localListReads: ReadonlyMap<string, 'loading' | 'loaded' | 'failed'>
+  beginLocalListRead: (serverId: string) => {
+    complete: (rows: readonly ConversationSummary[]) => void
+    fail: () => void
+    cancel: () => void
+  } | null
   setConversations: (conversations: readonly ConversationSummary[], serverId?: string | null) => void
   clearAllConversations: () => void   // the pairing-boundary drop (#1086, AC5) — nullary
   clearConversationsFor: (serverId: string) => void   // the per-server drop (#1196), see below
@@ -60,10 +66,13 @@ EMPTY_CONVERSATION_IDS: ReadonlySet<string>  // stable empty-Set reference both 
 
 Mirrors [`runConfigStore`](run-config-store.md)'s DI-factory → singleton → hook → selector structure
 verbatim, including the `null` "not yet loaded" sentinel — an empty array (`[]`) is a real, loaded
-"zero conversations" state, never coerced to or from `null`. Still a **single setter**, not a
-reducer: keying adds no second *kind* of write, so the discriminated-union-would-be-ceremony argument
-stands; `clearAllConversations` is a second entry point but not a second kind of mutation — it is the
-pairing-boundary drop, and its nullary signature is the point (see below). Rows are held **verbatim
+"zero conversations" state, never coerced to or from `null`. Received lists use `setConversations`; saved lists use
+`beginLocalListRead` without a fabricated received event. Its per-host token rejects
+late success and failure after received data, clears or cancellation. Missing/empty
+local success installs `[]`; failure leaves the slot absent. These local changes
+never authorize persistence or establish connection state. See
+[restoration admission](chat-history.md#received-state-admission-and-ownership).
+Rows are held **verbatim
 in wire snake_case** with exactly one client-owned property added beside them: no parallel camelCase
 renderer type, no per-field remap — unlike `runConfigSnapshot`'s `used_tokens → usedTokens`, this
 reuses `ConversationSummary` directly (`ServerConversationSummary extends` it) so the slice needs
@@ -186,7 +195,9 @@ closed the gap this document used to name as "a later ticket's" (§ AC5 below). 
 is the keyed sibling of `clearAllConversations`: copy-on-write (`new Map(held)`, `delete`), the union
 recomputed through the same `flattenByServer` in the same `set`, every surviving slot handed back by
 reference so a component watching another server does not re-render, and the same subscriber
-short-circuit — a key not held hands the state object straight back. Dropping the *only* held slot
+short-circuit — a key with neither rows nor local read state hands the state object
+straight back. Both clear methods invalidate pending local read tokens and remove
+the corresponding `localListReads` entries, even before rows arrive. Dropping the *only* held slot
 flattens to `conversations: null` (not-loaded), the honest read for a surviving server that has not
 replied yet, never a false loaded-empty. **Typed `string`, not `ConversationListOrigin`** — narrower
 than the store's key domain on purpose, since only a paired server can be forgotten, so the `null`

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConversationListStore } from './conversationListStore'
 import { createConversationTimelineStore } from './conversationTimelineStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
+import { beginChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
 import type { ConversationSummary } from '@shared/wire/types'
 
@@ -9,8 +10,8 @@ const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_p
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
   const lists = createConversationListStore()
-  const timelines = createConversationTimelineStore()
   let receipt: { type: string; serverId: string | null } | null = null
+  const timelines = createConversationTimelineStore(undefined, () => receipt?.serverId)
   let scheduled: (() => void) | undefined
   const log = vi.fn()
   const save = vi.fn(write)
@@ -30,6 +31,67 @@ const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 
 describe('chat history recording', () => {
+  it('pauses buffered host saves, discards them on removal and admits fresh re-pair receipts', async () => {
+    const h = harness()
+    h.list()
+    h.delta('old')
+    const settle = beginChatHistoryRemoval('a')
+    h.list(['other'], 'b')
+    await h.writer.flush()
+    expect(h.save.mock.calls.map(([r]) => r.serverId)).toEqual(['b'])
+    settle(true)
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledTimes(1)
+    h.list()
+    h.delta('fresh')
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'fresh' }] } }])
+    await h.writer.stop()
+  })
+
+  it('resumes buffered history when credential removal fails', async () => {
+    const h = harness()
+    h.list()
+    h.delta('kept')
+    const settle = beginChatHistoryRemoval('a')
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    settle(false)
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'kept' }] } }])
+    await h.writer.stop()
+  })
+
+  it.each([false, true])('settles pending removal before the shutdown flush (removed=%s)', async removed => {
+    const h = harness()
+    h.delta('pending at close')
+    const settle = beginChatHistoryRemoval('a')
+    let stopped = false
+    const stopping = h.writer.stop().then(() => { stopped = true })
+    await vi.waitFor(() => expect(h.save).not.toHaveBeenCalled())
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    settle(removed)
+    await stopping
+    expect(h.save).toHaveBeenCalledTimes(removed ? 0 : 1)
+  })
+
+  it('does not let an in-flight save restore comparison state after successful removal', async () => {
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const h = harness(async () => { await held; return { status: 'ok' } })
+    h.list()
+    const flushing = h.writer.flush()
+    h.delta('buffered')
+    const settle = beginChatHistoryRemoval('a')
+    settle(true)
+    h.list()
+    release()
+    await flushing
+    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['replaceList', 'replaceList'])
+    await h.writer.stop()
+  })
+
   it('adopts explicit restored ownership and coverage without saving restoration or eviction', async () => {
     const h = harness()
     h.list()
@@ -52,6 +114,7 @@ describe('chat history recording', () => {
     for (let i = 0; i < 10; i++) h.timelines.getState().markViewed(String(i))
     await h.writer.flush()
     expect(h.save).not.toHaveBeenCalled()
+    await h.writer.stop()
   })
 
   it('coalesces received lists in order and ignores restoration, empty startup and unchanged values', async () => {

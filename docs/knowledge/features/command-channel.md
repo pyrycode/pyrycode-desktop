@@ -271,6 +271,28 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 - **`sendMessageCommand` is the pure, tested constructor** — a one-line wrap of already-assembled fields. It deliberately does **not** mint the `message_id`: randomness would break purity, so #11's composer generates it (`crypto.randomUUID()` — main-safe, security-appropriate) and passes the assembled `SendMessagePayload` in. The `RendererCommand` return type is the compile-time guarantee AC4 requires — a member with an unmodelled `type` cannot type-check.
 - **`isRendererCommand` is the boundary validator.** Minimum structural checks: `value` is a non-null object with a known `type`; for `sendMessage`, `value.payload` is a non-null object whose `conversation_id`, `message_id`, and `text` are all strings. It **accepts** commands carrying extra/unknown fields (structural minimum — do not reject on excess) and **rejects** everything else. Pure; never throws. It is co-located with the union so the two evolve in lockstep — the `switch (value.type)` shape makes a missing case visible.
 
+#### Modal answer validation
+
+`AnswerModalCommandPayload = Omit<ModalAnswerPayload, 'answer_token'>` carries
+`modal_id`, `option_id` and optional `always_allow?: boolean`. The command keeps
+wire field names. `isAnswerModalPayload` requires both IDs to be strings and accepts
+`always_allow` only when absent or Boolean; true and false pass unchanged. A
+present `undefined`, null, number, string, array or object rejects the whole command,
+so `onCommand` invokes no handler and sends nothing. Structured clone preserves
+an own `undefined` property: test presence with `in` before checking type, rather
+than treating `value.always_allow === undefined` as absence.
+
+The guard accepts unknown extras as elsewhere in this channel. The
+[main sender](daemon-connection-methods.md#modal-answers-and-cancellation) rebuilds
+modeled fields and mints the token; renderer-supplied tokens, rules and destinations
+never become answer authority. False or absence requests no additional grant.
+The daemon validates any requested session grant against its retained offer.
+
+`commands.test.ts` covers Boolean acceptance and invalid presence, including explicit
+undefined. The receiver-to-wire tests in `daemonConnection.test.ts` additionally
+prove that rejected commands never send and accepted fields survive main's rebuild;
+guard tests alone cannot prove either sender filtering or wire carriage.
+
 ### 2. The receiver seam (`src/main/receiveCommand.ts`)
 
 Imports the shared contract by **relative** path (`../shared/ipc/commands`). **No `electron` import** — the source is injected structurally, so the test runs in plain Node (mirrors `emitDaemonEvent.ts`).

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChannelForm, channelsParent } from './ChannelForm'
 import { Modal } from '../../components/Modal'
 import { requestNewChannel } from '../../store/conversationCreatedBridge'
 import { selectStatusFor, sessionStore } from '../../store/sessionStore'
@@ -26,30 +27,8 @@ export function CreateChannelDialogView({
         cancelAction={{ label: 'Cancel', onClick: onCancel }}
         confirmAction={{ label: 'OK', onClick: onCreate, disabled: busy || name.trim() === '' }}
       >
-        <label className="create-channel__field">
-          <span className="create-channel__label">Channel name:</span>
-          <input
-            type="text"
-            className="create-channel__input"
-            value={name}
-            onChange={(event) => onNameChange(event.target.value)}
-            disabled={busy}
-            autoFocus
-          />
-        </label>
-        <label className="create-channel__option">
-          <input type="radio" name="create-channel-location" value="scratch"
-            checked={location === 'scratch'} disabled={busy}
-            onChange={() => onLocationChange('scratch')} />
-          <span>Use shared scratch folder</span>
-        </label>
-        <label className="create-channel__option">
-          <input type="radio" name="create-channel-location" value="dedicated"
-            checked={location === 'dedicated'} disabled={busy}
-            onChange={() => onLocationChange('dedicated')} />
-          <span>Create a dedicated channel folder</span>
-        </label>
-        {error !== null && <p className="create-channel__error" role="alert">{error}</p>}
+        <ChannelForm name={name} location={location} busy={busy} error={error}
+          onNameChange={onNameChange} onLocationChange={onLocationChange} />
       </Modal>
     </div>
   )
@@ -150,7 +129,7 @@ export function CreateChannelDialog({ cwd, serverId, onDismiss }: {
       window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'folder-requested' })
       try {
         window.pyry.sendCommand({ type: 'createWorkspaceFolder', serverId,
-          payload: { parent: cwd.replace(/\/+$/, '') + '/channels', name: slugForChannel(displayName) } })
+          payload: { parent: channelsParent(cwd), name: slugForChannel(displayName) } })
       } catch {
         fail('folder')
       }

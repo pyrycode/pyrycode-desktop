@@ -11,51 +11,12 @@ import {
 import { sessionStore, selectStatusFor } from '../../store/sessionStore'
 import { titleFor } from './channelListViewModel'
 
-// #274/#288: the Save-as-channel dialog — Figma 19:24. #274 shipped the naming half (title + Name field +
-// Cancel/Save) that dispatches `promoteConversation` (#273), keeping the discussion in its current `cwd`.
-// #288 adds the LOCATION CHOICE: the two radios from the same node — "Move to dedicated channel folder"
-// (default) and "Keep in scratch". Scratch reuses the row's existing `cwd` (the #274 behaviour). Dedicated
-// is a two-verb dance over already-shipped transport: dispatch `createWorkspaceFolder` (#381), observe the
-// daemon's `workspaceFolderCreated { path }` reply via #397's newFolderStore round-trip, then promote with
-// that RETURNED path VERBATIM (never the previewed string — the daemon EvalSymlinks-resolves promote's cwd
-// and rejects a non-existent client-templated path; #288). No keys, sockets, or raw bytes here — the two
-// commands are fire-and-forget through the preload bridge, and the daemon polices both paths server-side.
-//
-// Three exports mirror #398's CreateFolderDialog shape: the pure view (props-in / markup-out, SSR-testable),
-// the two dispatch helpers, and the in-file interaction container (untested reviewed glue; `window.pyry`
-// dereferenced only at interaction time). The round-trip + location are INJECTED props on the view, so every
-// state is server-renderable without a store.
+import { Modal } from '../../components/Modal'
+import { ChannelForm, channelsParent } from './ChannelForm'
 
-/** The location the promoted channel takes: a dedicated daemon-created folder (default) or the discussion's
- *  existing scratch `cwd`. The single source of the radio group's checked state (AC1). */
 export type ChannelLocation = 'dedicated' | 'scratch'
 
-// The parent directory for dedicated channel folders — a tilde-string the daemon expands SERVER-side
-// (#887's expandTilde(parent) + $HOME confinement). Held as opaque text; the renderer resolves no path
-// (the #381 security posture). Matches the Figma 19:35 preview prefix.
-const CHANNELS_PARENT = '~/pyry-workspace/channels'
-
-// A stable id tying the dialog's aria-labelledby to its title element (the PERMISSION_MODAL_TITLE_ID
-// idiom). A single fixed id is safe: only one Save-as-channel dialog is open at a time.
-const SAVE_AS_CHANNEL_TITLE_ID = 'save-as-channel-title'
-
-// The radio group's shared `name` — groups the two native inputs so the browser enforces single-select.
-const SAVE_AS_CHANNEL_LOCATION_NAME = 'save-as-channel-location'
-
-// Client-owned failure copy (AC5) — apostrophe-free by design: renderToStaticMarkup escapes ' → &#x27;
-// (the standing desktop lesson), and workspaceFolderRejected is bare (#396), so NO daemon error text ever
-// reaches this line (the #398 precedent). A single generic message the user reads then retries against.
-const SAVE_AS_CHANNEL_ERROR_COPY = 'Could not create that folder'
-
-/**
- * Derive a folder `name` (a slug) from the channel's display name. Kebab-cased, guaranteed a
- * single-clean-element + non-empty string so it ALWAYS passes the daemon's name-shape guard (#887: no
- * `/`, no `..`, not absolute, non-empty). Any run of non-alphanumerics collapses to one hyphen — which
- * kills separators, `..`, and whitespace in one pass — then edge hyphens are trimmed; an empty result
- * (e.g. a punctuation-only name) falls back to `'channel'`. Only the on-disk FOLDER is slugged; the
- * channel's display name keeps the full typed text (the promote carries `name` unslugged). Divergence
- * from mobile's slug is cosmetic — the promote always uses the daemon-returned path (#288). Pure.
- */
+/** Convert a display name to one clean remote folder element. */
 export function slugForChannel(name: string): string {
   const slug = name
     .trim()
@@ -65,17 +26,6 @@ export function slugForChannel(name: string): string {
   return slug === '' ? 'channel' : slug
 }
 
-/**
- * The pure dialog chrome. `name` and `location` are controlled state (container-owned); `roundTrip` is the
- * injected round-trip status (#397) that drives the disabled/error display. The four effects are REQUIRED
- * injected props (the "a view that cannot act is a bug" rule). Save is disabled while the name is blank
- * (empty OR whitespace-only, the #274 gate) OR the create is in-flight; the Name input and BOTH radios are
- * disabled while in-flight (freezing the choice mid-create) — all computed inline so the disabled state is
- * directly assertable in server-rendered markup. Exactly one radio is `checked` — `location` is the single
- * source (AC1). The dedicated preview line renders only while `location === 'dedicated'`, as plain
- * auto-escaped text (never dangerouslySetInnerHTML), and it is illustrative ONLY (AC2). When `rejected`, a
- * single generic failure line renders (AC5); any other status renders none.
- */
 export function SaveAsChannelDialogView({
   name,
   location,
@@ -93,94 +43,17 @@ export function SaveAsChannelDialogView({
   onCancel: () => void
   onSave: () => void
 }): JSX.Element {
-  const blank = name.trim() === ''
   const busy = roundTrip.status === 'in-flight'
-  const rejected = roundTrip.status === 'rejected'
   return (
-    <div className="save-as-channel-overlay">
-      {/* A dedicated scrim element (not the overlay's own background) so the opaque panel sibling is
-          never dimmed and no bare color literal is needed — the permission-modal-overlay__scrim idiom. */}
-      <div className="save-as-channel-overlay__scrim" aria-hidden="true" />
-      <div
-        className="save-as-channel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={SAVE_AS_CHANNEL_TITLE_ID}
-      >
-        <h2 id={SAVE_AS_CHANNEL_TITLE_ID} className="save-as-channel__title">
-          Save as channel
-        </h2>
-        {/* The Figma outlined Name field (19:26). The wrapping <label> gives the input its accessible
-            name from the "Name" text — no id/htmlFor pair needed. Disabled while in-flight (freezes the
-            typed name that the created-effect promotes with). */}
-        <label className="save-as-channel__field">
-          <span className="save-as-channel__label">Name</span>
-          <input
-            type="text"
-            className="save-as-channel__input"
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            disabled={busy}
-          />
-        </label>
-        {/* The location radio group (Figma 19:29) — two native radios sharing one `name`, so exactly one is
-            checked (AC1). Each wrapping <label> gives its radio the option text as accessible name. Both are
-            disabled while in-flight so the choice can't change under an outstanding create. */}
-        <div className="save-as-channel__location">
-          <label className="save-as-channel__option">
-            <input
-              type="radio"
-              className="save-as-channel__radio"
-              name={SAVE_AS_CHANNEL_LOCATION_NAME}
-              value="dedicated"
-              checked={location === 'dedicated'}
-              onChange={() => onLocationChange('dedicated')}
-              disabled={busy}
-            />
-            <span className="save-as-channel__option-body">
-              <span className="save-as-channel__option-label">Move to dedicated channel folder</span>
-              {/* The illustrative slug preview (Figma 19:35) — rendered only while dedicated is selected,
-                  updating live with the name (AC2). Plain auto-escaped text; ILLUSTRATIVE ONLY — the
-                  promote uses the daemon-returned path, never this string (#288). */}
-              {location === 'dedicated' && (
-                <span className="save-as-channel__preview">
-                  {`${CHANNELS_PARENT}/${slugForChannel(name)}/`}
-                </span>
-              )}
-            </span>
-          </label>
-          <label className="save-as-channel__option">
-            <input
-              type="radio"
-              className="save-as-channel__radio"
-              name={SAVE_AS_CHANNEL_LOCATION_NAME}
-              value="scratch"
-              checked={location === 'scratch'}
-              onChange={() => onLocationChange('scratch')}
-              disabled={busy}
-            />
-            <span className="save-as-channel__option-label">Keep in scratch</span>
-          </label>
-        </div>
-        {/* The rejected failure line (AC5) — spec-added, not in the Figma. Generic and apostrophe-free;
-            reads NO daemon error text (workspaceFolderRejected is bare, #396). Absent in every other status. */}
-        {rejected && <p className="save-as-channel__error">{SAVE_AS_CHANNEL_ERROR_COPY}</p>}
-        {/* The action row (Figma 19:39): Cancel + Save both right-aligned (justify-end in the node) —
-            this dialog groups both trailing, unlike PermissionModal's leading-dismissive Cancel. */}
-        <div className="save-as-channel__actions">
-          <button type="button" className="save-as-channel__cancel" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="save-as-channel__save"
-            onClick={onSave}
-            disabled={blank || busy}
-          >
-            Save
-          </button>
-        </div>
-      </div>
+    <div className="create-channel-overlay">
+      <div className="create-channel-overlay__scrim" aria-hidden="true" />
+      <Modal title="Save as channel" width={640} onClose={onCancel}
+        cancelAction={{ label: 'Cancel', onClick: onCancel }}
+        confirmAction={{ label: 'OK', onClick: onSave, disabled: busy || name.trim() === '' }}>
+        <ChannelForm name={name} location={location} busy={busy}
+          error={roundTrip.status === 'rejected' ? 'Could not create that folder' : null}
+          onNameChange={onNameChange} onLocationChange={onLocationChange} />
+      </Modal>
     </div>
   )
 }
@@ -208,22 +81,16 @@ export function requestPromoteConversation(
   })
 }
 
-/**
- * Fire the `createWorkspaceFolder` command (#381) for the dedicated-folder branch. Distinct from #398's
- * requestCreateWorkspaceFolder (which passes `parent` + `name` raw): this one PINS the channels parent and
- * SLUGS the channel name, so the folder created and the folder previewed are the same string. An inline
- * literal typed as RendererCommand — the requestPromoteConversation twin (fire-and-forget: `sendCommand` is
- * void). `parent`/`name` are renderer strings the daemon polices server-side ($HOME confinement + the
- * single-clean-element name guard, #887); the renderer resolves no path (the #381 security posture).
- */
+/** Request the dedicated folder on the retained chat host, relative to its workspace. */
 export function requestCreateChannelFolder(
   sendCommand: (command: RendererCommand) => void,
   channelName: string,
+  cwd: string,
   serverId?: string
 ): void {
   sendCommand({
     type: 'createWorkspaceFolder',
-    payload: { parent: CHANNELS_PARENT, name: slugForChannel(channelName) },
+    payload: { parent: channelsParent(cwd), name: slugForChannel(channelName) },
     ...(serverId === undefined ? {} : { serverId })
   })
 }
@@ -249,8 +116,8 @@ export function SaveAsChannelDialog({
   // open (ChannelList gates the mount on a non-null row), so a lazy initializer suffices with no re-seed
   // effect (the renameName precedent, moved in-container). Transient UI state → useState, not the store.
   const [name, setName] = useState(() => titleFor(row.name))
-  // The location choice — dedicated by default (AC1 / Figma). Transient UI state → useState.
-  const [location, setLocation] = useState<ChannelLocation>('dedicated')
+  // Each opening uses the chat workspace by default.
+  const [location, setLocation] = useState<ChannelLocation>('scratch')
   const roundTrip = useNewFolderStore(selectNewFolderRoundTrip)
   const abandoned = useRef(false)
   const pending = useRef(false)
@@ -258,6 +125,7 @@ export function SaveAsChannelDialog({
 
 
   useEffect(() => {
+    abandoned.current = false
     const offStatus = sessionStore.subscribe((state) => {
       if (!abandoned.current && (typeof serverId !== 'string' || selectStatusFor(serverId)(state)?.type !== 'connected')) {
         abandoned.current = true
@@ -272,7 +140,12 @@ export function SaveAsChannelDialog({
       }),
       (event) => newFolderStore.getState().dispatch(event)
     )
-    return () => { offStatus(); offFolder() }
+    return () => {
+      abandoned.current = true
+      pending.current = false
+      offStatus()
+      offFolder()
+    }
   }, [serverId])
 
   // Reset the store to idle on unmount — the single deterministic mechanism covering EVERY close path
@@ -306,7 +179,13 @@ export function SaveAsChannelDialog({
         roundTrip={roundTrip}
         onNameChange={setName}
         onLocationChange={setLocation}
-        onCancel={onDismiss}
+        onCancel={() => {
+          abandoned.current = true
+          pending.current = false
+          newFolderStore.getState().dispatch({ type: 'reset' })
+          window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'abandoned' })
+          onDismiss()
+        }}
         // Branch on the location choice. Scratch (AC3): promote immediately with the row's existing cwd,
         // no round-trip. Dedicated (AC4 first half): dispatch createRequested (→ in-flight; disables Save +
         // input + radios) THEN send the slugged createWorkspaceFolder; the created-effect does the promote,
@@ -321,7 +200,7 @@ export function SaveAsChannelDialog({
           }
           pending.current = true
           newFolderStore.getState().dispatch({ type: 'createRequested' })
-          requestCreateChannelFolder(window.pyry.sendCommand, name, typeof serverId === 'string' ? serverId : undefined)
+          requestCreateChannelFolder(window.pyry.sendCommand, name, row.cwd, typeof serverId === 'string' ? serverId : undefined)
           window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'folder-requested' })
         }}
       />

@@ -1,198 +1,163 @@
-import type { Page } from '@playwright/test'
-import { test, expect } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, type PairedApp } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { ConversationSummary, WorkspaceFolderCreatedPayload } from '../src/shared/wire/types'
+import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import type { ConversationSummary } from '../src/shared/wire/types'
 
-// Fake-stack UI e2e for the SAVE-AS-CHANNEL promote flow (#423, split from #422): the only client flow with
-// two location branches, neither covered today. It drives the already-shipped SaveAsChannelDialog (#274/#288)
-// end-to-end through renderer → IPC → main → Noise wire → decode → render against the stateful
-// conversationStateFake (#434) on the launchPairedApp fixture (#433). Zero production code.
-//
-// TWO test() blocks, each its own launchPairedApp launch and its own single non-promoted seed — NOT one
-// sequential drive. Both branches PROMOTE the seeded row, and promotion is one-way: once promoted the row moves
-// to "Channels" and LOSES the `.channel-list__save` affordance (Recent-discussions-only). So one seeded row
-// cannot drive both branches. And launchPairedApp reaches the thread by clicking a STRICT single
-// `.channel-list__row-open`, so a two-seed single launch strict-violates at launch. Two isolated launches (a
-// fresh launch + pairing costs ~15–60s each) is the only realizable shape.
-//
-// The seeds are NON-promoted so each (a) launches — `.channel-list__row-open` renders on every row, so the
-// strict click reaches the thread — and (b) after one back-nav renders the `.channel-list__save` affordance
-// under "Chats".
-//
-// SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM text / visibility / counts
-// only; the seed names and DEDICATED_PATH are non-secret display literals; the pairing plumbing (synthetic
-// token, fake static key) lives in launchPairedApp and is never echoed. No failure diagnostic serialises a
-// token, key, or plaintext. DEDICATED_PATH is a fixed fake remote path, never resolved locally (the #380/#139
-// opaque-remote-path posture).
+const CWD = '/home/alex/projects/demo'
+const CANONICAL = '/home/alex/resolved/channels/release-planning/'
+const TS = '2026-09-13T00:00:00Z'
+const row = (id: string, name: string | null): ConversationSummary => ({ id, name, cwd: CWD,
+  is_promoted: false, is_archived: false, workspace_label: null, last_message_ts: TS, last_used_at: TS })
+const dialogOf = (app: PairedApp) => app.page.getByRole('dialog', { name: 'Save as channel', exact: true })
 
-// The promote → conversation_updated broadcast → re-list → re-render loop (and, for the dedicated branch, the
-// preceding create → workspace_folder_created → created-effect promote) is a fast in-process round-trip, so a
-// short headroom over Playwright's 5s default suffices for a cold runner (the siblings' value).
-const ROUNDTRIP_TIMEOUT_MS = 15_000
-
-// Fixed reply framing for the spec-local create-folder reply — the fakeDaemon / conversationStateFake
-// convention (no Date.now(), no randomness). The app inspects neither the reply envelope `id` nor `ts`.
-const REPLY_ENVELOPE_ID = 1
-const FIXED_TS = '2026-07-07T12:00:00.000Z'
-
-// The daemon-RETURNED path the dedicated branch promotes with — a fixed literal DELIBERATELY distinct from the
-// dialog's previewed slug (`~/pyry-workspace/channels/<slug>/`). The divergence is documentary: it proves the
-// client promotes with the daemon-returned path, never the client-templated preview (#288). It is not
-// DOM-asserted (cwd is not surfaced in the Channel List) — its correctness is proven structurally: only the
-// created-effect, reading roundTrip.path, fires the dedicated promote, so a promoted row at all means the
-// returned path drove it.
-const DEDICATED_PATH = '/srv/pyry/workspaces/chan-7fa'
-
-// EXACTLY ONE clickable, NON-promoted seed per test. Non-promoted → renders under "Chats" with the
-// `.channel-list__save` affordance, and is the only clickable row so launchPairedApp's strict row-open click
-// reaches its thread. Per-test names aid diagnostics; the tests are isolated (separate launch, separate fake
-// state) so no id/name collision matters. Fixed literals only (the fakeDaemon convention).
-const SCRATCH_SEED: ConversationSummary = {
-  id: 'scratch-conversation',
-  name: 'Scratch discussion',
-  is_promoted: false,
-  is_archived: false,
-  cwd: '/fake/workspace',
-  last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS,
-  workspace_label: null
-}
-
-const DEDICATED_SEED: ConversationSummary = {
-  id: 'dedicated-conversation',
-  name: 'Dedicated discussion',
-  is_promoted: false,
-  is_archived: false,
-  cwd: '/fake/workspace',
-  last_message_ts: FIXED_TS,
-  last_used_at: FIXED_TS,
-  workspace_label: null
-}
-
-/**
- * Compose over the shared conversationStateFake so the DEDICATED branch's `create_workspace_folder` gets a
- * canonical `workspace_folder_created { path }` reply, delegating every other verb (list_conversations,
- * promote_conversation, …) to the shared fake untouched. Without this, conversationStateFake's default arm
- * returns [] for create_workspace_folder, so the dedicated round-trip would hang in-flight forever (Save stays
- * disabled, the promote never fires) — the realizability gap (#423). Only this spec needs the verb answered, so
- * the reply is spec-local test infra, NOT a fixture change (single-consumer rule). The double-decode is pure
- * and harmless. `in_reply_to: env.id` mirrors the daemon's correlation contract and the conversationDeletedFrame
- * precedent; the client's success path emits unconditionally on decode (daemonConnection.ts:718-731), so it is
- * contract-fidelity, not a functional gate. The SCRATCH branch never sends create_workspace_folder, so its arm
- * is simply never hit.
- */
-function promoteFake(seed: ConversationSummary): (inbound: Uint8Array) => Uint8Array[] {
-  const stateFake = conversationStateFake({ conversations: [seed] })
-  return (inbound) => {
-    const env = decodeEnvelope(inbound)
-    if (env.type === 'create_workspace_folder') {
-      return [
-        encodeEnvelope({
-          id: REPLY_ENVELOPE_ID,
-          type: 'workspace_folder_created',
-          ts: FIXED_TS,
-          in_reply_to: env.id,
-          payload: { path: DEDICATED_PATH } satisfies WorkspaceFolderCreatedPayload
-        })
-      ]
+function controlled(id: string, name: string | null = 'Existing chat') {
+  const accepted = conversationStateFake({ conversations: [row(id, name)] })
+  const requests: ReturnType<typeof decodeEnvelope>[] = []
+  return {
+    requests,
+    reply(bytes: Uint8Array): Uint8Array[] {
+      const request = decodeEnvelope(bytes)
+      if (['create_workspace_folder', 'promote_conversation', 'create_conversation'].includes(request.type)) requests.push(request)
+      if (request.type === 'create_workspace_folder') return []
+      return accepted(bytes)
+    },
+    folder(app: PairedApp, host = 0) {
+      app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 900, type: 'workspace_folder_created',
+        ts: TS, in_reply_to: requests.at(-1)!.id, payload: { path: CANONICAL } }))
+    },
+    reject(app: PairedApp, host = 0) {
+      app.servers[host].daemon.pushFrame(encodeEnvelope({ id: 901, type: 'error', ts: TS,
+        in_reply_to: requests.at(-1)!.id,
+        payload: { code: 'server.rejected', message: 'private daemon detail', retryable: false } }))
     }
-    return stateFake(inbound)
   }
 }
 
-// THE SECTION PROXY, RE-BASED IN #1070. This spec proved "the row moved sections" on two mutually
-// exclusive section headers — "Channels" absent before the promote, "Chats" absent after — which rested
-// entirely on a zero-row section rendering no header. Since #1070 both headers render whenever any machine
-// is paired, so six assertions across this file and its real-daemon twin would have gone quiet: still
-// green, detecting nothing.
-//
-// The replacement is the row's OWN affordance, which is what `sidebar-row-geometry.spec.ts` and both
-// real-daemon rename/lifecycle specs already use and which criterion 2 leaves untouched. The two are
-// disjoint by section BY CONSTRUCTION (ChannelList's `Row`): a Recent row is passed `onSaveAsChannel` and
-// renders `.channel-list__save` with no Rename control; a promoted Channel row is passed `onRename` and
-// renders `.channel-list__rename` with no Save one. With exactly one seeded row per test, "Rename appears
-// AND Save disappears AND the title stays visible" captures "the row promoted in place" at least as
-// tightly as the headers did — and more directly, since it reads the row itself rather than the chrome
-// above it.
-//
-// It still reddens on a promote that never lands: nothing moves the row optimistically (the scratch arm
-// never touches the list store), so without the daemon's `conversation_updated` → re-list the row keeps
-// its Save control and the Rename one never appears — the positive read below times out. That timeout IS
-// the regression signal; never soften it or lengthen it away.
-const renameControl = (page: Page) => page.locator('.channel-list__rename')
-const saveControl = (page: Page) => page.locator('.channel-list__save')
+async function event(app: PairedApp, value: object): Promise<void> {
+  await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
+  }, { channel: DAEMON_EVENT_CHANNEL, value })
+  await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+}
 
-test('scratch branch: Keep in scratch promotes the row in place', async ({ launchPairedApp }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(SCRATCH_SEED) })
+async function open(app: PairedApp, index = 0, title = 'Existing chat') {
+  await app.page.locator('.channel-list__save').nth(index).click({ force: true })
+  const dialog = dialogOf(app)
+  await expect(dialog.getByRole('textbox', { name: 'Channel name:' })).toBeFocused()
+  await expect(dialog.getByRole('textbox')).toHaveValue(title)
+  await expect(dialog.getByLabel('Use shared scratch folder')).toBeChecked()
+  return dialog
+}
 
-  // launchPairedApp lands IN the seeded row's thread (it clicked the non-promoted seed to reach it). The
-  // app-singleton conversation-list store already holds SCRATCH_SEED (listed on the connected edge) and, since
-  // #670, the sidebar stays mounted beside the thread — so the baseline below reads the list where it stands.
-  // (#1064 deleted the back arrow this used to click first; the round trip reached a list that never left.)
-
-  // AC1 — baseline: the seed is a Recent row, carrying Save-as-channel and no Rename control. Asserted
-  // rather than assumed, so the post-Save reading below proves a TRANSITION and not a pre-existing state.
-  await expect(saveControl(page)).toBeVisible()
-  await expect(renameControl(page)).toHaveCount(0)
-  await expect(
-    page.locator('.channel-list').getByText('Scratch discussion', { exact: true })
-  ).toBeVisible()
-
-  // AC1 — open the Save-as-channel dialog from the Recent row's affordance.
-  await saveControl(page).click()
-  await expect(page.locator('.save-as-channel')).toBeVisible()
-
-  // AC2 — choose "Keep in scratch" + Save. The two radios share `.save-as-channel__radio`, so target by
-  // accessible name (the wrapping <label> text). Save fires promote_conversation with cwd = SCRATCH_SEED.cwd,
-  // synchronously closes the dialog (onPromoted), and the fake broadcasts conversation_updated → the app re-lists.
-  await page.getByRole('radio', { name: 'Keep in scratch' }).check()
-  await page.locator('.save-as-channel__save').click()
-
-  // AC2 — assert the promotion. THE POSITIVE READ IS ORDERED FIRST and carries the round-trip headroom:
-  // a closing `toHaveCount(0)` on its own would pass before the click's async work resolved, reading the
-  // pre-promote render and calling it a result. The Rename control is the promoted row's own affordance,
-  // unreachable from the state being asserted against.
-  await expect(renameControl(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(saveControl(page)).toHaveCount(0)
-  await expect(
-    page.locator('.channel-list').getByText('Scratch discussion', { exact: true })
-  ).toBeVisible()
+test('default promotes the original chat in its exact workspace and refreshes without duplication', async ({ launchPairedApp }) => {
+  const first = controlled('first-chat')
+  const second = controlled('second-chat', 'Other chat')
+  const app = await launchPairedApp({ buildReplyFrames: first.reply },
+    { secondServer: { buildReplyFrames: second.reply } })
+  const dialog = await open(app)
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  await dialog.getByRole('textbox').fill('   ')
+  await expect(ok).toBeDisabled()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await open(app)
+  await app.page.setViewportSize({ width: 1280, height: 800 })
+  await app.page.screenshot({ path: '/tmp/builder-1353-modal-1280.png' })
+  await app.page.setViewportSize({ width: 800, height: 600 })
+  await expect(dialog).toHaveCSS('width', '640px')
+  await app.page.screenshot({ path: '/tmp/builder-1353-modal-800.png' })
+  await app.page.setViewportSize({ width: 800, height: 260 })
+  expect(await dialog.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded()
+  await app.page.screenshot({ path: '/tmp/builder-1353-modal-short.png' })
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await app.page.setViewportSize({ width: 800, height: 600 })
+  await open(app)
+  await dialog.getByRole('textbox').fill(' Release planning ')
+  await ok.press('Enter')
+  await expect.poll(() => first.requests.length).toBe(1)
+  expect(first.requests[0]).toMatchObject({ type: 'promote_conversation',
+    payload: { conversation_id: 'first-chat', cwd: CWD, name: 'Release planning' } })
+  await expect(app.page.locator('.channel-list__rename')).toHaveCount(1)
+  await expect(app.page.locator('.channel-list__row-open')).toHaveCount(2)
+  await expect(app.page.locator('.channel-list__row-open').filter({ hasText: 'Release planning' })).toHaveCount(1)
+  await expect(dialog).toHaveCount(0)
+  expect(second.requests).toHaveLength(0)
 })
 
-test('dedicated branch: create-folder → returned path promotes the row', async ({ launchPairedApp }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(DEDICATED_SEED) })
+test('dedicated uses its own host canonical reply, freezes edits and retries rejection', async ({ launchPairedApp }) => {
+  const first = controlled('first-chat')
+  const second = controlled('second-chat', 'Other chat')
+  const app = await launchPairedApp({ buildReplyFrames: first.reply },
+    { secondServer: { buildReplyFrames: second.reply } })
+  const dialog = await open(app, 1, 'Other chat')
+  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/idle' })
+  expect(second.requests).toHaveLength(0)
+  await dialog.getByRole('textbox').fill(' Release planning ')
+  await dialog.getByLabel('Use shared scratch folder').focus()
+  await app.page.keyboard.press('ArrowDown')
+  await expect(dialog.getByLabel('Create a dedicated channel folder')).toBeChecked()
+  const ok = dialog.getByRole('button', { name: 'OK', exact: true })
+  await ok.click()
+  await expect.poll(() => second.requests.length).toBe(1)
+  expect(second.requests[0]).toMatchObject({ type: 'create_workspace_folder',
+    payload: { parent: CWD + '/channels', name: 'release-planning' } })
+  await expect(dialog.getByRole('textbox')).toBeDisabled()
+  await expect(dialog.getByRole('radio').nth(0)).toBeDisabled()
+  await expect(dialog.getByRole('radio').nth(1)).toBeDisabled()
+  await expect(ok).toBeDisabled()
+  await ok.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
+  for (const serverId of [FIRST_SERVER_ID, undefined, null, '', 42]) {
+    await event(app, { type: 'workspaceFolderCreated', serverId, path: CANONICAL })
+    await event(app, { type: 'workspaceFolderRejected', serverId })
+  }
+  await event(app, { type: 'conversationCreateRejected', serverId: SECOND_SERVER_ID })
+  await expect(ok).toBeDisabled()
+  expect(second.requests).toHaveLength(1)
+  second.reject(app, 1)
+  await expect(dialog.getByRole('alert')).toHaveText('Could not create that folder')
+  await expect(dialog.getByRole('textbox')).toBeEnabled()
+  await expect(dialog.getByRole('radio').nth(1)).toBeEnabled()
+  await app.page.screenshot({ path: '/tmp/builder-1353-rejected.png' })
+  expect(second.requests.filter(r => r.type === 'promote_conversation')).toHaveLength(0)
+  await ok.click()
+  await expect.poll(() => second.requests.length).toBe(2)
+  second.folder(app, 1)
+  await expect.poll(() => second.requests.length).toBe(3)
+  expect(second.requests[2]).toMatchObject({ type: 'promote_conversation',
+    payload: { conversation_id: 'second-chat', cwd: CANONICAL, name: 'Release planning' } })
+  await expect(dialog).toHaveCount(0)
+  await expect(app.page.locator('.channel-list__rename')).toHaveCount(1)
+  await expect(app.page.locator('.channel-list__row-open')).toHaveCount(2)
+  await event(app, { type: 'workspaceFolderCreated', serverId: SECOND_SERVER_ID, path: '/duplicate' })
+  expect(second.requests).toHaveLength(3)
+  expect(first.requests).toHaveLength(0)
+})
 
-  // Same launch + baseline as the scratch test, with a fresh launch and single non-promoted seed — and the
-  // same reason there is no navigation step: the sidebar is already beside the thread (#670, #1064).
-
-  // AC1 — same baseline as the scratch test: a Recent row carrying Save-as-channel and no Rename control.
-  await expect(saveControl(page)).toBeVisible()
-  await expect(renameControl(page)).toHaveCount(0)
-  await expect(
-    page.locator('.channel-list').getByText('Dedicated discussion', { exact: true })
-  ).toBeVisible()
-
-  // AC1 — open the dialog.
-  await saveControl(page).click()
-  await expect(page.locator('.save-as-channel')).toBeVisible()
-
-  // AC3 — leave the default ("Move to dedicated channel folder" is pre-checked, AC1) and Save. The radio's
-  // accessible name is a substring of the label (which also carries the live slug preview), so the substring
-  // match still resolves it. Save dispatches createRequested (dialog goes in-flight) and sends
-  // create_workspace_folder → promoteFake answers workspace_folder_created { path: DEDICATED_PATH } → the mounted
-  // <NewFolderData /> folds it into the store (in-flight → created) → the created-effect fires
-  // promote_conversation with DEDICATED_PATH verbatim → onPromoted() unmounts the dialog → the fake broadcasts
-  // conversation_updated → the app re-lists.
-  await expect(page.getByRole('radio', { name: 'Move to dedicated channel folder' })).toBeChecked()
-  await page.locator('.save-as-channel__save').click()
-
-  // AC3 — identical section-move proof, positive read first. This trio is also the end-to-end proof the
-  // create-folder leg was answered: had promoteFake not replied to create_workspace_folder, the store
-  // would hang in-flight, the promote would never fire, and the Rename control would time out.
-  await expect(renameControl(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(saveControl(page)).toHaveCount(0)
-  await expect(
-    page.locator('.channel-list').getByText('Dedicated discussion', { exact: true })
-  ).toBeVisible()
+test('idle and pending dismissal abandon drafts; reopening restores the Untitled default', async ({ launchPairedApp }) => {
+  const fake = controlled('untitled-chat', null)
+  const app = await launchPairedApp({ buildReplyFrames: fake.reply })
+  for (const closeName of ['Cancel', 'Close dialog']) {
+    let dialog = await open(app, 0, 'Untitled')
+    await dialog.getByRole('textbox').fill('Discarded idle')
+    await dialog.getByRole('button', { name: closeName, exact: true }).click()
+    dialog = await open(app, 0, 'Untitled')
+    await dialog.getByRole('textbox').fill('Discarded pending')
+    await dialog.getByLabel('Create a dedicated channel folder').check()
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect.poll(() => fake.requests.length).toBe(closeName === 'Cancel' ? 1 : 2)
+    await dialog.getByRole('button', { name: closeName, exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+    expect(fake.requests.filter(r => r.type === 'promote_conversation')).toHaveLength(0)
+  }
+  const dialog = await open(app, 0, 'Untitled')
+  await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: CANONICAL })
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeEnabled()
+  expect(fake.requests).toHaveLength(2)
+  await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(() => fake.requests.length).toBe(3)
+  expect(fake.requests[2]).toMatchObject({ type: 'promote_conversation',
+    payload: { conversation_id: 'untitled-chat', cwd: CWD, name: 'Untitled' } })
+  await expect(app.page.locator('.channel-list__rename')).toHaveCount(1)
 })

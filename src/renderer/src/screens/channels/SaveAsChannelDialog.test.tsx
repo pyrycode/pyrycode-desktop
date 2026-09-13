@@ -8,17 +8,12 @@ import {
   slugForChannel
 } from './SaveAsChannelDialog'
 
-// The #218/#398 idiom: server-render the pure view with injected props — no DOM harness, no store, no
-// clicks (the `node` env fires none). The open / name-typing / location / created-outcome wiring lives
-// in the SaveAsChannelDialog container and is untested reviewed glue (the CreateFolderDialog posture).
-// This file proves the dialog view (AC1/AC2/AC5), the pure slug (the daemon single-clean-element
-// invariant), and the two dispatch helpers (AC3/AC4). The round-trip + location are injected props, so
-// every state is server-renderable without a store.
+// Static presentation and payload proof; interaction lives in save-as-channel-promote.spec.ts.
 const noop = (): void => {}
 
 function renderView(
   name: string,
-  location: 'dedicated' | 'scratch' = 'dedicated',
+  location: 'dedicated' | 'scratch' = 'scratch',
   roundTrip: NewFolderRoundTrip = { status: 'idle' }
 ): string {
   return renderToStaticMarkup(
@@ -47,24 +42,27 @@ describe('SaveAsChannelDialogView', () => {
     const markup = renderView('My channel')
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
-    expect(markup).toContain('aria-labelledby="save-as-channel-title"')
-    expect(markup).toContain('id="save-as-channel-title"')
+    expect(markup).toContain('--modal-width:640px')
+    expect(markup).toContain('aria-label="Close dialog"')
+    expect(markup).toContain('modal__header')
+    expect(markup).toContain('modal__footer')
     expect(markup).toContain('Save as channel')
   })
 
   it('renders the Name field prefilled with the injected name (AC1)', () => {
     const markup = renderView('Investment Strategy Review')
-    expect(markup).toContain('Name')
+    expect(markup).toContain('Channel name:')
+    expect(markup).toContain('autofocus')
     expect(markup).toContain('value="Investment Strategy Review"')
   })
 
-  it('renders both location options with exactly the dedicated radio checked by default (AC1)', () => {
-    const markup = renderView('x', 'dedicated')
-    expect(markup).toContain('Move to dedicated channel folder')
-    expect(markup).toContain('Keep in scratch')
+  it('renders scratch first and checked by default (AC1)', () => {
+    const markup = renderView('x')
+    expect(markup).toContain('Create a dedicated channel folder')
+    expect(markup).toContain('Use shared scratch folder')
     const dedicatedChecked = inputByValue(markup, 'dedicated').includes('checked')
     const scratchChecked = inputByValue(markup, 'scratch').includes('checked')
-    expect(dedicatedChecked).toBe(true)
+    expect(scratchChecked).toBe(true)
     expect([dedicatedChecked, scratchChecked].filter(Boolean)).toHaveLength(1)
   })
 
@@ -76,17 +74,14 @@ describe('SaveAsChannelDialogView', () => {
     expect([dedicatedChecked, scratchChecked].filter(Boolean)).toHaveLength(1)
   })
 
-  it('renders the live slug preview under the dedicated option, updating with the name (AC2)', () => {
+  it('omits the old fixed-path preview for dedicated too', () => {
     const markup = renderView('Investment Strategy Review', 'dedicated')
-    expect(markup).toContain('save-as-channel__preview')
-    expect(markup).toContain('~/pyry-workspace/channels/investment-strategy-review/')
-    // Updates with the name.
-    expect(renderView('Other Name', 'dedicated')).toContain(
-      '~/pyry-workspace/channels/other-name/'
-    )
+    expect(markup).not.toContain('save-as-channel__preview')
+    expect(markup).not.toContain('~/pyry-workspace/channels')
+    expect(markup.indexOf('Use shared scratch folder')).toBeLessThan(markup.indexOf('Create a dedicated channel folder'))
   })
 
-  it('renders no location preview when Keep in scratch is selected (AC2)', () => {
+  it('renders no location preview when Use shared scratch folder is selected (AC2)', () => {
     const markup = renderView('Investment Strategy Review', 'scratch')
     expect(markup).not.toContain('save-as-channel__preview')
     expect(markup).not.toContain('~/pyry-workspace/channels/')
@@ -94,28 +89,29 @@ describe('SaveAsChannelDialogView', () => {
 
   it('disables Save, the Name input, and both radios while in-flight', () => {
     const markup = renderView('a name', 'dedicated', { status: 'in-flight' })
-    expect(markup).toMatch(/save-as-channel__save"[^>]*disabled/)
-    expect(markup).toMatch(/save-as-channel__input"[^>]*disabled/)
+    expect(markup).toMatch(/modal__action--confirm"[^>]*disabled/)
+    expect(markup).toMatch(/create-channel__input"[^>]*disabled/)
     expect(inputByValue(markup, 'dedicated')).toContain('disabled')
     expect(inputByValue(markup, 'scratch')).toContain('disabled')
   })
 
   it('enables Save once a non-blank name is entered at idle (AC preserved from #274)', () => {
-    expect(renderView('a name')).not.toMatch(/save-as-channel__save"[^>]*disabled/)
+    expect(renderView('a name')).not.toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
   it('disables Save when the name is empty', () => {
-    expect(renderView('')).toMatch(/save-as-channel__save"[^>]*disabled/)
+    expect(renderView('')).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
   it('disables Save when the name is whitespace-only', () => {
-    expect(renderView('   ')).toMatch(/save-as-channel__save"[^>]*disabled/)
+    expect(renderView('   ')).toMatch(/modal__action--confirm"[^>]*disabled/)
   })
 
   it('surfaces a generic apostrophe-free failure line when rejected (AC5)', () => {
     const markup = renderView('a name', 'dedicated', { status: 'rejected' })
-    expect(markup).toContain('save-as-channel__error')
+    expect(markup).toContain('create-channel__error')
     expect(markup).toContain('Could not create that folder')
+    expect(markup).toContain('role="alert"')
     // Apostrophe-free by design: renderToStaticMarkup escapes ' → &#x27; (the standing desktop lesson),
     // and the reply carries no daemon error text (#396) — so no escaped apostrophe should appear.
     expect(markup).not.toContain('&#x27;')
@@ -128,7 +124,7 @@ describe('SaveAsChannelDialogView', () => {
       { status: 'created', path: '~/pyry-workspace/channels/x' }
     ]
     for (const roundTrip of nonRejected) {
-      expect(renderView('a name', 'dedicated', roundTrip)).not.toContain('save-as-channel__error')
+      expect(renderView('a name', 'dedicated', roundTrip)).not.toContain('create-channel__error')
     }
   })
 
@@ -200,13 +196,22 @@ describe('requestPromoteConversation', () => {
 })
 
 describe('requestCreateChannelFolder', () => {
+  it.each(['/home/alex/projects/demo/', '/home/alex/projects/demo///', '/'])(
+    'removes trailing separators from workspace %s', (cwd) => {
+      const sendCommand = vi.fn()
+      requestCreateChannelFolder(sendCommand, 'Release planning', cwd, 'host-a')
+      expect(sendCommand).toHaveBeenCalledWith({ type: 'createWorkspaceFolder', serverId: 'host-a',
+        payload: { parent: cwd === '/' ? '/channels' : '/home/alex/projects/demo/channels', name: 'release-planning' } })
+    }
+  )
   it('fires exactly one createWorkspaceFolder with the channels parent and the slugged name (AC4)', () => {
     const sendCommand = vi.fn()
-    requestCreateChannelFolder(sendCommand, 'Investment Strategy Review')
+    requestCreateChannelFolder(sendCommand, ' Release planning ', '/home/alex/projects/demo', 'host-a')
     expect(sendCommand).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledWith({
       type: 'createWorkspaceFolder',
-      payload: { parent: '~/pyry-workspace/channels', name: 'investment-strategy-review' }
+      serverId: 'host-a',
+      payload: { parent: '/home/alex/projects/demo/channels', name: 'release-planning' }
     })
   })
 })

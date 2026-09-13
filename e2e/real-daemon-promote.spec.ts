@@ -18,7 +18,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // the content-blind relay, so the fake twin's in-process capture (`promoteFake`, the codec import) is
 // unavailable here. Every assertion reads DOM text / visibility / counts only.
 //
-// SCOPE: SCRATCH branch only — the dedicated ("Move to dedicated channel folder") branch is dropped. The
+// SCOPE: SCRATCH branch only — the dedicated ("Create a dedicated channel folder") branch is dropped. The
 // dedicated branch first sends `create_workspace_folder`, already real-wire-proven by sibling #441, and under
 // #949's Option B the daemon IGNORES the promote payload `cwd` — so the dedicated leg's "promote with the
 // daemon-returned path" contract has NO real-wire DOM surface here (its correctness is a client concern
@@ -125,14 +125,14 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
   // row (setSaveRow(row)); its Name field auto-seeds to titleFor(null) = "Untitled" (non-blank → Save
   // enabled — the Name wrinkle above). No activeConversation, no thread-open is needed. ---
   await saveControl(page).click()
-  await expect(page.locator('.save-as-channel')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Save as channel', exact: true })).toBeVisible()
 
-  // --- Choose scratch + Save (AC2). The default is `dedicated`; the two radios share `.save-as-channel__radio`
-  // so target "Keep in scratch" by accessible name. The scratch arm fires promote_conversation
+  // --- Choose scratch + Save (AC2). The default is scratch; the two radios are labelled
+  // so target "Use shared scratch folder" by accessible name. The scratch arm fires promote_conversation
   // { conversation_id, name: "Untitled", cwd: seedCwd } ALONE and synchronously closes the dialog (onPromoted)
   // — NO round-trip store, NO optimistic list mutation. ---
-  await page.getByRole('radio', { name: 'Keep in scratch' }).check()
-  await page.locator('.save-as-channel__save').click()
+  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
+  await page.getByRole('button', { name: 'OK', exact: true }).click()
 
   // --- Assert the reply-gated promotion (AC3). The row moves Chats → Channels ONLY after the daemon's
   // conversation_updated drives the re-list, and the row's affordance flips with it: the Rename control

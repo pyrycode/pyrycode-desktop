@@ -39,7 +39,8 @@ close on submission.
 only for a connected host. The container owns transient name, location, busy and error state;
 unmounting discards the draft. Its pure `CreateChannelDialogView` receives presentation state
 and callbacks, with no workspace path prop or transport access. Operator input is rendered
-through React's escaped input value.
+through React's escaped input value. Both views render `ChannelForm` inside `Modal`;
+only fields and workspace-parent construction are shared, while submission stays in each container.
 
 The workspace plus and disclosure remain sibling controls, so creating does not toggle the
 workspace fold. The shared `WorkspaceCreateControl` bundles a label and callback: two parallel
@@ -53,11 +54,12 @@ That helper sends `createConversation` with `is_promoted: true`, the trimmed nam
 `cwd`. The host routing key is a top-level IPC field, outside the wire payload.
 
 Dedicated submission uses the existing `createWorkspaceFolder` command on the same host.
-Its parent is the selected `cwd` stripped of trailing slashes plus `/channels`.
+Its parent comes from the shared `channelsParent(cwd)` helper in `ChannelForm.tsx`: the
+selected `cwd` stripped of trailing slashes plus `/channels`.
 `slugForChannel`, shared with [Save as channel](save-as-channel-dialog.md), lowercases the
 trimmed name, replaces runs outside ASCII letters/digits with hyphens, removes edge hyphens,
-and falls back to `channel` when empty. Only the folder name is converted. Save as channel's
-fixed `CHANNELS_PARENT` is not this flow's parent. Remote folder creation and canonicalization
+and falls back to `channel` when empty. Only the folder name is converted. Both dialogs use
+their retained workspace as the parent source. Remote folder creation and canonicalization
 remain authoritative; no new wire or main-process operation is introduced.
 
 A synchronous ref records `idle`, `folder` (including the submitted display name), or `channel`

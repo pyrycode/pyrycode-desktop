@@ -3,7 +3,8 @@
 The [host row's hover plus](channel-list-host-row.md#the-rows-pen-and-plus-on-hover-1185)
 opens `AddWorkspaceDialog` in `src/renderer/src/screens/channels/AddWorkspaceDialog.tsx`.
 It starts a chat in an operator-typed folder on that host; the conversation list supplies
-the new workspace group. The shared modal previews the remote destination; #1367 bounds its creation lifecycle.
+the new workspace group. The shared modal previews the remote destination and optionally
+saves a shared workspace name after creation confirms the folder.
 
 ## Connection and folder admission
 
@@ -13,7 +14,8 @@ Missing, connecting, disconnected and failed states withhold the plus. Another c
 host or an open relay socket cannot enable it: eligibility requires the selected host's
 authenticated session.
 
-OK requires the same connection, a nonempty resolved destination and no pending attempt.
+Before creation, OK requires the same connection, a nonempty resolved destination,
+a valid optional name and no pending attempt.
 The folder resolver trims outer input whitespace. Blank input leaves the preview empty
 and disables OK. A leading `/` preserves the trimmed absolute input; otherwise the
 resolver joins it to this host's `ack.workspace_root`, removing the base's trailing
@@ -40,30 +42,53 @@ dot-segment collapse or symlink canonicalisation. Existing folders are reused; t
 existing daemon create operation makes missing folders and parents, subject to its
 validation and normalisation. No separate folder-creation request is sent.
 
+## Optional shared name
+
+Both inputs start empty on every opening. The name is trimmed at submission; its
+trimmed JavaScript `.length` must be at most 128 UTF-16 code units. Above the limit,
+OK is disabled and the name input has an accessible invalid state and length feedback.
+Blank or whitespace-only input sends no rename, preserving any existing shared label
+and the folder-name fallback for an unnamed workspace. Every explicit nonblank name
+is saved, even when equal to the folder fallback. This differs from [Edit
+workspace](edit-workspace-dialog.md), whose helper clears the label for blank or
+fallback-equivalent input; Add workspace uses the underlying rename command directly.
+Neither operation renames the chat or changes its folder.
+
 ## Local wait and retry
 
-The mounted dialog owns the folder, status, submitted marker and deadline.
-`ChannelList` holds only `addWorkspaceServerId: string | null`; the dialog is keyed by
-host and remounts with an empty field on reopen. Its status is `idle`, `creating`,
-`rejected`, `disconnected` or `timed-out`.
+The mounted dialog owns both drafts, the submitted trimmed name, confirmed folder,
+status, naming attempt and deadline. `ChannelList` holds only
+`addWorkspaceServerId: string | null`; the host-keyed dialog remounts on reopen.
+Statuses are `idle`, `creating`, `naming`, `rejected`, `disconnected` and `timed-out`.
 
-Submission marks the attempt pending synchronously and arms the single named
-`WORKSPACE_CREATE_DEADLINE_MS = 30_000` before dispatch. The field and OK are
-disabled while pending; Cancel and close stay enabled throughout. A local bridge/build/send
-failure, matching server rejection or selected-host connection loss ends the busy state
-immediately, preserves the entered folder and makes it editable again. Feedback uses
-fixed client copy: generic creation failure or guidance to connect this host.
+Submission snapshots the trimmed name and starts an unnamed, unpromoted chat first.
+The first accepted create confirmation pins `conversation.cwd` as the authoritative
+remote folder without desktop resolution. The preview now shows that folder and the
+folder input stays disabled for the rest of this opening. Blank names dismiss;
+nonblank names start a host-addressed rename against that exact confirmed folder.
+Further create notifications cannot restart this transition.
 
-With no result after 30 seconds, the error reads: “Could not confirm completion within
-30 seconds. The chat may still appear.” Timeout and Cancel end only the local wait;
-neither cancels a server-side create, which may still complete. Cancel or close closes the form
-and discards its draft. After failure, retry requires an explicit OK click and
-a connected selected host. Disconnect, timeout and reconnect never resend automatically.
+Each creating or naming phase independently arms a fresh 30-second deadline using
+`WORKSPACE_CREATE_DEADLINE_MS`. Both inputs and OK are disabled while either phase
+is pending. Synchronous status refs also block repeated clicks before React renders.
+A local bridge/build/send failure, matching rejection or selected-host connection
+loss ends the busy state immediately. Before creation confirms, both drafts remain
+editable and explicit OK retries creation when connected. Create timeout says the
+chat may still appear; it does not cancel the daemon's operation.
 
-Every settlement clears the deadline; retry arms a fresh one, so the old timer cannot
-fail the new attempt. Success, Cancel and unmount clear the timer and remove both the
-result and session-state subscriptions. Synchronous pending/closed refs prevent repeated
-clicks before React renders and callbacks acting on a dismissed dialog.
+After creation, every naming failure retains the usable chat and fixed folder,
+unlocks only the name, and shows client-owned failure or uncertainty copy. A naming
+timeout says the name may still be saved. Explicit OK with a valid nonblank name
+retries only naming when the selected host is connected, with a fresh UUID and
+deadline; it never creates another chat. Blank input finishes without another rename,
+even while disconnected. Finishing blank does not undo a rename already sent.
+Disconnect, timeout and reconnect never resend automatically.
+
+Cancel and header close remain available in both phases. They dismiss and discard
+the drafts, retaining any created chat; they do not cancel an already-sent remote
+operation. Every settlement clears the deadline. Dismissal and unmount remove the
+result/session-state subscriptions and clear the timer; closed guards prevent a late
+create confirmation from initiating naming or a late result from reopening the form.
 
 ## Host-scoped results
 
@@ -73,13 +98,21 @@ the main-stamped origin and cannot provide this boundary. Only a nonempty string
 `event.serverId` exactly matching the selected host is accepted; missing, null, invalid
 and foreign-host origins cannot settle this dialog.
 
-A rejection affects only `creating`. A confirmation closes a still-open dialog after
-any submission, including late success after timeout or failure. The independent
+A create rejection affects only `creating`. The first create confirmation after any
+submission, including late success after timeout or failure, pins the folder and
+continues with the submitted name as above. The independent
 navigation subscription and [host-addressed list refresh](conversation-list-store.md)
 show the created chat through the existing request-driven list reply. Results after
 success or Cancel cannot reopen the dialog or its error.
 
-Per-request correlation remains unchanged: main matches daemon rejection envelope ids,
+Naming uses the [workspace rename result contract](daemon-connection-correlation.md#workspace-renaming).
+Only `workspaceRenameResult` matching the selected host, current UUID and active
+`naming` phase can settle the wait. Unsolicited `workspaceUpdated` broadcasts,
+foreign-host results and results from earlier saves cannot confirm naming. A late
+rename reply may still refresh the authoritative list without dismissing this dialog.
+The shared label belongs only to the selected host, even if another host has the same path.
+
+Create per-request correlation remains unchanged: main matches daemon rejection envelope ids,
 but the renderer receives no create-request id. Concurrent creates or retries on the
 same host remain indistinguishable; either result may belong to another same-host
 attempt. This does not establish exactly-once creation. Matching `cwd` would not solve
@@ -91,11 +124,12 @@ correlation because the daemon may normalise the folder string. See
 The [shared Modal](modal-presentation.md) supplies a 640px panel, divided header,
 close icon and centred Cancel/OK actions. The selected host's stored nonblank label
 (or `Server`) is read-only. Reopening starts with an empty focused folder input and
-empty labelled `output` preview. The input fill is 41%; preview text has full opacity.
+empty labelled `output` preview, followed by one “Workspace name (optional):” input.
+There is no duplicate read-only name row. The input fill is 41%; preview text has full opacity.
 Long preview text wraps and the panel scrolls in short windows. Escape and backdrop
-clicks do not dismiss; Cancel and close remain available during creation.
+clicks do not dismiss; Cancel and close remain available during creation and naming.
 
-The controlled input uses an escaped `value`; host label and preview render as escaped
+The controlled inputs use escaped `value` attributes; host label and preview render as escaped
 text. These values never supply a `title`, `aria-label`, id, key, lookup path or log
 entry. Rejection feedback carries no daemon or caught-error text.
 
@@ -109,6 +143,17 @@ unavailable hosts, connection loss, local failure, rejection, deadline, cancella
 late success and explicit retry use the existing fake transport. Playwright's clock
 proves the 29,999/30,000ms boundary and retry past the old deadline. Request counts prove
 blocked/repeated clicks and reconnect never produce extra creates.
+
+Naming coverage checks blank preservation, the trimmed UTF-16 boundary, explicit
+fallback names, daemon-confirmed folder targeting, same-path host isolation and
+naming-only retries. Keep request-driven list replies: dialog dismissal alone cannot
+prove the shared label refreshed. Main tests separately require every update broadcast
+and exactly one matching result, including duplicate replies and redial cleanup.
+
+A valid-length name can still exceed the full wire-envelope cap beside a long
+confirmed folder because JSON escaping expands the name. The mounted local-build-failure
+test exercises this real encode failure and then retries with a shorter name, asserting
+that the chat count and create request count do not increase.
 
 Keep a second host connected and deliver its confirmation and rejection while the
 selected host is pending. Two `conversationStateFake` instances both mint `created-1`;

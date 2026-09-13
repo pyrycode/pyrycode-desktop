@@ -5,7 +5,7 @@ import { Modal } from '../../components/Modal'
 import { selectHostLabelFor, useHostLabelStore } from '../../store/hostLabelStore'
 
 const WORKSPACE_CREATE_DEADLINE_MS = 30_000
-export type AddWorkspaceStatus = 'idle' | 'creating' | 'rejected' | 'disconnected' | 'timed-out'
+export type AddWorkspaceStatus = 'idle' | 'creating' | 'naming' | 'rejected' | 'disconnected' | 'timed-out'
 
 const ADD_WORKSPACE_ERROR_COPY = 'Could not start a chat in that folder'
 const ADD_WORKSPACE_OFFLINE_COPY = 'Connect this host before starting a chat'
@@ -21,9 +21,12 @@ function resolveWorkspacePath(path: string, workspaceRoot?: string): string {
 }
 
 export function AddWorkspaceDialogView({
-  path, workspaceRoot, hostLabel, status, connected, onPathChange, onCancel, onStart
+  path, name, confirmedFolder, workspaceRoot, hostLabel, status, connected, onPathChange, onNameChange, onCancel, onStart
 }: {
   path: string
+  name: string
+  confirmedFolder?: string
+  onNameChange: (next: string) => void
   workspaceRoot?: string
   hostLabel: string
   status: AddWorkspaceStatus
@@ -33,10 +36,15 @@ export function AddWorkspaceDialogView({
   onStart: () => void
 }): JSX.Element {
   const previewId = useId()
-  const busy = status === 'creating'
-  const destination = resolveWorkspacePath(path, workspaceRoot)
+  const busy = status === 'creating' || status === 'naming'
+  const destination = confirmedFolder ?? resolveWorkspacePath(path, workspaceRoot)
   const locationUnavailable = path.trim() !== '' && destination === ''
-  const error = status === 'timed-out'
+  const namingError = status === 'timed-out'
+    ? 'The chat was created. Could not confirm the workspace name within 30 seconds. It may still be saved.'
+    : status === 'disconnected' || !connected
+      ? 'The chat was created. Connect this host to retry saving the workspace name.'
+      : status === 'rejected' ? 'The chat was created. Could not save the workspace name. Edit it and retry, or leave it blank to finish.' : null
+  const error = confirmedFolder !== undefined ? namingError : status === 'timed-out'
     ? ADD_WORKSPACE_TIMEOUT_COPY
     : status === 'disconnected' || !connected
       ? ADD_WORKSPACE_OFFLINE_COPY
@@ -49,7 +57,8 @@ export function AddWorkspaceDialogView({
         width={640}
         onClose={onCancel}
         cancelAction={{ label: 'Cancel', onClick: onCancel }}
-        confirmAction={{ label: 'OK', onClick: onStart, disabled: busy || !connected || destination === '' }}
+        confirmAction={{ label: 'OK', onClick: onStart, disabled: busy || name.trim().length > 128 || destination === '' ||
+          (!connected && !(confirmedFolder !== undefined && name.trim() === '')) }}
       >
         <p className="add-workspace__detail">
           <span className="add-workspace__label">Host:</span>
@@ -62,7 +71,7 @@ export function AddWorkspaceDialogView({
             className="add-workspace__input"
             value={path}
             onChange={(e) => onPathChange(e.target.value)}
-            disabled={busy}
+            disabled={busy || confirmedFolder !== undefined}
             autoFocus
           />
         </label>
@@ -70,6 +79,15 @@ export function AddWorkspaceDialogView({
           <span id={previewId} className="add-workspace__label">Absolute path preview:</span>
           <output className="add-workspace__preview" aria-labelledby={previewId}>{destination}</output>
         </p>
+        <label className="add-workspace__field">
+          <span className="add-workspace__label">Workspace name (optional):</span>
+          <input type="text" className="add-workspace__input add-workspace__name"
+            value={name} onChange={(e) => onNameChange(e.target.value)} disabled={busy}
+            aria-invalid={name.trim().length > 128 || undefined} />
+        </label>
+        {name.trim().length > 128 && (
+          <p className="add-workspace__error" role="alert">Use at most 128 characters for the workspace name.</p>
+        )}
         {locationUnavailable && (
           <p className="add-workspace__error" role="alert">Host workspace location is unavailable</p>
         )}
@@ -89,6 +107,11 @@ export function AddWorkspaceDialog({
   onDismiss: () => void
 }): JSX.Element {
   const [path, setPath] = useState('')
+  const [name, setName] = useState('')
+  const [confirmedFolder, setConfirmedFolder] = useState<string>()
+  const folderRef = useRef<string>()
+  const submittedName = useRef('')
+  const namingAttempt = useRef<string>()
   const [status, setStatus] = useState<AddWorkspaceStatus>('idle')
   const connection = useSessionStore(selectStatusFor(serverId))
   const connected = connection?.type === 'connected'
@@ -127,6 +150,28 @@ export function AddWorkspaceDialog({
     onDismissRef.current()
   }, [cleanup])
 
+  const beginNaming = useCallback((folder: string, trimmed: string) => {
+    if (trimmed === '') { dismiss('confirmed'); return }
+    if (selectStatusFor(serverId)(sessionStore.getState())?.type !== 'connected') {
+      settle('disconnected')
+      return
+    }
+    const attemptId = crypto.randomUUID()
+    namingAttempt.current = attemptId
+    settle('naming')
+    deadline.current = setTimeout(() => {
+      if (!closed.current && statusRef.current === 'naming' && namingAttempt.current === attemptId) {
+        settle('timed-out')
+      }
+    }, WORKSPACE_CREATE_DEADLINE_MS)
+    try {
+      window.pyry.sendCommand({ type: 'renameWorkspace', serverId, attemptId,
+        payload: { path: folder, label: trimmed } })
+    } catch {
+      settle('rejected')
+    }
+  }, [serverId, dismiss, settle])
+
   useEffect(() => {
     closed.current = false
     unsubscribe.current = window.pyry.onDaemonEvent((event) => {
@@ -134,7 +179,17 @@ export function AddWorkspaceDialog({
         closed.current || typeof event.serverId !== 'string' || event.serverId.length === 0 ||
         event.serverId !== serverId
       ) return
-      if (event.type === 'conversationCreated' && submitted.current) dismiss('confirmed')
+      if (event.type === 'conversationCreated' && submitted.current && folderRef.current === undefined) {
+        folderRef.current = event.conversation.cwd
+        setConfirmedFolder(event.conversation.cwd)
+        clearDeadline()
+        beginNaming(event.conversation.cwd, submittedName.current)
+      }
+      if (event.type === 'workspaceRenameResult' && statusRef.current === 'naming' &&
+        event.attemptId === namingAttempt.current) {
+        if (event.outcome === 'confirmed') dismiss('confirmed')
+        else settle('rejected')
+      }
       if (event.type === 'conversationCreateRejected' && statusRef.current === 'creating') {
         settle('rejected')
       }
@@ -142,7 +197,7 @@ export function AddWorkspaceDialog({
     // Subscribe synchronously to the host's state so loss ends a pending attempt before another click.
     const offStatus = sessionStore.subscribe((state) => {
       if (
-        !closed.current && statusRef.current === 'creating' &&
+        !closed.current && (statusRef.current === 'creating' || statusRef.current === 'naming') &&
         selectStatusFor(serverId)(state)?.type !== 'connected'
       ) settle('disconnected')
     })
@@ -152,11 +207,14 @@ export function AddWorkspaceDialog({
       offStatus()
     }
     return cleanup
-  }, [serverId, cleanup, dismiss, settle])
+  }, [serverId, cleanup, dismiss, settle, beginNaming, clearDeadline])
 
   return (
     <AddWorkspaceDialogView
       path={path}
+      name={name}
+      confirmedFolder={confirmedFolder}
+      onNameChange={setName}
       workspaceRoot={workspaceRoot}
       hostLabel={hostLabel}
       status={status}
@@ -164,7 +222,13 @@ export function AddWorkspaceDialog({
       onPathChange={setPath}
       onCancel={() => dismiss('cancelled')}
       onStart={() => {
-        if (closed.current || statusRef.current === 'creating' || destination === '') return
+        if (closed.current || statusRef.current === 'creating' || statusRef.current === 'naming' ||
+          name.trim().length > 128) return
+        if (folderRef.current !== undefined) {
+          beginNaming(folderRef.current, name.trim())
+          return
+        }
+        if (destination === '') return
         const current = selectStatusFor(serverId)(sessionStore.getState())
         if (current?.type !== 'connected') {
           settle('disconnected')
@@ -173,6 +237,7 @@ export function AddWorkspaceDialog({
         // Never send a newer greeting's destination before its preview has rendered.
         if (resolveWorkspacePath(path, current.ack.workspace_root) !== destination) return
         submitted.current = true
+        submittedName.current = name.trim()
         settle('creating')
         deadline.current = setTimeout(() => {
           if (!closed.current && statusRef.current === 'creating') settle('timed-out')

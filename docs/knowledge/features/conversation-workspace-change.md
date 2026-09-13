@@ -96,7 +96,7 @@ opposite axes: `changeWorkspace` by conversation (`router.route(payload.conversa
 to the host, not to any one chat.
 
 Introduced in [#1289](https://github.com/pyrycode/pyrycode-desktop/issues/1289), split from #1182.
-Its live caller is the [Edit workspace dialog](edit-workspace-dialog.md)
+Its callers include [Add workspace](add-workspace-dialog.md) and the [Edit workspace dialog](edit-workspace-dialog.md)
 ([#1180](https://github.com/pyrycode/pyrycode-desktop/issues/1180)) — the workspace row's hover pen,
 which shipped after this ticket and after the reply's inbound half. The inbound decode and the
 sidebar's read of the label are the sibling
@@ -120,7 +120,7 @@ path join, so a `../`-laden value draws `workspace.not_found` rather than traver
 label* value, and an absent key is a malformed frame, so the sender must name the key
 unconditionally. The daemon requires a non-`null` label to be non-empty after trimming and at most
 128 characters, and rejects with the static errors `workspace.not_found` / `protocol.malformed` —
-**all of that is policed server-side**; this client checks type only, never emptiness or length,
+**all of that is policed server-side**; the transport payload guard checks type only, never emptiness or length,
 the `CreateWorkspaceFolderPayload` posture verbatim. Both fields are renderer-supplied strings
 serialized to wire bytes only — never resolved into a local path, never a `Map` key or a filename,
 never logged.
@@ -131,9 +131,10 @@ surface, and an alias would couple an outbound request to an inbound record free
 
 **Reply is `workspace_updated`, correlated to the requester** (`in_reply_to` echoing this request's
 envelope id) rather than the unsolicited broadcast #1288 also produces from that same frame shape.
-This client neither awaits nor correlates it — #1288's inbound path decodes it unconditionally and
-the re-list it triggers is what actually lands the new label, the `renameConversation` posture
-toward `conversation_updated`.
+The inbound path always emits the list-refresh broadcast. Callers may also request an
+[attempt-correlated result](daemon-connection-correlation.md#workspace-renaming), as Add workspace
+does after creation; Edit workspace still sends without an attempt identifier. The
+authoritative re-list is what lands the new label.
 
 ### The six pieces
 
@@ -146,7 +147,7 @@ the ceiling here.
 | `RenameWorkspacePayload` + `rename_workspace` `EnvelopeType` member | `src/shared/wire/types.ts` | ported wire type, field-for-field with the daemon |
 | `renameWorkspace` command / `isRenameWorkspacePayload` guard | `src/shared/ipc/commands.ts` | untrusted renderer→main boundary |
 | `buildRenameWorkspace` | `src/main/transport/renameWorkspaceEnvelope.ts` | pure payload-carrying outbound envelope builder |
-| `renameWorkspace(payload)` | `src/main/daemonConnection.ts` | connection method — the `send` twin, fresh-literal net |
+| `renameWorkspace(payload, attemptId?)` | `src/main/daemonConnection.ts` | connection method — the `send` twin, fresh-literal net |
 | `renameWorkspace` delegate | `src/main/connectionRegistry.ts` | compile-forced `ActiveConnection`/`viewOf` entry |
 | `case 'renameWorkspace'` | `src/main/index.ts` | command dispatch, routed BY SERVER — the one place this verb differs from every other piece's `changeWorkspace` twin |
 
@@ -179,7 +180,7 @@ unsolicited-broadcast drive (`workspace-updated-relist.spec.ts`) produces byte-i
 needed no change. Driven end to end by
 [`e2e/rename-workspace-command.spec.ts`](https://github.com/pyrycode/pyrycode-desktop/issues/1289),
 which dispatches the command through the preload bridge (`window.pyry.sendCommand`) with no UI
-affordance — the only gate covering `src/main/index.ts`'s `case 'renameWorkspace':` line, which has
+affordance. Together with the Add workspace browser tests, it covers `src/main/index.ts`'s `case 'renameWorkspace':` line, which has
 no unit test of its own.
 
 ## Related

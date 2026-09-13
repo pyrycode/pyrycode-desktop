@@ -10008,3 +10008,66 @@ describe('pairing rejection lifetime', () => {
     b.connection.stop()
   })
 })
+
+describe('workspace rename attempt results', () => {
+  const payload = { path: '/confirmed', label: 'Private name' }
+  it('adds one correlated result while retaining every workspace broadcast', async () => {
+    const { connection, drivers, sink } = build({ serverId: 'selected' })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.renameWorkspace(payload, 'attempt-one')
+    const request = decodeEnvelope(drivers[0].sent[0])
+    expect(request.payload).toEqual(payload)
+    expect(JSON.stringify(request)).not.toContain('attempt-one')
+    for (const id of [undefined, 999, request.id, request.id]) {
+      drivers[0].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(payload, id) })
+    }
+    expect(emitted(sink).filter(e => e.type === 'workspaceUpdated')).toHaveLength(4)
+    expect(emitted(sink).filter(e => e.type === 'workspaceRenameResult')).toEqual([
+      { type: 'workspaceRenameResult', attemptId: 'attempt-one', outcome: 'confirmed' }
+    ])
+    expect(stampedEvents(sink).filter(e => e.type === 'workspaceRenameResult')[0]?.serverId).toBe('selected')
+    connection.renameWorkspace(payload, 'attempt-two')
+    const second = decodeEnvelope(drivers[0].sent[1])
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 90, type: 'error',
+      ts: FIXED_TS, in_reply_to: second.id,
+      payload: { code: 'server.rejected', message: 'Private failure', retryable: false } }) })
+    drivers[0].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(payload, second.id) })
+    expect(emitted(sink).filter(e => e.type === 'workspaceRenameResult')).toEqual([
+      { type: 'workspaceRenameResult', attemptId: 'attempt-one', outcome: 'confirmed' },
+      { type: 'workspaceRenameResult', attemptId: 'attempt-two', outcome: 'rejected' }
+    ])
+    connection.stop()
+  })
+  it('clears pending rename correlation on redial', async () => {
+    const { connection, drivers, sink } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.renameWorkspace(payload, 'old-connection')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    connection.reconnect()
+    await tick()
+    drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    drivers[1].emit({ type: 'message', plaintext: workspaceUpdatedPlaintext(payload, id) })
+    expect(emitted(sink).filter(e => e.type === 'workspaceRenameResult')).toEqual([])
+    connection.stop()
+  })
+  it('rejects identified local failures without changing legacy callers', async () => {
+    const { connection, drivers, sink } = build({ throwOnSend: true })
+    connection.renameWorkspace(payload)
+    expect(emitted(sink)).toEqual([])
+    connection.renameWorkspace(payload, 'offline')
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.renameWorkspace(payload, 'send-failed')
+    connection.renameWorkspace({ path: 'x'.repeat(MAX_PLAINTEXT_BYTES), label: 'a' }, 'build-failed')
+    expect(emitted(sink).filter(e => e.type === 'workspaceRenameResult')).toEqual(
+      ['offline', 'send-failed', 'build-failed'].map(attemptId => ({
+        type: 'workspaceRenameResult', attemptId, outcome: 'rejected'
+      })))
+    connection.stop()
+  })
+})

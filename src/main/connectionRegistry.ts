@@ -259,7 +259,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     deleteConversation: (payload) => resolve().deleteConversation(payload),
     renameConversation: (payload) => resolve().renameConversation(payload),
     changeWorkspace: (payload) => resolve().changeWorkspace(payload),
-    renameWorkspace: (payload) => resolve().renameWorkspace(payload),
+    renameWorkspace: (payload, attemptId) => resolve().renameWorkspace(payload, attemptId),
     setSystemPrompt: (payload) => resolve().setSystemPrompt(payload),
     setSessionSettings: (payload, changeId) => resolve().setSessionSettings(payload, changeId),
     answerModal: (payload) => resolve().answerModal(payload),

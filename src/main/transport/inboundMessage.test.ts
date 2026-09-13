@@ -2059,16 +2059,13 @@ describe('parseInboundMessage — workspace_updated recognition (#1288, additive
     })
   })
 
-  it('decodes IDENTICALLY with and without in_reply_to (AC1)', () => {
-    // The daemon correlates this frame to the client that asked for the rename and pushes it unsolicited
-    // to every other one. The arm never reads `Envelope.in_reply_to`, so a correlated frame and an
-    // unsolicited one produce the same value — no `inReplyTo` handle rides the kind, deliberately: the
-    // outbound verb (#1289) learns the rename landed from the re-listed rows like everyone else, so a
-    // handle here would be a match key nothing correlates on.
-    const correlated = parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED, 77))
-    const unsolicited = parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED))
-    expect(correlated).toEqual(unsolicited)
-    expect(correlated).toEqual({ kind: 'workspace-updated', workspaceUpdated: WORKSPACE_UPDATED })
+  it('retains optional rename correlation without changing unsolicited updates', () => {
+    expect(parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED, 77))).toEqual({
+      kind: 'workspace-updated', workspaceUpdated: WORKSPACE_UPDATED, inReplyTo: 77
+    })
+    expect(parseInboundMessage(encodeWorkspaceUpdated(WORKSPACE_UPDATED))).toEqual({
+      kind: 'workspace-updated', workspaceUpdated: WORKSPACE_UPDATED
+    })
   })
 
   it('preserves a null label as the VALUE null — a workspace whose label was cleared', () => {

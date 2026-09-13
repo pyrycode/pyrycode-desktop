@@ -887,8 +887,8 @@ type BaseDaemonEvent =
   // literals, not the wire payload object): the small-payload emit idiom its neighbours use
   // (workspaceFolderCreated naming `path`, conversationDeleted naming `id`), keeping events.ts free of a
   // WorkspaceUpdatedPayload import. Emitted from a frame that is CORRELATED by in_reply_to when this
-  // client asked for the rename and UNSOLICITED otherwise — both decode and emit identically, so no
-  // correlation state is threaded and no handle rides the arm.
+  // client asked for the rename and UNSOLICITED otherwise — both emit identically, so no
+  // correlation handle rides this broadcast arm. Identified results use workspaceRenameResult.
   //
   // NO CONSUMER READS EITHER FIELD, AND THAT IS THE DESIGN — read this before writing the first one.
   // The event is a REFRESH TRIGGER: `shouldRefreshList` reacts to its OCCURRENCE and re-requests the
@@ -904,6 +904,8 @@ type BaseDaemonEvent =
   // filename or cache key, and never a log argument. No token, key, or raw frame can ride two bare
   // strings (AC-by-construction).
   | { type: 'workspaceUpdated'; path: string; label: string | null }
+  // Additive acknowledgement for identified renames; host origin is stamped in main.
+  | { type: 'workspaceRenameResult'; attemptId: string; outcome: 'confirmed' | 'rejected' }
   // The create_workspace_folder REJECTION arm (#396), the rejected twin of workspaceFolderCreated.
   // Emitted by the MAIN-side correlation gate (daemonConnection.ts) when a content-free daemon `error`
   // (#116) arrives whose `Envelope.in_reply_to` matches a pending create_workspace_folder request — the

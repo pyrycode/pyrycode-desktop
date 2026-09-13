@@ -147,7 +147,9 @@ no gate checks, and this one does not add a third claim to keep straight.
   already-created conversation can still emit a rejection. The [Add workspace
   dialog](add-workspace-dialog.md#host-scoped-results) accepts only its selected host's
   stamped results and gates rejection on `status === 'creating'`. After any submission,
-  a matching confirmation closes the still-open dialog, including after timeout/failure.
+  the first matching confirmation pins the remote folder, including after timeout/failure.
+  A blank submitted name closes the dialog; otherwise it enters the independently
+  correlated naming phase described under [Workspace renaming](#workspace-renaming).
   Success, Cancel and unmount detach its result/session-state listeners and clear its
   local deadline; a later rejection cannot reopen it. Pending entries remain unbounded, on
   `pendingHistoryRequests`' accepted argument: an entry costs one number, only this client's own sends add
@@ -468,3 +470,46 @@ instead of the map's value reddened 3; the byte bound as `>=` instead of `>` red
 write](system-prompt-write.md) for the full design, including the outbound builder, the additive-ack
 pattern stated once for reuse, the fail-closed decode, and the two `DaemonEvent` arms this correlation
 feeds.
+
+## Workspace renaming
+
+`renameWorkspace(payload, attemptId?)` supports an optional acknowledgement for
+[Add workspace](add-workspace-dialog.md#optional-shared-name). Existing callers that
+omit the identifier, including Edit workspace, retain fire-and-forget behaviour.
+The IPC command carries optional top-level `serverId` and `attemptId`; the guard
+requires a present attempt identifier to be a nonempty string of at most 128 UTF-16
+code units. It is a client correlation token, not authority and not a wire field.
+Main routes by host and builds only `{ path, label }`, preserving explicit `null`
+for callers that clear labels. The daemon wire contract is unchanged.
+
+`pendingWorkspaceRenames: Map<number, string>` maps the sent wire envelope id to the
+renderer attempt identifier. Registration happens only after build and send succeed,
+so failed sends leave no phantom correlation. `dial()` clears the map with its siblings.
+
+- Every decoded `workspace-updated` emits `workspaceUpdated` first, unconditionally.
+  The decoder now retains optional `inReplyTo`; a matching map entry is then consumed
+  and emits `workspaceRenameResult { attemptId, outcome: 'confirmed' }`. Missing,
+  unrelated or duplicate correlation leaves only the broadcast. This additive order
+  preserves the host-addressed authoritative list refresh for the requester and for
+  unsolicited updates; consuming the success frame would lose that refresh.
+- A matching `daemon-error` consumes the entry and emits the same result shape with
+  `outcome: 'rejected'`, then returns before bundle/modal error fallbacks. No daemon
+  error text, code, name or path is carried in this result.
+- A null driver or local build/send throw rejects an identified attempt immediately.
+  Missing host routing also rejects, stamped with the requested host in main. Calls
+  without an identifier get no result. Normal connection results inherit the
+  main-bound host origin; neither reply payload nor attempt identifier selects it.
+
+The dialog alone consumes these results; the session, modal, question and timeline
+bridges ignore them. It requires the selected host, current UUID and active naming
+phase to match. Its 30-second deadline and dismissal are local: they do not remove a
+main map entry or cancel a remote rename. A late reply can therefore still refresh
+labels, but cannot settle a newer naming attempt. Map entries end on a correlated
+reply/error or dial; there is no main-side timeout.
+
+Lifecycle diagnostics use static event names and classifications: `workspace-rename-sent`,
+`workspace-rename-result` with `confirmed`/`rejected`, and `workspace-rename-failed`
+with `local-send` or `unavailable-host`. They omit identifiers, paths, names and
+caught/daemon error text. The connection tests pin additive broadcasts, single-use
+results, redial cleanup, local rejection and omission of attempt IDs from the wire;
+mounted dialog tests prove host/attempt isolation and naming-only retry.

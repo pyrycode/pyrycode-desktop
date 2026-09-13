@@ -768,18 +768,8 @@ export type InboundDaemonMessage =
   // reports that a workspace DIRECTORY was made. Correlated by `in_reply_to` to whoever asked for the
   // rename and pushed UNSOLICITED to every other interactive client, so both shapes are real traffic.
   //
-  // IT CARRIES NO `inReplyTo`, and the absence is the design — the `attachment-stored` argument in a
-  // different key. The three kinds that DO carry one need the envelope id BECAUSE it is their correlation.
-  // Here nothing correlates on it: the consumer treats this frame as a refresh trigger, and the outbound
-  // rename verb (#1289) learns its write landed from the re-listed rows exactly as every other client
-  // does. Surfacing the handle would hand a consumer a plausible-looking match key nothing matches on.
-  // `workspace-folder-created` above is the precedent: always correlated, no handle, payload sufficient.
-  //
-  // NEITHER FIELD IS READ BY ANY CONSUMER, deliberately. The emit carries them across IPC and the
-  // renderer's list bridge reacts to the OCCURRENCE alone, letting the daemon's authoritative
-  // `conversations` reply land the new label. `path` is an untrusted REMOTE path and `label` untrusted
-  // operator text; both are opaque here, resolved against no filesystem, and neither reaches a log.
-  | { kind: 'workspace-updated'; workspaceUpdated: WorkspaceUpdatedPayload }
+  // Optional correlation settles an identified rename; every update still refreshes the list.
+  | { kind: 'workspace-updated'; workspaceUpdated: WorkspaceUpdatedPayload; inReplyTo?: number }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
@@ -3847,8 +3837,6 @@ export function parseInboundMessage(
       // type/bytes/hash. `path` could echo a $HOME / username and `label` is operator-chosen text, so
       // nothing but the shape is recorded. `code` is a client-owned literal, never the peer's `type`.
       //
-      // `Envelope.in_reply_to` is deliberately NOT read: the frame decodes identically whether the
-      // daemon correlated it to this client's own rename or pushed it unsolicited (see the kind above).
       const workspaceUpdated = parseWorkspaceUpdatedPayload(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
@@ -3856,7 +3844,8 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'workspace-updated', workspaceUpdated }
+      return { kind: 'workspace-updated', workspaceUpdated,
+        ...(envelope.in_reply_to === undefined ? {} : { inReplyTo: envelope.in_reply_to }) }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

@@ -378,7 +378,7 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId)
+  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId, prependedRows)
   return (
     <div className="conversation">
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
@@ -655,6 +655,7 @@ function reassertPinnedToBottom(
   pinnedOffset: { current: number | null }
 ): void {
   if (!following.current) return
+  el.style.removeProperty('padding-bottom')
   const before = el.scrollTop
   // Past the maximum; the browser clamps to exactly the bottom.
   el.scrollTop = el.scrollHeight
@@ -692,7 +693,7 @@ function reassertPinnedToBottom(
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
@@ -703,6 +704,19 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
+  const topAnchor = useRef<{
+    row: Element
+    top: number
+    prependedRows: number
+    conversationId: string | null
+  } | null>(null)
+  const rememberTop = (el: HTMLDivElement): void => {
+    const row = el.firstElementChild
+    topAnchor.current = el.scrollTop === 0 && row !== null
+      ? { row, top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+          prependedRows, conversationId }
+      : null
+  }
 
   // NO dependency array — this runs after every render of the screen, and that is what makes the chrome
   // case work rather than being a missing optimization. Enumerating what changes the region's height in a
@@ -789,6 +803,28 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     const el = ref.current
     if (el === null) return
 
+    const anchor = topAnchor.current
+    if (!following.current && el.scrollTop === 0 && anchor !== null &&
+        anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
+        anchor.row.parentElement === el) {
+      // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
+      // short threads include unused viewport space that is not part of the inserted content.
+      const offset = anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
+      const contentBottom = Array.from(el.children).reduce(
+        (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
+        el.getBoundingClientRect().top
+      ) - el.getBoundingClientRect().top + padding
+      const missingRoom = offset + el.clientHeight - contentBottom
+      if (missingRoom > 0) {
+        // Retain the short thread's blank space below its rows so the target is reachable.
+        // Bottom following removes this measured padding and restores the stylesheet token.
+        el.style.paddingBottom = `${padding + Math.ceil(missingRoom)}px`
+      }
+      el.scrollTop = offset
+      if (el.scrollTop !== 0) pinnedOffset.current = el.scrollTop
+    }
+
     const observer = (growth.current ??= new ResizeObserver(() => {
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
@@ -803,6 +839,7 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     for (const row of el.children) observer.observe(row)
 
     reassertPinnedToBottom(el, following, pinnedOffset)
+    rememberTop(el)
   })
 
   // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
@@ -823,6 +860,7 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     const nearTop = isNearTop({ scrollOffset: el.scrollTop,
       viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
     if (nearTop) following.current = false
+    rememberTop(el)
     requestOlderHistory(historyAskDeps, conversationId, nearTop)
   }
 
@@ -843,6 +881,7 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        rememberTop(el)
         // #1049: the pin's own write queues a scroll event, and that event is not the operator scrolling.
         // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
         // the write produced, so an event the operator caused in the same frame — a different offset —
@@ -861,7 +900,9 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
           contentHeight: el.scrollHeight
         }
         following.current = isAtBottom(metrics)
-
+        if (following.current && el.style.paddingBottom !== '') {
+          reassertPinnedToBottom(el, following, pinnedOffset)
+        }
       }
     },
     // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate

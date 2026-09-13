@@ -1296,6 +1296,56 @@ const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Prom
     return row.getBoundingClientRect().top
   }, content)
 
+for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, REPLY_TURNS]]) {
+  test(`first history prepend preserves the row at zero with ${initialRows} held rows and ${pageRows} incoming rows`, async ({ launchPairedApp }) => {
+    const requests: number[] = []
+    const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+      const envelope = decodeEnvelope(bytes)
+      if (envelope.type === 'request_history') {
+        expect((envelope.payload as RequestHistoryPayload).cursor).toBe('')
+        requests.push(envelope.id)
+        return []
+      }
+      return buildReplyFrames(bytes)
+    } })
+    for (let row = 1; row <= initialRows; row++) {
+      daemon.pushFrame(assistantDeltaFrame(row))
+      daemon.pushFrame(turnEndFrame(row))
+    }
+    await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(initialRows)
+    const thread = page.locator('.conversation__thread')
+    await thread.evaluate(el => { el.scrollTop = 0 })
+    await settleScrollEvent(page)
+    const before = await readThreadMetrics(page)
+    expect(before.scrollTop).toBe(0)
+    expect(before.scrollHeight > before.clientHeight).toBe(initialRows > 1)
+    expect(requests).toHaveLength(0)
+    const content = await assistantRowContentAt(page, 0)
+    const top = await viewportTopOfAssistantRowWithContent(page, content)
+    await thread.focus()
+    await page.keyboard.press('ArrowUp')
+    await expect.poll(() => requests.length).toBe(1)
+    await settleScrollEvent(page)
+    expect((await readThreadMetrics(page)).scrollTop).toBe(0)
+    daemon.pushFrame(historyPageFrame(requests[0], Array.from({ length: pageRows }, (_, i) =>
+      historyEntry(200 + i, walkedBackText(i + 1))), WALK_CURSOR, false))
+    await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(pageRows)
+    await settleScrollEvent(page)
+    expect((await readThreadMetrics(page)).scrollTop).toBeGreaterThan(pageRows > 1 ? WALKED_BACK_GROWTH_FLOOR_PX : 0)
+    expect(await viewportTopOfAssistantRowWithContent(page, content)).toBeCloseTo(top, 0)
+    expect(requests).toHaveLength(1)
+    if (initialRows === 1) {
+      await page.screenshot({ path: `/tmp/builder-1394-zero-prepend-${pageRows}.png` })
+      await page.getByPlaceholder('Message…').fill('resume bottom following')
+      await page.getByRole('button', { name: 'Send' }).click()
+      await settleScrollEvent(page)
+      expect(await thread.evaluate(el => el.style.paddingBottom)).toBe('')
+      expect(distanceFromBottom(await readThreadMetrics(page))).toBeLessThanOrEqual(AT_BOTTOM_TOLERANCE_PX)
+      expect(requests).toHaveLength(1)
+    }
+  })
+}
+
 test('a page walked back above the reader leaves them looking at the same row', async ({
   launchPairedApp
 }) => {

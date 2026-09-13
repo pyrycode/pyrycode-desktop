@@ -175,6 +175,14 @@ export function createChatHistoryWriter(deps: {
             saved.delete(key)
           }
         }
+        // The latest list can omit retained timelines. Drop actual host-owned slices so
+        // a new receipt after re-pair cannot inherit erased rows or unknown ownership.
+        for (const [id, slice] of deps.timelines.getState().timelines) {
+          if (slice.serverId === serverId) {
+            deps.timelines.getState().clearTimelineFor(id)
+            observations.delete(id)
+          }
+        }
         for (const [id, observation] of observations) {
           if (observation.owner === serverId) observations.set(id, { owner: null, coverage: { status: 'unknown' } })
         }

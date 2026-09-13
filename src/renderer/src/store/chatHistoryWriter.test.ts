@@ -10,8 +10,8 @@ const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_p
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
   const lists = createConversationListStore()
-  const timelines = createConversationTimelineStore()
   let receipt: { type: string; serverId: string | null } | null = null
+  const timelines = createConversationTimelineStore(undefined, () => receipt?.serverId)
   let scheduled: (() => void) | undefined
   const log = vi.fn()
   const save = vi.fn(write)
@@ -40,7 +40,6 @@ describe('chat history recording', () => {
     await h.writer.flush()
     expect(h.save.mock.calls.map(([r]) => r.serverId)).toEqual(['b'])
     settle(true)
-    h.timelines.getState().clearAllTimelines()
     await h.writer.flush()
     expect(h.save).toHaveBeenCalledTimes(1)
     h.list()
@@ -86,7 +85,6 @@ describe('chat history recording', () => {
     h.delta('buffered')
     const settle = beginChatHistoryRemoval('a')
     settle(true)
-    h.timelines.getState().clearAllTimelines()
     h.list()
     release()
     await flushing

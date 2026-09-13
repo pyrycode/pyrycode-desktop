@@ -68,9 +68,10 @@ test('explicit unpair discards buffered history across restart while same-server
   await first.page.clock.runFor(500)
   expect(await read(first.page)).toEqual({ status: 'error', code: 'unknown-host' })
   expect(snapshotText(await read(first.page, otherId))).toBe('saved before removal')
-  await first.app.close()
-
-  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await first.page.clock.resume()
+  await first.page.getByRole('button', { name: 'Back', exact: true }).click()
+  // Re-pair in the same renderer: restarting here would hide retained omitted slices.
+  const second = first
   await pairAnotherServerFromSettings(second.page, freshCode())
   await expect(second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true })).toBeVisible()
   expect(await read(second.page)).toEqual({ status: 'missing' })
@@ -79,12 +80,15 @@ test('explicit unpair discards buffered history across restart while same-server
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await first.daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'after-forget', seq: 0, text: 'fresh after re-pair' }))
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: 'omitted-chat', turn_id: 'fresh-omitted', seq: 0, text: 'fresh omitted timeline' }))
   await expect.poll(async () => snapshotText(await read(second.page))).toBe('fresh after re-pair')
+  await expect.poll(async () => snapshotText(await read(second.page, serverId, 'omitted-chat'))).toBe('fresh omitted timeline')
   expect(commands).not.toContain('request_history')
   await second.app.close()
   const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   expect(snapshotText(await read(third.page))).toBe('fresh after re-pair')
-  expect(await read(third.page, serverId, 'omitted-chat')).toEqual({ status: 'missing' })
+  expect(snapshotText(await read(third.page, serverId, 'omitted-chat'))).toBe('fresh omitted timeline')
   expect(snapshotText(await read(third.page, otherId))).toBe('saved before removal')
 })
 

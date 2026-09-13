@@ -78,3 +78,40 @@ None.
 ## Revisions
 
 - During implementation, shutdown testing showed that a paused writer could acknowledge close before a failed unpair resumed its buffered snapshots. `stop` now unsubscribes, waits for already-started removal settlements, then flushes; settlement cannot schedule a new timer after stop. A held-removal test proves both success and failure. The coordinator exposes two functions (subscribe and begin), within the export budget.
+
+### 2026-09-13 — retained timelines after same-session re-pair
+
+The verifier found that `clearServerScopedState` enumerates the latest list through
+`selectExclusiveConversationIdsFor`, leaving omitted timelines held. Resetting writer
+ownership alone then rejects all fresh same-host receipts; simply restoring ownership
+would instead allow erased text back into storage.
+
+Successful removal settlement in `createChatHistoryWriter` now clears every retained
+slice whose `serverId` matches the removed host, using `clearTimelineFor`, before
+resuming writes. This includes omitted, restored and pending-read slices, independent
+of list claims. Other host-stamped slices remain held. Failed removal and repair do
+not clear slices. The existing generation and buffered-snapshot invalidation remain.
+
+The regression in `e2e/chat-history-removal.test.ts` uses receipt-stamped holders, `runUnpairServer`, the actual
+`clearServerScopedState` with its production selector, and fresh protected-store
+instances to prove only fresh content saves after same-session re-pair. The recording
+Playwright scenario now re-pairs before restart and receives fresh text for the omitted
+timeline, then checks persistence after restart. No new production file or API is needed.
+The cross-process store regression runs in the existing `e2e/*.test.ts` Vitest tier;
+importing main storage into a renderer test violates the separate TypeScript project
+file lists. Renderer writer tests now supply the same receipt-host callback as production.
+
+### Security review of revision
+
+**Verdict: PASS.** The retained-holder finding is addressed by clearing actual
+host-stamped content, not by relaxing writer ownership checks. `serverId` comes from
+the existing receipt/restoration boundary; another host's list claim cannot authorize
+clearing its slice. Clearing also invalidates pending local-read completion by removing
+its exact held slice. Settlement runs synchronously before identity refresh, with no
+new async task or subscription. Existing main membership checks, generations, protected
+storage, credential outcomes and static diagnostics remain unchanged. No new IPC,
+credential, path, crypto, network or markup surface is introduced. The threat under
+review is erased plaintext returning through a retained renderer slice; the fresh-store
+and same-renderer regressions cover it.
+
+**Reviewer:** builder self-review using `builder/security-review.md`, 2026-09-13.

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 import { PyryMark } from '../../theme/PyryMark'
@@ -27,6 +27,21 @@ export function PermissionModalView({
   onBack: () => void
   onCancel: (modalId: string) => void
 }): JSX.Element {
+  const cancelButton = useRef<HTMLButtonElement>(null)
+  const displayedModalId = useRef<string | null>(null)
+  useEffect(() => {
+    if (displayedModalId.current === prompt.modalId) return
+    displayedModalId.current = prompt.modalId
+    // Only initial display moves focus; updates, Back and availability changes never steal it.
+    if (prompt.defaultToNo === true && responseAvailable) cancelButton.current?.focus()
+  }, [prompt.modalId, prompt.defaultToNo, responseAvailable])
+  // The inbound parser supplies JSON; keep false, zero and null as meaningful display text.
+  const reason = typeof prompt.reason === 'string' ? prompt.reason : JSON.stringify(prompt.reason)
+  const reasonLabel = prompt.reasonType === 'classifier' ? 'The auto classifier could not approve this'
+    : prompt.reasonType === 'rule' ? 'A permission rule asks'
+      : prompt.reasonType !== undefined ? `Reason type: ${prompt.reasonType}` : 'Reason'
+  const hasReason = reason !== undefined || prompt.reasonType !== undefined
+  const hasContext = hasReason || prompt.description !== undefined || prompt.blockedPath !== undefined
   return (
     <section className="question-panel permission-panel" role="region" aria-labelledby={PERMISSION_MODAL_TITLE_ID}>
       <div className="question-panel__title">
@@ -44,6 +59,15 @@ export function PermissionModalView({
           ) : (
             <>
               <p className="question-panel__question permission-panel__explanation">{prompt.prompt}</p>
+              {hasContext && (
+                <div className="permission-panel__context">
+                  {hasReason && <p className="permission-panel__context-text">
+                    {reasonLabel}{reason !== undefined ? `: ${reason}` : ''}
+                  </p>}
+                  {prompt.description !== undefined && <p className="permission-panel__context-text">{prompt.description}</p>}
+                  {prompt.blockedPath !== undefined && <p className="permission-panel__context-text">{prompt.blockedPath}</p>}
+                </div>
+              )}
               <div className="question-panel__options">
                 {prompt.options.map((option) => (
                   <label key={option.id} className="question-panel__option">
@@ -80,6 +104,7 @@ export function PermissionModalView({
           ) : (
             <>
               <button type="button" className="button-small question-panel__cancel permission-modal__cancel"
+                ref={cancelButton}
                 disabled={!responseAvailable}
                 onClick={() => onCancel(prompt.modalId)}>
                 Cancel

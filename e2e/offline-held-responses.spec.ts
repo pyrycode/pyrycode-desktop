@@ -29,7 +29,7 @@ async function observeCommands(app: PairedApp) {
 
 async function permission(app: PairedApp, kind = 'permission', conversationId = SEEDED_ROW.id, serverId = FIRST_SERVER_ID) {
   await event(app, { type: 'modalShown', serverId, conversationId, modalId: 'held-' + conversationId,
-    class: kind, title: 'Held permission', prompt: 'Allow reading?',
+    class: kind, title: 'Held permission', prompt: 'Allow reading?', defaultToNo: true,
     options: [{ id: 'deny', label: 'Deny' }, { id: 'allow', label: 'Allow' }], defaultOptionId: 'deny' })
 }
 

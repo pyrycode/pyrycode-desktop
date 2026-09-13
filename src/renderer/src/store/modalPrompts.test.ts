@@ -88,6 +88,21 @@ it('copies outstanding rejection ownership without attributing unknown IDs to a 
 })
 
 describe('reduceModal — install', () => {
+  it('preserves an explicitly false focus hint as an own property', () => {
+    const state = reduceModal(initialModalState, shown('context', { defaultToNo: false }))
+    expect(state.outstanding[0]).toHaveProperty('defaultToNo', false)
+  })
+
+  it.each(['plain reason', { checks: [false, 0, null] }, null, false, 0])('holds context and drops it on replacement: %j', (reason) => {
+    const context = { reason, reasonType: 'rule', blockedPath: '/workspace/file',
+      description: 'Additional context', defaultToNo: true }
+    const state = reduceModal(initialModalState, shown('context', context))
+    expect(state.outstanding[0]).toMatchObject(context)
+    const replaced = reduceModal(state, shown('context'))
+    expect(replaced.outstanding).toHaveLength(1)
+    for (const key of Object.keys(context)) expect(replaced.outstanding[0]).not.toHaveProperty(key)
+  })
+
   it('holds a single shown prompt addressed by modalId, carrying its fields verbatim', () => {
     const state = run([shown('m1')])
     expect(state.outstanding).toHaveLength(1)

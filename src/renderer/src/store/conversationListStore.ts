@@ -1,29 +1,4 @@
-// The daemon's conversation list, kept live as one unidirectional source of truth for the Channel
-// List screen (#141), the create-discussion affordance (#142), and every future list / navigation /
-// archive feature. Pure renderer state — no IPC, no preload bridge, no transport. The data path
-// (conversationListBridge.ts) requests the list once the connection reaches `connected` and writes
-// the arriving `conversationsReceived` rows here via the single setter; #141 reads them through the
-// selector.
-//
-// A dedicated store (the runConfigStore precedent, #187), NOT a session-store facet: a conversation-
-// list update never touches connection/messages state and vice versa, so the two stores stay
-// orthogonal and a list arrival re-renders only components selecting this slice. It mirrors
-// runConfigStore's DI-factory → singleton → hook → selector structure, but holds the wire
-// ConversationSummary rows VERBATIM in snake_case — no parallel camelCase renderer type, no per-field
-// remap (unlike runConfigSnapshot's used_tokens → usedTokens) — so the slice stays drift-free against
-// the mobile wire contract. A single setter rather than a reducer: there is exactly one mutation
-// ("record the latest list"), so a discriminated-union action set would be a one-member union —
-// ceremony without benefit. Unidirectional is preserved: read-only selector, one write path, and
-// `setConversations` is invoked only by the subscription wiring, never two-way-bound from a component.
-//
-// Since #1086 the list is KEYED BY SERVER: since #1117 the registry holds one connection per paired
-// server, so with two connected daemons each answering the list request the second reply overwrote the
-// first and the sidebar showed whichever server answered last. The third store in the family after
-// #1085 (session) and #1134 (relay link) — but the ONE that could not copy their shape. Both siblings
-// left their app-wide field as last-writer-wins and hung the per-server index beside it; here a list
-// showing one server's rows IS the bug, so the app-wide read is a UNION across servers. A union reads
-// every slot, so a stale slot becomes visible — which is why this store, alone in the family, also
-// joins `clearPairingScopedState`'s dep set (see `clearAllConversations` below).
+// Host-scoped received and restored lists; connection and navigation state stay separate.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { ConversationSummary } from '@shared/wire/types'
@@ -89,8 +64,15 @@ export interface ConversationListState {
   byServer: ReadonlyMap<ConversationListOrigin, readonly ServerConversationSummary[]>
 }
 
-/** Store shape = state + its two mutation entry points. */
+/** Store state and explicit received, restored and clear entry points. */
 export type ConversationListStore = ConversationListState & {
+  localListReads: ReadonlyMap<string, 'loading' | 'loaded' | 'failed'>
+  /** Saved identities only. The handle is invalidated by received data, clears or cancellation. */
+  beginLocalListRead: (serverId: string) => {
+    complete: (rows: readonly ConversationSummary[]) => void
+    fail: () => void
+    cancel: () => void
+  } | null
   setConversations: (
     conversations: readonly ConversationSummary[],
     serverId?: string | null
@@ -212,8 +194,7 @@ function flattenByServer(
  * two replies arriving back-to-back cannot interleave: zustand runs the updater synchronously against
  * current state, which closes the only check-then-act shape on this path.
  *
- * Still a SINGLE write path rather than a reducer: keying adds no second kind of write, so the
- * header's one-member-union argument stands. `serverId` is OPTIONAL, and the optionality is
+ * The received-list `serverId` is OPTIONAL, and the optionality is
  * load-bearing twice over (the `setRelayLinkStatus` property) — it makes the absent case a genuine
  * absent argument, matching the three-case domain with no sentinel value, and it leaves an origin-less
  * call filing under the unstamped slot rather than being dropped.
@@ -221,42 +202,58 @@ function flattenByServer(
 export function createConversationListStore(
   init: ConversationListState = initialConversationListState
 ) {
-  return createStore<ConversationListStore>((set) => ({
+  const pending = new Map<string, symbol>()
+  return createStore<ConversationListStore>((set, get) => ({
     ...init,
+    localListReads: new Map(),
+    beginLocalListRead: (serverId) => {
+      if (get().byServer.has(serverId) || get().localListReads.has(serverId)) return null
+      const token = Symbol()
+      pending.set(serverId, token)
+      set((s) => ({ localListReads: new Map(s.localListReads).set(serverId, 'loading') }))
+      function finish(status: 'loaded' | 'failed' | null, rows?: readonly ConversationSummary[]): void {
+        if (pending.get(serverId) !== token) return
+        pending.delete(serverId)
+        set((s) => {
+          const localListReads = new Map(s.localListReads)
+          if (status === null) localListReads.delete(serverId)
+          else localListReads.set(serverId, status)
+          if (rows === undefined) return { localListReads }
+          const byServer = new Map(s.byServer)
+          byServer.set(serverId, stampRows(rows, serverId))
+          return { localListReads, byServer, conversations: flattenByServer(byServer) }
+        })
+      }
+      return { complete: (rows) => finish('loaded', rows), fail: () => finish('failed'),
+        cancel: () => finish(null) }
+    },
     setConversations: (conversations, serverId) =>
       set((s) => {
+        const localListReads = new Map(s.localListReads)
+        if (typeof serverId === 'string') {
+          pending.delete(serverId)
+          localListReads.delete(serverId)
+        }
         const byServer = new Map(s.byServer)
         byServer.set(serverId, stampRows(conversations, serverId))
-        return { conversations: flattenByServer(byServer), byServer }
+        return { conversations: flattenByServer(byServer), byServer, localListReads }
       }),
-    clearAllConversations: () =>
-      set((s) =>
-        // THE SUBSCRIBER SHORT-CIRCUIT (`clearPairingScopedState`'s docblock names the two different
-        // jobs a guard like this can do; this store needs only the first). Handing the state OBJECT
-        // straight back on an already-clear store makes zustand's `Object.is(next, state)` fire, so a
-        // redundant clear wakes NO listener at all rather than only sparing the selectors. Both halves
-        // are tested because the DI factory accepts an arbitrary injected state and it is only the
-        // sole write path that keeps the two fields derived together. There is no side-effect guard to
-        // want: nothing here reaches outside memory, so this clear cannot throw.
-        s.conversations === null && s.byServer.size === 0 ? s : initialConversationListState
-      ),
-    clearConversationsFor: (serverId) =>
+    clearAllConversations: () => {
+      pending.clear()
+      set((s) => s.conversations === null && s.byServer.size === 0 && s.localListReads.size === 0
+        ? s : { ...initialConversationListState, localListReads: new Map() })
+    },
+    clearConversationsFor: (serverId) => {
+      pending.delete(serverId)
       set((s) => {
-        // The same SUBSCRIBER SHORT-CIRCUIT its nullary sibling carries, against the condition that
-        // matters here: an id naming no held slot hands the state OBJECT straight back, so zustand's
-        // `Object.is(next, state)` fires and a redundant clear wakes NO listener. Reachable in
-        // production whenever a server is forgotten before its list reply ever landed.
-        if (!s.byServer.has(serverId)) return s
-        // Copy-on-write, the discipline `setConversations` above documents: a new Map, never a mutation
-        // of the one the store already handed out. Every surviving slot is carried across BY REFERENCE,
-        // so a component watching another server sees `Object.is` true and does not re-render.
+        if (!s.byServer.has(serverId) && !s.localListReads.has(serverId)) return s
         const byServer = new Map(s.byServer)
         byServer.delete(serverId)
-        // The union is recomputed in the SAME `set` that writes the map — what makes the two fields
-        // derived together by construction rather than by convention, and what actually takes the
-        // departed rows off the app-wide read.
-        return { conversations: flattenByServer(byServer), byServer }
+        const localListReads = new Map(s.localListReads)
+        localListReads.delete(serverId)
+        return { conversations: flattenByServer(byServer), byServer, localListReads }
       })
+    }
   }))
 }
 
@@ -268,9 +265,7 @@ export function useConversationListStore<T>(selector: (s: ConversationListStore)
   return useStore(conversationListStore, selector)
 }
 
-/** The read surface. There is no exposed setter beyond `setConversations` and the pairing-boundary
- *  `clearAllConversations`; both are invoked only by the subscription wiring and by
- *  `clearPairingScopedState`, never two-way-bound from a component. */
+/** Read selectors; mutations belong to received-list wiring, the saved-list loader and pairing clears. */
 
 /**
  * EVERY server's rows, in one array (#1086, AC3). Unchanged in name and in its `| null`, and that is

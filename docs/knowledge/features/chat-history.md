@@ -7,9 +7,10 @@ saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
 The app records received lists, live timeline content, composer echoes and loaded
-history pages automatically. [#1339](https://github.com/pyrycode/pyrycode-desktop/issues/1339)
-still owns offline display and restoration entry points, including explicit
-ownership installation before a restored slice can record further live content.
+history pages automatically. Saved lists restore into the sidebar on launch,
+including unavailable and pairing-rejected hosts.
+[#1388](https://github.com/pyrycode/pyrycode-desktop/issues/1388) owns on-demand
+timeline restoration and ownership installation for restored timeline slices.
 [#1340](https://github.com/pyrycode/pyrycode-desktop/issues/1340) owns reconnect,
 scroll-trigger changes and explicit host/conversation removal integration.
 Observing, saving and flushing add no history requests; existing opening and
@@ -119,6 +120,31 @@ Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
 
+[`createSavedListRestorer`](../../../src/renderer/src/store/savedListRestorer.ts)
+mounts once in `PairedShell` and observes saved identities in `serverInfoStore`,
+independently of connection state. It calls only `chatHistory`'s `readList` operation
+and verifies a stored result's list kind and host identity. The explicit
+`conversationListStore.beginLocalListRead(serverId)` handle installs host-stamped
+rows directly, preserving snapshot order within existing sidebar grouping and
+keeping equal conversation ids on different hosts separate. It never fabricates
+a daemon event or calls the received-list setter.
+
+Admission is store-owned: an existing host list or local read prevents another
+read. Unique tokens invalidate both late success and late failure after a received
+list, host/global clear, or cancellation, including clears before any rows exist.
+Other hosts retain their arrays by reference. The restorer attempts each held
+identity once, cancels departed hosts, and cancels outstanding handles on teardown.
+IPC itself is not abortable; cancelled results cannot change the store. Cancellation
+removes pending read state so a later mount can retry, while loaded/failed results
+remain settled across navigation.
+
+A saved list is local display data, not current server state. Restoration never
+selects a chat, changes selection after navigation, or creates connection or working
+state. `SessionState.statuses` remains connection truth: offline row browsing keeps
+the existing host-scoped action gates and sends no history or session-configuration
+request. List restoration does not restore timeline messages or establish timeline
+recording ownership. Received lists still replace their host's displayed list.
+
 [`useChatHistoryWriter`](../../../src/renderer/src/store/chatHistoryWriter.ts)
 mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives), observing
 `conversationListStore` and `conversationTimelineStore` across routes. It projects
@@ -155,8 +181,9 @@ observation metadata. Main independently checks saved-host membership again.
 
 Startup-empty state, activation, direct snapshot installation, list/holder clears
 and memory eviction are not deletion signals. Directly installed nonempty rows
-have no observed owner and cannot establish one by later live delivery. Restore
-snapshots through the future restoration entry point, never through live reducers.
+in a timeline have no observed owner and cannot establish one by later live delivery.
+List restoration uses its explicit handle; timeline restoration needs its own
+ownership entry point. Neither belongs in live reducers.
 Failed requests and rejected pairings do not delete saved content. Received empty
 lists/pages and cancellation of an observed echo remain valid durable changes.
 
@@ -178,6 +205,19 @@ These limits govern individual admitted records. They impose no ten-chat disk
 cap, automatic eviction, total collection-size bound or history-download policy.
 
 ## Results and failure preservation
+
+For sidebar restoration, both `missing` and a stored empty list settle as a loaded
+empty host slot (`[]`, with `localListReads` set to `loaded`). Errors and rejected
+IPC instead leave the list absent and mark that host `failed`; unexpected result
+status, snapshot kind or host coordinates fail the same way. They never masquerade
+as loaded-empty data.
+
+`HostRow` shows “Could not read saved chats on this device.” beneath the affected
+host in each sidebar tree. This local failure is separate from connection dots,
+failed-connection styling and the repair control. It changes neither connection
+status nor saved data and triggers no write, deletion, network request or retry
+loop. A newer received list clears the local failure state. Stale failures cannot
+attach an error to a newer list or a cleared host.
 
 | Result | Meaning |
 | --- | --- |
@@ -207,7 +247,8 @@ exception.
 
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
-`history-writer-started`, `history-writer-result` and `history-flushed`.
+`history-writer-started`, `history-writer-result`, `history-flushed` and
+`history-list-restore` (static start/result/stop codes).
 They include no requests, coordinates, message content, keys, storage paths or
 caught errors. Successful reads return the declared chat content; error replies
 contain only their static classification.
@@ -319,6 +360,12 @@ Cancellation regressions must include later live content and retained coverage;
 checking only echo addition or its immediate removal misses a writer that has
 silently stopped recording the held chat.
 
+[`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
+covers ordered host isolation with equal ids, missing/empty/error results, duplicate
+admission and delayed success/failure after received lists, clears and cancellation.
+It runs the real writer alongside restoration: installing and clearing local lists
+must schedule no save, while a later received list must still record.
+
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
 exercises the mounted production observer and handler, real composer cancellation,
 quit/relaunch and window close/reopen. It freezes renderer timers after earlier
@@ -327,8 +374,12 @@ that waits for the debounce before quitting cannot prove the flush. Reusing the
 user-data directory proves disconnected local reads without a new handshake,
 including the last list, partial live text and loaded older page. The suite also
 covers pairing-rejected access, saved-host validation and zero added history
-requests. Its test encryption backend does not prove the OS keychain adapter or
-offline restoration UI.
+requests. It also proves restored sidebar browsing after normal quit/relaunch,
+a rejected host beside a usable connected host, and mounted local read failures.
+The pairing-recovery regression must expect the saved row after startup rejection;
+row absence no longer proves rejection. Keep the decoded rejection and actual
+repair-click assertions. Timeline reads here prove storage access, not restored
+message UI. The test encryption backend does not prove the OS keychain adapter.
 
 The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
 [`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).

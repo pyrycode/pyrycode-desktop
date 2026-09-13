@@ -68,8 +68,8 @@ test('folder completion cannot promote an abandoned attempt offline or after rec
   const commands = await observeCommands(app)
   const { page } = app
   await page.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Keep in scratch' }).check()
-  await page.getByRole('button', { name: 'Save', exact: true }).focus()
+  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
+  await page.getByRole('button', { name: 'OK', exact: true }).focus()
   await connection(app, FIRST_SERVER_ID, 'disconnected')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.keyboard.press('Enter')
@@ -78,7 +78,8 @@ test('folder completion cannot promote an abandoned attempt offline or after rec
   await expect(page.locator('.channel-list__save')).toHaveCount(1)
   for (const reconnectFirst of [false, true]) {
     await page.locator('.channel-list__save').click({ force: true })
-    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
+    await page.getByRole('button', { name: 'OK', exact: true }).click()
     await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
     expect((await commands.read()).find(c => c.type === 'createWorkspaceFolder')).toMatchObject({ serverId: FIRST_SERVER_ID })
     await connection(app, FIRST_SERVER_ID, 'disconnected')
@@ -92,7 +93,8 @@ test('folder completion cannot promote an abandoned attempt offline or after rec
     await commands.clear()
   }
   await page.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
+  await page.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
   await event(app, { type: 'workspaceFolderCreated', serverId: FIRST_SERVER_ID, path: '/fake/fresh' })
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'promoteConversation').length).toBe(1)
@@ -138,7 +140,8 @@ test('a batched disconnect and reconnect invalidates pending promotion before Re
   const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) })
   const commands = await observeCommands(app)
   await app.page.locator('.channel-list__save').click({ force: true })
-  await app.page.getByRole('button', { name: 'Save', exact: true }).click()
+  await app.page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
+  await app.page.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
   await app.app.evaluate(({ BrowserWindow }, { channel, serverId }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents
@@ -166,13 +169,14 @@ test('chat creation and scratch promotion address the connected sidebar host whi
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   const secondRow = page.locator('.channel-list__row').filter({ hasText: SECOND_SEEDED_ROW.name! })
   await secondRow.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('radio', { name: 'Create a dedicated channel folder' }).check()
+  await page.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'createWorkspaceFolder').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'createWorkspaceFolder')).toMatchObject({ serverId: SECOND_SERVER_ID })
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await secondRow.locator('.channel-list__save').click({ force: true })
-  await page.getByRole('radio', { name: 'Keep in scratch' }).check()
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('radio', { name: 'Use shared scratch folder' }).check()
+  await page.getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await commands.read()).filter(c => c.type === 'promoteConversation').length).toBe(1)
   expect((await commands.read()).find(c => c.type === 'promoteConversation')).toMatchObject({
     payload: { conversation_id: SECOND_SEEDED_ROW.id, cwd: SECOND_SEEDED_ROW.cwd }

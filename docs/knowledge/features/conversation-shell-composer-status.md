@@ -226,18 +226,12 @@ reading `Pairing error - Re-pair`, exactly when `shouldOfferRepair` is true. Thi
 that used to sit beneath the composer — one escape hatch, in the slot the operator is already looking at,
 rather than two surfaces for the same terminal state.
 
-**`ComposerErrorSlot({ status, onRepair })`** is the pure, exported three-way view that now fills the
-row's `trailing` slot: `shouldOfferRepair(status)` → the button; otherwise it **delegates** to
-`ComposerErrorChip({ status })` unchanged, which returns the chip on the `error` arm and `null` on the
-other three. Delegating rather than inlining the chip's markup is what keeps #797's whole describe block
-and both container assertions true, unedited by this ticket. Ordering is the whole of "one occupant per
-slot": `shouldOfferRepair` is a **strict subset** of `status.type === 'error'` (it adds `!retryable` and
-`code !== 'unpair'`), so the narrower gate has to be asked first, or the chip would swallow every
-actionable case. A retryable daemon error (`server.binary_offline`, `rate_limited`) still gets the plain
-chip — #167's AC4 — and so does the self-inflicted `code: 'unpair'` failure — #167's AC5 — both preserved
-by construction rather than by a new check. `status` and `onRepair` are both **props, not a store read**,
-for `RepairPrompt`'s and `ComposerErrorChip`'s reason: the populated branches are unreachable under
-`renderToStaticMarkup`, so the matrix is only assertable with an injected status.
+**`ComposerErrorSlot`** is the pure view for the trailing slot. Repair takes
+precedence over the connection-error chip because `shouldOfferRepair` is a strict
+subset of the error state. Retryable connection errors and `code: 'unpair'` still
+get the chip. Connected-only occupants follow in the [status priority](#model-settings-rejection)
+below. Props keep this decision testable with static markup; the container owns
+store reads.
 
 **The error arm is read for a decision, never for markup.** `ComposerErrorChip` can state the stronger
 "never destructures `status.error`"; this view cannot, because `shouldOfferRepair` reads
@@ -417,7 +411,7 @@ is visible; rejection leaves the question answerable and rolls back the optimist
 
 The single-occupant priority is repair button → connection-error chip → stopped-turn
 recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
-stopping report → usage notice. Recovery and notices require `connected`;
+stopping report → usage notice → history failure. Recovery and notices require `connected`;
 disconnected and connecting states hide them without clearing held reports.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
@@ -461,12 +455,38 @@ level. The multiline `/cost` example in `e2e/banner-reports.spec.ts` is syntheti
 client coverage; it does not establish a `local_command_output` or `notification`
 producer.
 
+## History page failure and Retry
+
+A settled failure shows “Could not load older messages” with `role="status"` only
+for the displayed conversation's exact owning host while connected, behind every
+occupant in the priority above. An unowned slice, another host's equal conversation
+id, or another conversation cannot supply it. `ComposerHistoryFailure` uses the
+existing recovery layout and `button-small button-small--error`; Retry appears
+only for `retryable: true`. Daemon failure text never supplies the copy.
+
+`retryHistoryPage` rechecks the captured displayed conversation object, connected
+host, exact held failure object and retryability at activation. Navigation (even
+to a new object with the same id), disconnect or a new settlement invalidates the
+action. A local read in progress or completed coverage also prevents dispatch.
+It delegates to the [existing history request path](request-history-send.md#the-one-fact-that-shapes-every-piece),
+preserving the failed cursor, limit, rows and successful coverage. Starting a retry
+removes the settled message and button while pending; correlated success clears
+failure, and a new failure supplies its new retryability. No automatic retry is
+introduced. Fresh upward input can still ask again after either classification.
+
+`historyRetry.test.ts` covers state and stale actions; `historyRetry.test.tsx`
+covers ownership, pending disappearance and priority through the real container.
+`e2e/history-retry.spec.ts` compares the full retry payload and fresh correlation
+id, holds the reply to prove one pending request and retained rows, then releases
+success. Immediate replies could conceal duplicate-demand bugs. It also delivers
+a nonretryable error and proves fresh upward demand remains available.
+
 ## The usage-limit notice, the slot's third occupant (#1321)
 
 Draws [the usage-limit store](usage-limit-store.md)'s per-conversation reading in the trailing slot,
 below the actionable-error button, connection-error chip, stopped-turn recovery,
 refusal Switch back, model rejection and Claude stopping reports in precedence.
-It remains the slot's lowest priority. `status` and `limitType` are claude-authored open strings that crossed the
+It precedes history failure. `status` and `limitType` are claude-authored open strings that crossed the
 subprocess trust boundary; this slice is where the "no DOM sink" constraint that store inherited is
 **discharged** rather than passed on further.
 
@@ -517,25 +537,19 @@ into a template — the same discipline that keeps `notice.text` itself free of 
 live region and no hidden prefix, unlike the chip: both leads already say what they are in plain words, so
 the visible text is already the accessible name.
 
-**`ComposerErrorSlot` grows from three arms to four, and the order is the whole of the one-occupant
-rule:** `shouldOfferRepair(status)` → the button; `status.type === 'error'` → the chip (the discriminant
-now asked explicitly here, where it used to be left to the chip's own guard, so the notice's arm cannot be
-reached while either existing occupant could claim the slot); `status.type === 'connected'` → `recovery ?? refusal ?? notice`;
-otherwise `null`. The `connected` gate is deliberately **stricter** than "no error live" — while
-disconnected or connecting, [the banner](#composer-error-chip-797) is already up saying so, and a quota
-claim beside it would contradict it, so the notice is suppressed on both of those arms too, not only on
-`error`. `notice` reaches the slot as a `JSX.Element | null` prop rather than the reading itself — the
-slot stays a view that knows a position and its occupants' priority, and knows nothing about a usage
-window. The container chooses model rejection, then a Claude stopping report, then
-the usage notice; the slot's connection gating is unchanged.
+**`ComposerErrorSlot`** selects repair, then connection error; while connected it
+returns `recovery ?? refusal ?? notice ?? history ?? null`. Otherwise it returns
+null. The container chooses model rejection, stopping report, then usage for
+`notice`. Each absent occupant must be actual `null`: a non-null React element
+whose component renders null still wins `??` and hides the next occupant.
+`ComposerErrorSlotControl` therefore checks `usageLimit === null` before creating
+`ComposerUsageLimitNotice`. A pure slot test with `notice={null}` alone cannot
+catch this; the store-bound history markup test exercises the real composition.
 
-**`ComposerErrorSlotControl`** gains two more narrow-slice reads, on the container that already owns this
-slot rather than a fourth container mounted beside it: `useActiveConversationStore(selectActiveConversation)`
-for which conversation is open, `Math.floor(Date.now() / 1000)` for the instant (read at render, matching
-`selectUsageLimitFor`'s unit — a millisecond value would expire every reading with no symptom beyond
-"nothing ever shows"), and `useUsageLimitStore(selectUsageLimitFor(...))` for the reading itself. A
-module-level `NO_USAGE_LIMIT_READING` selector constant covers "no conversation is open" so the hook is
-called unconditionally with a stable identity on that arm, rather than a fresh closure every render.
+The container reads the active conversation and `selectUsageLimitFor` with
+`Math.floor(Date.now() / 1000)`, matching the selector's seconds unit. The stable
+`NO_USAGE_LIMIT_READING` selector covers no open conversation without a conditional
+hook call. These reads add no timer.
 
 ### The layout hazard the first review cleared, wrongly
 

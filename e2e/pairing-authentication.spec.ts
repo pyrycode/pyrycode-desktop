@@ -68,6 +68,16 @@ async function confirm(page: Page, server: PairedServerHandle, onboarding = fals
   await page.getByRole('button', { name: onboarding ? 'Confirm' : 'Pair', exact: true }).click()
 }
 
+// Electron can transiently lose the inspection context while the app stays alive.
+// Only count reads may retry; control actions must never be replayed.
+async function readAuthentication(app: ElectronApplication) {
+  try { return await control(app) }
+  catch (error) {
+    if (error instanceof Error && error.message.includes('Execution context was destroyed')) return null
+    throw error
+  }
+}
+
 test('new host waits while the existing host is connected; timeout, Retry and one real save', async ({ launchPairedApp }) => {
   const { app, page } = await launchPairedApp()
   const forwarder = await startFakeRelayForwarder()
@@ -135,15 +145,8 @@ test('onboarding catches authentication before the save response and navigates o
   await holdAuthentication(app, servers[0].serverId, true)
   await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
   await confirm(page, servers[0], true)
-  // First-handshake inspection can transiently lose its CDP execution context while
-  // Electron remains alive. Retry only this read; action failures still fail immediately.
-  await expect.poll(async () => {
-    try { return await control(app) }
-    catch (error) {
-      if (error instanceof Error && error.message.includes('Execution context was destroyed')) return null
-      throw error
-    }
-  }, { timeout: 5_000 }).toEqual({ saves: 1, responses: 0, authenticated: true })
+  await expect.poll(() => readAuthentication(app), { timeout: 5_000 })
+    .toEqual({ saves: 1, responses: 0, authenticated: true })
   await control(app, 'authenticate')
   await expect(page.getByRole('button', { name: 'Confirming…', exact: true })).toBeDisabled()
   await control(app, 'response')
@@ -197,7 +200,8 @@ test('onboarding daemon absence is sticky; Retry and Cancel retain the saved hos
   await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
   await confirm(page, servers[0], true)
   await expect(page.getByText(pending, { exact: true })).toBeVisible()
-  await expect.poll(() => control(app)).toEqual({ saves: 1, responses: 1, authenticated: true })
+  await expect.poll(() => readAuthentication(app), { timeout: 5_000 })
+    .toEqual({ saves: 1, responses: 1, authenticated: true })
   await control(app, 'event', { type: 'relayLinkChanged', serverId: servers[0].serverId, status: 'daemon-absent' })
   await expect(page.getByRole('alert')).toContainText('temporarily unavailable')
   await page.getByRole('button', { name: 'Retry', exact: true }).click()
@@ -205,7 +209,7 @@ test('onboarding daemon absence is sticky; Retry and Cancel retain the saved hos
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.getByRole('button', { name: 'I already have pyrycode', exact: true })).toBeVisible()
   await control(app, 'authenticate')
-  expect((await control(app)).saves).toBe(1)
+  await expect.poll(async () => (await readAuthentication(app))?.saves, { timeout: 5_000 }).toBe(1)
   await expect(page.getByRole('button', { name: 'I already have pyrycode', exact: true })).toBeVisible()
   expect(await page.evaluate(async () => (await window.pyry.serverInfo()).status)).toBe('available')
 })

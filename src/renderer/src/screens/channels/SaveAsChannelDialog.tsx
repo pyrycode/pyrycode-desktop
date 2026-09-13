@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { ConversationSummary } from '@shared/wire/types'
-import { NewFolderData } from '../../store/newFolderBridge'
+import { subscribeNewFolder } from '../../store/newFolderBridge'
 import {
   newFolderStore,
   useNewFolderStore,
   selectNewFolderRoundTrip,
   type NewFolderRoundTrip
 } from '../../store/newFolderStore'
+import { sessionStore, selectStatusFor } from '../../store/sessionStore'
 import { titleFor } from './channelListViewModel'
 
 // #274/#288: the Save-as-channel dialog — Figma 19:24. #274 shipped the naming half (title + Name field +
@@ -217,11 +218,13 @@ export function requestPromoteConversation(
  */
 export function requestCreateChannelFolder(
   sendCommand: (command: RendererCommand) => void,
-  channelName: string
+  channelName: string,
+  serverId?: string
 ): void {
   sendCommand({
     type: 'createWorkspaceFolder',
-    payload: { parent: CHANNELS_PARENT, name: slugForChannel(channelName) }
+    payload: { parent: CHANNELS_PARENT, name: slugForChannel(channelName) },
+    ...(serverId === undefined ? {} : { serverId })
   })
 }
 
@@ -236,7 +239,7 @@ export function SaveAsChannelDialog({
   onDismiss,
   onPromoted
 }: {
-  row: ConversationSummary
+  row: ConversationSummary & { readonly serverId?: string | null }
   // Cancel: close the dialog only.
   onDismiss: () => void
   // scratch-save OR created→promote: close the dialog.
@@ -249,6 +252,28 @@ export function SaveAsChannelDialog({
   // The location choice — dedicated by default (AC1 / Figma). Transient UI state → useState.
   const [location, setLocation] = useState<ChannelLocation>('dedicated')
   const roundTrip = useNewFolderStore(selectNewFolderRoundTrip)
+  const abandoned = useRef(false)
+  const pending = useRef(false)
+  const serverId = row.serverId
+
+
+  useEffect(() => {
+    const offStatus = sessionStore.subscribe((state) => {
+      if (!abandoned.current && (typeof serverId !== 'string' || selectStatusFor(serverId)(state)?.type !== 'connected')) {
+        abandoned.current = true
+        pending.current = false
+        newFolderStore.getState().dispatch({ type: 'reset' })
+        window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'abandoned' })
+      }
+    })
+    const offFolder = subscribeNewFolder(
+      (listener) => window.pyry.onDaemonEvent((event) => {
+        if (!abandoned.current && pending.current && event.serverId === serverId) listener(event)
+      }),
+      (event) => newFolderStore.getState().dispatch(event)
+    )
+    return () => { offStatus(); offFolder() }
+  }, [serverId])
 
   // Reset the store to idle on unmount — the single deterministic mechanism covering EVERY close path
   // (Cancel, scratch-save, created→onPromoted, Escape). Because the store is an app singleton, any close
@@ -262,17 +287,19 @@ export function SaveAsChannelDialog({
   // disabled while in-flight, so it holds the value typed before Save. Only fires in the dedicated branch —
   // the scratch branch never dispatches createRequested, so the store never reaches `created`.
   useEffect(() => {
-    if (roundTrip.status !== 'created') return
+    if (roundTrip.status === 'rejected' && pending.current) {
+      pending.current = false
+      window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'folder-rejected' })
+    }
+    if (roundTrip.status !== 'created' || abandoned.current || !pending.current || !isHostConnected(serverId)) return
+    pending.current = false
     requestPromoteConversation(window.pyry.sendCommand, row.id, name, roundTrip.path)
+    window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'sent' })
     onPromoted()
-  }, [roundTrip, row.id, name, onPromoted])
+  }, [roundTrip, row.id, name, onPromoted, serverId])
 
   return (
     <>
-      {/* Mount the dormant #397 bridge dialog-scoped so the daemon-reply listener lives exactly while the
-          dialog is open (the CreateFolderDialog shape). Without this the store never leaves in-flight and
-          Save hangs forever. Renders null. */}
-      <NewFolderData />
       <SaveAsChannelDialogView
         name={name}
         location={location}
@@ -285,15 +312,24 @@ export function SaveAsChannelDialog({
         // input + radios) THEN send the slugged createWorkspaceFolder; the created-effect does the promote,
         // NOT here. window.pyry is dereferenced only here (interaction time, never render).
         onSave={() => {
+          if (abandoned.current || !isHostConnected(serverId) || pending.current || name.trim() === '') return
           if (location === 'scratch') {
             requestPromoteConversation(window.pyry.sendCommand, row.id, name, row.cwd)
+            window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'sent' })
             onPromoted()
             return
           }
+          pending.current = true
           newFolderStore.getState().dispatch({ type: 'createRequested' })
-          requestCreateChannelFolder(window.pyry.sendCommand, name)
+          requestCreateChannelFolder(window.pyry.sendCommand, name, typeof serverId === 'string' ? serverId : undefined)
+          window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'folder-requested' })
         }}
       />
     </>
   )
+}
+
+function isHostConnected(serverId: string | null | undefined): boolean {
+  return typeof serverId === 'string' &&
+    selectStatusFor(serverId)(sessionStore.getState())?.type === 'connected'
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { connectedConversationHostNow } from './conversationActionAvailability'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { requestRunConfigSnapshot } from './runConfigSnapshot'
 
@@ -40,6 +41,7 @@ export function RunConfigData(): null {
     // No "subscribe first" ordering to preserve any more: the app-level listener (#810) has been live
     // since App mounted, so it is already listening when this request goes out.
     if (requested.current) return
+    if (connectedConversationHostNow(activeConversationStore.getState().activeConversation?.id ?? null) === null) return
     requested.current = true
     requestRunConfigSnapshot(
       window.pyry.sendCommand,

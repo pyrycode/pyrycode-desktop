@@ -36,7 +36,9 @@ first-write order. #758 remains the reader cutover, now depending on this rather
 Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
 `stalled`, `apiRetry`, `compacting`, `localSendPending`, `thinkingTokens` and optional
 `latestTurnEnd`. The `ConversationSlice` wrapper also holds history-request state,
-the prepend count and live/history join keys. A key **absent** from the map means
+the prepend count, live/history join keys, supplying `serverId`, local-read status
+and explicit restored host/coverage evidence. Successful `coverage` lives separately
+from pending/failed `history`, so retries retain the last successful cursor. A key **absent** from the map means
 "nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
 **present, empty** slice ("observed; nothing in the thread yet"). `selectTimelineFor` preserves that
 distinction rather than collapsing it, the same three-way reading [background-task roster
@@ -66,6 +68,10 @@ exactly the thread the operator stepped away from.
     See [live tool progress](conversation-timeline-store.md#live-tool-progress). A
     reduce that changes nothing on an already-held key returns the state object itself, so zustand's
     `Object.is` short-circuit fires and no subscriber wakes.
+  - `dispatchLocalEcho(serverId, conversationId, userText)` — folds a composer echo
+    using the host resolved by the current send gate. Retains only explicitly
+    same-host content and clears local-read status, invalidating pending completion.
+    This lets connected reopening reuse the echo without admitting unowned rows.
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a
     same-object no-churn return (the common case: `activateConversation`'s `onOpen` fires on every row
     click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
@@ -85,6 +91,7 @@ exactly the thread the operator stepped away from.
      preserves position) — this is what makes "written constantly, viewed never" fail to protect a slice.
   2. A fold that **creates** a key inserts it at the **head**, ahead of every slice already held.
   3. `markViewed` moves the key to the **tail**, creating it there if absent.
+     On-demand `beginLocalTimelineRead` also installs its pending slice at the tail.
 
   Neither [#757](../codebase/757.md) clear is an exception: `Map.prototype.delete` preserves the position
   of every remaining entry, so a removal re-orders nothing, and dropping the whole map leaves nothing left
@@ -145,8 +152,8 @@ exactly the thread the operator stepped away from.
   no re-export of the constant from this module (so a collapse needs a deliberate import from
   `threadTimeline`, not a nearby default), and the AC4 tests asserting the three-way distinction through
   the read surface alone.
-- **The hard import constraint, checkable by grep:** this module's only imports are `zustand/vanilla`,
-  `zustand`, and `./threadTimeline`. No `activeConversationStore`, no `./timelineStore`, no
+- **The import boundary:** Zustand, shared types/history validation and thread-timeline
+  helpers are used. No `activeConversationStore`, no `./timelineStore`, no
   `src/renderer/src/screens/`. With no reference to the open conversation in scope, the `?? activeConversation`
   fallback banned in prose at the four turn-stream arms (#751-#754) is not something a developer must
   remember to avoid here — it is unavailable.
@@ -158,6 +165,22 @@ exactly the thread the operator stepped away from.
   saves display snapshots through main's protected storage with captured host
   ownership. Clearing or evicting a slice leaves its saved copy and any buffered
   snapshot intact; live session state remains confined to the holder.
+
+### Local timeline admission
+
+`beginLocalTimelineRead` admits validated saved rows through an explicit completion
+handle, not fabricated daemon events. Exact pending-slice identity rejects stale
+success/failure after mutation, cancellation, replacement, clear or eviction.
+The holder remains keyed by conversation id; per-slice host evidence and the
+screen's selected-host check prevent equal ids from sharing saved content, including
+while connected. Reconnect and list refresh do not clear the slice or its ownership.
+Receipt-stamped mutations cannot append one host's content to another's restored
+rows. Successful restoration preserves durable identity metadata and coverage
+while resetting transient state and conferring writer ownership without a save.
+See [chat-history admission](chat-history.md#received-state-admission-and-ownership)
+for cache reuse and cancellation, and [saved coverage](chat-history.md#snapshot-contract)
+for its distinction from current server history. Evicted saved slices reload on
+opening within the same ten-slot bound; eviction never deletes their disk copies.
 
 ### Stopped records and history isolation
 
@@ -181,7 +204,8 @@ boundary and transient reading with their slice.
   every one of the eight id-carrying owned arms (`assistantDelta`/`turnEnd`/`turnState`/`toolUse`/
   `toolResult`/`stallDetected`/`apiRetry`/`compacting` — the whole #675 family), keyed by each event's own
   `conversationId`, never the open conversation's; and the composer's optimistic echo
-  (`composerSend.ts`) calls it too, keyed by the conversation the message was sent to. Both writers also
+  (`composerSend.ts`) is wired through Composer to `dispatchLocalEcho`, keyed by the
+  resolved send host and conversation. Both writers also
   keep writing the flat `timelineStore` unchanged (dual-write). **`markViewed` gained its first caller in
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
   eviction ordering is now armed in production rather than degrading to first-write order; see § Edge
@@ -217,8 +241,9 @@ boundary and transient reading with their slice.
 
 ## Edge cases and limitations
 
-- **History backfills rows only.** Reopening an evicted conversation can request history
-  through the [opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259).
+- **History backfills rows only.** Reopening an evicted conversation sends no history
+  request. New [upward user demand](chat-history.md#received-state-admission-and-ownership)
+  can request pages using the coverage then held or restored.
   An old stopped boundary can return; its live recovery reading cannot.
 - **Bounds slice count, not slice bytes.** `MAX_RETAINED_TIMELINES` caps how many conversations' threads
   are retained at once; it does not cap the size of any one thread. A hostile daemon inside an already-

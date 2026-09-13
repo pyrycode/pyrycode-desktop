@@ -5,8 +5,8 @@ import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
 import { useAnnouncedModelStore, selectAnnouncedModelFor } from '../../store/announcedModelStore'
-import { publishedRowFor } from './RunConfigSections'
-import { changeSetting } from './runSettingsControls'
+import { publishedRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import { isAddressableSessionId } from './runSettingsControls'
 
 // #988: the composer footer's MODEL menu (Figma 115:3683) — the SECOND live host of the shared options
 // panel, and the first that offers a CHOICE rather than a list of actions. It owns exactly three things:
@@ -230,8 +230,8 @@ export function composerModelMenuModel(
 
 /**
  * The pure view: props in, markup out — no store read, no window.pyry and no state of its own, so both
- * arms server-render directly under the repo's `node` vitest environment. Every prop is REQUIRED, the "a
- * view that cannot answer is a bug" rule (ConversationScreen.tsx:2033).
+ * arms server-render directly under the repo's `node` vitest environment. An absent selection callback
+ * keeps the held value readable without offering a write.
  *
  * SECURITY — this is a render boundary for claude-authored text. `display_name`, `value` and, since
  * #1053, the ANNOUNCED identifier crossed the subprocess trust boundary and DECODED IS NOT SANITIZED
@@ -265,7 +265,7 @@ export function ComposerModelMenuView({
 }: {
   layers: ComposerModelLayers
   models: ModelListEntry | null
-  onSelect: (value: string) => void
+  onSelect?: (value: string) => void
 }): JSX.Element | null {
   const menu = composerModelMenuModel(models, layers)
   if (menu === null) return null
@@ -275,7 +275,7 @@ export function ComposerModelMenuView({
   // idiom (RunConfigSections.tsx:354-365) one layer down. The chevron goes with the interactivity it
   // claims: an up chevron is the design's "this opens a panel" mark, and drawing it here would be the
   // visual half of exactly the claim this arm refuses.
-  if (menu.options.length === 0) {
+  if (!onSelect || menu.options.length === 0) {
     return (
       <span className="composer__footer-button">
         <span className="composer__model-label">{menu.label}</span>
@@ -328,15 +328,12 @@ export function ComposerModelMenuView({
  * `activeConversationId`, so the prop costs no subscription. It is NOT the session id also read here —
  * those are different identifiers, and a session id keys nothing in the model-list map.
  *
- * AC3's "sends nothing when there is no addressable session id" is met by changeSetting's OWN gate, not
- * by withholding the handler, and that differs from the sheet deliberately. The sheet withholds
- * `onChange` because its view branches OPERABILITY on handler presence; this view branches operability on
- * the ROWS (AC4). Withholding here would fuse two unrelated conditions into one rendering and make a
- * populated menu unopenable whenever the session id is unknown, which no AC asks for. changeSetting is
- * documented as the deterministic safety net behind that structural gate; here it is the whole gate, and
- * it has its own unit tests.
+ * The host must be connected and the session addressable before a selection callback is offered.
+ * The view retains its label without that callback; changeConnectedSetting rechecks current stores
+ * before sending or recording an optimistic change, including calls saved before disconnect.
  */
 export function ComposerModelMenu({ conversationId }: { conversationId: string | null }): JSX.Element | null {
+  const connected = useSessionSettingsConnected(conversationId)
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // The RAW write state (stable identity between dispatches). NOT selectEffectiveSettings as the zustand
@@ -387,12 +384,9 @@ export function ComposerModelMenu({ conversationId }: { conversationId: string |
       // it (or the deps object) would move the dereference into the render path, where window.pyry does
       // not exist under renderToStaticMarkup and every container smoke test would throw
       // (ConversationScreen.tsx:2523-2526 and RunConfigSections.tsx:687-696 state this from both sides).
-      onSelect={(value) =>
-        changeSetting(
-          { sessionId, sendCommand: window.pyry.sendCommand, dispatch: writeState.dispatch },
-          { field: 'model', value }
-        )
-      }
+      onSelect={connected && isAddressableSessionId(sessionId)
+        ? (value) => changeConnectedSetting(conversationId, { field: 'model', value })
+        : undefined}
     />
   )
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   ChannelListView,
@@ -124,12 +125,14 @@ type SidebarRow = ConversationSummary & { readonly serverId?: string | null }
 const render = (
   conversations: readonly SidebarRow[] | null,
   openConversationId: string | null = null,
-  serverIds: readonly string[] = [DEFAULT_SERVER]
+  serverIds: readonly string[] = [DEFAULT_SERVER],
+  statuses: SessionState['statuses'] = new Map(serverIds.map(id => [id, { type: 'connected', ack: {} } as ConnectionStatus]))
 ): string =>
   renderToStaticMarkup(
     <ChannelListView
       conversations={conversations}
       serverIds={serverIds}
+      statuses={statuses}
       openConversationId={openConversationId}
       onOpen={noop}
       onOpenSettings={noop}
@@ -2314,4 +2317,46 @@ it('renders every saved host in both trees before the first list', () => {
   expect(markup).toContain('Channels')
   expect(markup).toContain('Chats')
   expect(markup).not.toContain('channel-list__row-open')
+})
+
+describe('host-owned mutation availability', () => {
+  it.each([undefined, { type: 'connecting' }, { type: 'disconnected' }, { type: 'error' }])(
+    'withholds mutations for %j while preserving held navigation',
+    (status) => {
+      const statuses = new Map<string, ConnectionStatus>()
+      if (status) statuses.set(DEFAULT_SERVER, status as ConnectionStatus)
+      const html = render([row({ is_promoted: true }), row({ id: 'chat', is_promoted: false })], null, [DEFAULT_SERVER], statuses)
+      expect(html).not.toContain('aria-label="Rename"')
+      expect(html).not.toContain('aria-label="Save as channel"')
+      expect(html).not.toContain('aria-label="Create chat"')
+      expect(html).not.toContain('aria-label="Create channel"')
+      expect(html).not.toContain('aria-label="Edit workspace"')
+      expect(html.match(/class="channel-list__row-open"/g)).toHaveLength(2)
+      expect(html).toContain('aria-expanded="true"')
+      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
+    }
+  )
+
+  it('uses each row host regardless of which conversation is open', () => {
+    const rows = [row({ id: 'offline', serverId: 'offline', is_promoted: true }), row({ id: 'online', serverId: 'online', is_promoted: true })]
+    const statuses = new Map([['online', { type: 'connected', ack: {} } as ConnectionStatus]])
+    for (const open of ['offline', 'online']) {
+      const html = render(rows, open, ['offline', 'online'], statuses)
+      expect(html.match(/aria-label="Rename"/g)).toHaveLength(1)
+      expect(html.match(/aria-label="Create channel"/g)).toHaveLength(1)
+      expect(html).toMatch(/aria-label="New discussion"[^>]*disabled/)
+    }
+  })
+})
+
+it('shows a local read failure independently of the host connection and repair control', () => {
+  const local = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id" localReadFailed />)
+  expect(local).toContain('Could not read saved chats on this device.')
+  expect(local).not.toContain('channel-list__host--failed')
+  expect(local).not.toContain('private-id')
+  const both = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id"
+    localReadFailed failed onRepair={() => {}} />)
+  expect(both).toContain('Could not read saved chats on this device.')
+  expect(both).toContain('aria-label="Repair host"')
+  expect(both).toContain('channel-list__host--failed')
 })

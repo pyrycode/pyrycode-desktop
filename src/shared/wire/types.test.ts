@@ -130,6 +130,14 @@ describe('structured-stream wire vocabulary (#199)', () => {
   })
 })
 
+describe('conversation-deleted wire vocabulary (#1247)', () => {
+  it('admits the conversation_deleted inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const deleted: EnvelopeType = 'conversation_deleted'
+    expect(deleted).toBe('conversation_deleted')
+  })
+})
+
 describe('turn-state wire vocabulary (#214)', () => {
   it('admits the turn_state inbound envelope type', () => {
     // Compile-time membership: this assigns only if the member is part of EnvelopeType.

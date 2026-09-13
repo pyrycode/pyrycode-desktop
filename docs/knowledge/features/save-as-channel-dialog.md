@@ -24,7 +24,7 @@ shape [#398](../codebase/398.md) proved first.
 
 ## What it does
 
-- Each Recent (unpromoted) row in the Channel List renders a trailing icon-only "Save as channel"
+- Each Recent (unpromoted) row whose owning host is connected renders a trailing icon-only "Save as channel"
   affordance (`aria-label="Save as channel"`, a Material bookmark glyph — no Figma node pins this
   row-level control; 19:24 is the dialog only). Saved Channel rows render no affordance (AC1).
 - Clicking it opens a centered modal dialog (`role="dialog"`, `aria-modal`, `aria-labelledby`): the
@@ -41,12 +41,20 @@ shape [#398](../codebase/398.md) proved first.
   row.id, name: name.trim(), cwd: row.cwd}` immediately and closes the dialog — the #274 behavior,
   unchanged.
 - Confirming Save with **"Move to dedicated channel folder"** dispatches `createWorkspaceFolder{
-  parent: '~/pyry-workspace/channels', name: slugForChannel(name)}`, then — only once the daemon
+  parent: '~/pyry-workspace/channels', name: slugForChannel(name)}` with top-level
+  `serverId: row.serverId`, then — only once the daemon
   replies `workspaceFolderCreated{path}` — dispatches `promoteConversation` with `cwd` set to that
   **returned `path`, verbatim**, never the previewed string (the daemon's `EvalSymlinks` resolution
   of promote's `cwd` rejects a non-existent client-templated path). If the daemon instead replies
   `workspaceFolderRejected`, no promote fires; the dialog stays open with a generic,
   apostrophe-free failure line, and Save re-enables.
+- Folder replies are accepted only from the retained row's host while this dialog has a
+  pending create. Both folder creation and promotion check that host's live status before
+  sending; the open conversation's host is irrelevant.
+- Any non-connected transition abandons the pending continuation synchronously and resets
+  the folder round trip. This also covers disconnect/reconnect before React paints: a late
+  completion offline or after reconnect cannot promote, and reconnect never replays the
+  attempt. The sidebar closes the draft; a fresh explicit opening after reconnect can save.
 - Cancel or dismiss closes the dialog and dispatches nothing, at any point (including mid-create).
 - The promoted row's move from Recent to Channels happens later, if at all, when the daemon's
   `conversation_updated` broadcast triggers [#275](conversation-list-store.md)'s list re-request —
@@ -87,11 +95,12 @@ export function requestPromoteConversation(
 
 export function requestCreateChannelFolder(
   sendCommand: (command: RendererCommand) => void,
-  channelName: string
+  channelName: string,
+  serverId?: string
 ): void
 
 export function SaveAsChannelDialog(props: {
-  row: ConversationSummary
+  row: ConversationSummary & { readonly serverId?: string | null }
   onDismiss: () => void                  // Cancel: close only
   onPromoted: () => void                 // scratch-save OR created→promote: close
 }): JSX.Element
@@ -127,16 +136,18 @@ the same command because this one pins `parent: '~/pyry-workspace/channels'` and
 
 **`SaveAsChannelDialog` (the container)** owns `name` (seeded once via
 `useState(() => titleFor(row.name))` on mount) and `location` (`'dedicated'` default per AC1),
-reads `useNewFolderStore(selectNewFolderRoundTrip)`, and mounts `<NewFolderData />` (#397's bridge)
-dialog-scoped so the daemon reply actually resolves — without it the store never leaves
-`in-flight` and Save hangs. Two effects: a reset-to-idle unmount cleanup (`useEffect(() => () =>
-newFolderStore.getState().dispatch({type:'reset'}), [])`) is the single mechanism covering every
-close path (Cancel, scratch-save, created→promoted, Escape); a created-effect
-(`roundTrip.status === 'created'`) fires `requestPromoteConversation` with `roundTrip.path`
-verbatim then calls `onPromoted`. `onSave` branches on `location`: scratch promotes immediately
-with `row.cwd` and calls `onPromoted` directly; dedicated dispatches `createRequested` (→
-`in-flight`, freezing the Name input and both radios) then `requestCreateChannelFolder` — the
-promote itself happens only in the created-effect, never inline in `onSave`.
+and reads `useNewFolderStore(selectNewFolderRoundTrip)`. A dialog-scoped
+`subscribeNewFolder` listener filters main-stamped events by the retained `serverId` and a
+pending ref. A separate session subscription marks the attempt abandoned and resets the
+round trip synchronously on host loss; both subscriptions clean up on unmount, which also
+resets the singleton round trip.
+
+The created-effect promotes with `roundTrip.path` verbatim only while pending, un-abandoned
+and currently connected, clearing pending before the send. `onSave` applies the same live
+host and abandonment checks: scratch promotes with `row.cwd`; dedicated marks pending,
+dispatches `createRequested`, then sends the slugged folder request to the retained host.
+The status subscription is necessary even with render-time gating: a rapid reconnect can
+otherwise hide the offline transition from the effect that promotes.
 
 ### `ChannelList.tsx` — `Row` restructure (unchanged from #274)
 
@@ -154,12 +165,12 @@ promoted rows (AC1), not hidden by CSS.
 `location`, the round-trip) now live inside `SaveAsChannelDialog` itself:
 
 ```ts
-const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
+const [saveRow, setSaveRow] = useState<SidebarRow | null>(null)
 ```
 
-- `onSaveAsChannel={(row) => setSaveRow(row)}` opens the dialog; seeding is now the container's own
+- `onSaveAsChannel` checks the row host before retaining `saveRow`; seeding is the container's own
   job (`useState(() => titleFor(row.name))` on mount), not `ChannelList`'s.
-- The list returns a fragment: the list view, then `saveRow && <SaveAsChannelDialog row={saveRow}
+- The list returns a fragment: the list view, then `saveRow && connected(saveRow.serverId) && <SaveAsChannelDialog row={saveRow}
   onDismiss={() => setSaveRow(null)} onPromoted={() => setSaveRow(null)} />` as a sibling.
 - `window.pyry` is dereferenced only inside `SaveAsChannelDialog`'s callbacks/effects, and the
   dialog is absent on first paint (`saveRow` starts `null`), so the `renderToStaticMarkup`
@@ -192,7 +203,7 @@ Save with location='dedicated'
 newFolderStore.dispatch({type:'createRequested'})  →  roundTrip: in-flight (Save/input/radios disable)
         │
         ▼
-requestCreateChannelFolder(sendCommand, name)
+requestCreateChannelFolder(sendCommand, name, row.serverId)
         → createWorkspaceFolder{parent:'~/pyry-workspace/channels', name: slugForChannel(name)}
         → [#381] daemon: expandTilde(parent) + $HOME-confine + MkdirAll + EvalSymlinks
         │
@@ -246,8 +257,7 @@ requestCreateChannelFolder(sendCommand, name)
 - **A `createWorkspaceFolder` the daemon never replies to leaves the dialog stuck `in-flight`
   forever** — no timeout exists on this round-trip either (mirrors [#397](new-folder-store.md)'s
   documented limitation). Cancel remains clickable throughout and unmounts the dialog regardless,
-  resetting the store to `idle` via the unmount effect — the only way out of a stuck in-flight
-  state today.
+  resetting the store to `idle` via the unmount effect. Host disconnection also abandons the wait.
 - **The Name field has no Enter-to-submit or autofocus-select.** Both need DOM (`<form onSubmit>` or
   a ref + effect) and are neither an AC nor node-env-testable; left as a documented, safe additive
   enhancement (spec's Open questions).
@@ -263,12 +273,12 @@ requestCreateChannelFolder(sendCommand, name)
 - **The slug algorithm is client-owned and may not match a future mobile slug spec** — no canonical
   mobile algorithm exists in the vault as of #288; divergence is cosmetic since the promote always
   uses the daemon-returned path regardless of what the slug looked like in the preview.
-- **The click→open, typed→controlled-input, and Save-click→dispatch wiring live in the container
-  and are not DOM-tested** — the codebase has no jsdom interaction harness for this dialog. Covered
-  by pure-function specs (`SaveAsChannelDialogView`'s render/disabled-state assertions,
-  `slugForChannel`'s pure-unit cases, `requestPromoteConversation`/`requestCreateChannelFolder`'s
-  spy tests) plus composition-level assertions, the same boundary as `PermissionModal`'s click
-  wiring and #398's `CreateFolderDialog`.
+- **Static render tests cannot prove cancellation or command absence.**
+  `e2e/sidebar-offline-mutations.spec.ts` covers disconnected keyboard activation, delayed
+  completion, batched reconnect and fresh retry. It observes renderer `sendCommand` calls
+  with a conditional CDP function-call breakpoint, before IPC/transport filtering. Counting
+  only daemon receipts could pass with a broken UI gate; replacing the frozen contextBridge
+  API is unnecessary. Pure view and helper specs still cover markup and payload shapes.
 
 ## Related
 
@@ -283,7 +293,7 @@ requestCreateChannelFolder(sendCommand, name)
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   sibling fire-and-forget, no-optimistic-UI dispatch precedent the scratch-save branch follows.
 - [Create-folder round-trip store](new-folder-store.md) / [#397 codebase notes](../codebase/397.md)
-  — the `newFolderStore` + `NewFolderData` bridge this dialog mounts and reads; its second real
+  — the `newFolderStore` + `subscribeNewFolder` bridge this dialog reads with host filtering; its second real
   consumer after [#398](../codebase/398.md)'s `CreateFolderDialog`.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — the first path to a channel that
   skips promotion; keeps this dialog's location choice, since only the promote case has a chat's

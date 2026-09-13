@@ -14,9 +14,9 @@ other edge cases and its links.
 **Thread scroll pin** ([#601](../codebase/601.md), built on the dormant `isAtBottom` helper from
 [#600](../codebase/600.md)) — `.conversation__thread` now stays pinned to the bottom while a new item
 arrives, but only if the operator was already there; a screen-local `useRef` flag, written only by the
-container's own scroll events and re-asserted in a dependency-free layout effect, decides — never a
+container's scroll/input handlers and send action, and re-asserted in a dependency-free layout effect, decides — never a
 measurement taken after the new content is already in the layout. `Timeline` gained one optional
-`scrollPin` prop bundling the ref and the scroll handler so the ~30 pre-existing render sites needed no
+`scrollPin` prop bundling the ref and scroll, wheel and keyboard handlers so the ~30 pre-existing render sites needed no
 edits. Every chrome sibling below the thread that can still mount or unmount there (`__interrupt`) does
 so with no risk of un-pinning a thread the operator never scrolled — a chrome mount only shrinks the
 thread's viewport, which cannot fire a scroll event. (Through #967 that list also included
@@ -159,61 +159,44 @@ gaps — does not get layered over a case the browser already handles for free. 
 growth **below** the reader (their own last bubble); that gap is unaffected and stays filed as
 [#1049](https://github.com/pyrycode/pyrycode-desktop/issues/1049).
 
-**The scroll-back walk rides this exact pin, in reverse, and needed a trigger that isn't the wall itself
-([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)).** Scrolling back to the top of a
-thread asks the daemon for the page before the oldest loaded entry — see [Conversation timeline store §
-Edge cases](conversation-timeline-store.md#edge-cases-and-limitations) for the ask itself. The trigger is
-a new pure predicate beside `isAtBottom`, `isNearTop(metrics)` (`threadScrollPosition.ts`), true whenever
-`metrics.scrollOffset <= HISTORY_ASK_BAND_PX` (200). It has to be a band above the wall rather than the
-wall itself: **Chromium suppresses scroll anchoring at a scroll offset of exactly zero** — the one
-position at which the mechanism this whole document is about does not run at all. A walk that only asked
-once the reader hit `scrollTop === 0` would ask from the one position where anchoring cannot hold their
-place while the page lands above them, making AC2 unsatisfiable by construction. 200px is deliberate, not
-round: two of Chromium's ~100px wheel notches of headroom, an order of magnitude above
-`AT_BOTTOM_TOLERANCE_PX`'s 4px subpixel-error band (so the two thresholds can never be confused for the
-same kind of tolerance), and a quarter of the app's 800px minimum window height, so it reads as a rim
-rather than a viewport. `useThreadScrollPin`'s `onScroll` calls the walk's asker
-(`requestOlderHistory`) right after its existing pin write, on every scroll event — the walk's own
-one-ask-in-flight guard (see the linked section above) is what keeps that from spamming the daemon.
+## User demand and prepend position
 
-**A known bound, stated rather than defended:** a reader who lands on exactly `scrollTop === 0` — a
-fling, `Home`, a programmatic jump — triggers a page that arrives with their place unheld, since nothing
-here writes `scrollTop` itself. Closing it would need a second mechanism layered over anchoring, which is
-exactly what this whole document already argues against building unless a real gap is observed. Likewise
-a page that doesn't overflow the viewport produces no scroll event, so the walk stalls until the operator
-scrolls again — both are the ticket's own accepted residue, not oversights.
+[`useThreadScrollPin`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
+separates local scroll measurement from download intent. `onScroll` updates bottom
+following only. Trusted upward wheel input or ArrowUp/PageUp/Home targeted at the
+thread itself checks host availability and `isNearTop` before the browser scrolls.
+The band includes offsets from zero through `HISTORY_ASK_BAND_PX` (200). Crossing
+into it does not queue demand. See [history admission](chat-history.md#received-state-admission-and-ownership)
+for first-page coverage, pending-read gates and retry policy.
 
-**Discovered rather than designed: the walk can take several steps for one operator scroll, because
-Chromium's anchoring adjustment after a prepend is itself a scroll event.** A page that lands but doesn't
-push the reader's `scrollOffset` back out past `HISTORY_ASK_BAND_PX` leaves them still near the top, and
-the resulting `onScroll` fires again with no further input from the operator — an empty page (no growth
-at all) and a short, one-entry page (≈40px, still inside the band) both cascade this way in practice. This
-is the correct product behaviour (keep loading until there's enough above the reader, bounded by
-`atStart`), and no production code exists to prevent it or needs to. It did invalidate a class of e2e
-assertion that encodes a *moment* rather than a fact — an ask-**count** barrier and a row-**count** read
-each raced the cascade in `e2e/history-walk.spec.ts`'s first draft, since a page had often already landed
-by the time the assertion ran. The fix in both cases was to assert something that stays true regardless of
-how many steps already happened: a barrier waits for a specific **cursor** to appear among the recorded
-asks, a reference row is addressed by its own **text**, and the walk's shape is pinned once at the end by
-an equality on the full ordered cursor list — a strictly stronger claim than any per-step count, since it
-also proves no page was asked for twice across dozens of real scroll events.
+`Timeline` keeps its empty content inside the same focusable scroll region
+(`tabIndex={0}`, client-owned accessible label `Conversation history`). Returning
+`EmptyThread` before mounting that region makes first-page input unreachable.
+The browser's keyboard-focus indicator remains visible. Upward demand in the band
+releases bottom following even on a short thread; programmatic movement and a
+page's arrival cannot ask for another page.
 
-**AC2's own case has to drive its growth from the position the walk actually fires from, not from the
-middle of the thread the way the two cases above it do.** `thread-scroll-pin.spec.ts`'s new case copies
-their `withheldThumbnails` shape — the walk's ask is recorded and deliberately answered with no frames
-first, so the reader's position and the reference row's viewport-relative top are captured *after* the
-ask has provably gone out — then parks the reader inside `HISTORY_ASK_BAND_PX` and above zero before the
-correlated `history_page` lands. It asserts the thread grew by a floor, the reference row (addressed by
-its own text) kept the same viewport top, `scrollTop` advanced by that growth, and the reader was not
-yanked to the bottom. **§ Design 3's row-key fix is load-bearing here**, not incidental: an
-index-addressed reference row would report the same unchanged viewport top even with the bug present,
-since the bug leaves the anchor *node* in place and only its content changes — see [Conversation
-timeline store § Edge cases](conversation-timeline-store.md#edge-cases-and-limitations) for that fix.
-Measured by mutation, the same way the row-key fix itself was: reverting `firstRowKey` and rebuilding
-moves the reference row's viewport top from 112px to 848px, which is what this case exists to catch.
+Chromium suppresses native anchoring at exactly `scrollTop === 0`. Stable row keys
+and clearing bottom following alone therefore cannot preserve that reader's place.
+The pin remembers the first direct-child row and its viewport-relative top at zero,
+refreshing this local measurement after renders and scroll/input. When
+`prependedRows` increases for the same conversation while the reader remains at
+zero and is not following, a layout effect restores the surviving row's position
+before paint. Nonzero offsets retain native anchoring, avoiding double compensation.
 
-**The park is well clear of the bottom, confirmed rather than assumed.** A primer long enough to
-overflow the viewport puts the reader a full viewport-plus above it before the walk's trigger fires, so
-the pin's `following` flag is clear and the pin writes nothing during the prepend — asserted as a
-precondition (`distanceFromBottom(before) > before.clientHeight`), so the case can tell anchoring's
-contribution apart from the pin's rather than assuming which mechanism is in play.
+A short thread may not have enough scroll range to reach the measured target.
+The pin adds only the measured bottom padding needed to retain its existing blank
+space below the rows. Bottom following removes that inline padding and restores
+the stylesheet token, including after a successful send. The existing
+`pinnedOffset` echo guard prevents compensation's scroll event from re-arming
+following. Measuring row displacement matters: `scrollHeight` includes unused
+viewport space in short threads and is not the inserted content's height.
+
+[`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts) covers a
+one-row held thread receiving one or twenty rows, an overflowing thread at zero,
+and the existing nonzero native-anchor case. It identifies the retained row by
+content and checks its viewport top, plus zero extra requests and padding removal
+on send. Index-addressed assertions can pass while a reused DOM node displays a
+different row. The nonzero case alone can also pass while zero-offset prepends
+remain broken. Native ArrowUp scrolling animates after release, so that case issues
+demand at zero before parking the nonzero anchor and releasing the held reply.

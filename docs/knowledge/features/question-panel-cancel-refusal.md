@@ -69,7 +69,7 @@ to prevent.
 existing Cancel `<button>`'s `onClick` with no wrapping arrow — there is no argument to supply, and the
 container's single read of `batch.questionBatchId` is what the refusal is recorded against, never a value
 this view holds. Required rather than optional, so `tsc` forces the one call site to supply it. Nothing
-else about the row changed: no class, no attribute, no copy, no conversation.css edit — the Figma read
+else about the row changed in #921: no class, no attribute, no copy, no conversation.css edit — the Figma read
 confirmed the Actions row's treatment (`347:6657`) is exactly what #906/#916 already shipped, and the
 view's spec asserts Cancel's rendered markup is byte-identical to what #906 shipped, so the handler leaks
 no attribute.
@@ -81,14 +81,20 @@ only at interaction time — never during render, the queued backlog's own drop-
 both read off their singletons the same way the existing picks read already does:
 
 ```ts
-onCancel={() =>
+onCancel={() => {
+  if (!canRespondToPromptNow(batch.conversationId)) return
   refuseQuestionBatch(batch.questionBatchId, {
     sendCommand: window.pyry.sendCommand,
     dispatchPicks: dispatch,
     dispatchBatch: questionBatchStore.getState().dispatch
   })
-}
+}}
 ```
+
+The current closure checks [host availability](conversation-shell-question-panel.md#cancel-refuses-the-batch-921)
+before entering the optimistic helper. The view also receives `responseAvailable` and disables Cancel
+when false, muting its text and border while keeping its outlined shape. Blocked attempts leave both
+stores intact; local navigation and editing do not call this response gate.
 
 **The catch logs a static, content-free string and drops the caught error** — a security-review finding
 addressed in the design rather than deferred, and the one place this helper departs from

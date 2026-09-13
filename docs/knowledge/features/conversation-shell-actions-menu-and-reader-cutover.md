@@ -60,14 +60,13 @@ and the `onMessageSent()` notify, moved verbatim — and a one-line `handleSubmi
 box on success. `<ComposerActionsMenu onCommand={sendText} />` mounts ahead of `ContextUsageControl` in
 `.composer__footer`, so a picked command gets the identical `submitMessage` call, `message_id`, wire
 `send_message`, optimistic `userText` echo and `followBottom()` scroll-follow a typed message gets — no
-second entry point to drift. The menu carries no `canSend` prop of its own for exactly that reason: the
-gate exists in one place, and the trigger is never disabled (including while disconnected) — picking
-while the composer can't send sends nothing and writes nothing, silently, the same posture [the connection
-banner](conversation-shell-chrome.md#connection-banner-279) and, in the `error` arm, [the status row's
-chip or button](conversation-shell-composer-status.md#composer-error-chip-797) already explain. Through
-[#968](../codebase/968.md) the composer also carried its own `Not connected` caption one row up for the
-same reason; that caption is retired. `window.pyry` is still dereferenced only inside `sendText`, at
-interaction time, never during render, so the container smoke test still server-renders with no bridge mock.
+second entry point to drift. `sendText` also rechecks the current owning host before
+submitting or creating an optimistic echo. The container hides the menu when that host
+is unavailable, including a menu opened before disconnect. Reusing the greyed rows would
+incorrectly announce a workspace limitation for an offline host. Local drafts remain
+editable; blocked commands do not replay on reconnect. See
+[host availability](conversation-shell.md#held-reading-and-host-availability).
+`window.pyry` is dereferenced only at interaction time.
 
 **Styling** — `.composer__actions` (`conversation.css`) was originally an explicit `<button>` reset (no
 border, no fill, no padding) plus `color: var(--color-primary)` and the `.composer__context` body-small
@@ -85,17 +84,11 @@ the `.button-small` shape). `outline: none` is still deliberately absent: every 
 **Testing.** `ComposerActionsMenu.test.tsx` pins the mapping (`renderToStaticMarkup` cannot fire
 `onCommand`, so only the data half and the closed-at-mount markup are unit-tested) plus a direct render
 of `ComposerOptionsPanel` fed `COMPOSER_ACTIONS`/`currentId={null}` to prove zero `aria-current`
-occurrences. `ConversationScreen.test.tsx` gained the mount-site guard — the trigger renders inside
-`.composer__footer`, closed, ahead of the context reading in DOM order, and (since the container smoke
-renders a disconnected session) present-and-**enabled** in that state, pinning AC4's static half.
-`e2e/composer-actions.spec.ts` is the in-app interaction proof #840 deferred here: open → three rows in
-order → pick → the outbound `send_message`'s `text` is the command verbatim *and* the thread's
-`.bubble[data-thread-role="user"]` shows it; Escape and an outside click both dismiss; Escape also
-returns focus to the trigger (an outside click deliberately does not — `close()`'s `.focus()` runs before
-the browser's own mousedown focus action, the same accepted deviation `ComposerOptionsMenu` shipped
-under #840). AC4's *interactive* half is not driven in e2e — tearing down the fake daemon mid-spec is
-larger fixture work than this ticket's whole feature — and the spec says so in its own header comment
-rather than leaving the gap silent.
+occurrences. The disconnected container now hides the trigger.
+`e2e/composer-actions.spec.ts` proves command dispatch and optimistic echo, Escape and
+outside-click dismissal. `e2e/offline-conversation-actions.spec.ts` closes the former
+offline interaction gap by disconnecting with an open menu and checking renderer commands,
+held state and explicit reconnect actions.
 
 **A landmine found and repaired, not introduced.** `getByRole`'s `name` option matches as a
 case-insensitive *substring* by default, and the thread overflow trigger one region up is labelled `More
@@ -303,12 +296,10 @@ killed mid-work. `isNewSessionPayload` (`src/shared/ipc/commands.ts`) remains th
 that case at the renderer→main boundary; the renderer-side check is defence in depth, commented as such so
 a later reader cannot conclude the boundary guard is now redundant and relax it — a command the boundary
 guard rejects is dropped in silence, no frame, no event, no error, so a relaxed clause on either side
-compiles, typechecks and passes every gate with no symptom to chase. No `canSend` gate: that axis decides
-whether a *message* can be sent, main's `newSession` arm is already inert when nothing is connected, and a
-second copy of the gate here is exactly the drift `ComposerActionsMenu`'s own header refuses. Wired from
-`Composer` in `ConversationScreen.tsx` as `startNewSession`, closing over the same `activeConversationId`
-expression `sendText` reads — what stops the send and the restart from ever naming different chats —
-dereferencing `window.pyry` only at interaction time, never during render.
+compiles, typechecks and passes every gate with no symptom to chase. `Composer.startNewSession` now checks the current conversation owner's connected status
+before calling this helper. It closes over the same `activeConversationId` as `sendText`
+and dereferences `window.pyry` only at interaction time. Main's existing validation remains
+in place; renderer availability prevents offering or dispatching unavailable actions.
 
 **Testing.** `sendNewSession.test.ts` covers the happy path, the `null` and `''` refusals and a swallowed
 bridge throw with a plain spy — no React, no store. `ComposerActionsMenu.test.tsx` pins the fourth row's

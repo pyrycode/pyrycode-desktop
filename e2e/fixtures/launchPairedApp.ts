@@ -145,6 +145,8 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
+  /** Install command observation before pairing or conversation activation. */
+  onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
   skipPairing?: boolean
   /** Reuse this exact `--user-data-dir` (typically a prior launch's `userDataDir`) instead of minting a
@@ -353,6 +355,7 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
+      await control.onLaunched?.(app)
       const page = await app.firstWindow()
 
       // Reuse (#466): the persisted pairing blob in the reused dir routes the app straight to the

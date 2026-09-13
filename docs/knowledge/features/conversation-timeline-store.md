@@ -11,8 +11,9 @@ Introduced in [#202](../codebase/202.md), built directly on [#121](../codebase/1
 [thread timeline](thread-timeline.md) model, shipped). The
 [keyed holder](conversation-timeline-holder.md) retains stream content and status
 readings per conversation. `historyPageBridge.ts` draws served history pages and
-asks for them — first on opening a conversation, then each time the operator scrolls
-back to its top, until the daemon reports the start of the log. The account of how each piece
+asks for them only on qualifying upward user input near the thread top, including
+the first page. Successful coverage survives failures and reconnect; only the
+daemon's `atStart` ends paging. The account of how each piece
 arrived is in [Conversation timeline store — history](conversation-timeline-store-history.md); this page
 covers what's true today.
 
@@ -114,7 +115,7 @@ changes permission or mutates turn lifecycle. The `stoppingBanner` reading share
 the in-memory timeline lifetime. Received banner rows are saved by
 [local chat history](chat-history.md#snapshot-contract), including `stopsTurn`,
 without restoring the separate live reading. History replay of banners is absent;
-offline snapshot restoration remains pending.
+offline snapshot restoration displays saved rows without reviving that reading.
 
 The shipped daemon producer maps Claude's `informational` subtype, including a
 captured hook-block reason. That subtype is distinct from the payload's open `level`.
@@ -288,13 +289,11 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   passed every renderer unit test (a static server render mounts no effects) and only reddened the three
   `question-*` e2e specs. Takes no `openConversationId` unlike `useTimelineBridge`: a page's
   `conversationId` is required and client-owned, so there is nothing to fall back to.
-- **`historyPageBridge.ts` has two askers as of [#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260):**
-  `requestOpeningHistory` (fired once per activation, [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259))
-  and `requestOlderHistory` (fired from `useThreadScrollPin`'s `onScroll`, right after its existing pin
-  write, passing the container's own `conversationId`). The production deps singleton feeding both was
-  renamed `OpeningHistoryDeps`/`openingHistoryDeps` → `HistoryAskDeps`/`historyAskDeps` — same shape, six
-  call sites across two production files plus the spec — since the old name would read as a claim about
-  which asker it serves.
+- **`historyPageBridge.ts` has one asker, `requestOlderHistory`.** Its production
+  caller is the scroll pin's trusted upward input handler, never activation or
+  `onScroll`. `historyAskDeps` reads the current held slice and supplying host,
+  marks before sending, and uses retained successful coverage independently of
+  pending/failed request state. See [history admission](chat-history.md#received-state-admission-and-ownership).
 
 ## Edge cases and limitations
 
@@ -333,8 +332,8 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
 - **Held state and saved rows have separate lifetimes.** A timeline reset, holder
   clear or eviction drops its in-memory dividers and pending association.
   [Local chat history](chat-history.md#storage-and-concurrency) retains received
-  divider rows on disk, never the pending association; offline restoration remains
-  pending. This feature does not recover missed offline events or replay
+  divider rows on disk and restores them on demand while offline, never the pending
+  association. This feature does not recover missed offline events or replay
   `compaction_boundary` from history. History's existing `compacting` decoder carries
   outcomes, but prepending its reduced rows does not create a live pending association.
 - **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot
@@ -387,20 +386,12 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
   Applying the same page twice prepends its non-`userText` rows twice — only `userText` rows are
   suppressed, by the AC4 echo dedup. Unreachable today; see § the write path above for why a guard was
   deliberately not built here.
-- **The walk asks from a band above the top, never from the top itself** ([#1260](https://github.com/pyrycode/pyrycode-desktop/issues/1260)).
-  `requestOlderHistory(deps, conversationId, nearTop)` sends only when the held reading is `loaded` with
-  `atStart` false and `nearTop` is true; `requested`/`failed`/`null` all decline (see [Internals § The
-  opening ask](conversation-timeline-store-internals.md#the-opening-ask-1259) for why `null` never
-  restarts a walk mid-screen). `nearTop` comes from `isNearTop(metrics)`
-  (`threadScrollPosition.ts`), true within `HISTORY_ASK_BAND_PX` (200) of the scroll wall rather than
-  only at it, because Chromium suppresses scroll anchoring at a scroll offset of exactly zero — the one
-  position where the mechanism holding the reader's place while a page lands above them is off. `atStart`
-  is the only stop: nothing here counts entries or compares a page against the `limit` it was asked
-  with, so neither an empty page nor a short one is read as the end of the log. A page too small to push
-  the reader out of the band leaves them still near the top, and Chromium's own anchoring adjustment
-  after a prepend is itself a scroll event — so a handful of small pages can walk several steps for one
-  operator scroll, with no further operator action. See [Conversation shell § Thread scroll
-  pin](conversation-shell-scroll-pin.md) for the band's arithmetic.
+- **User demand checks the near-top band, including zero.** Unknown coverage asks
+  for the first page; received coverage uses its retained cursor unless `atStart`
+  is true. Local reads and pending requests discard demand. Empty/short pages and
+  prepend scroll events do not chain requests; failures require new connected
+  input. See [history admission](chat-history.md#received-state-admission-and-ownership)
+  and [zero-offset compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position).
 
 ## Related
 

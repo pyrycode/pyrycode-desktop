@@ -7,14 +7,17 @@ saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
 The app records received lists, live timeline content, composer echoes and loaded
-history pages automatically. [#1339](https://github.com/pyrycode/pyrycode-desktop/issues/1339)
-still owns offline display and restoration entry points, including explicit
-ownership installation before a restored slice can record further live content.
-[#1340](https://github.com/pyrycode/pyrycode-desktop/issues/1340) owns reconnect,
-scroll-trigger changes and explicit host/conversation removal integration.
-Observing, saving and flushing add no history requests; existing opening and
-scroll requests remain. Disk retention is independent of the renderer holder's
-ten-conversation memory limit.
+history pages automatically. Saved lists restore into the sidebar on launch,
+including unavailable and pairing-rejected hosts. Opening a saved chat restores its
+timeline on demand whether its host is connected or unavailable. Restored rows remain
+readable through reconnect and subsequent same-host receipts continue saving.
+Downloads require explicit upward thread input or a retryable failed page's Retry
+action, including after reconnect; explicit Forget/Unpair removes the host's saved content after credential removal.
+Confirmed conversation deletion removes that host/conversation's saved timeline
+and list entry.
+Observing, saving, flushing and restoration add no history requests.
+Offline opening and scrolling retain the existing host-scoped request gates. Disk
+retention is independent of the renderer holder's ten-conversation memory limit.
 
 ## API
 
@@ -40,6 +43,25 @@ store for the app lifetime, sharing the existing secure store and paired-server
 store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
 on the fixed `pyry:chat-history` channel; `PyryApi` carries its type into the window.
 Reads and replacements need no handshake.
+
+The callable handler also exposes main-only `clearServer(serverId, clearCredentials)`.
+The composition root supplies it to the existing unpair handler: credential erasure
+and protected `removeServer` run in the same queue as history membership checks and
+storage operations. Earlier admitted work finishes before removal. Each history
+request captures a host generation at admission; a matched credential erase advances
+that generation before releasing the queue, even if history cleanup fails. Requests
+queued behind removal with the old generation return `unknown-host`, including after
+same-server re-pairing. Fresh requests still require saved-host membership. Calling
+renderer `removeServer` after erasing credentials cannot replace this coordination:
+it would fail membership validation.
+
+A credential erase that throws or matches no record leaves history and the generation
+untouched. After a matched erase, cleanup failure or a thrown cleanup error preserves
+the successful credential outcome, so label cleanup, connection teardown and the
+unpaired-state transition continue. `history-unpair-cleanup` records only static
+`ok` or `failed`; successful unpair alone does not establish successful history deletion.
+Successful cleanup removes the list and every timeline for that `server` identity,
+including omitted timelines, while preserving other hosts' equal conversation ids.
 
 Every request has `operation` and `serverId`. Additional fields are operation-specific:
 
@@ -76,7 +98,15 @@ that history has reached its beginning. Empty cursor strings are valid. Successf
 coverage stays separate from later pending or failed requests; row count alone
 does not establish coverage or the beginning of history.
 
-The writer retains the last successful coverage beside each observed timeline.
+Restoration preserves this coverage, durable row order, optional identity metadata
+and `prependedRows`, but initializes transient timeline state afresh. Saved coverage
+records what was received previously, not the server's current history or freshness.
+While offline, before the oldest saved row, the view shows “Older messages require
+a connection.” unless coverage explicitly reports `atStart: true`; neither a short nor an empty
+saved snapshot proves completeness. This notice sends no request.
+
+The holder retains successful `ConversationSlice.coverage` independently of transient
+`history`; the writer also retains it beside each observed timeline.
 `HistoryRequestState` alone is insufficient: `markHistoryRequested` and
 `recordHistoryFailure` replace its loaded cursor and `atStart`. A served page
 updates rows before `recordHistoryPage` publishes successful coverage; only that
@@ -115,9 +145,113 @@ Attachment references survive; attachment file bodies do not.
 Connection state, running-turn phase, in-flight requests, pending permissions,
 recovery offers/actions and credentials are excluded. Retained reports and denial
 text are display data; they cannot restore a live permission or recovery action.
+Resetting transient state is insufficient for display: a partial assistant tail
+and unresolved grouped tools derive working indicators from row shape. Offline or
+locally restored rendering separately suppresses the streaming cursor and grouped-tool
+running label, including on connected opening and after reconnect. New live receipts
+resume normal rendering; connection status alone cannot revive saved working state.
 Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
+
+Apart from explicit Retry of a failed page, history downloads require trusted
+upward wheel/trackpad input over the thread, or
+ArrowUp/PageUp/Home with the thread itself focused. The current offset must be
+within the existing 200px near-top band before that input scrolls. Input outside
+the band only scrolls locally; entering the band needs another qualifying input.
+The same focusable region contains empty and short threads, so first-page demand
+does not depend on overflow. Composer navigation, synthetic events, ordinary
+scroll events, mounting, resize, bottom pinning and prepend compensation send no
+history command. Launch, opening, restoration and reconnect do not request pages.
+
+`requestOlderHistory` reads successful coverage at demand time: unknown coverage
+uses `cursor: ''`, while received coverage uses the exact last successful cursor,
+including one restored from disk. Only `atStart: true` establishes completion;
+short, empty and all-undrawable pages do not. One request may be outstanding per
+host/conversation. Demand during a local read or pending request is discarded,
+not queued; settling either does not trigger a download. Remaining in the band
+after a response also requires new input. There is no timer or automatic walk.
+
+Requests and failures retain same-host rows, prepend metadata and successful
+coverage. Main clears outstanding history correlations before emitting classified
+failure events on connection drop, terminal/error, pairing rejection or explicit
+redial, including when no server failure reply arrived. Unavailable/build/send
+failures also settle immediately. This releases pending state without retrying:
+new qualifying upward input while connected can ask again from the retained cursor
+even when the server's failure classification is nonretryable. The separate
+[composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
+requires `retryable: true`, the displayed conversation and its connected owning host,
+and the same held failure at activation. It calls `requestOlderHistory` with the
+same cursor and `limit: 0`; pending state removes the failure affordance and rejects
+duplicate demand without changing rows or successful coverage. A partial history walk
+never restarts itself at the newest page. Offline scrolling only exposes held
+content. Host-stamped requests cannot borrow another host's cursor, and stale
+cross-host failures cannot settle its replacement slice.
+
+Page admission keeps the existing [history/live overlap filter](conversation-timeline-store-internals.md#the-historylive-join-1225)
+and row order. [Scroll compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
+preserves a surviving row at zero offset as well as through native nonzero
+anchoring; compensation itself cannot request another page.
+
+[`createSavedListRestorer`](../../../src/renderer/src/store/savedListRestorer.ts)
+mounts once in `PairedShell` and observes saved identities in `serverInfoStore`,
+independently of connection state. It calls only `chatHistory`'s `readList` operation
+and verifies a stored result's list kind and host identity. The explicit
+`conversationListStore.beginLocalListRead(serverId)` handle installs host-stamped
+rows directly, preserving snapshot order within existing sidebar grouping and
+keeping equal conversation ids on different hosts separate. It never fabricates
+a daemon event or calls the received-list setter.
+
+Admission is store-owned: an existing host list or local read prevents another
+read. Unique tokens invalidate both late success and late failure after a received
+list, host/global clear, or cancellation, including clears before any rows exist.
+Other hosts retain their arrays by reference. The restorer attempts each held
+identity once, cancels departed hosts, and cancels outstanding handles on teardown.
+IPC itself is not abortable; cancelled results cannot change the store. Cancellation
+removes pending read state so a later mount can retry, while loaded/failed results
+remain settled across navigation.
+
+A saved list is local display data, not current server state. Restoration never
+selects a chat, changes selection after navigation, or creates connection or working
+state. `SessionState.statuses` remains connection truth: offline row browsing keeps
+the existing host-scoped action gates and sends no history or session-configuration
+request. List restoration does not restore timeline messages or establish timeline
+recording ownership. Received lists still replace their host's displayed list.
+
+[`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
+uses only `readTimeline`. `PairedShell` starts it from every clicked host-stamped
+sidebar row, regardless of connection status, and retains those coordinates explicitly:
+active metadata reseeding projects wire fields and can discard an incidental host stamp.
+The view checks the selected host against the held slice in either connection state;
+another host's rows under an equal conversation id cannot substitute.
+Reconnect and received list refreshes retain that selected timeline. Actual selected-host
+status controls offline notices; local-read status controls saved-row presentation and
+exclusion of unrelated conversation-id-only queue rows.
+
+`conversationTimelineStore.beginLocalTimelineRead(serverId, conversationId)`
+installs a pending slice in the existing ten-slot holder at the viewed tail. A
+same-host local read (including a settled failure) or nonempty held timeline is
+reused; unowned or differently owned content is replaced. Completion validates the
+snapshot and exact coordinates, then admits it only if the exact pending slice is
+still held. Replacement, received mutations, clear, eviction and cancellation
+invalidate late success and failure. Opening eleven saved chats and reopening the
+first therefore reads it again from disk without increasing the memory bound.
+
+Composer echoes must already have explicit ownership before reopening. Composer
+passes the host synchronously resolved by `connectedConversationHostNow` to
+`dispatchLocalEcho(serverId, conversationId, userText)`. That write retains only
+same-host rows, stamps the slice and invalidates any pending read. An unstamped echo
+would be replaced on connected reopening; admitting unowned rows during restoration
+would weaken host isolation. The writer still requires its existing message-id and
+unique-list-owner checks before saving an echo.
+
+Cancellation removes only the pending slice, never saved data, and cannot abort
+IPC or change selection. Sidebar activation, active-id changes, actual departure
+from the thread and shell teardown cancel pending reads. Opening host repair keeps
+the origin thread mounted, so its read must survive the modal and cancellation of
+repair. Cancelling on every non-thread route would leave the retained view loading
+forever after the correctly rejected result; read lifetime follows the retained
+background route. Metadata-only active-row refreshes do not cancel it.
 
 [`useChatHistoryWriter`](../../../src/renderer/src/store/chatHistoryWriter.ts)
 mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives), observing
@@ -155,10 +289,49 @@ observation metadata. Main independently checks saved-host membership again.
 
 Startup-empty state, activation, direct snapshot installation, list/holder clears
 and memory eviction are not deletion signals. Directly installed nonempty rows
-have no observed owner and cannot establish one by later live delivery. Restore
-snapshots through the future restoration entry point, never through live reducers.
-Failed requests and rejected pairings do not delete saved content. Received empty
+in a timeline have no observed owner and cannot establish one by later live delivery.
+Both list and timeline restoration use explicit handles, outside live reducers.
+The writer recognizes a newly admitted `restored` marker before receipt checks,
+adopting its host and coverage without scheduling a save. Starting a local read
+clears prior observation/comparison metadata. Reconnect and metadata-only list refresh
+do not reset restored ownership. A later unambiguous same-host
+received change continues recording under that owner with the restored coverage;
+conflicting list claims still refuse recording. Receipt-stamped holder mutations
+start from an empty slice when the supplying host differs, preventing mixed-host
+rows; they do not bypass the writer's ownership refusal.
+Failed requests, network failure and rejected or expired pairings do not delete saved
+content. Opening/cancelling repair and successful same-server repair retain timelines
+and never enter the explicit removal lifecycle. Missing or partial lists are not
+timeline-deletion signals; received lists still replace the saved list. Received empty
 lists/pages and cancellation of an observed echo remain valid durable changes.
+
+Confirmed `conversationDeleted` delivery is an explicit deletion signal. The writer
+subscribes through `window.pyry.onDaemonEvent` and captures the main-stamped
+`serverId` and confirmed `id` synchronously before queuing `removeConversation`.
+Store observation alone misses this event: the list bridge only requests a separate
+refresh, and the synchronous receipt context carries no deleted id. Removal runs
+even without a held timeline or matching list entry, independently of selection or
+the refresh response. Missing supplying-host context reports `unknown-ownership`
+and never borrows the active host. Other conversations on that host and equal ids
+on other hosts remain saved. Sending a delete command without confirmation, including
+rejection or network failure, removes no saved timeline. Persistence removal does
+not itself change renderer display state.
+
+[`runUnpairServer`](../../../src/renderer/src/screens/settings/unpairServerAction.ts)
+begins the renderer-local [removal lifecycle](../../../src/renderer/src/store/chatHistoryRemoval.ts)
+before invoking main and settles it before refreshing identities. While pending,
+writers pause draining that host and allow other hosts' buffered work to proceed.
+Failure resumes the paused operations and retains conversation-deletion suppression.
+Success discards pending operations, the host's deleted-id set and comparison
+state, invalidates observation ownership and prevents an in-flight completion from
+repopulating deduplication state, including when main reported cleanup failure.
+
+Successful settlement also clears every held timeline stamped with that host's
+`serverId`, including omitted, restored and pending-read slices; other host-stamped
+slices survive. Enumerating only the latest list misses retained timelines. Resetting
+ownership alone would block later receipts, while restoring ownership over old rows
+would save erased text again. Clearing the actual slices invalidates pending local
+reads and lets fresh receipts after same-session re-pairing save only fresh content.
 
 ### Admission limits
 
@@ -179,6 +352,31 @@ cap, automatic eviction, total collection-size bound or history-download policy.
 
 ## Results and failure preservation
 
+Timeline reading shows “Loading saved messages…” while pending in either connection
+state. Nonempty restored content shows “Offline. Showing saved messages.” only while
+the selected host is unavailable; connected opening and reconnect show no offline
+notice. Both `missing` and a stored empty timeline succeed and show “No messages
+are saved on this device.” Errors, rejected
+IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
+results instead show “Could not read saved messages on this device.” A local read
+failure changes neither `SessionState.statuses` nor saved data and creates no
+connection, working, permission or recovery state. The failed-host repair control
+remains available. Stale failures cannot replace newer received content or attach
+to a cleared/evicted slice. There is no automatic retry loop.
+
+For sidebar restoration, both `missing` and a stored empty list settle as a loaded
+empty host slot (`[]`, with `localListReads` set to `loaded`). Errors and rejected
+IPC instead leave the list absent and mark that host `failed`; unexpected result
+status, snapshot kind or host coordinates fail the same way. They never masquerade
+as loaded-empty data.
+
+`HostRow` shows “Could not read saved chats on this device.” beneath the affected
+host in each sidebar tree. This local failure is separate from connection dots,
+failed-connection styling and the repair control. It changes neither connection
+status nor saved data and triggers no write, deletion, network request or retry
+loop. A newer received list clears the local failure state. Stale failures cannot
+attach an error to a newer list or a cleared host.
+
 | Result | Meaning |
 | --- | --- |
 | `{ status: 'missing' }` | No matching snapshot exists in a readable or absent collection. |
@@ -189,7 +387,7 @@ cap, automatic eviction, total collection-size bound or history-download policy.
 | Error code | Meaning |
 | --- | --- |
 | `invalid-request` | Request validation failed, including an unsupported version supplied for replacement. |
-| `unknown-host` | The handler found no saved pairing for `serverId`. |
+| `unknown-host` | No saved pairing exists, or removal invalidated the request's admission generation. |
 | `membership-unavailable` | The saved-host lookup threw. |
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
 | `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1. Malformed version values are `unreadable`. |
@@ -207,7 +405,9 @@ exception.
 
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
-`history-writer-started`, `history-writer-result` and `history-flushed`.
+`history-writer-started`, `history-writer-result`, `history-flushed`,
+`history-list-restore`, `history-timeline-restore` and `history-unpair-cleanup`
+(static lifecycle/result codes).
 They include no requests, coordinates, message content, keys, storage paths or
 caught errors. Successful reads return the declared chat content; error replies
 contain only their static classification.
@@ -216,6 +416,14 @@ Projection failures, rejected storage results and IPC exceptions stay local to
 recording; they never dispatch connection failures or disable the live chat.
 The drain remains usable for later changed content. A failed save is not an
 automatic retry loop for an unchanged snapshot.
+
+Conversation cleanup reports `history-writer-result: conversation-removed` only
+after storage returns `status: 'ok'`. Classified failures report their static error
+code, unexpected results report `remove-failed`, and thrown IPC failures report
+`ipc-failed`, without coordinates or exception text. Failed removal preserves the
+protected store's prior content and retains stale-save suppression; daemon
+confirmation alone does not prove local cleanup succeeded. There is no automatic
+removal retry, but another confirmed receipt can retry it.
 
 ## Storage and concurrency
 
@@ -234,6 +442,16 @@ holder eviction with their original coordinates. Eviction drops observation and
 comparison metadata, never the pending save or the disk record. The eleventh
 received conversation can therefore evict the first before its timer runs without
 losing the first conversation's captured snapshot.
+
+Confirmed deletion shares this serial drain with replacements. It discards the
+exact timeline's buffered replacement, filters its entry from buffered host lists
+without reordering peers, and waits behind any already in-flight write. A per-host
+deleted-id set suppresses subsequent timeline captures and filters delayed list
+captures for the writer's lifetime, including retained holder mutations and shutdown.
+Stale captures therefore cannot overwrite the queued removal or recreate successfully
+removed records. Each removal attempt clears comparison state for that timeline and
+host list; removal itself is not skipped by replacement deduplication. Successful
+unpair resets suppression for fresh same-server re-pairing.
 
 ### Protected collection
 
@@ -279,8 +497,13 @@ work or background pruning is involved.
 
 ### Window close and app quit
 
-`writer.stop()` unsubscribes both stores, cancels the timer and drains buffered
-and in-flight updates. Main defers normal window close and `before-quit` teardown
+`writer.stop()` unsubscribes both stores, daemon events and host-removal notifications,
+waits for already-started host removals to settle, then cancels the timer and drains
+buffered and in-flight replacements and confirmed conversation removals in order.
+Deletion suppression remains active throughout the flush. Unsubscribing alone
+could acknowledge close before failed
+unpair resumes its buffered snapshots. Settlement cannot schedule a new timer after
+stop. Main defers normal window close and `before-quit` teardown
 until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
 `flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
 submitted history operations before resuming close/quit. App quit stops the
@@ -298,6 +521,17 @@ renderer buffers; atomic file replacement still protects the last complete
 collection. Flushing never adds a completion boundary to a partial answer.
 
 ## Testing
+
+[`historyDemand.test.ts`](../../../src/renderer/src/store/historyDemand.test.ts)
+checks unknown/restored/complete coverage, discarded pending demand, failure retry
+from the retained cursor and host isolation. Main connection tests cover abandoned
+requests and late replies. [`history-on-open.spec.ts`](../../../e2e/history-on-open.spec.ts)
+now tests explicit demand: its main IPC observer is installed before pairing and
+activation, so zero commands cannot be confused with commands discarded by host
+routing. Genuine wheel/keyboard input is compared with composer navigation,
+synthetic events and programmatic movement, including empty/short threads and
+reconnect. An empty page needs a later received live frame as a receipt barrier;
+row count alone cannot prove that the empty response has settled.
 
 [`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) exercises every
 current row shape, optional/empty values, coverage, nested field projection,
@@ -319,6 +553,46 @@ Cancellation regressions must include later live content and retained coverage;
 checking only echo addition or its immediate removal misses a writer that has
 silently stopped recording the held chat.
 
+Removal regressions hold membership checks and protected writes, then use fresh
+storage instances to verify absent lists and omitted timelines, stale admission
+rejection, other-host preservation and fresh saves after re-pairing. Writer tests
+also hold removal through shutdown for both outcomes.
+[`chat-history-removal.test.ts`](../../../e2e/chat-history-removal.test.ts) combines
+receipt-stamped holders, the real scoped-clear selector and protected storage.
+Its same-session re-pair must save only fresh text for an omitted timeline. Manually
+clearing all timelines or restarting before re-pairing masks the retained-slice bug.
+The recording Playwright scenario re-pairs before restart, then checks persistence
+after restart and no added history downloads.
+
+Conversation-deletion regressions hold real protected-store list and timeline writes,
+deliver confirmation with buffered and later stale captures, and await flush/stop
+before fresh-instance reads. They check both removed records, same-host peers and
+another host's equal id. Empty/partial lists and eviction must retain timelines;
+failed cleanup must preserve content without a success diagnostic. The recording
+Playwright test holds confirmation after the delete command, proves retention, then
+waits for the actual `removeConversation` result to be `ok` before asserting absence
+and restarting. Renderer disappearance or an early missing read cannot prove cleanup
+or ordering; the scenario withholds list refresh responses throughout deletion.
+
+[`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
+covers explicit admission, row identity metadata and coverage, equal-id host
+isolation, delayed success/failure after invalidation, and eleven-chat eviction
+and reload. Echo regressions cover same-host reopening, cross-host replacement and
+rejection of a delayed read after sending. Writer tests pair restoration with a
+subsequent same-host receipt:
+restoration and eviction must write nothing, but later content must save with the
+restored owner and coverage. Static screen tests cover local notices, host-bound
+display and partial-row cursor suppression both connected and offline, normal rendering
+after live receipts, and held versus restored queue visibility. Healthy-host interaction
+tests assert exactly the local empty-storage notice, so they still reject an additional
+connection warning caused by another host's failure.
+
+[`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
+covers ordered host isolation with equal ids, missing/empty/error results, duplicate
+admission and delayed success/failure after received lists, clears and cancellation.
+It runs the real writer alongside restoration: installing and clearing local lists
+must schedule no save, while a later received list must still record.
+
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
 exercises the mounted production observer and handler, real composer cancellation,
 quit/relaunch and window close/reopen. It freezes renderer timers after earlier
@@ -327,8 +601,32 @@ that waits for the debounce before quitting cannot prove the flush. Reusing the
 user-data directory proves disconnected local reads without a new handshake,
 including the last list, partial live text and loaded older page. The suite also
 covers pairing-rejected access, saved-host validation and zero added history
-requests. Its test encryption backend does not prove the OS keychain adapter or
-offline restoration UI.
+requests. It also proves restored sidebar browsing after normal quit/relaunch,
+a rejected host beside a usable connected host, and mounted local read failures.
+The pairing-recovery regression must expect the saved row after startup rejection;
+row absence no longer proves rejection. Keep the decoded rejection and actual
+repair-click assertions. Restored message UI is exercised by opening and copying
+received content after restart, including a rejected host beside a connected one.
+A held-IPC result crosses repair opening/cancellation before release, then proves
+reading and copying without renderer commands during opening or scrolling. Command
+observation must precede main's host routing: absent socket traffic can hide a
+renderer command discarded offline. In the held-IPC scenario, observing
+`pyry:command` at main avoids CDP function-breakpoint observation stalling the test.
+Reload fixtures wait for saved-list persistence and use a newly named received row
+as their receipt barrier; saved rows can return without a status replay, so row
+count alone is not that barrier. The test encryption backend does not prove the OS
+keychain adapter.
+
+The continuity scenario starts with incomplete saved coverage, restarts offline,
+reads, reconnects and receives new same-host text, then demands one older page with
+the saved cursor. A connected restart checks ordered older/restored/new content and
+the advanced coverage, with no duplicate rows on reopening. Holding the local read
+and observing commands before host routing proves opening, pending demand, settlement
+and reconnect send zero history requests; only fresh qualifying input requests a page.
+Overlap fixtures must place the live overlap at the newest end of the newest-first
+page. Putting an unmatched older entry first exercises the intentional
+stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead
+of testing overlap suppression.
 
 The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
 [`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).

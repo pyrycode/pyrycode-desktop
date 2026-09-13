@@ -22,11 +22,13 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
  */
 export function requestNewConversation(
   sendCommand: (command: RendererCommand) => void,
-  defaultCwd: string | null
+  defaultCwd: string | null,
+  serverId?: string
 ): void {
   sendCommand({
     type: 'createConversation',
-    payload: { is_promoted: false, name: null, cwd: defaultCwd }
+    payload: { is_promoted: false, name: null, cwd: defaultCwd },
+    ...(serverId === undefined ? {} : { serverId })
   })
 }
 
@@ -59,11 +61,13 @@ export function requestNewConversation(
 export function requestNewChannel(
   sendCommand: (command: RendererCommand) => void,
   name: string,
-  cwd: string
+  cwd: string,
+  serverId?: string
 ): void {
   sendCommand({
     type: 'createConversation',
-    payload: { is_promoted: true, name: name.trim(), cwd }
+    payload: { is_promoted: true, name: name.trim(), cwd },
+    ...(serverId === undefined ? {} : { serverId })
   })
 }
 
@@ -71,14 +75,9 @@ export function requestNewChannel(
  * Fire the `createConversation` command asking for an ad-hoc chat IN A NAMED FOLDER ON A NAMED MACHINE
  * (#1308) — the host row plus's dispatch, and the THIRD fixed shape beside its two siblings above.
  *
- * ITS PAYLOAD IS `requestNewConversation`'S, BYTE FOR BYTE. What differs is the top-level `serverId`, and
- * that is why this is a third sibling rather than an optional third parameter on that helper. The key must
- * be REQUIRED here: main refuses an unnamed `createConversation` as ambiguous once more than one server is
- * paired (#1120), and this caller always knows which machine's row was clicked, so a `serverId?: string`
- * parameter would make the field forgettable at exactly the call site that must never forget it. It would
- * also force a conditional spread to avoid emitting an explicit `undefined` key, which `structuredClone`
- * preserves across the bridge. Two shipped call sites stay untouched, and each helper's unit test stays a
- * single-literal assertion — the property this file's header asks callers to preserve.
+ * This Add-workspace helper requires the clicked host and trims operator-entered paths.
+ * The sidebar helpers above now also accept an explicit host, but preserve daemon-reported cwd
+ * verbatim. Existing callers that omit the optional host retain main's single-host fallback.
  *
  * `serverId` IS A TOP-LEVEL SIBLING OF `payload` AND NEVER A FIELD INSIDE IT. The envelope builders consume
  * `payload` alone, so the routing key stays off the wire BY CONSTRUCTION rather than by discipline. It is a
@@ -138,11 +137,17 @@ export function translateConversationCreated(
  */
 export function subscribeConversationCreated(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  onCreated: (created: ConversationCreatedPayload) => void
+  onCreated: (created: ConversationCreatedPayload, serverId?: string) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const created = translateConversationCreated(event)
-    if (created !== null) onCreated(created)
+    if (created === null) return
+    // Only the main-process stamp identifies the creating host, never a payload field.
+    if ('serverId' in event && typeof event.serverId === 'string') {
+      onCreated(created, event.serverId)
+    } else {
+      onCreated(created)
+    }
   })
 }
 
@@ -186,7 +191,7 @@ export function subscribeConversationCreateRejected(
  * stays server-renderable.
  */
 export function useConversationCreatedNav(
-  onCreated: (created: ConversationCreatedPayload) => void
+  onCreated: (created: ConversationCreatedPayload, serverId?: string) => void
 ): void {
   const onCreatedRef = useRef(onCreated)
   useEffect(() => {
@@ -194,8 +199,8 @@ export function useConversationCreatedNav(
   })
   useEffect(
     () =>
-      subscribeConversationCreated(window.pyry.onDaemonEvent, (created) =>
-        onCreatedRef.current(created)
+      subscribeConversationCreated(window.pyry.onDaemonEvent, (created, serverId) =>
+        onCreatedRef.current(created, serverId)
       ),
     []
   )

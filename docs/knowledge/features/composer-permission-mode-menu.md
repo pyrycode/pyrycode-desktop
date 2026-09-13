@@ -150,13 +150,13 @@ as a daemon-text sink unconditionally even though five of its six values are cli
 
 `ComposerPermissionModeMenuView({ model, permissionMode, models, onSelect })` is a pure view — no store
 read, no `window.pyry`, no state — so it server-renders under this repo's `node` vitest environment like
-its two neighbours. It returns `null` on the empty-mode arm, otherwise a `ComposerOptionsMenu` with
+its two neighbours. It returns `null` on the empty-mode arm, an inert held label when
+`onSelect` is absent, otherwise a `ComposerOptionsMenu` with
 `triggerClassName="composer__footer-button composer__permission"`, a client-owned `ariaLabel` naming the
 **panel** (`COMPOSER_PERMISSION_MODE_MENU_LABEL = 'Permission mode'` — the trigger itself carries no
 `aria-label`, so its accessible name stays its visible text), and the sibling triggers' `chevron-up-solid-full`
-glyph, duplicated at its own use site rather than shared (see § CSS below). Since #1022 every prop is
-**required**, `model` and `models` included: the container always knows both, so an optional `models`
-would only hide the wiring seam described next.
+glyph, duplicated at its own use site rather than shared (see § CSS below). `model`,
+`permissionMode` and `models` remain required; `onSelect` is optional for availability.
 
 `ComposerPermissionModeMenu({ conversationId })`, the container, took **no props** until #1022 — the
 visible half of reading no per-conversation model list. It now takes `conversationId` the way both
@@ -167,33 +167,35 @@ path). It reads `sessionIdStore`, `runConfigStore.snapshot`, and the **raw** `ru
 every store tick), composing them with `selectEffectiveSettings` in the render body and passing
 `effective.model` into the view alongside the held model list. `onSelect` is an arrow so `window.pyry` is
 dereferenced at interaction time and never during render, and forwards to
-`changeSetting({ field: 'permissionMode', value })` — the mode's own machine value, submitted with no
+`changeConnectedSetting(conversationId, { field: 'permissionMode', value })` — the mode's own machine value, submitted with no
 reverse lookup.
 
-**The container mount is the one seam no unit test can see.** The pure model function stays green with
-the mount unwired (`conversationId={null}` selects an empty model list, which reads identically to "no
-frame arrived yet" — `auto` stays offered), so a broken wire fails silently in the fail-open direction.
-Verified to actually redden: temporarily reverting the `ConversationScreen.tsx` mount to pass no
-`conversationId` turns `e2e/composer-permission-mode-auto.spec.ts` red at the four-entry assertion
-(`locator resolved to 5 elements`). That e2e case is the only proof this wiring is live.
+The container supplies the callback only with an addressable session ID and an
+unambiguous owning host reporting `connected`. Missing ownership/status and all
+non-connected statuses withhold it. The held label remains readable, but the
+chevron and open menu disappear. `changeConnectedSetting` checks current stores
+again before any command or optimistic change. Reconnection restores the existing
+Auto capability gate without replaying blocked choices; see
+[the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188).
 
-\#682's AC3 ("sends nothing when there is no addressable session id") is `changeSetting`'s own gate, not a
-withheld handler: this view has no operability branch to fuse the gate with, unlike the run-configuration
-sheet. #682's AC3 optimistic move and AC4's rollback-on-rejection are both `selectEffectiveSettings`'s
-pending-over-confirmed-over-snapshot composition, with no code of #682's own — the same composition the
-model and effort triggers read through, and, since #1022, the same composition this control's
-`auto`-hiding join reads its `model` from (see § The `auto`-hiding join above).
+The pure model function alone cannot prove container wiring: it still computes
+Auto choices with no published list. Missing conversation ownership now makes the
+mounted view inert instead. `e2e/composer-permission-mode-auto.spec.ts` proves the
+live per-model capability filter, while `e2e/offline-session-settings.spec.ts`
+proves host availability through mouse/keyboard actions and outbound commands.
+
+Allowed selections and rejection rollback still use `selectEffectiveSettings`'s
+pending-over-confirmed-over-snapshot composition, shared with the model and effort
+triggers and this control's Auto-hiding model join.
 
 ## CSS: a fourth footer-button consumer, and the fourth-glyph lift declined again
 
 The trigger rides the shared [`.composer__footer-button`](composer-model-menu.md) treatment #988 extracted;
 nothing about that rule is re-forked here. Three new declarations:
 
-- **`.composer__permission { cursor: pointer }`** — worn **unconditionally**, unlike its two neighbours'
-  per-consumer `cursor: pointer`, which only exists to keep their *inert* arm from lying about being
-  clickable. This control has no inert arm, so there is nothing for the declaration to disagree with — and
-  that stayed true when #1022 gave it a model-list read: its vocabulary is still client-owned and its list
-  never falls below four entries, so the rule is unchanged even though the premise above it was reworded.
+- **`.composer__permission { cursor: pointer }`** — worn only by the operable
+  trigger. The unavailable span keeps `.composer__footer-button` without this
+  class, so a readable held label does not claim to be clickable.
 - **`.composer__permission-label { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis }`**
   — its own rule rather than reusing `.composer__model-label`'s identical bound, since each footer e2e spec
   locates its own label class bare (a second wearer breaks Playwright strict mode). 120px is derived from
@@ -232,8 +234,8 @@ and the four `CHEVRON_PATH` consts live one per `Composer*Menu.tsx` file.
 (#1020); decoded is not sanitized, and this control is where the string is finally rendered. The whole
 obligation is discharged at `permissionModeLabel`'s own-property-guarded lookup reaching exactly one JSX
 text position, where React escapes it. `currentId` reaches only the shared panel's `option.id === currentId`
-string comparison — no plain object is keyed by the raw mode anywhere in this file. Nothing on this path is
-logged, matching [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)'s content-free
+string comparison — no plain object is keyed by the raw mode anywhere in this file. The write gate
+logs only static availability codes, never mode values, matching [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)'s content-free
 rule. The panel's `aria-label` is the client-owned `COMPOSER_PERMISSION_MODE_MENU_LABEL`, never the
 trigger's own daemon-authored visible text.
 

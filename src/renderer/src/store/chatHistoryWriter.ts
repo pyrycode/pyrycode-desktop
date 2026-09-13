@@ -1,10 +1,13 @@
 import { useEffect } from 'react'
 import type { StoreApi } from 'zustand/vanilla'
 import { parseChatHistorySnapshot, type ChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import { conversationListStore, type ConversationListStore } from './conversationListStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
+import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 
+type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
 type TimelineSnapshot = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
 type Receipt = { type: string; serverId: string | null | undefined }
 type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'] }
@@ -13,21 +16,28 @@ type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'
 export function createChatHistoryWriter(deps: {
   lists: Pick<StoreApi<ConversationListStore>, 'getState' | 'subscribe'>
   timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
+  subscribeEvents?: (listener: (event: StampedDaemonEvent) => void) => () => void
   receipt: () => Receipt | null
   write: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
   log: (event: RendererDiagnosticEvent) => void
   schedule: (run: () => void) => () => void
 }) {
-  const pending = new Map<string, ChatHistorySnapshot>()
+  const pending = new Map<string, ChatHistorySnapshot | ConversationRemoval>()
   const seen = new Map<string, string>()
   const saved = new Map<string, string>()
   const observations = new Map<string, Observation>()
+  const deleted = new Map<string, Set<string>>()
   const localEchoes = new WeakSet<object>()
+  const paused = new Map<string, number>()
+  const generations = new Map<string, number>()
+  const removals = new Set<Promise<void>>()
+  let stopped = false
   let cancel: (() => void) | undefined
   let running: Promise<void> | undefined
   const report = (code: string) => deps.log({ event: 'history-writer-result', code })
   const keyFor = (s: ChatHistorySnapshot) => JSON.stringify([s.serverId, s.kind,
     s.kind === 'timeline' ? s.conversationId : null])
+  const hasReady = () => [...pending.values()].some(snapshot => !paused.has(snapshot.serverId))
   function forgetComparison(id: string): void {
     const owner = observations.get(id)?.owner
     if (typeof owner !== 'string') return
@@ -37,6 +47,11 @@ export function createChatHistoryWriter(deps: {
   }
 
   function capture(value: ChatHistorySnapshot): void {
+    const removed = deleted.get(value.serverId)
+    if (value.kind === 'timeline' && removed?.has(value.conversationId)) return
+    if (value.kind === 'list' && removed !== undefined) {
+      value = { ...value, conversations: value.conversations.filter(row => !removed.has(row.id)) }
+    }
     let snapshot: ChatHistorySnapshot
     try { snapshot = parseChatHistorySnapshot(value) } catch { report('invalid-snapshot'); return }
     const key = keyFor(snapshot)
@@ -49,10 +64,22 @@ export function createChatHistoryWriter(deps: {
 
   async function drain(): Promise<void> {
     while (pending.size > 0) {
-      const next = pending.entries().next()
-      if (next.done) break
-      const [key, snapshot] = next.value
+      const next = [...pending].find(([, snapshot]) => !paused.has(snapshot.serverId))
+      if (next === undefined) break
+      const [key, snapshot] = next
+      const generation = generations.get(snapshot.serverId)
       pending.delete(key)
+      if ('operation' in snapshot) {
+        try {
+          const result = await deps.write(snapshot)
+          report(result.status === 'ok' ? 'conversation-removed' : result.status === 'error' ? result.code : 'remove-failed')
+        } catch { report('ipc-failed') }
+        for (const comparisonKey of [key, JSON.stringify([snapshot.serverId, 'list', null])]) {
+          seen.delete(comparisonKey)
+          saved.delete(comparisonKey)
+        }
+        continue
+      }
       const encoded = JSON.stringify(snapshot)
       const request: ChatHistoryRequest = snapshot.kind === 'list'
         ? { operation: 'replaceList', serverId: snapshot.serverId, snapshot }
@@ -60,12 +87,13 @@ export function createChatHistoryWriter(deps: {
       if (saved.get(key) !== encoded) {
         try {
           const result = await deps.write(request)
-          if (result.status === 'ok') saved.set(key, encoded)
+          if (result.status === 'ok' && generation === generations.get(snapshot.serverId)) saved.set(key, encoded)
           report(result.status === 'error' ? result.code : result.status)
         } catch { report('ipc-failed') }
       }
       // Deduplication follows held state; evicted content survives only as long as its write needs it.
-      if (snapshot.kind === 'timeline' && observations.get(snapshot.conversationId)?.owner !== snapshot.serverId && !pending.has(key)) {
+      if (generation === generations.get(snapshot.serverId) && snapshot.kind === 'timeline' &&
+          observations.get(snapshot.conversationId)?.owner !== snapshot.serverId && !pending.has(key)) {
         seen.delete(key)
         saved.delete(key)
       }
@@ -76,7 +104,7 @@ export function createChatHistoryWriter(deps: {
     cancel = undefined
     if (running === undefined) running = drain().finally(() => {
       running = undefined
-      if (pending.size > 0) return flush()
+      if (hasReady()) return flush()
     })
     return running
   }
@@ -98,6 +126,16 @@ export function createChatHistoryWriter(deps: {
     for (const [id, slice] of state.timelines) {
       const before = previous.timelines.get(id)
       if (slice === before) continue
+      if (slice.localRead === 'loading') {
+        forgetComparison(id)
+        observations.delete(id)
+        continue
+      }
+      if (slice.restored !== undefined && slice.restored !== before?.restored && slice.localRead === 'loaded') {
+        forgetComparison(id)
+        observations.set(id, { owner: slice.restored.serverId, coverage: slice.restored.coverage })
+        continue
+      }
       const items = slice.timeline.items
       const previousItems = before?.timeline.items ?? []
       const changed = items !== previousItems
@@ -141,13 +179,72 @@ export function createChatHistoryWriter(deps: {
         items: [...items], prependedRows: slice.prependedRows, coverage })
     }
   })
+  const offEvents = deps.subscribeEvents?.(event => {
+    if (stopped || event.type !== 'conversationDeleted') return
+    const { serverId, id } = event
+    if (typeof serverId !== 'string') { report('unknown-ownership'); return }
+    const ids = deleted.get(serverId) ?? new Set<string>()
+    ids.add(id)
+    deleted.set(serverId, ids)
+    const key = JSON.stringify([serverId, 'timeline', id])
+    // Replace buffered timeline content with a removal in the same serial drain.
+    pending.delete(key)
+    for (const snapshot of pending.values()) {
+      if (!('operation' in snapshot) && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
+    }
+    pending.set(key, { operation: 'removeConversation', serverId, conversationId: id })
+    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+  })
+  const offRemoval = subscribeChatHistoryRemoval(serverId => {
+    paused.set(serverId, (paused.get(serverId) ?? 0) + 1)
+    let done = () => {}
+    const settlement = new Promise<void>(resolve => { done = resolve })
+    removals.add(settlement)
+    return removed => {
+      if (removed) {
+        deleted.delete(serverId)
+        generations.set(serverId, (generations.get(serverId) ?? 0) + 1)
+        for (const [key, snapshot] of pending) if (snapshot.serverId === serverId) pending.delete(key)
+        for (const key of seen.keys()) {
+          // Keys are local tuple encodings, not storage paths or daemon-provided lookup paths.
+          if (key.startsWith('[' + JSON.stringify(serverId) + ',')) {
+            seen.delete(key)
+            saved.delete(key)
+          }
+        }
+        // The latest list can omit retained timelines. Drop actual host-owned slices so
+        // a new receipt after re-pair cannot inherit erased rows or unknown ownership.
+        for (const [id, slice] of deps.timelines.getState().timelines) {
+          if (slice.serverId === serverId) {
+            deps.timelines.getState().clearTimelineFor(id)
+            observations.delete(id)
+          }
+        }
+        for (const [id, observation] of observations) {
+          if (observation.owner === serverId) observations.set(id, { owner: null, coverage: { status: 'unknown' } })
+        }
+        report('host-removed')
+      }
+      const remaining = (paused.get(serverId) ?? 1) - 1
+      if (remaining === 0) paused.delete(serverId)
+      else paused.set(serverId, remaining)
+      removals.delete(settlement)
+      done()
+      if (!stopped && hasReady() && cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+    }
+  })
   deps.log({ event: 'history-writer-started' })
-  return { flush, stop: () => { offLists(); offTimelines(); return flush() } }
+  return { flush, stop: () => {
+    stopped = true
+    offLists(); offTimelines(); offRemoval(); offEvents?.()
+    return Promise.all([...removals]).then(flush)
+  } }
 }
 
 export function useChatHistoryWriter(): void {
   useEffect(() => {
     const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
+      subscribeEvents: window.pyry.onDaemonEvent,
       receipt: window.pyry.chatHistoryReceipt, write: window.pyry.chatHistory, log: window.pyry.sendDiagnostic,
       schedule: (run) => { const timer = setTimeout(run, 200); return () => clearTimeout(timer) } })
     const off = window.pyry.onChatHistoryFlush(writer.stop)

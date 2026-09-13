@@ -7,7 +7,58 @@ import {
 } from '../../store/runSettingsWriteStore'
 import type { ModelListEntry, ModelListState } from '../../store/modelListStore'
 import type { WireModelOption } from '@shared/wire/types'
-import { RunConfigView, RunConfigSections } from './RunConfigSections'
+import { RunConfigView, RunConfigSections, changeConnectedSetting } from './RunConfigSections'
+import { conversationListStore } from '../../store/conversationListStore'
+import { sessionStore, type ConnectionStatus } from '../../store/sessionStore'
+import { sessionIdStore } from '../../store/sessionIdStore'
+import { runSettingsWriteStore, type SettingsChange } from '../../store/runSettingsWriteStore'
+
+it('rechecks a saved selection against current ownership and status before any optimistic write', () => {
+  const previous = [conversationListStore.getState(), sessionStore.getState(), sessionIdStore.getState(), runSettingsWriteStore.getState()] as const
+  const sendCommand = vi.fn()
+  vi.stubGlobal('window', { pyry: { sendCommand, sendDiagnostic: vi.fn() } })
+  const row = { id: 'chat', name: 'Chat', cwd: '/fake', workspace_label: null,
+    is_promoted: false, is_archived: false, last_message_ts: '', last_used_at: '', serverId: 'owner' }
+  const changes: SettingsChange[] = [
+    { field: 'model', value: 'sonnet' }, { field: 'effort', value: 'high' },
+    { field: 'permissionMode', value: 'plan' }, { field: 'yolo', value: true }
+  ]
+  const savedSelections = changes.map(change => () => changeConnectedSetting('chat', change))
+  const connected: ConnectionStatus = { type: 'connected', ack: { protocol_version: '1', server_id: 'test-server', conn_id: 'test-connection', capabilities: [] } }
+  try {
+    sessionIdStore.getState().setSessionId('session')
+    conversationListStore.setState({ conversations: [row] })
+    for (const status of [undefined, { type: 'connecting' }, { type: 'disconnected' },
+      { type: 'error', error: { code: 'transport', message: 'Offline', retryable: true } }] as const) {
+      const statuses = new Map<string, ConnectionStatus>([['other', connected]])
+      if (status) statuses.set('owner', status)
+      sessionStore.setState({ status: connected, statuses })
+      for (const select of savedSelections) select()
+      expect(sendCommand).not.toHaveBeenCalled()
+      expect(runSettingsWriteStore.getState()).toBe(previous[3])
+    }
+    sessionStore.setState({ statuses: new Map([['owner', connected]]) })
+    for (const rows of [[], [{ ...row, serverId: undefined }], [row, { ...row, serverId: 'other' }]]) {
+      conversationListStore.setState({ conversations: rows })
+      for (const select of savedSelections) select()
+      expect(sendCommand).not.toHaveBeenCalled()
+      expect(runSettingsWriteStore.getState()).toBe(previous[3])
+    }
+    conversationListStore.setState({ conversations: [row] })
+    savedSelections[0]()
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'setSessionSettings', payload: { session_id: 'session', model: 'sonnet' },
+      changeId: expect.any(String)
+    })
+  } finally {
+    conversationListStore.setState(previous[0], true)
+    sessionStore.setState(previous[1], true)
+    sessionIdStore.setState(previous[2], true)
+    runSettingsWriteStore.setState(previous[3], true)
+    vi.unstubAllGlobals()
+  }
+})
 
 // #975: the published rows the sheet now renders. A local builder rather than a shared fixture — the
 // six-field row is the wire shape and every test below varies one field of it.

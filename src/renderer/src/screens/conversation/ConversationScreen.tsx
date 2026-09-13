@@ -10,15 +10,19 @@ import {
   type ReactNode,
   type Ref,
   type RefObject,
+  type WheelEventHandler,
+  type KeyboardEventHandler,
   type UIEventHandler
 } from 'react'
 import './conversation.css'
+import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
+import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
 // #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
@@ -31,6 +35,7 @@ import {
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
 import { historyAskDeps, requestOlderHistory } from '../../store/historyPageBridge'
+import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   activeConversationStore,
@@ -182,6 +187,7 @@ export function selectOpenTimelineFor(
 }
 
 export interface ConversationScreenProps {
+  savedTimelineTarget?: { serverId: string; conversationId: string }
   onRepairHost?: (serverId: string) => void
   // Compatibility prop for existing embedders; repair now delegates through onRepairHost.
   onUnpaired?: () => void
@@ -195,6 +201,7 @@ export interface ConversationScreenProps {
 }
 
 export function ConversationScreen({
+  savedTimelineTarget,
   onRepairHost,
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
@@ -213,6 +220,7 @@ export function ConversationScreen({
   // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
+  const actionsAvailable = useConversationActionAvailability(openConversationId)
   // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
   // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
   // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
@@ -223,7 +231,21 @@ export function ConversationScreen({
     () => selectOpenTimelineFor(openConversationId),
     [openConversationId]
   )
-  const openTimeline = useConversationTimelineStore(selectOpenTimeline)
+  const heldTimeline = useConversationTimelineStore(selectOpenTimeline)
+  // Active metadata can be reseeded from the wire; the clicked saved coordinates remain client-owned.
+  const selectedHost = savedTimelineTarget?.conversationId === openConversationId
+    ? savedTimelineTarget.serverId
+    : activeConversation !== null && 'serverId' in activeConversation &&
+      typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
+  const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
+  const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
+  const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
+  const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
+  const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
+    ? ownSlice.history : ownSlice?.restored?.coverage)
+  const olderSaved = offline && localStatus === 'loaded' &&
+    !(coverage && 'atStart' in coverage && coverage.atStart)
   // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
   // every read site (conversationTimelineStore.ts:44-49) because it collapses "nothing is held for this
   // conversation" into "observed, nothing in the thread" with no type error and no failing test; the
@@ -300,6 +322,9 @@ export function ConversationScreen({
     [openConversationId]
   )
   const queuedBacklog = useQueueStore(selectOpenBacklog)
+  // A disconnect retains received queues; a local read cannot borrow the id-only queue cache.
+  const visibleQueued = selectedHost !== null && (ownSlice === undefined || ownSlice.localRead !== undefined)
+    ? EMPTY_QUEUED : queuedBacklog
   // #1213: the two timeline writes the queued-row drop needs, so cancelling a message takes its optimistic
   // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
   // through (#756) — the flat store for the open thread, the keyed holder for the conversation it was sent
@@ -354,7 +379,7 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId)
+  const { scrollPin, followBottom } = useThreadScrollPin(openConversationId, prependedRows)
   return (
     <div className="conversation">
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
@@ -381,13 +406,16 @@ export function ConversationScreen({
           so the banner is now the first thing under the overflow menu's gate; nothing else in this
           region moved. */}
       <ConnectionBannerControl />
+      {(offline || (selectedHost !== null && (localStatus !== 'loaded' ||
+        (ownSlice?.localRead === 'loaded' && items.length === 0)))) &&
+        <SavedTimelineNotice status={localStatus} empty={items.length === 0} />}
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
       <WorkspaceChip
         conversation={activeConversation}
         isEmpty={items.length === 0}
-        onChange={() => setPickerOpen(true)}
+        onChange={actionsAvailable ? () => setPickerOpen(true) : undefined}
       />
       {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
           queueStore and never written through the timeline reducer — the fold is render-time, per
@@ -401,7 +429,7 @@ export function ConversationScreen({
           daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
           an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
           the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
-      <Timeline
+      {(!offline || items.length > 0 || visibleQueued.length > 0) && <Timeline
         key={openConversationId}
         items={items}
         scrollPin={scrollPin}
@@ -409,16 +437,18 @@ export function ConversationScreen({
         // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
         // which is what leaves their keys — and therefore React's identity for them — unmoved.
         firstRowKey={-prependedRows}
-        queued={queuedBacklog}
-        onDropQueued={(queuedMsgId, messageId) => {
-          if (openConversationId === null) return
+        queued={visibleQueued}
+        olderSaved={olderSaved}
+        saved={offline || ownSlice?.localRead !== undefined}
+        onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
+          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
           dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
             sendCommand: window.pyry.sendCommand,
             dispatch: dispatchTimeline,
             dispatchFor: dispatchTimelineFor
           })
-        }}
-      />
+        } : undefined}
+      />}
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
           #496's compaction and #317's stall each mounted their own null-at-rest bubble block here until
@@ -502,7 +532,7 @@ export function ConversationScreen({
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
               Renders nothing (DOM order immaterial); #188 renders the held values here. */}
-          <RunConfigData />
+          {actionsAvailable && <RunConfigData />}
           {/* #188: the read-only Model / Effort / YOLO sections, reading the held snapshot.
               #975: the conversation id goes down as a prop off the `activeConversation` slice already
               read above (the ComposerSlot / BackgroundTaskPanel idiom), because the Model rows now come
@@ -559,6 +589,8 @@ export function ConversationScreen({
 export interface ThreadScrollPin {
   ref: RefObject<HTMLDivElement>
   onScroll: UIEventHandler<HTMLDivElement>
+  onWheel: WheelEventHandler<HTMLDivElement>
+  onKeyDown: KeyboardEventHandler<HTMLDivElement>
 }
 
 /**
@@ -626,6 +658,7 @@ function reassertPinnedToBottom(
   pinnedOffset: { current: number | null }
 ): void {
   if (!following.current) return
+  el.style.removeProperty('padding-bottom')
   const before = el.scrollTop
   // Past the maximum; the browser clamps to exactly the bottom.
   el.scrollTop = el.scrollHeight
@@ -663,7 +696,7 @@ function reassertPinnedToBottom(
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
@@ -674,6 +707,19 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
+  const topAnchor = useRef<{
+    row: Element
+    top: number
+    prependedRows: number
+    conversationId: string | null
+  } | null>(null)
+  const rememberTop = (el: HTMLDivElement): void => {
+    const row = el.firstElementChild
+    topAnchor.current = el.scrollTop === 0 && row !== null
+      ? { row, top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
+          prependedRows, conversationId }
+      : null
+  }
 
   // NO dependency array — this runs after every render of the screen, and that is what makes the chrome
   // case work rather than being a missing optimization. Enumerating what changes the region's height in a
@@ -760,6 +806,28 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     const el = ref.current
     if (el === null) return
 
+    const anchor = topAnchor.current
+    if (!following.current && el.scrollTop === 0 && anchor !== null &&
+        anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
+        anchor.row.parentElement === el) {
+      // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
+      // short threads include unused viewport space that is not part of the inserted content.
+      const offset = anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
+      const contentBottom = Array.from(el.children).reduce(
+        (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
+        el.getBoundingClientRect().top
+      ) - el.getBoundingClientRect().top + padding
+      const missingRoom = offset + el.clientHeight - contentBottom
+      if (missingRoom > 0) {
+        // Retain the short thread's blank space below its rows so the target is reachable.
+        // Bottom following removes this measured padding and restores the stylesheet token.
+        el.style.paddingBottom = `${padding + Math.ceil(missingRoom)}px`
+      }
+      el.scrollTop = offset
+      if (el.scrollTop !== 0) pinnedOffset.current = el.scrollTop
+    }
+
     const observer = (growth.current ??= new ResizeObserver(() => {
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
@@ -774,6 +842,7 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     for (const row of el.children) observer.observe(row)
 
     reassertPinnedToBottom(el, following, pinnedOffset)
+    rememberTop(el)
   })
 
   // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
@@ -788,8 +857,25 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
     }
   }, [])
 
+  const demandHistory = (el: HTMLDivElement): void => {
+    // Measure before the input scrolls: crossing into the band needs a new input.
+    if (connectedConversationHostNow(conversationId) === null) return
+    const nearTop = isNearTop({ scrollOffset: el.scrollTop,
+      viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
+    if (nearTop) following.current = false
+    rememberTop(el)
+    requestOlderHistory(historyAskDeps, conversationId, nearTop)
+  }
+
   return {
     scrollPin: {
+      onWheel: (event) => {
+        if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
+      },
+      onKeyDown: (event) => {
+        if (event.isTrusted && event.target === event.currentTarget &&
+          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) demandHistory(event.currentTarget)
+      },
       ref,
       // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
       // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
@@ -798,18 +884,17 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        rememberTop(el)
         // #1049: the pin's own write queues a scroll event, and that event is not the operator scrolling.
         // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
         // the write produced, so an event the operator caused in the same frame — a different offset —
         // re-measures normally. See `reassertPinnedToBottom` for the drift this was measured to fix.
         //
-        // #1260 HANGS THE HISTORY WALK'S DETECTOR ON THIS SAME EARLY RETURN, and that is not incidental:
-        // a write the pin made moved the view to the BOTTOM, so re-reading it as the operator scrolling
-        // back would be wrong for both readings, not just for the flag.
+        // Scroll events update only the local following flag; they never request history.
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
-        // Measured once, into the named fields, and handed to both readings. The mapping is the one thing
+        // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
         const metrics = {
@@ -818,12 +903,9 @@ function useThreadScrollPin(conversationId: string | null): ThreadPin {
           contentHeight: el.scrollHeight
         }
         following.current = isAtBottom(metrics)
-        // #1260: the walk's ask. NO BRANCH HERE — every reading that declines does so inside
-        // `requestOlderHistory`, where a spy can reach it, and this handler stays a measurement plus two
-        // total functions of it. The deps object dereferences `window.pyry` inside its own arrow bodies,
-        // so nothing is touched during render and the static renderer tier — where no handler ever fires
-        // — is unaffected.
-        requestOlderHistory(historyAskDeps, conversationId, isNearTop(metrics))
+        if (following.current && el.style.paddingBottom !== '') {
+          reassertPinnedToBottom(el, following, pinnedOffset)
+        }
       }
     },
     // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate
@@ -898,12 +980,23 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
+export function SavedTimelineNotice({ status, empty }: {
+  status: 'loading' | 'loaded' | 'failed'; empty: boolean
+}): JSX.Element {
+  const text = status === 'failed' ? 'Could not read saved messages on this device.'
+    : status === 'loading' ? 'Loading saved messages…'
+      : empty ? 'No messages are saved on this device.' : 'Offline. Showing saved messages.'
+  return <p className="conversation__banner" role="status">{text}</p>
+}
+
 export function Timeline({
   items,
   scrollPin,
   queued,
   onDropQueued,
-  firstRowKey = 0
+  firstRowKey = 0,
+  olderSaved = false,
+  saved = false
 }: {
   items: readonly ThreadItem[]
   scrollPin?: ThreadScrollPin
@@ -913,6 +1006,8 @@ export function Timeline({
    *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
    *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
   firstRowKey?: number
+  olderSaved?: boolean
+  saved?: boolean
 }): JSX.Element {
   const rows = foldQueuedRows(items, queued ?? EMPTY_QUEUED)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number>>(() => new Set())
@@ -938,9 +1033,11 @@ export function Timeline({
       below?.kind === 'toolCall' && below.denial === undefined && below.result?.isError && 'tool-group-row--error-below'
     ].filter(Boolean).join(' ')]
   }))
-  if (rows.length === 0) return <EmptyThread />
   return (
-    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
+    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
+      aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
+      {rows.length === 0 && <EmptyThread />}
+      {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
       {projection.map((group) => {
         const row = rows[group.index]
         if (!row) return null
@@ -949,14 +1046,14 @@ export function Timeline({
         if (row.item.kind !== 'toolCall') return (
           <TimelineRow key={group.index < items.length ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
             item={row.item} queued={row.queued} onDropQueued={onDropQueued}
-            inProgress={group.index === items.length - 1 && row.item.kind === 'assistantText'} />
+            inProgress={!saved && group.index === items.length - 1 && row.item.kind === 'assistantText'} />
         )
         const content = (
           <ToolRow
             item={row.item}
             group={group.count > 0 ? {
               count: group.count,
-              running: group.running
+              running: !saved && group.running
             } : undefined}
             expansion={{
               expanded: expandedTools.has(key),
@@ -1112,11 +1209,17 @@ function BubbleMeta({
 // Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
+  const conversationId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
+  const available = useConversationActionAvailability(conversationId)
   return (
     <button
       type="button"
       className="bubble__file"
-      onClick={() => downloadAttachment(attachmentDownloadDeps, attachment)}
+      disabled={!available}
+      onClick={() => {
+        if (connectedConversationHostNow(conversationId) === null) return
+        downloadAttachment(attachmentDownloadDeps, attachment)
+      }}
     >
       {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.
           The markup this renders is BYTE-IDENTICAL to the transcription that stood here: the component
@@ -1170,6 +1273,7 @@ function QueuedRowDrop({
       type="button"
       className="queued-row__drop"
       aria-label={DROP_QUEUED_LABEL}
+      disabled={!onDropQueued}
       onClick={() => onDropQueued?.(queued.queuedMsgId, queued.messageId)}
     >
       <svg
@@ -2954,6 +3058,7 @@ function ChannelInfoSheet({
   // is the controlled field, seeded from the conversation's displayed title on open. Both reset for free
   // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
+  const available = useConversationActionAvailability(conversation?.id ?? null)
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
@@ -2980,7 +3085,7 @@ function ChannelInfoSheet({
         // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button
         // (AC1). Seed the field via titleFor so a null-name conversation prefills with 'Untitled' (AC2).
         onRename={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
                 setRenameName(titleFor(conversation.name))
@@ -2990,9 +3095,10 @@ function ChannelInfoSheet({
         // #366: Archive dispatches then closes (no dialog — unlike Rename). Supplied only for a non-null
         // conversation (AC1). `window.pyry` is dereferenced only inside this callback (AC4).
         onArchive={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
+                if (connectedConversationHostNow(conversation.id) === null) return
                 requestArchiveConversation(window.pyry.sendCommand, conversation.id)
                 onClose()
               }
@@ -3001,12 +3107,13 @@ function ChannelInfoSheet({
         // traffic, AC2); it is supplied only for a non-null conversation (AC1), mirroring onArchive's
         // gating. onDeleteConfirm dispatches then closes — `window.pyry` is dereferenced ONLY here (AC5).
         // onDeleteCancel dismisses with no wire effect (AC3).
-        onDelete={conversation === null ? undefined : () => setDeleteConfirmOpen(true)}
+        onDelete={conversation === null || !available ? undefined : () => setDeleteConfirmOpen(true)}
         deleteConfirmPending={deleteConfirmOpen}
         onDeleteConfirm={
-          conversation === null
+          conversation === null || !available
             ? undefined
             : () => {
+                if (connectedConversationHostNow(conversation.id) === null) return
                 requestDeleteConversation(window.pyry.sendCommand, conversation.id)
                 onClose()
               }
@@ -3023,9 +3130,11 @@ function ChannelInfoSheet({
       {renameOpen && conversation !== null && (
         <RenameConversationDialogView
           name={renameName}
+          available={available}
           onNameChange={setRenameName}
           onCancel={() => setRenameOpen(false)}
           onSave={() => {
+            if (connectedConversationHostNow(conversation.id) === null) return
             requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
             setRenameOpen(false)
           }}
@@ -3105,6 +3214,7 @@ export function ComposerSendButton({
         type="button"
         className="composer__send"
         aria-label={INTERRUPT_LABEL}
+        disabled={!canSend}
         onClick={onInterrupt}
         // #1072: the SECOND Escape binding, and it is not optional. Chromium focuses a <button> on click
         // and nothing in the composer moves focus back (`handleSubmit` only clears the text), so after a
@@ -3196,10 +3306,9 @@ function Composer({
   // — content lives in one store. The send gate below still reads sessionStore's connection status;
   // two stores in one component is fine (status vs. content are orthogonal facets).
   const dispatch = useTimelineStore((s) => s.dispatch)
-  // #756: the echo's second write path — the same event folded into the keyed holder under the
-  // conversation it is sent to. `dispatchFor`'s identity is stable for the same reason `dispatch`'s is,
-  // so selecting it adds no re-render churn either.
-  const dispatchFor = useConversationTimelineStore((s) => s.dispatchFor)
+  // Stamp the local echo with the resolved send host so saved-chat reopening retains it.
+  // The store action is stable, just like the flat timeline's dispatch.
+  const dispatchLocalEcho = useConversationTimelineStore((s) => s.dispatchLocalEcho)
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
@@ -3236,7 +3345,8 @@ function Composer({
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    if (!canSend) return false
+    const serverId = connectedConversationHostNow(activeConversationId)
+    if (!canSend || serverId === null) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not
@@ -3244,7 +3354,9 @@ function Composer({
     const sent = submitMessage(value, activeConversationId, {
       sendCommand: window.pyry.sendCommand,
       dispatch,
-      dispatchFor,
+      dispatchFor: (conversationId, event) => {
+        if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
+      },
       newMessageId: () => crypto.randomUUID(),
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
       // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because
@@ -3282,18 +3394,9 @@ function Composer({
     if (sendText(text)) setText('')
   }
 
-  // #1218: the Actions menu's New session row. It shares NOTHING with `sendText` above on purpose —
-  // Reset session sends `/clear` as ordinary message text and this asks the daemon to kill claude and
-  // spawn a fresh one, so there is no shared gate, no optimistic echo and no text to clear.
-  //
-  // It takes `activeConversationId`, the SAME expression the send reads, which is what stops the two
-  // ever naming different chats; `sendNewSession` refuses a null or empty id and sends nothing, so the
-  // composer footer rendering with no conversation open is a no-op rather than a command naming none.
-  // `window.pyry` is dereferenced only here, at interaction time — never during render, where it does
-  // not exist under renderToStaticMarkup. No `canSend` gate: that axis decides whether a MESSAGE can be
-  // sent, main's `newSession` arm is already inert when nothing is connected, and a second copy of the
-  // gate in this menu is the drift ComposerActionsMenu's header refuses.
+  // New session uses its own command, with the same current-owner gate as message sends.
   const startNewSession = (): void => {
+    if (connectedConversationHostNow(activeConversationId) === null) return
     sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
   }
 
@@ -3358,7 +3461,9 @@ function Composer({
       // #1092: `activeConversationId` is the SAME expression the send and `startNewSession` read,
       // which is what stops the three ever naming different chats; `sendInterrupt` refuses a null or
       // empty id and sends nothing.
-      sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+      if (connectedConversationHostNow(activeConversationId) !== null) {
+        sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+      }
       return
     }
     // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
@@ -3449,9 +3554,10 @@ function Composer({
           isRunning={isTurnRunning(phase)}
           canSend={canSend}
           onSend={handleSubmit}
-          onInterrupt={() =>
+          onInterrupt={() => {
+            if (connectedConversationHostNow(activeConversationId) === null) return
             sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
-          }
+          }}
         />
         {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
             item of this row and moves neither the box nor the button; `null` when the type-ahead is
@@ -3670,6 +3776,7 @@ const FIRST_QUESTION_INDEX = 0
  * time, never render — so the container's smoke render still touches no bridge.
  */
 export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
+  const responseAvailable = usePromptResponseAvailability(batch.conversationId)
   const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
   // CLAMPED, AND THIS IS A CRASH GUARD RATHER THAN TIDINESS. `jumpedTo` is component state; the batch is
   // store state; they move independently. A same-nonce `question_shown` re-delivery REPLACES the held batch
@@ -3705,6 +3812,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
   const dispatch = questionPicksStore.getState().dispatch
   return (
     <QuestionPanelView
+      responseAvailable={responseAvailable}
       questions={batch.questions}
       activeIndex={activeIndex}
       onQuestionSelected={setJumpedTo}
@@ -3712,25 +3820,27 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       // the batch refused is by construction the batch drawn. Both stores' `dispatch` are read off their
       // singletons rather than through a hook: each is a stable function, so subscribing would buy
       // nothing (the existing `dispatch` read below made the same call).
-      onCancel={() =>
+      onCancel={() => {
+        if (!canRespondToPromptNow(batch.conversationId)) return
         refuseQuestionBatch(batch.questionBatchId, {
           sendCommand: window.pyry.sendCommand,
           dispatchPicks: dispatch,
           dispatchBatch: questionBatchStore.getState().dispatch
         })
-      }
+      }}
       // #922. The same three injected effects as the refusal above — one `QuestionResolveDeps` serves
       // both exits — with the assembled entries in place of nothing. The id read is
       // `batch.questionBatchId`, the value this leaf is keyed on upstream, so the batch answered is by
       // construction the batch drawn.
       canAnswer={answers !== null}
-      onAnswer={() =>
+      onAnswer={() => {
+        if (!canRespondToPromptNow(batch.conversationId)) return
         answerQuestionBatch(batch.questionBatchId, answers, {
           sendCommand: window.pyry.sendCommand,
           dispatchPicks: dispatch,
           dispatchBatch: questionBatchStore.getState().dispatch
         })
-      }
+      }}
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}
@@ -3908,13 +4018,15 @@ export function ComposerErrorSlot({
   onRepair,
   notice,
   recovery,
-  refusal
+  refusal,
+  history
 }: {
   status: ConnectionStatus
   onRepair: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
+  history?: JSX.Element | null
 }): JSX.Element | null {
   if (shouldOfferRepair(status)) {
     return (
@@ -3939,7 +4051,17 @@ export function ComposerErrorSlot({
   // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
   // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
   // rule that an optional prop is the silent-omission hole a type cannot catch.
-  return status.type === 'connected' ? recovery ?? refusal ?? notice : null
+  return status.type === 'connected' ? recovery ?? refusal ?? notice ?? history ?? null : null
+}
+
+export function ComposerHistoryFailure({ retryable, onRetry }: {
+  retryable: boolean
+  onRetry: () => void
+}): JSX.Element {
+  return <div className="stopped-turn-recovery" role="status">
+    <span>Could not load older messages</span>
+    {retryable && <button type="button" className="button-small button-small--error" onClick={onRetry}>Retry</button>}
+  </div>
 }
 
 // The store-bound container for the slot (#963), collapsing #797's ComposerErrorChipControl and #167's
@@ -3977,6 +4099,15 @@ function ComposerErrorSlotControl({
   // produces a new map holding the same record.
   const open = useActiveConversationStore(selectActiveConversation)
   const nowSeconds = Math.floor(Date.now() / 1000)
+  const rows = useConversationListStore(selectConversations)
+  const historyHost = serverIdForOpenConversation(rows, open?.id ?? null)
+  const historyFailure = useConversationTimelineStore(s =>
+    selectHistoryFailure(open === null ? undefined : s.timelines.get(open.id), historyHost))
+  const retryHistory = (): void => {
+    if (open !== null && historyHost !== null && historyFailure !== null) {
+      retryHistoryPage(historyRetryDeps, open, historyHost, historyFailure)
+    }
+  }
   const usageLimit = useUsageLimitStore(
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
@@ -4074,9 +4205,11 @@ function ComposerErrorSlotControl({
           </div>
         ) : (
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} /> :
-            <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
+            usageLimit === null ? null : <ComposerUsageLimitNotice reading={usageLimit} nowSeconds={nowSeconds} />
         )
       }
+      history={historyFailure === null ? null :
+        <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
     />
   )
 }

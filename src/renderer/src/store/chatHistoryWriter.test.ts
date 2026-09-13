@@ -2,19 +2,24 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConversationListStore } from './conversationListStore'
 import { createConversationTimelineStore } from './conversationTimelineStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
+import { beginChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
 const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_promoted: false,
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
   const lists = createConversationListStore()
-  const timelines = createConversationTimelineStore()
   let receipt: { type: string; serverId: string | null } | null = null
+  const timelines = createConversationTimelineStore(undefined, () => receipt?.serverId)
   let scheduled: (() => void) | undefined
   const log = vi.fn()
   const save = vi.fn(write)
+  let listener: (event: StampedDaemonEvent) => void = () => {}
+  const offEvents = vi.fn(() => { listener = () => {} })
   const writer = createChatHistoryWriter({ lists, timelines, write: save, log,
+    subscribeEvents: onEvent => { listener = onEvent; return offEvents },
     receipt: () => receipt, schedule: (run) => { scheduled = run; return () => { scheduled = undefined } } })
   const receive = (type: string, action: () => void, serverId: string | null = 'a') => {
     receipt = { type, serverId }
@@ -24,12 +29,166 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
     () => lists.getState().setConversations(ids.map(row), serverId), serverId)
   const delta = (text: string, id = 'chat', serverId: string | null = 'a') => receive('assistantDelta',
     () => timelines.getState().dispatchFor(id, { type: 'assistantDelta', turnId: 'turn', seq: 0, text }), serverId)
-  return { lists, timelines, writer, save, log, receive, list, delta, run: () => scheduled?.() }
+  return { lists, timelines, writer, save, log, receive, list, delta, offEvents,
+    event: (event: StampedDaemonEvent) => listener(event), run: () => scheduled?.() }
 }
 const timelineRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([r]) => r).filter((r) => r.operation === 'replaceTimeline')
 
 describe('chat history recording', () => {
+  it('captures confirmed coordinates without a held timeline, list entry or selection', async () => {
+    const h = harness()
+    const event: StampedDaemonEvent = { type: 'conversationDeleted', serverId: 'a', id: 'unloaded' }
+    h.event(event)
+    event.serverId = 'b'
+    event.id = 'changed'
+    await h.writer.stop()
+    expect(h.save.mock.calls.map(([r]) => r)).toEqual([
+      { operation: 'removeConversation', serverId: 'a', conversationId: 'unloaded' }
+    ])
+    expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+    expect(h.offEvents).toHaveBeenCalledOnce()
+    h.event({ type: 'conversationDeleted', serverId: 'b', id: 'after-stop' })
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledOnce()
+  })
+
+  it('ignores missing origin and non-confirmation events', async () => {
+    const h = harness()
+    h.list()
+    h.delta('kept')
+    await h.writer.flush()
+    h.save.mockClear()
+    h.event({ type: 'conversationDeleted', serverId: null, id: 'chat' })
+    h.event({ type: 'conversationsReceived', serverId: 'a', conversations: [] })
+    h.receive('deleteConversation', () => {})
+    h.receive('error', () => {})
+    h.lists.getState().clearAllConversations()
+    h.timelines.getState().clearAllTimelines()
+    await h.writer.stop()
+    expect(h.save).not.toHaveBeenCalled()
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+  })
+
+  it.each(['error', 'throw'])('reports removal %s without success or content', async mode => {
+    const h = harness(async () => {
+      if (mode === 'throw') throw new Error('private detail')
+      return { status: 'error', code: 'remove-failed' }
+    })
+    h.event({ type: 'conversationDeleted', serverId: 'private host', id: 'private chat' })
+    await h.writer.stop()
+    expect(h.log).toHaveBeenCalledWith({ event: 'history-writer-result',
+      code: mode === 'throw' ? 'ipc-failed' : 'remove-failed' })
+    expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
+    expect(JSON.stringify(h.log.mock.calls)).not.toContain('private')
+  })
+
+  it('pauses buffered host saves, discards them on removal and admits fresh re-pair receipts', async () => {
+    const h = harness()
+    h.list()
+    h.delta('old')
+    const settle = beginChatHistoryRemoval('a')
+    h.list(['other'], 'b')
+    await h.writer.flush()
+    expect(h.save.mock.calls.map(([r]) => r.serverId)).toEqual(['b'])
+    settle(true)
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledTimes(1)
+    h.list()
+    h.delta('fresh')
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'fresh' }] } }])
+    await h.writer.stop()
+  })
+
+  it('retains deletion suppression on failed unpair and releases it for fresh re-pair', async () => {
+    const h = harness()
+    h.list()
+    h.delta('old')
+    h.event({ type: 'conversationDeleted', serverId: 'a', id: 'chat' })
+    await h.writer.flush()
+    const failed = beginChatHistoryRemoval('a')
+    failed(false)
+    h.delta(' stale')
+    h.list()
+    await h.writer.flush()
+    expect(timelineRequests(h)).toHaveLength(0)
+    const removed = beginChatHistoryRemoval('a')
+    removed(true)
+    h.list()
+    h.delta('fresh')
+    await h.writer.stop()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'fresh' }] } }])
+  })
+
+  it('resumes buffered history when credential removal fails', async () => {
+    const h = harness()
+    h.list()
+    h.delta('kept')
+    const settle = beginChatHistoryRemoval('a')
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    settle(false)
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ snapshot: { items: [{ text: 'kept' }] } }])
+    await h.writer.stop()
+  })
+
+  it.each([false, true])('settles pending removal before the shutdown flush (removed=%s)', async removed => {
+    const h = harness()
+    h.delta('pending at close')
+    const settle = beginChatHistoryRemoval('a')
+    let stopped = false
+    const stopping = h.writer.stop().then(() => { stopped = true })
+    await vi.waitFor(() => expect(h.save).not.toHaveBeenCalled())
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    settle(removed)
+    await stopping
+    expect(h.save).toHaveBeenCalledTimes(removed ? 0 : 1)
+  })
+
+  it('does not let an in-flight save restore comparison state after successful removal', async () => {
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const h = harness(async () => { await held; return { status: 'ok' } })
+    h.list()
+    const flushing = h.writer.flush()
+    h.delta('buffered')
+    const settle = beginChatHistoryRemoval('a')
+    settle(true)
+    h.list()
+    release()
+    await flushing
+    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['replaceList', 'replaceList'])
+    await h.writer.stop()
+  })
+
+  it('adopts explicit restored ownership and coverage without saving restoration or eviction', async () => {
+    const h = harness()
+    h.list()
+    await h.writer.flush()
+    h.save.mockClear()
+    h.timelines.getState().beginLocalTimelineRead('a', 'chat')!.complete({
+      version: 1, kind: 'timeline', serverId: 'a', conversationId: 'chat', prependedRows: 4,
+      items: [{ kind: 'assistantText', turnId: 'turn', text: 'saved' }],
+      coverage: { status: 'received', cursor: 'old', atStart: true }
+    })
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    h.delta(' later')
+    await h.writer.flush()
+    expect(timelineRequests(h)).toMatchObject([{ serverId: 'a', snapshot: {
+      items: [{ text: 'saved later' }], prependedRows: 4,
+      coverage: { status: 'received', cursor: 'old', atStart: true }
+    } }])
+    h.save.mockClear()
+    for (let i = 0; i < 10; i++) h.timelines.getState().markViewed(String(i))
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    await h.writer.stop()
+  })
+
   it('coalesces received lists in order and ignores restoration, empty startup and unchanged values', async () => {
     const h = harness()
     await h.writer.flush()

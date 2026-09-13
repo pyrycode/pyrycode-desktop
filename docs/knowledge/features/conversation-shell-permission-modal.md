@@ -42,6 +42,21 @@ quoted in confirmation. No daemon text supplies markup or an attribute.
 
 ## Selection and confirmation
 
+Continue, Confirm and server-bound Cancel require the prompt conversation's uniquely stamped host
+to report `connected` in `SessionState.statuses` ([#1381](https://github.com/pyrycode/pyrycode-desktop/issues/1381)).
+`promptResponseAvailability.ts` uses `serverIdForOpenConversation`; missing/unstamped or duplicate
+ownership, absent status, connecting, disconnected and error all block responses. Neither aggregate
+status nor another connected host supplies a fallback. The hook updates native disabled controls;
+each response handler also rereads ownership and status synchronously before calling a resolution
+helper, with no intervening await. A confirmation opened before disconnect cannot send afterward,
+including by keyboard. A blocked attempt emits no answer/cancel command and does not resolve the prompt.
+
+Selection editing, local Back and rejection-feedback Dismiss remain usable offline. Disconnect
+preserves the held prompt, selection, confirmation and hidden composer draft. Reconnect retains the
+[bridge reset and daemon re-delivery](modal-store-bridge.md#configuration-and-usage) contract; it never
+submits a blocked response automatically. A re-delivered prompt needs a fresh explicit response under
+the selection and confirmation rules below. Chat-switch remounts still reset local selection and drafts.
+
 `PermissionModalView` receives `selectedOption`, `pendingOption` and injected handlers; both modes
 remain statically renderable. The container owns selection and confirmation separately:
 
@@ -55,7 +70,7 @@ remain statically renderable. The container owns selection and confirmation sepa
   title and replaces the explanation/options with the client-owned sentence naming the selected
   label. Back sends nothing and restores the selection; Confirm sends that option.
 - Cancel in the choice view calls `cancelPrompt`. Both answer and cancel retain the guarded send and
-  unconditional optimistic `dismissed` dispatch in `modalResolution.ts`. An answer contains one
+  unconditional optimistic `dismissed` dispatch in `modalResolution.ts` once availability passes. An answer contains one
   supplied `option_id`, with `modal_id` for correlation; main mints `answer_token`. Questionnaire
   free text and multiple picks never enter a permission answer.
 
@@ -89,6 +104,14 @@ input panel, using the existing surface card and error-coloured leading border. 
 alone never covers or hides the composer or questionnaire, and may coexist with the next permission.
 
 ## Verification
+
+[`offline-held-responses.spec.ts`](../../../e2e/offline-held-responses.spec.ts) observes renderer
+`sendCommand` calls as well as retained prompts/picks: observing only outbound daemon frames could
+pass while broken if main rejected an offline renderer command. It covers both request classes,
+pre-opened confirmation, keyboard attempts, unavailable ownership/status and another connected host.
+Draft retention is asserted before switching chats, because pane remounts reset composer-local state.
+Reconnect tests re-deliver prompts before explicit responses; reconnect alone must send nothing.
+`promptResponseAvailability.test.ts` checks fresh store reads independently of native disabled buttons.
 
 `PermissionModal.test.tsx` checks static region markup, supplied/default choices, initial disabled
 Continue, confirmation and escaped text. `composerSlot.test.tsx` checks current-chat/null-chat

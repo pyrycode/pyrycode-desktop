@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 import { PyryMark } from '../../theme/PyryMark'
+import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
 import {
   answerPrompt,
   cancelPrompt,
@@ -14,11 +15,12 @@ const PERMISSION_MODAL_TITLE_ID = 'permission-modal-title'
 
 // Permission and questionnaire share visual structure, but never requests or answer state.
 export function PermissionModalView({
-  prompt, selectedOption, pendingOption, onSelect, onContinue, onConfirm, onBack, onCancel
+  prompt, selectedOption, pendingOption, responseAvailable, onSelect, onContinue, onConfirm, onBack, onCancel
 }: {
   prompt: ModalPrompt
   selectedOption: ModalOption | null
   pendingOption: ModalOption | null
+  responseAvailable: boolean
   onSelect: (modalId: string, optionId: string) => void
   onContinue: () => void
   onConfirm: (modalId: string, optionId: string) => void
@@ -70,6 +72,7 @@ export function PermissionModalView({
                 Back
               </button>
               <button type="button" className="button-small question-panel__continue permission-modal__confirm"
+                disabled={!responseAvailable}
                 onClick={() => onConfirm(prompt.modalId, pendingOption.id)}>
                 Confirm
               </button>
@@ -77,10 +80,11 @@ export function PermissionModalView({
           ) : (
             <>
               <button type="button" className="button-small question-panel__cancel permission-modal__cancel"
+                disabled={!responseAvailable}
                 onClick={() => onCancel(prompt.modalId)}>
                 Cancel
               </button>
-              <button type="button" className="button-small question-panel__continue" disabled={selectedOption === null}
+              <button type="button" className="button-small question-panel__continue" disabled={!responseAvailable || selectedOption === null}
                 onClick={onContinue}>
                 Continue
               </button>
@@ -132,6 +136,7 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const prompt = conversationId === null ? undefined
     : outstanding.find((p) => p.conversationId === conversationId)
+  const responseAvailable = usePromptResponseAvailability(prompt?.conversationId ?? null)
   const selectedOption = resolvePendingOption(prompt, selected)
   const pendingOption = resolvePendingOption(prompt, pending)
   // Clear invalid markers during render: a removed option must not revive on a later re-delivery.
@@ -146,23 +151,27 @@ export function PermissionModal({ conversationId }: { conversationId: string | n
       {prompt && (
         <PermissionModalView
           prompt={prompt}
+          responseAvailable={responseAvailable}
           selectedOption={selectedOption}
           pendingOption={pendingOption}
           onSelect={(modalId, optionId) => setSelected({ modalId, optionId })}
           onContinue={() => {
-            if (!selectedOption) return
+            if (!selectedOption || !canRespondToPromptNow(prompt.conversationId)) return
             selectOption(prompt, selectedOption.id, {
               answer: (id) => answerPrompt(prompt.modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
               requestConfirm: (optionId) => setPending({ modalId: prompt.modalId, optionId })
             })
           }}
           onConfirm={(modalId, optionId) => {
-            if (!pendingOption || pendingOption.id !== optionId) return
+            if (!pendingOption || pendingOption.id !== optionId || !canRespondToPromptNow(prompt.conversationId)) return
             answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
             setPending(null)
           }}
           onBack={() => setPending(null)}
-          onCancel={(modalId) => cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })}
+          onCancel={(modalId) => {
+            if (!canRespondToPromptNow(prompt.conversationId)) return
+            cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
+          }}
         />
       )}
     </>

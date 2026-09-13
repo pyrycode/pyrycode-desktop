@@ -1,5 +1,5 @@
 import './channels.css'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -18,7 +18,7 @@ import { requestNewConversation, requestNewChannel } from '../../store/conversat
 // store's INITIAL cell is imported too —
 // it is the collapse target for a server that has reported nothing, so the launch frame is pinned to the
 // same constant it has always rendered rather than to a literal restated here.
-import { useSessionStore, sessionStore, selectStatusFor, initialSessionState } from '../../store/sessionStore'
+import { useSessionStore, sessionStore, selectStatusFor, initialSessionState, type SessionState } from '../../store/sessionStore'
 import {
   useRelayLinkStore,
   selectRelayLinkStatusFor,
@@ -185,30 +185,33 @@ export function ChannelList({
   //
   // The honest cost, stated rather than hidden: a pairing change now re-renders the whole sidebar where
   // it used to wake one row. Accepted — a pairing change IS a whole-sidebar change, and the per-server
-  // label and dot reads stay inside their own leaves, so one machine's flap still wakes only that
-  // machine's two dots.
+  // label reads stay inside their leaves. Status changes also update mutation availability.
   const servers = useServerInfoStore(selectServers)
+  const statuses = useSessionStore((state) => state.statuses)
+  const connected = (serverId: string | null | undefined): boolean =>
+    typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
+  const soleServerId = servers.length === 1 ? servers[0].serverId : undefined
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
   // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
   // the SaveAsChannelDialog container itself (#288), seeded from the row on mount. The dialog is not
   // rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside the
   // container's callbacks, so ChannelList stays server-renderable (the onNewConversation discipline).
-  const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
+  const [saveRow, setSaveRow] = useState<SidebarRow | null>(null)
   // The Rename dialog's independent per-interaction state (#360) — a separate local pair, not shared with
   // the save-as one. No mutual-exclusion logic is needed: an open dialog's fixed-inset overlay covers the
   // window, so the row affordance behind it is not clickable and the two dialogs cannot both be open.
   // `renameRow` is the row whose Rename dialog is open (or none); `renameName` is the controlled field,
   // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
-  const [renameRow, setRenameRow] = useState<ConversationSummary | null>(null)
+  const [renameRow, setRenameRow] = useState<SidebarRow | null>(null)
   const [renameName, setRenameName] = useState('')
   // The Create-channel dialog's own per-interaction pair (#1179), independent of the two above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
-  // at once and no mutual-exclusion logic is needed. `createChannelCwd` is the WORKSPACE the dialog will
+  // at once and no mutual-exclusion logic is needed. The target retains the host and workspace to
   // create in — the group key the clicked plus closed over — and holding it here is what keeps that
   // daemon-asserted path out of the dialog view entirely. `createChannelName` is the controlled field,
   // seeded EMPTY on every open (there is no current name to seed from, this being a create).
-  const [createChannelCwd, setCreateChannelCwd] = useState<string | null>(null)
+  const [createChannelTarget, setCreateChannelTarget] = useState<{ cwd: string; serverId: string } | null>(null)
   const [createChannelName, setCreateChannelName] = useState('')
   // The Edit-workspace dialog's own per-interaction pair (#1180), independent of the three above for
   // their stated reason: an open dialog's fixed-inset overlay covers the window, so no two can be open
@@ -238,6 +241,16 @@ export function ChannelList({
   // will be created on — the id the clicked plus closed over — and holding it HERE is what keeps it out of
   // the dialog view entirely: that view never sees an id at all, it sees a path and a status.
   const [addWorkspaceServerId, setAddWorkspaceServerId] = useState<string | null>(null)
+
+  // Clear drafts on loss, including a disconnect/reconnect before React paints.
+  useEffect(() => sessionStore.subscribe((state) => {
+    const unavailable = (id: string | null | undefined): boolean =>
+      typeof id !== 'string' || state.statuses.get(id)?.type !== 'connected'
+    if (saveRow && unavailable(saveRow.serverId)) setSaveRow(null)
+    if (renameRow && unavailable(renameRow.serverId)) setRenameRow(null)
+    if (createChannelTarget && unavailable(createChannelTarget.serverId)) setCreateChannelTarget(null)
+    if (editWorkspaceTarget && unavailable(editWorkspaceTarget.serverId)) setEditWorkspaceTarget(null)
+  }), [saveRow, renameRow, createChannelTarget, editWorkspaceTarget])
   return (
     <>
       {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
@@ -265,6 +278,7 @@ export function ChannelList({
       <ServerInfoData />
       <ChannelListView
         conversations={conversations}
+        statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
         openConversationId={openConversationId}
         onOpen={onOpen}
@@ -272,18 +286,22 @@ export function ChannelList({
         onOpenArchive={onOpenArchive}
         onPairNewHost={onPairNewHost}
         onRepairHost={onRepairHost}
-        onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
-        // #1178 — the SECOND caller of the shipped constructor, and the whole of the wiring: it already
-        // took the cwd as a required parameter, so the FAB's client-owned default and the workspace
-        // row's own path are its two arguments and no bridge changed. `window.pyry` is dereferenced
-        // inside the arrow alone, never during render (the onNewConversation discipline).
-        onCreateChat={(cwd) => requestNewConversation(window.pyry.sendCommand, cwd)}
+        onNewConversation={() => {
+          if (!canMutateHost(soleServerId)) return
+          requestNewConversation(window.pyry.sendCommand, defaultWorkspace, soleServerId)
+        }}
+        // Retain the clicked workspace and its host through the synchronous send.
+        onCreateChat={(cwd, serverId) => {
+          if (!canMutateHost(serverId)) return
+          requestNewConversation(window.pyry.sendCommand, cwd, serverId)
+        }}
         // #1179 — the Channels-tree plus OPENS A DIALOG and sends nothing: the workspace is fixed by
         // the row that was clicked, and the name still has to be typed. Both cells are seeded together
         // so a reopen always starts from an empty field (the CreateFolderDialog reset, achieved by the
         // seed rather than by a store, since there is no store here to reset).
-        onCreateChannel={(cwd) => {
-          setCreateChannelCwd(cwd)
+        onCreateChannel={(cwd, serverId) => {
+          if (!canMutateHost(serverId) || serverId === undefined) return
+          setCreateChannelTarget({ cwd, serverId })
           setCreateChannelName('')
         }}
         // #1180 — the pen OPENS A DIALOG and sends nothing: the workspace is fixed by the row that was
@@ -292,6 +310,7 @@ export function ChannelList({
         // and the folder segment otherwise, resolved by `groupByWorkspace` and indistinguishable here
         // on purpose (AC4 asks for "the row's current label", which is exactly what the row renders).
         onEditWorkspace={(cwd, label, serverId) => {
+          if (!canMutateHost(serverId)) return
           setEditWorkspaceTarget({ cwd, serverId })
           setEditWorkspaceName(label)
         }}
@@ -310,27 +329,29 @@ export function ChannelList({
         // on close: `ChannelList` mounts a fresh dialog container per open, so the field and the status
         // always start empty and `idle` without a reset here.
         onAddWorkspace={(serverId) => setAddWorkspaceServerId(serverId)}
-        onSaveAsChannel={(row) => setSaveRow(row)}
+        onSaveAsChannel={(row) => { if (canMutateHost(row.serverId)) setSaveRow(row) }}
         onRename={(row) => {
+          if (!canMutateHost(row.serverId)) return
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
           // same one-handler seed as save-as; a null-name row prefills with its "Untitled" placeholder.
           setRenameRow(row)
           setRenameName(titleFor(row.name))
         }}
       />
-      {saveRow && (
+      {saveRow && connected(saveRow.serverId) && (
         <SaveAsChannelDialog
           row={saveRow}
           onDismiss={() => setSaveRow(null)}
           onPromoted={() => setSaveRow(null)}
         />
       )}
-      {renameRow && (
+      {renameRow && connected(renameRow.serverId) && (
         <RenameConversationDialogView
           name={renameName}
           onNameChange={setRenameName}
           onCancel={() => setRenameRow(null)}
           onSave={() => {
+            if (!canMutateHost(renameRow.serverId)) return
             requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
             setRenameRow(null)
           }}
@@ -341,28 +362,30 @@ export function ChannelList({
           header names). It is unreachable today because `renderServerTrees` withholds the plus from the
           unknown-workspace group, whose key IS the empty string — and writing the check this way is
           what keeps that withhold load-bearing for one reason rather than two. */}
-      {createChannelCwd !== null && (
+      {createChannelTarget !== null && connected(createChannelTarget.serverId) && (
         <CreateChannelDialogView
           name={createChannelName}
           onNameChange={setCreateChannelName}
           // Cancel closes and sends nothing (AC2). The next open re-seeds the field, so there is
           // nothing to clear here.
-          onCancel={() => setCreateChannelCwd(null)}
+          onCancel={() => setCreateChannelTarget(null)}
           onCreate={() => {
             // Fire-and-forget, then close (AC3). `window.pyry` is dereferenced HERE, at interaction
             // time, never during render — the `onNewConversation` discipline. The `cwd` goes verbatim;
             // the helper trims the name.
-            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelCwd)
-            setCreateChannelCwd(null)
+            if (!canMutateHost(createChannelTarget.serverId)) return
+            requestNewChannel(window.pyry.sendCommand, createChannelName, createChannelTarget.cwd, createChannelTarget.serverId)
+            setCreateChannelTarget(null)
           }}
         />
       )}
-      {editWorkspaceTarget !== null && (
+      {editWorkspaceTarget !== null && connected(editWorkspaceTarget.serverId) && (
         <EditWorkspaceDialogView
           name={editWorkspaceName}
           onNameChange={setEditWorkspaceName}
           onCancel={() => setEditWorkspaceTarget(null)}
           onSave={() => {
+            if (!canMutateHost(editWorkspaceTarget.serverId)) return
             requestRenameWorkspace(
               window.pyry.sendCommand,
               editWorkspaceTarget.cwd,
@@ -467,6 +490,7 @@ export function ChannelList({
  */
 export function ChannelListView({
   conversations,
+  statuses,
   serverIds,
   openConversationId,
   onOpen,
@@ -496,6 +520,7 @@ export function ChannelListView({
   // Ids and not `ServerInfoValue`s: this view has no business with a relay URL, and the narrower prop is
   // also the one the unit tier can inject in one literal.
   serverIds: readonly string[]
+  statuses: SessionState['statuses']
   // #1098 — the id of the chat the pane is showing, or `null` when none has been opened this session.
   // REQUIRED rather than optional: the container must decide, and a defaulted prop would let a future
   // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
@@ -516,12 +541,12 @@ export function ChannelListView({
   // default. REQUIRED rather than optional, `openConversationId`'s reasoning: the container must decide,
   // and a defaulted prop would let a future caller silently render a sidebar with no per-workspace route
   // to a new chat. The `cwd` is the group's key and travels verbatim; this view never inspects it.
-  onCreateChat: (cwd: string) => void
+  onCreateChat: (cwd: string, serverId: string | undefined) => void
   // #1179 — open the Create-channel dialog for the named workspace. REQUIRED for `onCreateChat`'s
   // reason, and the symmetric one: a defaulted prop would let a future caller silently render a
   // Channels tree whose plus opens nothing. It receives the group's `cwd` and does NOT send a command —
   // the dialog's Create does, once a name has been typed.
-  onCreateChannel: (cwd: string) => void
+  onCreateChannel: (cwd: string, serverId: string | undefined) => void
   // #1180 — open the Edit-workspace dialog for the named workspace. REQUIRED for its two siblings'
   // reason: a defaulted prop would let a future caller silently render a sidebar whose pen opens
   // nothing. It takes the group's `cwd` AND the label the row is currently showing — the second
@@ -545,8 +570,8 @@ export function ChannelListView({
   // by `HostRowControl`, the level already drawn for one machine. It is not inspected on the way through;
   // it travels verbatim. Like `onEditHost` it sends no command — the dialog's Start chat does.
   onAddWorkspace: (serverId: string) => void
-  onSaveAsChannel: (row: ConversationSummary) => void
-  onRename: (row: ConversationSummary) => void
+  onSaveAsChannel: (row: SidebarRow) => void
+  onRename: (row: SidebarRow) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
@@ -559,6 +584,7 @@ export function ChannelListView({
       </div>
       {renderBody(
         conversations,
+        statuses,
         serverIds,
         openConversationId,
         onPairNewHost,
@@ -572,7 +598,7 @@ export function ChannelListView({
         onSaveAsChannel,
         onRename
       )}
-      <NewConversationFab onClick={onNewConversation} />
+      <NewConversationFab onClick={onNewConversation} disabled={serverIds.length !== 1 || statuses.get(serverIds[0])?.type !== 'connected'} />
     </section>
   )
 }
@@ -643,12 +669,13 @@ function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
 // injected handler; navigation to the new thread is decoupled and event-driven (useConversationCreatedNav
 // in PairedShell fires on the daemon's conversationCreated confirmation), never synchronous here. The
 // Material `add` glyph path is the 24px add icon.
-function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
+function NewConversationFab({ onClick, disabled }: { onClick: () => void; disabled: boolean }): JSX.Element {
   return (
     <button
       type="button"
       className="channel-list__fab"
       aria-label="New discussion"
+      disabled={disabled}
       onClick={onClick}
     >
       <svg
@@ -859,9 +886,11 @@ export function HostRow({
   onAddWorkspace,
   onEditHost,
   failed = false,
+  localReadFailed = false,
   onRepair
 }: {
   failed?: boolean
+  localReadFailed?: boolean
   onRepair?: () => void
   label: string
   serverId: string
@@ -869,101 +898,108 @@ export function HostRow({
   onEditHost?: () => void
 }): JSX.Element {
   return (
-    <div className={failed ? "channel-list__host channel-list__host--failed" : "channel-list__host"}>
-      <svg
-        className="channel-list__host-icon"
-        viewBox="0 0 24 24"
-        width="12"
-        height="12"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
-      </svg>
-      <span className="channel-list__host-label">{label}</span>
-      <HostConnectionDotsControl serverId={serverId} />
-      {failed && onRepair && (
-        <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
-          <span className="channel-list__host-repair-icon" aria-hidden="true" />
-        </button>
-      )}
-      {!failed && onEditHost && (
-        // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
-        // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
-        // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
-        // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
-        // level up, and since #1190 its `.channel-list__control-name` pill as well.
-        //
-        // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
-        // the same 12-unit viewBox scaled to the drawing's 14 by the box.
-        <button
-          type="button"
-          className="channel-list__host-edit"
-          aria-label={EDIT_HOST_CONTROL_LABEL}
-          onClick={onEditHost}
+    <>
+      <div className={failed ? "channel-list__host channel-list__host--failed" : "channel-list__host"}>
+        <svg
+          className="channel-list__host-icon"
+          viewBox="0 0 24 24"
+          width="12"
+          height="12"
+          fill="currentColor"
+          aria-hidden="true"
         >
-          <svg
-            className="channel-list__host-edit-icon"
-            viewBox="0 0 12 12"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
+          <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
+        </svg>
+        <span className="channel-list__host-label">{label}</span>
+        <HostConnectionDotsControl serverId={serverId} />
+        {failed && onRepair && (
+          <button type="button" className="channel-list__host-repair" aria-label="Repair host" onClick={onRepair}>
+            <span className="channel-list__host-repair-icon" aria-hidden="true" />
+          </button>
+        )}
+        {onEditHost && (
+          // The pen, APPENDED AFTER the dots and never before them: the elements above are byte-identical
+          // to what shipped, which is what leaves `HOST_ROW_MARKER`, `HOST_ICON_MARKER`, `HOST_LABEL_OPEN`
+          // and `DOT_WRAPPER_MARKER` matching and the five e2e specs AC5 names unedited. Icon-only, so
+          // `aria-label` supplies the accessible name — `.channel-list__workspace-edit`'s treatment one
+          // level up, and since #1190 its `.channel-list__control-name` pill as well.
+          //
+          // The glyph is `.channel-list__workspace-edit-icon`'s path in place, reused and NOT re-exported:
+          // the same 12-unit viewBox scaled to the drawing's 14 by the box.
+          <button
+            type="button"
+            className="channel-list__host-edit"
+            aria-label={EDIT_HOST_CONTROL_LABEL}
+            onClick={onEditHost}
           >
-            <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
-          </svg>
-          {/* #1190 — the control's NAME, in the pill the row's trailing controls (#1172), the workspace
-              row's own pen and plus (#1180/#1181) and the section header's plus (#1304) already wear.
-              APPENDED AFTER the glyph and never before it: `EDIT_ICON_MARKER` pins that <svg>'s whole
-              opening run, and a child after the closing tag leaves it byte-identical. The pill's text is
-              a bare text node, not an `aria-label="…"` run, so `EDIT_NAME_MARKER` and its counts are
-              untouched too.
+            <svg
+              className="channel-list__host-edit-icon"
+              viewBox="0 0 12 12"
+              width="14"
+              height="14"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M8.27109 0.495906L7.21875 1.5462L10.4508 4.77193L11.5031 3.72164C11.8219 3.40585 12 2.97544 12 2.52632C12 2.07719 11.8219 1.64678 11.5031 1.33099L10.6664 0.495906C10.35 0.177778 9.91875 0 9.46875 0C9.01875 0 8.5875 0.177778 8.27109 0.495906ZM6.42422 2.33918L1.38047 7.37076C1.12969 7.62105 0.946875 7.9345 0.850781 8.27602L0.0210937 11.2655C-0.0328125 11.4596 0.0210937 11.6702 0.166406 11.8129C0.311719 11.9556 0.520312 12.0117 0.714844 11.9579L3.71016 11.1275C4.05234 11.0316 4.36406 10.8515 4.61719 10.5988L9.65625 5.56491L6.42422 2.33918Z" />
+            </svg>
+            {/* #1190 — the control's NAME, in the pill the row's trailing controls (#1172), the workspace
+                row's own pen and plus (#1180/#1181) and the section header's plus (#1304) already wear.
+                APPENDED AFTER the glyph and never before it: `EDIT_ICON_MARKER` pins that <svg>'s whole
+                opening run, and a child after the closing tag leaves it byte-identical. The pill's text is
+                a bare text node, not an `aria-label="…"` run, so `EDIT_NAME_MARKER` and its counts are
+                untouched too.
 
-              THE SAME CONSTANT AS THE `aria-label` ABOVE, read TWICE, so the spoken name and the drawn
-              one cannot drift. `aria-hidden` is belt-and-braces rather than the mechanism — the
-              `aria-label` already overrides child text for the accessible name — which is why the static
-              tier pins it: nothing else would redden if it were dropped. */}
-          <span className="channel-list__control-name" aria-hidden="true">
-            {EDIT_HOST_CONTROL_LABEL}
-          </span>
-        </button>
-      )}
-      {!failed && onAddWorkspace && (
-        // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
-        // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
-        // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, and since #1190
-        // its name pill too.
-        //
-        // ITS OWN CLASS RATHER THAN THE WORKSPACE PLUS'S, the call #1180 made for the pen beside it: the
-        // two are the same drawn control at the same size and inset, but they hang off different rows,
-        // and a shared class would have to be revealed by two unrelated `:hover` ancestors — a selector
-        // list that grows with every row family rather than a block that says where it lives.
-        <button
-          type="button"
-          className="channel-list__host-add"
-          aria-label={ADD_WORKSPACE_CONTROL_LABEL}
-          onClick={onAddWorkspace}
-        >
-          <svg
-            className="channel-list__host-add-icon"
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
+                THE SAME CONSTANT AS THE `aria-label` ABOVE, read TWICE, so the spoken name and the drawn
+                one cannot drift. `aria-hidden` is belt-and-braces rather than the mechanism — the
+                `aria-label` already overrides child text for the accessible name — which is why the static
+                tier pins it: nothing else would redden if it were dropped. */}
+            <span className="channel-list__control-name" aria-hidden="true">
+              {EDIT_HOST_CONTROL_LABEL}
+            </span>
+          </button>
+        )}
+        {!failed && onAddWorkspace && (
+          // The plus, in the slot the dots occupy at rest — which is what makes the drawing a SWAP rather
+          // than an addition: its 16px box (342…358 in the 360 content box) sits over the pair's own
+          // 341…359. `.channel-list__workspace-create`'s treatment, glyph path included, and since #1190
+          // its name pill too.
+          //
+          // ITS OWN CLASS RATHER THAN THE WORKSPACE PLUS'S, the call #1180 made for the pen beside it: the
+          // two are the same drawn control at the same size and inset, but they hang off different rows,
+          // and a shared class would have to be revealed by two unrelated `:hover` ancestors — a selector
+          // list that grows with every row family rather than a block that says where it lives.
+          <button
+            type="button"
+            className="channel-list__host-add"
+            aria-label={ADD_WORKSPACE_CONTROL_LABEL}
+            onClick={onAddWorkspace}
           >
-            <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
-          </svg>
-          {/* The plus's name pill (#1190) on the control beside it — same class, same append discipline
-              and the same one-constant-read-twice wiring as the pen's above, for that comment's reasons.
-              The two pills are the reason the pen and the plus can be told apart at all before a click:
-              they are two bare glyphs 10px apart with nothing else to distinguish them. */}
-          <span className="channel-list__control-name" aria-hidden="true">
-            {ADD_WORKSPACE_CONTROL_LABEL}
-          </span>
-        </button>
+            <svg
+              className="channel-list__host-add-icon"
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M6.28571 14.2857V9.71429H1.71429C0.764286 9.71429 0 8.95 0 8C0 7.05 0.764286 6.28571 1.71429 6.28571H6.28571V1.71429C6.28571 0.764286 7.05 0 8 0C8.95 0 9.71429 0.764286 9.71429 1.71429V6.28571H14.2857C15.2357 6.28571 16 7.05 16 8C16 8.95 15.2357 9.71429 14.2857 9.71429H9.71429V14.2857C9.71429 15.2357 8.95 16 8 16C7.05 16 6.28571 15.2357 6.28571 14.2857Z" />
+            </svg>
+            {/* The plus's name pill (#1190) on the control beside it — same class, same append discipline
+                and the same one-constant-read-twice wiring as the pen's above, for that comment's reasons.
+                The two pills are the reason the pen and the plus can be told apart at all before a click:
+                they are two bare glyphs 10px apart with nothing else to distinguish them. */}
+            <span className="channel-list__control-name" aria-hidden="true">
+              {ADD_WORKSPACE_CONTROL_LABEL}
+            </span>
+          </button>
+        )}
+      </div>
+      {localReadFailed && (
+        <p className="channel-list__local-read-error" role="status">
+          Could not read saved chats on this device.
+        </p>
       )}
-    </div>
+    </>
   )
 }
 
@@ -1014,8 +1050,10 @@ function HostRowControl({
 }): JSX.Element {
   const hostLabel = useHostLabelStore(selectHostLabelFor(serverId))
   const status = useSessionStore(selectStatusFor(serverId))
+  const localReadFailed = useConversationListStore(s => s.localListReads.get(serverId) === 'failed')
   return (
     <HostRow
+      localReadFailed={localReadFailed}
       failed={status?.type === 'error'}
       onRepair={onRepairHost ? () => onRepairHost(serverId) : undefined}
       label={hostRowLabel(hostLabel)}
@@ -1542,6 +1580,7 @@ type WorkspaceEditControl = {
 function renderServerTrees(
   rows: readonly SidebarRow[],
   serverIds: readonly string[],
+  statuses: SessionState['statuses'],
   renderRow: (row: SidebarRow) => JSX.Element,
   // #1299 — open the Edit host dialog for one machine. REQUIRED, and placed BEFORE the two optional
   // control objects below rather than beside them: both calls supply it, every host row draws the pen, and
@@ -1563,7 +1602,7 @@ function renderServerTrees(
   // per-tree difference now that ONE helper draws both trees: BOTH calls supply one since #1179, and
   // they differ in the two fields of this object alone. `onCreate` takes the `cwd` rather than the
   // group, so the caller states exactly what crosses this seam.
-  create?: { readonly label: string; readonly onCreate: (cwd: string) => void },
+  create?: { readonly label: string; readonly onCreate: (cwd: string, serverId: string | undefined) => void },
   // #1180 — the trailing edit control this tree draws on each of its workspace rows. OPTIONAL and
   // trailing like `create`, but BOTH calls supply the SAME object: the pen is not a per-tree
   // difference, which is why its label is one constant rather than two. `onEdit` takes the group's
@@ -1595,9 +1634,9 @@ function renderServerTrees(
         // is an ordinary group and keeps its plus. Since #1179 that withhold covers BOTH trees, and it
         // is what keeps the empty string from ever reaching either create.
         create={
-          create === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+          create === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined
-            : { label: create.label, onCreate: () => create.onCreate(group.key) }
+            : { label: create.label, onCreate: () => create.onCreate(group.key, serverId) }
         }
         // #1180 — the pen, withheld on exactly the same terms and by the same test. Its key is
         // `UNKNOWN_WORKSPACE_KEY`, the empty string, which names no directory, so a rename sent with
@@ -1611,7 +1650,7 @@ function renderServerTrees(
         // one, the folder segment otherwise) and it is passed rather than re-derived so the dialog's
         // field cannot disagree with the row about what the workspace is currently called.
         edit={
-          edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY
+          edit === undefined || group.key === UNKNOWN_WORKSPACE_KEY || serverId === undefined || statuses.get(serverId)?.type !== 'connected'
             ? undefined
             : { label: edit.label, onEdit: () => edit.onEdit(group.key, group.label, serverId) }
         }
@@ -1726,6 +1765,7 @@ function SectionHeader({
 
 function renderBody(
   conversations: readonly SidebarRow[] | null,
+  statuses: SessionState['statuses'],
   // #1070 — the paired servers to draw, in pairing order. Data, so it leads the callbacks like the id
   // below. Its EMPTINESS is meaningful: it is the launch frame before the one-shot settles.
   serverIds: readonly string[],
@@ -1742,10 +1782,10 @@ function renderBody(
   // #1178 — start a chat in a named workspace. Handed to the `discussions` tree ALONE, which — with
   // its #1179 sibling below — is the one place the two trees are told apart now that
   // `renderServerTrees` draws both.
-  onCreateChat: (cwd: string) => void,
+  onCreateChat: (cwd: string, serverId: string | undefined) => void,
   // #1179 — open the Create-channel dialog for a named workspace. Handed to the `channels` tree alone.
   // The container turns it into dialog state; nothing is sent until the dialog's Create.
-  onCreateChannel: (cwd: string) => void,
+  onCreateChannel: (cwd: string, serverId: string | undefined) => void,
   // #1180 — open the Edit-workspace dialog for a named workspace. Handed to BOTH trees, unlike the two
   // creates above it: this is the one trailing control that is not a per-tree difference. The container
   // turns it into dialog state; nothing is sent until the dialog's Save.
@@ -1759,8 +1799,8 @@ function renderBody(
   // same machine. The container turns it into dialog state; nothing is sent until the dialog's Start chat.
   onAddWorkspace: (serverId: string) => void,
   onRepairHost: ((serverId: string) => void) | undefined,
-  onSaveAsChannel: (row: ConversationSummary) => void,
-  onRename: (row: ConversationSummary) => void
+  onSaveAsChannel: (row: SidebarRow) => void,
+  onRename: (row: SidebarRow) => void
 ): JSX.Element | null {
   // A view-only empty list leaves the store's not-yet-loaded meaning intact while saved hosts render.
   // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
@@ -1795,7 +1835,7 @@ function renderBody(
           two control objects are built HERE, at the only level that knows which tree it is drawing, so
           the two client-owned label constants stay module-local to this file and neither reaches a
           component that also handles a `cwd`. */}
-      {renderServerTrees(channels, serverIds, (c) => (
+      {renderServerTrees(channels, serverIds, statuses, (c) => (
         <Row
           key={c.id}
           row={c}
@@ -1805,7 +1845,7 @@ function renderBody(
           // `openConversationId` header names the same trap).
           isOpen={c.id === openConversationId}
           onOpen={() => onOpen(c)}
-          onRename={() => onRename(c)}
+          onRename={typeof c.serverId === 'string' && statuses.get(c.serverId)?.type === 'connected' ? () => onRename(c) : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHANNEL_CONTROL_LABEL, onCreate: onCreateChannel },
         // #1180 — the same control object in both trees, built at each call site rather than hoisted,
@@ -1823,7 +1863,7 @@ function renderBody(
           instances holding two separate booleans. #1070 extends that property across servers by the same
           mechanism and with nothing to implement for it. */}
       <SectionHeader label="Chats" onPairNewHost={onPairNewHost} />
-      {renderServerTrees(discussions, serverIds, (d) => (
+      {renderServerTrees(discussions, serverIds, statuses, (d) => (
         <Row
           key={d.id}
           row={d}
@@ -1831,7 +1871,7 @@ function renderBody(
           // marked in whichever tree it lives in and neither is a special case.
           isOpen={d.id === openConversationId}
           onOpen={() => onOpen(d)}
-          onSaveAsChannel={() => onSaveAsChannel(d)}
+          onSaveAsChannel={typeof d.serverId === 'string' && statuses.get(d.serverId)?.type === 'connected' ? () => onSaveAsChannel(d) : undefined}
         />
       ), onEditHost, onAddWorkspace, onRepairHost, { label: CREATE_CHAT_CONTROL_LABEL, onCreate: onCreateChat },
         { label: EDIT_WORKSPACE_CONTROL_LABEL, onEdit: onEditWorkspace })}
@@ -2076,4 +2116,11 @@ function Row({
       )}
     </div>
   )
+}
+
+// Read at interaction time: a render snapshot cannot authorize a later keyboard submission.
+function canMutateHost(serverId: string | null | undefined): boolean {
+  if (typeof serverId === 'string' && selectStatusFor(serverId)(sessionStore.getState())?.type === 'connected') return true
+  window.pyry.sendDiagnostic({ event: 'sidebar-mutation', code: 'host-unavailable' })
+  return false
 }

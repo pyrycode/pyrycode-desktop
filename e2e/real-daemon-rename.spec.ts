@@ -74,11 +74,11 @@ test('real daemon persists a rename round-trip, visible in the channel list', as
 
   // --- Drive the product rename UI: pencil → dialog → fill → Save. ---
   await renamePencil.click()
-  await expect(page.locator('.rename-conversation')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Rename', exact: true })).toBeVisible()
   // `fill` clears the prefilled current title before typing.
   await page.locator('.rename-conversation__input').fill(NEW_TITLE)
   // Save is enabled because NEW_TITLE is non-blank.
-  await page.locator('.rename-conversation__save').click()
+  await page.getByRole('dialog', { name: 'Rename', exact: true }).getByRole('button', { name: 'OK', exact: true }).click()
 
   // --- Assert the new title renders (AC3). Auto-waits the rename round-trip: command → daemon
   // rename_conversation → conversation_updated broadcast → shouldRefreshList → re-request → updated reply →

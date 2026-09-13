@@ -1,4 +1,7 @@
 import './pairedShell.css'
+import { readSavedTimeline } from './store/savedTimelineRestorer'
+import { createSavedListRestorer } from './store/savedListRestorer'
+import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
@@ -31,7 +34,6 @@ import {
 import { requestRunConfigSnapshot } from './screens/conversation/runConfigSnapshot'
 import { requestModelList } from './store/modelListBridge'
 import { requestSystemPrompt } from './store/systemPromptBridge'
-import { historyAskDeps, requestOpeningHistory } from './store/historyPageBridge'
 import { activeConversationStore } from './store/activeConversationStore'
 import { sessionFactsStore } from './store/sessionFactsStore'
 import { announcedModelStore } from './store/announcedModelStore'
@@ -128,18 +130,11 @@ const activateDeps: ActivateConversationDeps = {
   // it runs only when a conversation is activated, never at module load and never during render, so this
   // module stays server-renderable.
   //
-  // #1259's ask is the FOURTH and the only one that is not unconditional. The three above are
-  // whole-value replaces for which a duplicate costs nothing, so they fire on every activation
-  // including a re-click of the row already open. A duplicate history page replaces nothing — it
-  // PREPENDS its rows a second time — so that ask carries its own per-conversation gate, which lives
-  // inside `requestOpeningHistory` where a spy can reach it rather than as a branch in this arrow. It
-  // reaches its store through `historyAskDeps` (the `stampLastRead` shape) rather than a fourth
-  // `getState()` arrow here, so the read-then-mark decision stays in one tested place.
   requestConversationConfig: (conversationId) => {
+    if (connectedConversationHostNow(conversationId) === null) return
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)
     requestSystemPrompt(window.pyry.sendCommand, conversationId)
-    requestOpeningHistory(historyAskDeps, conversationId)
   }
 }
 
@@ -303,6 +298,7 @@ export function PairedShellView(props: {
    *  not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
    *  error rather than a silent `undefined`. See the container's `paneKey` state for why it is a prop. */
   paneKey: string | null
+  savedTimelineTarget?: { serverId: string; conversationId: string }
   onOpen: (conversation: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -340,6 +336,7 @@ export function PairedShellView(props: {
             <div className="paired-shell__pane">
               {visibleRoute === 'thread' ? (
                 <ConversationScreen
+                  savedTimelineTarget={props.savedTimelineTarget}
                   key={props.paneKey}
                   onRepairHost={props.onRepairHost}
                   onBack={props.onBack}
@@ -379,7 +376,20 @@ export function PairedShellView(props: {
  * `conversation` route).
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
+  useEffect(() => createSavedListRestorer({
+    lists: conversationListStore, servers: serverInfoStore,
+    read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
+  }), [])
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
+  const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
+
+  useEffect(() => {
+    const off = activeConversationStore.subscribe((state, previous) => {
+      if (state.activeConversation?.id !== previous.activeConversation?.id) localRead.current?.cancel()
+    })
+    return () => { off(); localRead.current?.cancel() }
+  }, [])
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
   // nav reducer. The two paths that activate a conversation are BOTH right here
   // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
@@ -390,6 +400,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // it on the way out. In-app pairing now preserves the background subtree, so
   // both this identity and the composer's local draft survive idle cancellation.
   const [paneKey, setPaneKey] = useState<string | null>(null)
+  const cancelCreatedInitialization = useRef<(() => void) | null>(null)
+  useEffect(() => () => cancelCreatedInitialization.current?.(), [])
   // #1303 — WHERE CANCELLING THE PAIRING FLOW PUTS THE OPERATOR BACK: the route this shell was on when
   // the flow was opened. Screen-local beside `paneKey` and for its reasons (ADR 0006) — never a store,
   // never persisted, never sent over IPC — and it dies with the shell on unpair, which is correct, since
@@ -405,6 +417,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // the pairing screen, which only the `openPairServer` that writes this cell puts up — so the seed
   // states which behaviour to preserve rather than being a fallback anything relies on.
   const [pairServerReturn, setPairServerReturn] = useState<PairedRoute>('settings')
+  useEffect(() => {
+    // Pairing retains its origin view; only leaving that thread cancels its read.
+    const retainedRoute = route === 'pairServer' ? pairServerReturn : route
+    if (retainedRoute !== 'thread') localRead.current?.cancel()
+  }, [route, pairServerReturn])
   const [recoveryServerId, setRecoveryServerId] = useState<string | null>(null)
   const pairingGeneration = useRef(0)
   const activePairingGeneration = pairingGeneration.current
@@ -434,9 +451,15 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // #670: the FAB's create is a conversation switch too when a thread is already open — `open` is
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // composer draft. Re-key it on the minted id.
-  useConversationCreatedNav((created) => {
+  useConversationCreatedNav((created, serverId) => {
+    localRead.current?.cancel()
+    setSavedTimelineTarget(undefined)
+    cancelCreatedInitialization.current?.()
     leaveRecovery()
     activateConversation(activateDeps, created)
+    cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
+      created.id, serverId, activateDeps.requestConversationConfig
+    )
     setPaneKey(created.id)
     dispatch({ type: 'open' })
   })
@@ -523,6 +546,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   return (
     <PairedShellView
       route={route}
+      savedTimelineTarget={savedTimelineTarget}
       pairingOrigin={pairServerReturn}
       paneKey={paneKey}
       recoveryServerId={recoveryServerId}
@@ -541,7 +565,15 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // thread's screen-local state from following the operator into the new one.
       onOpen={(conversation) => {
         leaveRecovery()
+        localRead.current?.cancel()
+        setSavedTimelineTarget(undefined)
         activateConversation(activateDeps, conversation)
+        if ('serverId' in conversation && typeof conversation.serverId === 'string') {
+          setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
+          localRead.current = readSavedTimeline({
+            timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
+          }, conversation.serverId, conversation.id)
+        }
         setPaneKey(conversation.id)
         dispatch({ type: 'open' })
       }}

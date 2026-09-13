@@ -78,6 +78,9 @@ property true per key: each conversation's held record is still the bare two fie
 to date or order it against a pick made in the same chat. The ordering is a client-side judgment call,
 not something the daemon's frames can settle.
 
+The table assumes a selection callback is available; without it, any held label
+uses the inert span described in [The write](#the-write).
+
 | Input | Rendering |
 |---|---|
 | no layer has anything (`picked === announced === stored === ''`) | `null` — nothing in the row |
@@ -158,16 +161,15 @@ announcement).
 
 ## The write
 
-`onSelect` calls `changeSetting({ sessionId, sendCommand: window.pyry.sendCommand, dispatch }, { field: 'model', value })`
-— the same single-field write path the run-configuration sheet uses. `window.pyry` is dereferenced only
-inside this arrow, at interaction time, never during render (hoisting it would break every container
-smoke test under `renderToStaticMarkup`, where the bridge doesn't exist).
-
-**AC3's "sends nothing when there is no addressable session id" is met by `changeSetting`'s own gate, not
-by withholding the handler** — a deliberate departure from the sheet, which withholds `onChange` because
-its view branches *operability* on handler presence. This view branches operability on the rows (AC4).
-Withholding the handler here would fuse two unrelated conditions into one rendering and make a
-session-less-but-populated menu unopenable, which no AC asks for.
+The container supplies optional `onSelect` only for an addressable session whose
+unambiguous owning host reports `connected`. Otherwise the view keeps any held
+label as an inert span and unmounts an open menu, even with published rows present.
+The callback calls `changeConnectedSetting(conversationId, { field: 'model', value })`;
+that wrapper rechecks current stores before `changeSetting` can send or create an
+optimistic change. Bridge access stays at interaction time, never during render.
+See [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188),
+which also applies to the model-only footer during questions. Reconnection restores
+eligible controls without replaying blocked choices.
 
 Picking a row moves the trigger's label to the optimistic value at once and reverts it if the change is
 rejected — not local state: `selectEffectiveSettings`'s pending-overlay-over-confirmed-over-snapshot

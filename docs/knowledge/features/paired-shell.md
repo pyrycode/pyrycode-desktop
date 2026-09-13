@@ -32,6 +32,22 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 ## What it does
 
+Conversation activation requests configuration only for a connected owner; it
+never requests history. First and subsequent history pages require new
+[upward thread input](chat-history.md#received-state-admission-and-ownership),
+including after reconnect or reopening an evicted conversation.
+
+The container mounts `createSavedListRestorer` for its lifetime, independently of
+route changes. Saved identities can populate the sidebar without a connected host;
+restoration never activates a conversation or dispatches navigation. Teardown
+cancels pending admission handles. See [saved-list restoration and stale-read
+admission](chat-history.md#received-state-admission-and-ownership).
+
+Opening a host-stamped sidebar row invokes saved-timeline restoration regardless of
+connection status. Explicit clicked coordinates survive active metadata refresh;
+reconnect preserves restored rows and their recording ownership. See
+[timeline admission and cancellation](chat-history.md#received-state-admission-and-ownership).
+
 - The paired region now enters at a **list** view — the [Channel List home screen](channel-list.md)
   (two-tier Channels/Chats, [#141](../codebase/141.md); the non-promoted tier read "Recent
   discussions" until the desktop-design relabel, [#709](../codebase/709.md)) — instead of the single

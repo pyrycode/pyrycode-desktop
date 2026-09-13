@@ -55,6 +55,7 @@ const renderBatch = (
 ): string =>
   renderToStaticMarkup(
     <QuestionPanelView
+      responseAvailable={true}
       questions={questions}
       activeIndex={activeIndex}
       selection={picked}

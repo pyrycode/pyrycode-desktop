@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
+  SavedTimelineNotice,
   MessageThread,
   Timeline,
   ThinkingIndicator,
@@ -43,7 +44,7 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
-import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
+import { createConversationTimelineStore, conversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
@@ -62,8 +63,10 @@ import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationListStore } from '../../store/conversationListStore'
+import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
+import { queueStore } from '../../store/queueStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -1560,7 +1563,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain(`<button type="button" class="${COPY}" aria-label="${COPY_LABEL}"`)
     // Exactly one interactive element in the bubble — the control this ticket adds and nothing else.
     expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
-    expect(markup).not.toContain('tabindex')
+    expect(markup.match(/tabindex/g)).toHaveLength(1)
+    expect(markup).toContain('class="conversation__thread" aria-label="Conversation history" tabindex="0"')
   })
 
   it('keeps the message text out of the accessible name — the label is a client-owned constant', () => {
@@ -1814,7 +1818,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // written here would pass a regex-shaped rewrite while the control had silently gone back to being
     // unfocusable. The attribute order is JSX order — `type` first, matching .bubble__copy's button.
     expect(markup).toContain(
-      'data-thread-role="user">here is the report<button type="button" class="bubble__file">'
+      'data-thread-role="user">here is the report<button type="button" class="bubble__file" disabled="">'
     )
     expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
   })
@@ -1962,7 +1966,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
       // A real button is what makes one tab stop, Enter and Space, and screen-reader semantics come for
       // free instead of being rebuilt out of tabIndex + onKeyDown — the ChannelList row's ruling.
-      expect(markup).toContain(`<button type="button" class="${ROW}">`)
+      expect(markup).toContain(`<button type="button" class="${ROW}" disabled="">`)
       expect(markup).not.toContain(`<div class="${ROW}">`)
       // `type="button"` matters beyond tidiness: the default is `submit`, and a submitting button inside a
       // form would reload the window rather than download anything.
@@ -2005,7 +2009,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       // Two rows, two buttons — each addressing its own attachment through its own closure. Counted rather
       // than matched by string, so a shared control wrapping both rows would redden here.
       expect(rowCount(markup)).toBe(2)
-      expect(markup.match(/<button type="button" class="bubble__file">/g)?.length ?? 0).toBe(2)
+      expect(markup.match(/<button type="button" class="bubble__file" disabled="">/g)?.length ?? 0).toBe(2)
       // Becoming a control did not give the storage handle a reason to appear in the DOM: it reaches the
       // click closure and nothing else.
       for (const id of ['att-1', 'att-2']) expect(markup).not.toContain(id)
@@ -2064,7 +2068,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       )
       expect(rowCount(markup)).toBe(1)
       expect(markup).toContain(
-        'data-thread-role="user">both kinds<button type="button" class="bubble__file">'
+        'data-thread-role="user">both kinds<button type="button" class="bubble__file" disabled="">'
       )
       expect(markup.indexOf(ROW)).toBeLessThan(markup.indexOf(META))
     })
@@ -3072,7 +3076,7 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
     expect(markup).not.toContain('aria-label="Send"')
   })
 
-  it('never disables the stop variant, even when the session cannot send', () => {
+  it('disables the stop variant when the session cannot send', () => {
     // The deliberate asymmetry: `canSend` gates the send variant only. A turn can be running while the
     // session is disconnected, and hiding the only interrupt affordance there would be a new behaviour.
     // Without this test a later tidy-up collapsing the two gates into one would pass silently.
@@ -3080,7 +3084,7 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
       <ComposerSendButton isRunning={true} canSend={false} onSend={noop} onInterrupt={noop} />
     )
     expect(markup).toContain('aria-label="Stop the running turn"')
-    expect(buttonTags(markup)[0]).not.toContain('disabled')
+    expect(buttonTags(markup)[0]).toContain('disabled')
   })
 
   it('renders exactly one button in either state — never null (the one-control invariant, AC1)', () => {
@@ -3165,10 +3169,10 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   // the click itself in e2e/), so these renders pass no handler at all — which is also the assertion that
   // `onDropQueued` really is optional and a handler-less render draws the control rather than throwing.
 
-  it('renders no thread region at all when both the timeline and the backlog are empty', () => {
+  it('keeps one focusable thread region when both timeline and backlog are empty', () => {
     // The empty-thread invitation, not a silent region: EmptyThread is a distinct surface.
     const markup = renderToStaticMarkup(<Timeline items={[]} queued={[]} />)
-    expect(markup).not.toContain('conversation__thread')
+    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
     expect(markup).not.toContain('queued-row__drop')
   })
 
@@ -4460,6 +4464,10 @@ describe('selectOpenTimelineFor', () => {
 })
 
 describe('ConversationScreen — store binding', () => {
+  const CONNECTED: ConnectionStatus = {
+    type: 'connected',
+    ack: { protocol_version: '1', server_id: 'host', conn_id: 'connection', capabilities: [] }
+  }
   beforeEach(() => {
     // setState shallow-merges (preserving dispatch); reset to a clean, empty session.
     sessionStore.setState({ status: { type: 'disconnected' }, messages: [] })
@@ -4482,7 +4490,7 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(bubbleCount(markup)).toBe(0)
     expect(markup).not.toContain('data-thread-role')
-    expect(markup).not.toContain('conversation__thread')
+    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
   })
 
   // #277: the timeline view mounts against the empty timeline store (getInitialState items: []), so
@@ -4613,48 +4621,28 @@ describe('ConversationScreen — store binding', () => {
     expect(footerAt).toBeGreaterThan(rowAt)
   })
 
-  // #680: the Actions menu's mount site. Every assertion in ComposerActionsMenu.test.tsx passes on an
-  // UNMOUNTED component, so these two are the only proof the control is actually wired into the footer.
-  //
-  // They render against a DISCONNECTED session — this block's beforeEach leaves it there, and zustand v5
-  // reads getInitialState() under renderToStaticMarkup anyway (the standing note at :2972-2977). That is
-  // convenient rather than limiting: it also pins AC4's static half, that the trigger renders ENABLED
-  // while the composer cannot send. Picking sends nothing because `sendText`'s first line is the canSend
-  // gate, not because the menu is unopenable.
-  it('mounts the Actions trigger in the footer row, closed and enabled while disconnected (AC1, AC4)', () => {
+  it('hides Actions without connected ownership while retaining the footer', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    const footerAt = markup.indexOf('class="composer__footer"')
-    const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
-    expect(footerAt).toBeGreaterThanOrEqual(0)
-    expect(triggerAt).toBeGreaterThan(footerAt)
-    expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
-    // Closed at mount: aria-expanded="false" and no panel in the tree.
-    expect(markup).toContain('aria-expanded="false"')
-    expect(markup).not.toContain('composer-options__item')
-    // Enabled: the trigger's own tag carries no `disabled`, unlike the send control one row up.
-    //
-    // THE NON-EMPTY ASSERTION IS LOAD-BEARING, and #988 is why it is here. This extractor used to end in
-    // `?? ''`, so when the class run changed under it (the shared-treatment lift) the match returned
-    // nothing, `expect('').not.toContain('disabled')` held, and the guard would have disappeared with no
-    // red anywhere in the suite. A whole-attribute-run match must prove it matched before it asserts an
-    // absence.
-    const triggerTag = markup.match(
-      new RegExp(`<button[^>]*${ACTIONS_TRIGGER_CLASS_RUN}[^>]*>`)
-    )?.[0]
-    expect(triggerTag).toBeDefined()
-    expect(triggerTag).not.toContain('disabled')
+    expect(markup).toContain('class="composer__footer"')
+    expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
   })
 
-  // The design's item order: Actions is the footer's leftmost control (Figma 110:3494, x=0), ahead of the
-  // context reading. The container smoke renders against the initial run-config store, where the reading
-  // is ABSENT — so the comparison is against the row's own opening tag, not against composer__context.
-  it('places the Actions trigger first in the footer row (Figma 115:3677 at x=0)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    const anchorAt = markup.indexOf('class="composer-options-anchor"')
-    const footerAt = markup.indexOf('class="composer__footer"')
-    expect(anchorAt).toBeGreaterThan(footerAt)
-    // Nothing of the footer's own between the row's tag and the anchor: the anchor opens the row.
-    expect(markup.slice(footerAt, anchorAt)).not.toContain('composer__context')
+  it('places the closed Actions trigger first in the connected footer', () => {
+    const restore = stageOpenConnection(CONNECTED)
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const footerAt = markup.indexOf('class="composer__footer"')
+      const anchorAt = markup.indexOf('class="composer-options-anchor"')
+      expect(footerAt).toBeGreaterThanOrEqual(0)
+      expect(anchorAt).toBeGreaterThan(footerAt)
+      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(anchorAt)
+      expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
+      expect(markup).toContain('aria-expanded="false"')
+      expect(markup).not.toContain('composer-options__item')
+      expect(markup.slice(footerAt, anchorAt)).not.toContain('composer__context')
+    } finally {
+      restore()
+    }
   })
 
   // #811: the reading's PRESENT arm through the mounted container — the only test that proves
@@ -4702,6 +4690,10 @@ describe('ConversationScreen — store binding', () => {
   // this a mount proof — the label is the seeded snapshot's own model value, so it can only appear if the
   // container actually read the snapshot.
   it('mounts the model control in the footer row, between Actions and the reading (AC1, AC4)', () => {
+    const restoreConnection = stageOpenConnection(CONNECTED)
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4730,12 +4722,14 @@ describe('ConversationScreen — store binding', () => {
       expect(markup).not.toContain('>seeded-session-model<')
       // AC4's inert arm: THIS control announces no popup and opens no anchor. The count is 2 rather than
       // 1 since #682 — the seeded snapshot names a permission mode, and that control's entries are a
-      // client-owned constant, so it is operable here where the model control is not. Both counts moved
+      // client-owned constant and its owning host is connected, so it is operable here. Both counts moved
       // together, which is what keeps this an assertion about the model control's inert arm.
       expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
       expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 
@@ -4746,8 +4740,12 @@ describe('ConversationScreen — store binding', () => {
   // menus visible at once and lets this test pin the row's ORDER — the one claim neither component's own
   // file can make. With no model list published (the model-list store's initial state is an empty map)
   // both render their inert arms, so each label can only appear if its container actually read the
-  // snapshot, and the row still holds exactly one popup announcement and one anchor (the Actions menu's).
+  // snapshot. Connected ownership leaves Actions and permission mode operable.
   it('mounts the effort control in the footer row, between the model control and the reading (AC1, AC3)', () => {
+    const restoreConnection = stageOpenConnection(CONNECTED)
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4772,12 +4770,14 @@ describe('ConversationScreen — store binding', () => {
       // The session's effort VERBATIM, through the mounted container — no relabelling, no capitalisation.
       expect(markup).toContain('>seeded-session-effort<')
       // AC3's inert arm: THIS control adds no popup announcement and no anchor. 2 rather than 1 since
-      // #682 for the reason given one test above — the seeded permission mode makes that control, and
+      // #682 for the reason given one test above — connected ownership and the seeded mode make that control, and
       // only that control, operable here.
       expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
       expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 
@@ -4791,7 +4791,11 @@ describe('ConversationScreen — store binding', () => {
   // entries are a client-owned constant), so the row's popup and anchor counts are exactly 2: the Actions
   // trigger and this one. That pair of counts is also the mount proof's sharpest half — it can only hold
   // if this container really read the snapshot.
-  it('mounts the permission-mode control in the footer row, between Actions and the model control (AC1, AC2)', () => {
+  it.each([true, false])('mounts the permission-mode control in footer order with connected ownership: %s', (connected) => {
+    const restoreConnection = connected ? stageOpenConnection(CONNECTED) : () => {}
+    const sessionId = vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
+      ...sessionIdStore.getInitialState(), sessionId: 'held-session'
+    })
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
@@ -4809,7 +4813,8 @@ describe('ConversationScreen — store binding', () => {
       const permissionAt = markup.indexOf('composer__permission-label')
       const modelAt = markup.indexOf('composer__model-label')
       // Figma 110:3494's order, in full: Actions, permission mode, model, effort, then the reading.
-      expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      if (connected) expect(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)).toBeGreaterThan(-1)
+      else expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
       expect(permissionAt).toBeGreaterThan(markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN))
       expect(modelAt).toBeGreaterThan(permissionAt)
       expect(markup.indexOf('composer__effort-label')).toBeGreaterThan(modelAt)
@@ -4817,11 +4822,14 @@ describe('ConversationScreen — store binding', () => {
       // must not reach the row, which is where this control departs from the effort trigger beside it.
       expect(markup).toContain(`>${PERMISSION_MODE_LABELS.acceptEdits}<`)
       expect(markup).not.toContain('>acceptEdits<')
-      // Operable while both neighbours are inert: the Actions trigger's popup and anchor, plus this one's.
-      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(2)
-      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(2)
+      // Connected ownership enables permission choices; without ownership all mutation menus stay hidden.
+      // Held labels and their order must survive in both presentations.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(connected ? 2 : 0)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(connected ? 2 : 0)
     } finally {
       spy.mockRestore()
+      restoreConnection()
+      sessionId.mockRestore()
     }
   })
 
@@ -5083,24 +5091,11 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('role="menu"')
   })
 
-  it('renders no overflow menu for a bare ConversationScreen (onBack absent — unchanged, AC1)', () => {
+  it('renders no menus for a bare ConversationScreen without connected ownership', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__overflow')
-    // Only the thread's menu popup must be absent here. #680 mounted the footer's Actions trigger, which
-    // legitimately advertises aria-haspopup="menu" — so the bare absence check this line used to make is
-    // no longer the right proxy. (StatusRow used to carry the region's only aria-haspopup="dialog" and
-    // was the other half of this note; #962 retired it, which changes nothing about the count below —
-    // it was never one of the menu popups.) Pinned as a COUNT instead, and
-    // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
-    // which is the guard #276 wanted.
-    // (The count stays 1 with #988's model menu, #989's effort menu and #682's permission-mode menu
-    // mounted: the bare tree has no run-config snapshot, so the effective model, effort and permission
-    // mode are all '' and none of the three renders anything at all. #682 is the one that would have
-    // broken this had it drawn a placeholder — it is operable whenever a mode is known, so "no mode is
-    // known" is the whole of what keeps it out of the bare tree.)
-    expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
-    // Adjacency-sensitive on purpose: it pins the class run immediately followed by aria-haspopup.
-    expect(markup).toContain(`${ACTIONS_TRIGGER_CLASS_RUN} aria-haspopup="menu"`)
+    expect(markup).not.toContain('aria-haspopup="menu"')
+    expect(markup).not.toContain(ACTIONS_TRIGGER_CLASS_RUN)
   })
 })
 
@@ -5203,5 +5198,94 @@ describe('model rejection in the mounted status row', () => {
       settings.mockRestore()
       restore()
     }
+  })
+})
+
+it('disables the held running-turn interrupt when sending is unavailable', () => {
+  const markup = renderToStaticMarkup(<ComposerSendButton isRunning canSend={false} onSend={() => {}} onInterrupt={() => {}} />)
+  expect(markup).toContain('disabled=""')
+})
+
+describe('saved timeline notices', () => {
+  it.each([false, true])('isolates saved rows and suppresses partial working state (connected=%s)', connected => {
+    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } } : { type: 'disconnected' })
+    const store = createConversationTimelineStore(undefined, () => 'host')
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
+    try {
+      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
+        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
+        prependedRows: 0, coverage: { status: 'unknown' } })
+      const html = render()
+      expect(html).toContain('Saved partial')
+      expect(html).not.toContain('bubble__cursor')
+      expect(html).not.toContain('aria-label="Assistant working"')
+      expect(html.includes('Offline. Showing saved messages.')).toBe(!connected)
+      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
+      expect(render()).toContain('New live reply')
+      expect(render().includes('bubble__cursor')).toBe(connected)
+      store.getState().beginLocalTimelineRead('other', 'open')!.complete({ version: 1, kind: 'timeline',
+        serverId: 'other', conversationId: 'open', items: [{ kind: 'userText', text: 'Other host secret' }],
+        prependedRows: 0, coverage: { status: 'unknown' } })
+      expect(render()).not.toContain('Other host secret')
+    } finally { held.mockRestore(); reset() }
+  })
+
+  it.each([false, true])('keeps held queues readable offline but excludes them from restored slices (restored=%s)', (restored) => {
+    const reset = stageOpenConnection({ type: 'disconnected' })
+    const store = createConversationTimelineStore(undefined, () => 'a')
+    if (restored) {
+      store.getState().beginLocalTimelineRead('a', 'open')!.complete(null)
+    } else {
+      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'Held reply' })
+    }
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const queue = vi.spyOn(queueStore, 'getInitialState').mockReturnValue({
+      ...queueStore.getInitialState(), backlogs: new Map([['open', [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13' }]]])
+    })
+    try {
+      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
+      expect(html.includes('Held queued work')).toBe(!restored)
+      if (!restored) expect(html).toMatch(/class="queued-row__drop"[^>]*disabled=""/)
+    } finally { queue.mockRestore(); held.mockRestore(); reset() }
+  })
+  it('keeps explicit saved coordinates after metadata reseeding and rejects another host held under the same id', () => {
+    const reset = stageOpenConnection({ type: 'disconnected' })
+    const store = createConversationTimelineStore()
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
+    try {
+      for (const serverId of ['a', 'b']) {
+        store.getState().beginLocalTimelineRead(serverId, 'open')!.complete({ version: 1, kind: 'timeline',
+          serverId, conversationId: 'open', items: [{ kind: 'userText', text: `${serverId} saved copy` }],
+          prependedRows: 0, coverage: { status: 'unknown' } })
+        const html = render()
+        if (serverId === 'a') expect(html).toContain('a saved copy')
+        else {
+          expect(html).not.toContain('b saved copy')
+          expect(html).not.toContain('No messages are saved on this device.')
+        }
+      }
+    } finally { held.mockRestore(); reset() }
+  })
+  it('does not render a streaming cursor from an unfinished saved reply', () => {
+    const html = renderToStaticMarkup(<Timeline saved items={[{ kind: 'assistantText', turnId: 'partial', text: 'saved' }]} />)
+    expect(html).toContain('saved')
+    expect(html).not.toContain('bubble__cursor')
+  })
+  it('distinguishes local failure, pending and saved-empty results', () => {
+    const render = (status: 'loading' | 'loaded' | 'failed', empty: boolean) =>
+      renderToStaticMarkup(<SavedTimelineNotice status={status} empty={empty} />)
+    expect(render('failed', true)).toContain('Could not read saved messages on this device.')
+    expect(render('failed', true)).not.toContain('No messages are saved')
+    expect(render('loading', true)).toContain('Loading saved messages…')
+    expect(render('loaded', true)).toContain('No messages are saved on this device.')
+    expect(render('loaded', false)).toContain('Offline. Showing saved messages.')
+  })
+  it('puts the saved coverage notice before rows without a history action', () => {
+    const html = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'saved row' }]} olderSaved />)
+    expect(html).toContain('Older messages require a connection.')
+    expect(html.indexOf('Older messages require a connection.')).toBeLessThan(html.indexOf('saved row'))
+    expect(renderToStaticMarkup(<Timeline items={[]} />)).not.toContain('Older messages require')
   })
 })

@@ -75,6 +75,7 @@
 // `defaultWorkspaceStore` and `pushNotificationPrefStore` do use `localStorage`, so the pattern is in
 // the repo to copy — but that would write conversation CONTENT to renderer-side web storage, surviving
 // the pairing boundary #757 exists to enforce.
+import { parseChatHistorySnapshot, type ChatHistorySnapshot } from '@shared/chatHistory'
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HistoryRequestFailure } from '@shared/ipc/events'
@@ -120,33 +121,9 @@ import {
  */
 export const MAX_RETAINED_TIMELINES = 10
 
-/**
- * Where one conversation's OPENING HISTORY ASK stands (#1259) — held beside the timeline it describes,
- * inside the same slice, so it dies with it. Four readings, and the fourth is the absence of this value:
- *
- *   `null` / absent key  never asked — or asked, drawn, and then EVICTED. Those two are deliberately the
- *                        same reading, and that identity is the whole of #1259's AC3: a re-opened
- *                        conversation whose slice was evicted asks again and refills, where one that
- *                        still holds its page does not.
- *   `requested`          an ask is on the wire and has not been answered. Terminal against a relay that
- *                        withholds the frame, and that is deliberate — see `markHistoryRequested`.
- *   `loaded`             a page was served. `cursor` and `atStart` are carried AS SENT for the
- *                        scroll-back walk (#1260) and are read by nothing today.
- *   `failed`             the ask was refused. All six members of `HistoryRequestFailure` settle here
- *                        identically; nothing branches on `reason` in this file or in its consumer.
- *
- * `retryable` IS RECORDED AND NEVER READ HERE. Its docblock on `historyRequestFailed` is explicit that
- * the flag is computed at the single emit so a walk driver cannot re-derive it wrong into a retry loop
- * against a relay that is merely withholding a frame. Storing it keeps that one computation
- * authoritative; acting on it is #1260's, and there is no timer, no backoff and no automatic re-ask
- * anywhere in this slice.
- *
- * `cursor` IS OPAQUE AND IS NOT A CAPABILITY. It is stored verbatim and never parsed, never compared,
- * never concatenated, never a `Map` key, a lookup path, a filename or a log field — and never reused
- * across conversations, which holding it per-slice makes structural rather than a rule to remember. The
- * daemon merges its three cursor failure causes into one indistinguishable answer on purpose; the
- * repair for all three is restarting with an empty cursor, so there is nothing here to tell apart.
- */
+/** Transient page request state. Successful coverage lives separately on the slice,
+ * so failure or interruption never resets the next cursor. Cursors remain opaque
+ * payload values and never enter paths, URLs, React keys or diagnostics. */
 export type HistoryRequestState =
   | { status: 'requested' }
   | { status: 'loaded'; cursor: string; atStart: boolean }
@@ -166,9 +143,17 @@ export type HistoryRequestState =
  * three-reading table below stand unedited, and the by-reference survivor copy in the two rebuild
  * helpers still hands back the identical slice object and therefore the identical `TimelineState`.
  */
+type SavedTimeline = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
+
 export interface ConversationSlice {
+  serverId?: string
+  localRead?: 'loading' | 'loaded' | 'failed'
+  /** Explicit admission evidence for the writer; never a received event. */
+  restored?: Pick<SavedTimeline, 'serverId' | 'coverage'>
   timeline: TimelineState
   history: HistoryRequestState | null
+  /** Last successful page coverage, independent of transient request status. */
+  coverage?: SavedTimeline['coverage']
   /**
    * How many rows a served history page has ever PREPENDED onto `timeline.items` for this conversation
    * (#1260) — a monotonically rising count, never reset while the slice lives.
@@ -327,9 +312,15 @@ export type ConversationTimelineStore = ConversationTimelineState & {
   // `subscribeTimeline`'s own #756/#1013 reason: a required parameter cascades over every existing call
   // site, an optional one over none. Absent means this event contributes no key, which is the correct
   // reading for an arm the emit did not stamp and the fail-open default everywhere else.
+  beginLocalTimelineRead: (serverId: string, conversationId: string) => {
+    complete: (snapshot: SavedTimeline | null) => void
+    fail: () => void
+    cancel: () => void
+  } | null
+  dispatchLocalEcho: (serverId: string, conversationId: string, event: Extract<ThreadEvent, { type: 'userText' }>) => void
   dispatchFor: (conversationId: string, event: ThreadEvent, joinKey?: string) => void
   prependHistoryFor: (conversationId: string, items: readonly ThreadItem[]) => void
-  markHistoryRequested: (conversationId: string) => void
+  markHistoryRequested: (conversationId: string, serverId?: string) => void
   recordHistoryPage: (conversationId: string, cursor: string, atStart: boolean) => void
   recordHistoryFailure: (
     conversationId: string,
@@ -491,12 +482,15 @@ function withoutHeldEchoes(
 function withHistory(
   state: ConversationTimelineState,
   conversationId: string,
-  history: HistoryRequestState
+  history: HistoryRequestState,
+  serverId?: string
 ): ConversationTimelineState {
   const held = state.timelines.get(conversationId)
-  if (held === undefined) return state
+  if (held === undefined || (serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId)) return state
+  const coverage = history.status === 'loaded'
+    ? { status: 'received' as const, cursor: history.cursor, atStart: history.atStart } : held.coverage
   const next = new Map(state.timelines)
-  next.set(conversationId, { ...held, history })
+  next.set(conversationId, { ...held, history, coverage, localRead: undefined })
   return { timelines: next }
 }
 
@@ -548,13 +542,74 @@ function tailKey(timelines: ReadonlyMap<string, ConversationSlice>): string | un
  * `init` is trusted test input and is not re-checked.
  */
 export function createConversationTimelineStore(
-  init: ConversationTimelineState = initialConversationTimelineState
+  init: ConversationTimelineState = initialConversationTimelineState,
+  receiptHost: () => string | null | undefined = () => undefined
 ) {
-  return createStore<ConversationTimelineStore>((set) => ({
+  function receivedSlice(held: ConversationSlice | undefined): ConversationSlice | undefined {
+    if (held === undefined) return undefined
+    const origin = receiptHost()
+    const base = typeof origin === 'string' && held.serverId !== undefined && held.serverId !== origin
+      ? emptySlice : held
+    return { ...base, serverId: typeof origin === 'string' ? origin : base.serverId, localRead: undefined }
+  }
+  return createStore<ConversationTimelineStore>((set, get) => ({
     ...init,
+    beginLocalTimelineRead: (serverId, conversationId) => {
+      const held = get().timelines.get(conversationId)
+      if (held?.serverId === serverId &&
+        (held.localRead !== undefined || held.timeline.items.length > 0)) return null
+      const pending: ConversationSlice = { ...emptySlice, serverId, localRead: 'loading' }
+      set(s => ({ timelines: withSliceAtTail(s.timelines, conversationId, pending) }))
+      const settle = (replacement: ConversationSlice | null): void => {
+        set(s => {
+          if (s.timelines.get(conversationId) !== pending) return s
+          const timelines = new Map(s.timelines)
+          if (replacement === null) timelines.delete(conversationId)
+          else timelines.set(conversationId, replacement)
+          return { timelines }
+        })
+      }
+      return {
+        complete: value => {
+          if (get().timelines.get(conversationId) !== pending) return
+          try {
+            const snapshot = parseChatHistorySnapshot(value ?? {
+              version: 1, kind: 'timeline', serverId, conversationId,
+              items: [], prependedRows: 0, coverage: { status: 'unknown' }
+            })
+            if (snapshot.kind !== 'timeline' || snapshot.serverId !== serverId ||
+              snapshot.conversationId !== conversationId) {
+              settle({ ...pending, localRead: 'failed' })
+              return
+            }
+            settle({ ...emptySlice, serverId, localRead: 'loaded', coverage: snapshot.coverage, restored: { serverId, coverage: snapshot.coverage },
+              timeline: { ...initialTimelineState, items: snapshot.items },
+              prependedRows: snapshot.prependedRows })
+          } catch { settle({ ...pending, localRead: 'failed' }) }
+        },
+        fail: () => settle({ ...pending, localRead: 'failed' }),
+        cancel: () => settle(null)
+      }
+    },
+    dispatchLocalEcho: (serverId, conversationId, event) =>
+      set(s => {
+        const held = s.timelines.get(conversationId)
+        // Only explicitly owned rows can join a local send; never adopt id-only content.
+        const base = held?.serverId === serverId ? held : emptySlice
+        const slice: ConversationSlice = {
+          ...base, serverId, localRead: undefined,
+          timeline: reduceTimeline(base.timeline, event)
+        }
+        if (held === undefined) {
+          return { timelines: withNewSliceAtHead(s.timelines, conversationId, slice) }
+        }
+        const timelines = new Map(s.timelines)
+        timelines.set(conversationId, slice)
+        return { timelines }
+      }),
     dispatchFor: (conversationId, event, joinKey) =>
       set((s) => {
-        const held = s.timelines.get(conversationId)
+        const held = receivedSlice(s.timelines.get(conversationId))
         if (held === undefined) {
           // A live reading can only update a retained call; it cannot create or evict a slice.
           if (event.type === 'toolProgress') return s
@@ -574,6 +629,7 @@ export function createConversationTimelineStore(
           const created = reduceTimeline(initialTimelineState, event)
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
+              serverId: receiptHost() ?? undefined,
               timeline: created,
               history: null,
               prependedRows: 0,
@@ -623,11 +679,12 @@ export function createConversationTimelineStore(
     prependHistoryFor: (conversationId, items) =>
       set((s) => {
         if (items.length === 0) return s
-        const held = s.timelines.get(conversationId)
+        const held = receivedSlice(s.timelines.get(conversationId))
         if (held === undefined) {
           return {
             timelines: withNewSliceAtHead(s.timelines, conversationId, {
               timeline: { ...initialTimelineState, items },
+              serverId: receiptHost() ?? undefined,
               history: null,
               // A page drew these rows, the live lane did not, so there is no live key to seed: the
               // join's whole premise is that a key names something the operator has ALREADY seen.
@@ -652,35 +709,25 @@ export function createConversationTimelineStore(
         })
         return { timelines: next }
       }),
-    // #1259 — the three request-state paths. Each replaces the slice's `history` half and touches its
-    // `timeline` half NOT AT ALL: the spread carries the held `TimelineState` across by reference, so a
-    // component reading this conversation's rows is not woken by an ask being marked or settled.
-    //
-    // ALL THREE ARE ABSENT-KEY NO-OPS, and that is a design decision rather than defensiveness. The
-    // reading has to die with the timeline it describes, so a slice minted by a history write alone
-    // would be a timeline-less holder outliving the thing it describes — and it would enter at the
-    // HEAD, making a conversation the daemon merely answered about the next eviction victim. It is also
-    // unreachable on the ask path (`activateConversation` calls `markViewed`, which creates the slice,
-    // before `requestConversationConfig`), and for a reply landing after an eviction the correct
-    // outcome is exactly "nothing is held, ask again on the next opening" (AC3). The guard returns the
-    // state OBJECT, so zustand's `Object.is` short-circuit fires and no subscriber wakes.
-    //
-    // NONE OF THE THREE RE-ORDERS THE MAP. They take `dispatchFor`'s key-present shape — clone the
-    // outer map, `set` the key, position preserved by rule 1 of the eviction invariant — because a
-    // history write is not a view: promoting on one would let the daemon's reply, rather than the
-    // operator's attention, decide which thread survives the bound.
-    markHistoryRequested: (conversationId) =>
-      set((s) => withHistory(s, conversationId, { status: 'requested' })),
-    // The page came back. `cursor` and `atStart` are carried AS SENT and never derived from each other:
-    // an empty cursor with `atStart` true is the terminal page's published shape, and a short page says
-    // nothing at all. Neither is read by this ticket — #1260's walk is their only future consumer.
+    // Requests preserve same-host rows and coverage without changing holder order.
+    // A different host starts with an empty slice; its cursor cannot come from the old host.
+    markHistoryRequested: (conversationId, serverId) =>
+      set((s) => {
+        const held = s.timelines.get(conversationId)
+        if (held === undefined) return s
+        const base = serverId !== undefined && held.serverId !== undefined && held.serverId !== serverId
+          ? emptySlice : held
+        const timelines = new Map(s.timelines)
+        timelines.set(conversationId, { ...base, serverId: serverId ?? base.serverId,
+          history: { status: 'requested' }, localRead: undefined })
+        return { timelines }
+      }),
+    // Only a successful page advances coverage, even when it contains no drawable rows.
     recordHistoryPage: (conversationId, cursor, atStart) =>
       set((s) => withHistory(s, conversationId, { status: 'loaded', cursor, atStart })),
-    // The refusal. `reason` and `retryable` are COPIED, never branched on: all six members of
-    // `HistoryRequestFailure` settle a conversation identically — it stops asking and nothing is drawn
-    // — and `history-unavailable`'s retryability is recorded for #1260 rather than acted on here.
+    // Settle without retrying; the next qualifying user input decides whether to ask.
     recordHistoryFailure: (conversationId, reason, retryable) =>
-      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable })),
+      set((s) => withHistory(s, conversationId, { status: 'failed', reason, retryable }, receiptHost() ?? undefined)),
     markViewed: (conversationId) =>
       set((s) => {
         if (tailKey(s.timelines) === conversationId) return s
@@ -727,7 +774,10 @@ export function createConversationTimelineStore(
 }
 
 /** App-wide singleton — the one source of truth #756 writes, #757 clears and #758 reads. */
-export const conversationTimelineStore = createConversationTimelineStore()
+export const conversationTimelineStore = createConversationTimelineStore(
+  initialConversationTimelineState,
+  () => typeof window === 'undefined' ? undefined : window.pyry?.chatHistoryReceipt?.()?.serverId
+)
 
 /** Narrow-slice React binding for #758. Selecting a single conversation's slice avoids cross-facet
  *  re-renders. */

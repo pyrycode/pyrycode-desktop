@@ -1,4 +1,4 @@
-import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame, type PairedApp } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ChatHistoryResult } from '../src/shared/chatHistory'
 
@@ -9,6 +9,16 @@ const entry = (i: number) => ({ id: i, type: 'message', ts, payload: {
   conversation_id: SEEDED_ROW.id, message_id: `old-${i}`, role: 'user', text: `loaded history ${i}` } })
 const snapshotText = (result: ChatHistoryResult): string => result.status === 'stored' && result.snapshot.kind === 'timeline'
   ? result.snapshot.items.map((i) => 'text' in i ? i.text : '').join('|') : ''
+
+async function observeCommands(app: PairedApp) {
+  const cdp = await app.page.context().newCDPSession(app.page)
+  await cdp.send('Debugger.enable')
+  await app.page.evaluate(() => { (window as any).__savedCommands = [] })
+  const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+  await cdp.send('Debugger.setBreakpointOnFunctionCall', { objectId: result.objectId,
+    condition: '(globalThis.__savedCommands.push(arguments[0]), false)' })
+  return () => app.page.evaluate(() => (window as any).__savedCommands as object[])
+}
 
 test('records received content, drains buffered quit, and reads locally after relaunch', async ({ launchPairedApp }) => {
   let historyAsks = 0
@@ -84,11 +94,20 @@ test('records received content, drains buffered quit, and reads locally after re
   await expect(second.page.locator('.channel-list__row-open')).toHaveText(['latest received list'])
   await expect(second.page.locator('.conversation')).toHaveCount(0)
   await expect(second.page.locator('[aria-current="true"]')).toHaveCount(0)
+  const outbound = await observeCommands(second)
   await second.page.getByRole('button', { name: 'latest received list', exact: true }).click()
+  await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('live partial final buffered text')
+  await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
+  await expect(second.page.getByText('Older messages require a connection.', { exact: true })).toHaveCount(0)
+  await second.page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'Copy message' }).click()
+  await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('live partial final buffered text')
+  await second.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  expect(await outbound()).toEqual([])
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
   await expect(second.page.getByRole('img', { name: 'Assistant working', exact: true })).toHaveCount(0)
   await second.page.setViewportSize({ width: 800, height: 800 })
-  await second.page.screenshot({ path: '/tmp/builder-1387-offline-800.png', animations: 'disabled' })
+  await second.page.screenshot({ path: '/tmp/builder-1388-offline-800.png', animations: 'disabled' })
   const reread = await second.page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
   expect(snapshotText(reread)).toContain('live partial final buffered text')
@@ -134,6 +153,11 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
     commands.push(env.type)
     return env.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
   } } })
+  await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await first.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'saved-rejected', seq: 0, text: 'Saved rejected-host reply'
+  }))
+  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
   await first.app.close()
   rejected = true
   commands.length = 0
@@ -145,7 +169,16 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!, SECOND_SEEDED_ROW.name!])
   await expect(page.locator('.conversation')).toHaveCount(0)
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
+  const outbound = await observeCommands(second)
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
+  await expect(page.getByText('Older messages require a connection.', { exact: true })).toBeVisible()
+  await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  await page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'Copy message' }).click()
+  await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Saved rejected-host reply')
+  expect(await outbound()).toEqual([])
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-1388-rejected-1280.png', animations: 'disabled' })
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
   await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
@@ -157,6 +190,58 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+})
+
+test('pending saved reading survives opening and cancelling host repair', async ({ launchPairedApp }) => {
+  const launched = await launchPairedApp()
+  const { app, page, daemon, forwarder, servers } = launched
+  const text = 'Saved reply after repair cancellation'
+  await daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'repair-read', seq: 0, text
+  }))
+  const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
+    operation: 'readTimeline', serverId, conversationId
+  }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
+  await expect.poll(async () => snapshotText(await read())).toBe(text)
+  const saved = await read()
+  forwarder.closeClientLeg(4401)
+  await expect(page.getByRole('button', { name: 'Pairing error - Re-pair' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: SEEDED_ROW.name!, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Repair host', exact: true }).first()).toBeVisible()
+
+  // Hold the real saved result at the IPC boundary until repair has been cancelled.
+  await app.evaluate(({ ipcMain }, saved) => {
+    ipcMain.removeHandler('pyry:chat-history')
+    ipcMain.handle('pyry:chat-history', (_event, request) => {
+      if (request.operation !== 'readTimeline') return { status: 'error', code: 'unreadable' }
+      return new Promise(resolve => { (globalThis as any).__releaseSavedRead = () => resolve(saved) })
+    })
+  }, saved)
+  // Observe renderer IPC before host routing can discard an offline command.
+  await app.evaluate(({ ipcMain }) => {
+    (globalThis as any).__offlineCommands = []
+    ipcMain.on('pyry:command', (_event, command) => {
+      (globalThis as any).__offlineCommands.push(command)
+    })
+  })
+  const outbound = () => app.evaluate(() => (globalThis as any).__offlineCommands)
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(page.getByText('Loading saved messages…', { exact: true })).toBeVisible()
+  await expect.poll(() => app.evaluate(() => typeof (globalThis as any).__releaseSavedRead)).toBe('function')
+  await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
+  await app.evaluate(() => (globalThis as any).__releaseSavedRead())
+  const reply = page.locator('.bubble[data-thread-role="assistant"]')
+  await expect(reply).toContainText(text)
+  await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await reply.getByRole('button', { name: 'Copy message' }).click()
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(text)
+  await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  expect(await outbound()).toEqual([])
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
 })
 
 test('local list read failures stay beside the saved host', async ({ launchPairedApp }) => {

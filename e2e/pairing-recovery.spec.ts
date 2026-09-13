@@ -189,6 +189,10 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     const { app, page, servers: [a, b] } = await launchPairedApp({}, {
       hostLabel: 'Alpha', secondServer: { buildReply: () => seedConversationsFrame(SECOND_SEEDED_ROW) }
     })
+    // Establish B's durable list before reload instead of racing the writer's debounce.
+    await expect.poll(() => page.evaluate(serverId => window.pyry.chatHistory({
+      operation: 'readList', serverId
+    }), b.serverId)).toMatchObject({ status: 'stored', snapshot: { conversations: [SECOND_SEEDED_ROW] } })
     // Withhold B's status replay from the fresh renderer while retaining both real saved hosts.
     await app.evaluate(({ BrowserWindow, ipcMain }, { channel, serverId }) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents
@@ -203,8 +207,9 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     await page.reload()
     await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
     await expect(page.getByRole('img', { name: 'Pyrycode Offline', exact: true })).toHaveCount(2)
-    a.daemon.pushFrame(seedConversationsFrame())
-    await expect(page.locator('.channel-list__row-open')).toHaveCount(1)
+    a.daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Reload receipt barrier' }))
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Reload receipt barrier' })).toBeVisible()
+    await expect(page.locator('.channel-list__row-open').filter({ hasText: SECOND_SEEDED_ROW.name! })).toBeVisible()
     await app.evaluate(({ ipcMain, BrowserWindow }, { channel, serverId, pendingState }) => {
       ipcMain.emit('test:restore-status-delivery')
       if (pendingState === 'connecting') {
@@ -218,7 +223,7 @@ for (const pendingState of ['connecting', 'unreported'] as const) {
     await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(recovery).toHaveCount(0)
-    await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
+    await page.locator('.channel-list__row-open').filter({ hasText: 'Reload receipt barrier' }).click()
     await expect(page.locator('.conversation')).toBeVisible()
     await page.getByPlaceholder('Message…').fill('Keep this thread')
     // B settles without ever reporting a successful connection to this renderer.

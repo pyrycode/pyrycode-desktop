@@ -95,7 +95,16 @@ Local drafting and dismissal remain available. Failed hosts keep their red indic
 and explicit repair entry; rejection never navigates away or opens repair automatically.
 Cancelling manual repair returns to reading with the mounted draft intact. See
 [recovery lifetime](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
-This describes held memory; disk restoration is separate.
+Saved chats also [restore timelines on demand](chat-history.md#received-state-admission-and-ownership)
+while their host is unavailable. The shell retains clicked host/conversation
+coordinates through metadata refreshes and pending reads through repair-modal
+cancellation. Offline rows keep copying and scrolling without history/configuration
+requests. Saved rendering suppresses cursors and grouped-tool running labels even
+when durable rows are partial.
+
+Received queue rows remain readable on disconnect with disabled drop controls.
+Pending, failed and restored local slices must not borrow the conversation-id-only
+queue cache: saved content cannot establish that cache's host or transient state.
 
 Conversation actions require a unique main-stamped owner from
 `serverIdForOpenConversation` and that exact host's `SessionState.statuses` entry to

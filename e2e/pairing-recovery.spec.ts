@@ -51,7 +51,7 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
     await page.setViewportSize({ width: 800, height: 800 })
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(page.locator('.channel-list__host')).toHaveCount(2)
-    await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
+    await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!])
     await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
     expect(rejectedFrames).toBeGreaterThan(0)
     await expect(page.getByRole('img', { name: 'Relay Connected', exact: true })).toHaveCount(2)

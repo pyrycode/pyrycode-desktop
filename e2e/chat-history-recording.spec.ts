@@ -1,4 +1,4 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ChatHistoryResult } from '../src/shared/chatHistory'
 
@@ -81,6 +81,14 @@ test('records received content, drains buffered quit, and reads locally after re
   await daemon.close()
 
   const second = await launchPairedApp({}, { reuseUserDataDir: userDataDir })
+  await expect(second.page.locator('.channel-list__row-open')).toHaveText(['latest received list'])
+  await expect(second.page.locator('.conversation')).toHaveCount(0)
+  await expect(second.page.locator('[aria-current="true"]')).toHaveCount(0)
+  await second.page.getByRole('button', { name: 'latest received list', exact: true }).click()
+  await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  await expect(second.page.getByRole('img', { name: 'Assistant working', exact: true })).toHaveCount(0)
+  await second.page.setViewportSize({ width: 800, height: 800 })
+  await second.page.screenshot({ path: '/tmp/builder-1387-offline-800.png', animations: 'disabled' })
   const reread = await second.page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
   expect(snapshotText(reread)).toContain('live partial final buffered text')
@@ -111,4 +119,62 @@ test('window close drains the writer and a reopened window can read its saved ro
   const result = await reopened.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
   expect(snapshotText(result)).toBe('buffered before window close')
+})
+
+test('restores a pairing-rejected saved host beside a usable connected host', async ({ launchPairedApp }) => {
+  let rejected = false
+  const commands: string[] = []
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    commands.push(env.type)
+    if (rejected) return [frame('error', { code: 'auth.invalid_token', message: 'private', retryable: false })]
+    return env.type === 'list_conversations' ? [seedConversationsFrame()] : []
+  } }, { secondServer: { buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    commands.push(env.type)
+    return env.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
+  } } })
+  await first.app.close()
+  rejected = true
+  commands.length = 0
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  // The original endpoints remain alive: one rejects pairing, the other reconnects normally.
+  const { page } = second
+  await expect(page.getByRole('img', { name: 'Pyrycode Pairing rejected', exact: true })).toHaveCount(2)
+  await expect(page.getByRole('img', { name: 'Pyrycode Connected', exact: true })).toHaveCount(2)
+  await expect(page.locator('.channel-list__row-open')).toHaveText([SEEDED_ROW.name!, SECOND_SEEDED_ROW.name!])
+  await expect(page.locator('.conversation')).toHaveCount(0)
+  expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
+  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
+  await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await expect.poll(() => commands.includes('request_history')).toBe(true)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-1387-mixed-1280.png', animations: 'disabled' })
+  await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
+  await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+})
+
+test('local list read failures stay beside the saved host', async ({ launchPairedApp }) => {
+  const { app, page, daemon, forwarder } = await launchPairedApp()
+  await daemon.close()
+  await forwarder.close()
+  // Inject a classified storage failure at the existing IPC boundary, without changing pairing data.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('pyry:chat-history')
+    ipcMain.handle('pyry:chat-history', () => ({ status: 'error', code: 'unreadable' }))
+  })
+  await page.reload()
+  await expect(page.locator('.channel-list__local-read-error')).toHaveCount(2)
+  await expect(page.locator('.channel-list__local-read-error').first())
+    .toHaveText('Could not read saved chats on this device.')
+  await expect(page.locator('.channel-list__host')).toHaveCount(2)
+  await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
+  await expect(page.locator('.conversation')).toHaveCount(0)
+  await page.setViewportSize({ width: 800, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-1387-local-error-800.png', animations: 'disabled' })
 })

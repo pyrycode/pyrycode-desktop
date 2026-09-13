@@ -1,4 +1,5 @@
 import './pairedShell.css'
+import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
@@ -381,6 +382,10 @@ export function PairedShellView(props: {
  * `conversation` route).
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
+  useEffect(() => createSavedListRestorer({
+    lists: conversationListStore, servers: serverInfoStore,
+    read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
+  }), [])
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
   // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
   // nav reducer. The two paths that activate a conversation are BOTH right here

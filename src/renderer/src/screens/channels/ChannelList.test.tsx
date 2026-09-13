@@ -2348,3 +2348,15 @@ describe('host-owned mutation availability', () => {
     }
   })
 })
+
+it('shows a local read failure independently of the host connection and repair control', () => {
+  const local = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id" localReadFailed />)
+  expect(local).toContain('Could not read saved chats on this device.')
+  expect(local).not.toContain('channel-list__host--failed')
+  expect(local).not.toContain('private-id')
+  const both = renderToStaticMarkup(<HostRow label="Saved host" serverId="private-id"
+    localReadFailed failed onRepair={() => {}} />)
+  expect(both).toContain('Could not read saved chats on this device.')
+  expect(both).toContain('aria-label="Repair host"')
+  expect(both).toContain('channel-list__host--failed')
+})

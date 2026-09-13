@@ -111,3 +111,13 @@ under “Results and failure preservation”.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+2026-09-13: No design change. The existing startup rejection assertion in
+`e2e/pairing-recovery.spec.ts` now expects the saved row instead of zero rows;
+the rest of its repair flow is unchanged. Its file and the stylesheet were included
+in the overlap check with no conflicts. Added an injected IPC read-failure capture
+to the recording spec to validate the mounted error presentation. Final scope
+remains four TypeScript production files, one stylesheet, one new exported factory,
+and fewer than 600 added lines including this plan and tests.

@@ -3940,6 +3940,21 @@
   font-weight: var(--text-label-medium-weight);
 }
 
+.permission-panel__session-offer {
+  min-width: 0;
+}
+
+.permission-panel__rules {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-8);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Feedback occupies normal flow; it never paints over the restored input controls. */
 .modal-rejections {
   flex: 0 0 auto;

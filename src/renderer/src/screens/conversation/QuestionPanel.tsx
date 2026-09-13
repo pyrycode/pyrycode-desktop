@@ -155,13 +155,13 @@ export function otherPickEventFor(args: {
  * INLINE JSX, never Figma's generated `<img src="https://www.figma.com/api/mcp/…">` and never a `data:`
  * background — `PyryMark.tsx` records the reasoning in full: the window's CSP is `default-src 'self'` with
  * no `img-src`, so either would fail closed and draw nothing, and the first would be an outbound
- * third-party fetch from the privileged window that holds the transport bridge. Module-private rather than
- * promoted to `theme/`: one call site, and `PyryMark`'s own comment says promote on the second.
+ * third-party fetch from the privileged window that holds the transport bridge. Shared with the
+ * permission panel's session checkbox so both controls use the same glyph.
  *
  * The radio's ticked `Selector` (347:6141 / 347:6478) needs no component at all — it is a plain filled
  * circle, so it is a `<span>` the stylesheet draws.
  */
-function QuestionTick(): JSX.Element {
+export function QuestionTick(): JSX.Element {
   return (
     <svg
       className="question-panel__control-tick"

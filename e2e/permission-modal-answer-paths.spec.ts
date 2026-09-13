@@ -5,6 +5,11 @@ import type { Locator, Page } from '@playwright/test'
 
 // All content is synthetic. Assert only routing fields; never serialize captured answer tokens.
 const OPEN = SEEDED_ROW.id
+const GRANT_OPTIONS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'].map(id => ({ id, label: id }))
+const OFFER = { offered: true, rules: ['Bash(touch:*)', 'Read(<example>)'] }
+const grantShown = (id: string, over: Partial<ModalShownPayload> = {}): Uint8Array => shown(id, {
+  options: GRANT_OPTIONS, default_option_id: 'reject_once', always_allow: OFFER, ...over
+})
 const OTHER = { ...SEEDED_ROW, id: 'other-chat', name: 'Other discussion' }
 const OPTIONS = [{ id: 'deny', label: 'Deny' }, { id: 'allow', label: 'Allow' }]
 const frame = (type: EnvelopeType, payload: unknown): Uint8Array =>
@@ -44,6 +49,140 @@ const openChat = async (page: Page, name: string): Promise<void> => {
   await rowFor(page, name).locator('.channel-list__row-open').click()
   await expect(rowFor(page, name).locator('.channel-list__row-open')).toHaveAttribute('aria-current', 'true')
 }
+
+test('one session checkbox grants only checked, explicitly confirmed supplied allow options', async ({ launchPairedApp }) => {
+  const captured: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const panel = panelFor(page)
+  const cases = [
+    { option: 'allow_once', checked: true, grant: true },
+    { option: 'allow_always', checked: true, grant: true },
+    { option: 'allow_once', checked: false },
+    { option: 'reject_once', checked: true },
+    { option: 'reject_always', checked: true },
+    { option: 'allow_once', checked: true, default: 'allow_once' },
+    { option: 'allow_once', unavailable: true },
+    { option: 'allow_once', trust: true },
+    { cancel: true, checked: true }
+  ]
+  for (const [index, scenario] of cases.entries()) {
+    const id = `grant-${index}`
+    daemon.pushFrame(grantShown(id, { class: scenario.trust ? 'trust' : 'permission',
+      default_option_id: scenario.default ?? 'reject_once',
+      always_allow: scenario.unavailable ? { offered: false, rules: [] } : OFFER }))
+    await expect(panel).toContainText(id)
+    const checkbox = panel.getByRole('checkbox', { name: "Don't ask again this session for:", exact: true })
+    if (scenario.trust || scenario.unavailable) await expect(checkbox).toHaveCount(0)
+    else {
+      await expect(checkbox).not.toBeChecked()
+      await expect(panel.locator('.permission-panel__rules li')).toHaveText(OFFER.rules)
+      if (index === 0) {
+        await panel.locator('.permission-panel__session-offer label').click()
+        await expect(checkbox).toBeChecked()
+        await checkbox.press('Space')
+        await expect(checkbox).not.toBeChecked()
+      }
+      if (scenario.checked) await checkbox.press('Space')
+      await expect(action(panel, 'Continue')).toBeDisabled()
+      expect(resolutions(captured, id)).toBe(0)
+    }
+    if (index === 0) await page.screenshot({ path: '/tmp/builder-1409-normal.png', animations: 'disabled' })
+    if (scenario.cancel) await action(panel, 'Cancel').click()
+    else {
+      await panel.getByRole('radio', { name: scenario.option + (scenario.option === (scenario.default ?? 'reject_once') ? ' Default' : ''), exact: true }).press('Space')
+      await action(panel, 'Continue').click()
+      if (scenario.option !== (scenario.default ?? 'reject_once')) {
+        await expect(action(panel, 'Confirm')).toBeVisible()
+        expect(resolutions(captured, id)).toBe(0)
+        if (index === 0) {
+          await expect(checkbox).toBeChecked()
+          await action(panel, 'Back').click()
+          await expect(checkbox).toBeChecked()
+          await action(panel, 'Continue').click()
+        }
+        await action(panel, 'Confirm').click()
+      }
+    }
+    const type = scenario.cancel ? 'modal_cancel' : 'modal_answer'
+    await expect.poll(() => resolutions(captured, id, type)).toBe(1)
+    const payload = captured.find(e => e.type === type && (e.payload as any).modal_id === id)!.payload as Record<string, unknown>
+    expect(payload.always_allow).toBe(scenario.grant ? true : undefined)
+    expect(payload).not.toHaveProperty('rules')
+    expect(payload).not.toHaveProperty('destination')
+    await expect(panel).toHaveCount(0)
+  }
+})
+
+test('same-ID changed, removed, reordered and restored offers clear opt-in during confirmation', async ({ launchPairedApp }) => {
+  const captured: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  const panel = panelFor(page)
+  daemon.pushFrame(grantShown('continuous'))
+  const checkbox = panel.getByRole('checkbox')
+  await checkbox.press('Space')
+  await panel.getByRole('radio', { name: 'allow_once', exact: true }).press('Space')
+  await action(panel, 'Continue').click()
+  daemon.pushFrame(grantShown('continuous', { description: 'Same ordered offer' }))
+  await expect(checkbox).toBeChecked()
+  await expect(action(panel, 'Confirm')).toBeVisible()
+  for (const replacement of [undefined, { offered: false, rules: [] },
+    { offered: true, rules: ['Changed'] }, { offered: true, rules: [...OFFER.rules].reverse() }]) {
+    daemon.pushFrame(grantShown('continuous', { always_allow: replacement }))
+    if (replacement?.offered) await expect(checkbox).not.toBeChecked()
+    else await expect(checkbox).toHaveCount(0)
+    daemon.pushFrame(grantShown('continuous'))
+    await expect(checkbox).not.toBeChecked()
+    await expect(action(panel, 'Confirm')).toBeVisible()
+    await checkbox.press('Space')
+  }
+  daemon.pushFrame(dismissed('continuous'))
+  daemon.pushFrame(grantShown('new request'))
+  await expect(panel).toContainText('new request')
+  await expect(checkbox).not.toBeChecked()
+  await expect(action(panel, 'Continue')).toBeDisabled()
+  await checkbox.press('Space')
+  await panel.getByRole('radio', { name: 'allow_once', exact: true }).press('Space')
+  await action(panel, 'Continue').click()
+  // Both transitions can reach the store before React renders. Restoring text is not restoring consent.
+  daemon.pushFrame(grantShown('new request', { always_allow: { offered: false, rules: [] } }))
+  daemon.pushFrame(grantShown('new request', { title: 'Restored offer' }))
+  await expect(panel).toContainText('Restored offer')
+  await expect(checkbox).not.toBeChecked()
+  await action(panel, 'Confirm').click()
+  await expect.poll(() => resolutions(captured, 'new request')).toBe(1)
+  expect((captured.find(e => e.type === 'modal_answer')!.payload as any).always_allow).toBeUndefined()
+})
+
+test('complete long and unbroken rules wrap at 800×600 with reachable confirmation actions', async ({ launchPairedApp }) => {
+  const captured: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake(captured, [SEEDED_ROW]) })
+  await page.setViewportSize({ width: 800, height: 600 })
+  const rules = ['Bash(' + 'a'.repeat(500) + ')', ...Array.from({ length: 15 }, (_, i) => `Read(${i} ${'long rule '.repeat(30)})`)]
+  daemon.pushFrame(grantShown('Review session permission', { always_allow: { offered: true, rules } }))
+  const panel = panelFor(page)
+  await expect(panel.locator('.permission-panel__rules li')).toHaveText(rules)
+  await panel.getByRole('checkbox').press('Space')
+  await page.screenshot({ path: '/tmp/builder-1409-long.png', animations: 'disabled' })
+  await panel.getByRole('radio', { name: 'allow_once', exact: true }).press('Space')
+  for (const name of ['Continue', 'Confirm']) {
+    const widths = await panel.locator('.permission-panel__content, .permission-panel__rules, .permission-panel__rules li').evaluateAll(nodes =>
+      nodes.map(n => n.scrollWidth <= n.clientWidth + 1))
+    expect(widths.every(Boolean)).toBe(true)
+    const button = action(panel, name)
+    const box = await button.boundingBox()
+    expect(box!.y + box!.height).toBeLessThanOrEqual(600)
+    await expect(button).toBeInViewport()
+    await panel.locator('.permission-panel__rules li').last().scrollIntoViewIfNeeded()
+    await expect(panel.locator('.permission-panel__rules li').last()).toBeInViewport()
+    await expect(button).toBeInViewport()
+    await panel.locator('.permission-panel__content').evaluate(node => { node.scrollTop = 0 })
+    expect(resolutions(captured, 'Review session permission')).toBe(0)
+    if (name === 'Confirm') await page.screenshot({ path: '/tmp/builder-1409-confirm.png', animations: 'disabled' })
+    await button.click()
+  }
+  await expect.poll(() => resolutions(captured, 'Review session permission')).toBe(1)
+})
 
 test('permission context and initial Cancel focus preserve deliberate keyboard response gates', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []

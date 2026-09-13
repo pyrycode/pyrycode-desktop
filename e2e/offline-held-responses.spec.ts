@@ -30,7 +30,8 @@ async function observeCommands(app: PairedApp) {
 async function permission(app: PairedApp, kind = 'permission', conversationId = SEEDED_ROW.id, serverId = FIRST_SERVER_ID) {
   await event(app, { type: 'modalShown', serverId, conversationId, modalId: 'held-' + conversationId,
     class: kind, title: 'Held permission', prompt: 'Allow reading?', defaultToNo: true,
-    options: [{ id: 'deny', label: 'Deny' }, { id: 'allow', label: 'Allow' }], defaultOptionId: 'deny' })
+    options: [{ id: 'deny', label: 'Deny' }, { id: 'allow_once', label: 'Allow' }], defaultOptionId: 'deny',
+    alwaysAllow: { offered: true, rules: ['Read'] } })
 }
 
 async function questions(app: PairedApp, conversationId = SEEDED_ROW.id, serverId = FIRST_SERVER_ID) {
@@ -47,6 +48,7 @@ test('permission and trust retain selection offline, including pre-opened confir
   const panel = page.locator('.permission-panel')
   for (const kind of ['permission', 'trust']) {
     await permission(app, kind)
+    if (kind === 'permission') await panel.getByRole('checkbox').press('Space')
     await panel.getByRole('radio', { name: 'Allow', exact: true }).press('Space')
     await panel.getByRole('button', { name: 'Continue', exact: true }).click()
     await panel.getByRole('button', { name: 'Confirm', exact: true }).focus()
@@ -56,6 +58,7 @@ test('permission and trust retain selection offline, including pre-opened confir
     await page.keyboard.press('Enter')
     await page.keyboard.press('Space')
     await expect(panel).toContainText('Send "Allow"?')
+    if (kind === 'permission') await expect(panel.getByRole('checkbox')).toBeChecked()
     expect(await read()).toHaveLength(before)
     await event(app, { type: 'modalAnswerRejected', serverId: FIRST_SERVER_ID, modalId: 'held-' + SEEDED_ROW.id })
     await expect(page.getByRole('alert')).toContainText('Your answer was rejected.')

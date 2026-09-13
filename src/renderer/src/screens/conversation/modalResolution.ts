@@ -33,17 +33,41 @@ export interface ModalResolveDeps {
  * apart. The send is guarded (AC4): a bridge failure is swallowed, never propagated. The `dispatch` is
  * OUTSIDE the try, so a send-bridge throw never prevents the local clear — the prompt always clears on
  * a click, exactly like submitMessage's optimistic echo. The `answer_token` is minted MAIN-side
- * (#236, daemonConnection.answerModal); this payload carries only `modal_id` + `option_id`.
+ * (#236, daemonConnection.answerModal); only explicit confirmed consent adds `always_allow: true`.
  */
-export function answerPrompt(modalId: string, optionId: string, deps: ModalResolveDeps): void {
+export function answerPrompt(modalId: string, optionId: string, deps: ModalResolveDeps, alwaysAllow = false): void {
   try {
-    deps.sendCommand(answerModalCommand({ modal_id: modalId, option_id: optionId }))
-  } catch (error) {
+    logResolution(alwaysAllow ? 'session-grant-requested' : 'answer-requested')
+    deps.sendCommand(answerModalCommand({ modal_id: modalId, option_id: optionId,
+      ...(alwaysAllow ? { always_allow: true } : {}) }))
+  } catch {
     // AC4: a send-bridge failure must not crash the window. The local clear still posts.
-    console.error('modal answer send failed', error)
+    logResolution('answer-send-failed')
   }
 
   deps.dispatch({ type: 'dismissed', modalId, outcome: optionId, source: 'local' })
+}
+
+function logResolution(code: 'session-grant-requested' | 'answer-requested' | 'answer-send-failed'
+  | 'cancel-requested' | 'cancel-send-failed'): void {
+  if (typeof window !== 'undefined') window.pyry?.sendDiagnostic?.({ event: 'permission-response', code })
+}
+
+/** Consent belongs to a continuous offer, not just matching text or a reused request id. */
+export function hasSessionPermission(prompt: ModalPrompt | undefined, opted: ModalPrompt | null): boolean {
+  return !!prompt && !!opted && prompt.class === 'permission' && opted.class === 'permission'
+    && prompt.modalId === opted.modalId && prompt.conversationId === opted.conversationId
+    && prompt.alwaysAllow?.offered === true && prompt.alwaysAllow === opted.alwaysAllow
+}
+
+/** Only the explicit Confirm path may request a session grant; the daemon retains authority. */
+export function confirmPrompt(
+  prompt: ModalPrompt, pending: PendingConfirm | null, opted: ModalPrompt | null, deps: ModalResolveDeps
+): void {
+  const option = resolvePendingOption(prompt, pending)
+  if (!option) return
+  const grant = (option.id === 'allow_once' || option.id === 'allow_always') && hasSessionPermission(prompt, opted)
+  answerPrompt(prompt.modalId, option.id, deps, grant)
 }
 
 /**
@@ -135,10 +159,11 @@ export function resolvePendingOption(
  */
 export function cancelPrompt(modalId: string, deps: ModalResolveDeps): void {
   try {
+    logResolution('cancel-requested')
     deps.sendCommand(cancelModalCommand({ modal_id: modalId }))
-  } catch (error) {
+  } catch {
     // AC4: a send-bridge failure must not crash the window. The local clear still posts.
-    console.error('modal cancel send failed', error)
+    logResolution('cancel-send-failed')
   }
 
   deps.dispatch({ type: 'dismissed', modalId, outcome: MODAL_CANCEL_OUTCOME, source: 'local' })

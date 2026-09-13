@@ -49,6 +49,15 @@ const listing =
     new Set(ids)
 
 describe('translateModalEvent — the owned arms', () => {
+  it.each([{ offered: true, rules: ['Bash(touch:*)', 'Read'] }, { offered: false, rules: [] }])(
+    'carries the complete offer through bridge and store: %j', (alwaysAllow) => {
+      const translated = translateModalEvent({ ...modalShown, alwaysAllow }, noConversations)!
+      expect(translated).toHaveProperty('alwaysAllow', alwaysAllow)
+      const store = createModalStore()
+      store.getState().dispatch(translated)
+      expect(selectOutstanding(store.getState())[0]).toHaveProperty('alwaysAllow', alwaysAllow)
+    })
+
   it.each(['plain reason', { checks: [false, 0, null] }, null, false, 0])('preserves optional permission context: %j', (reason) => {
     const context = { reason, reasonType: 'classifier', blockedPath: '/workspace/file',
       description: 'Additional context', defaultToNo: false }

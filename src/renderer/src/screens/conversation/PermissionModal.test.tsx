@@ -29,6 +29,8 @@ function renderView(prompt: ModalPrompt, pendingOption: ModalOption | null = nul
   return renderToStaticMarkup(
     <PermissionModalView
       responseAvailable={true}
+      sessionPermissionChecked={false}
+      onSessionPermissionChange={noop}
       prompt={prompt}
       pendingOption={pendingOption}
       selectedOption={null}
@@ -64,6 +66,27 @@ const PROMPT: ModalPrompt = {
 }
 
 describe('PermissionModalView — the outstanding permission/trust prompt', () => {
+  it('renders one unchecked checkbox and every escaped rule in source order in both steps', () => {
+    const prompt = { ...PROMPT, alwaysAllow: { offered: true, rules: ['Read(<img src=x>)', 'Bash(touch:*)', 'Read(<img src=x>)'] } }
+    for (const pending of [null, PROMPT.options[0]]) {
+      const markup = renderView(prompt, pending)
+      expect(markup.match(/type="checkbox"/g)).toHaveLength(1)
+      expect(markup).toContain('Don&#x27;t ask again this session for:')
+      expect(markup.match(/Read\(&lt;img src=x&gt;\)/g)).toHaveLength(2)
+      expect(markup.indexOf('Read(&lt;')).toBeLessThan(markup.indexOf('Bash(touch:*)'))
+      expect(markup).not.toContain('checked=""')
+      expect(markup).not.toContain('<img src=x>')
+      expect(markup).not.toContain(' title=')
+    }
+  })
+
+  it('hides legacy, unavailable and trust offers', () => {
+    for (const prompt of [PROMPT, { ...PROMPT, alwaysAllow: { offered: false, rules: [] } },
+      { ...PROMPT, class: 'trust' as const, alwaysAllow: { offered: true, rules: ['Read'] } }]) {
+      expect(renderView(prompt)).not.toContain('type="checkbox"')
+    }
+  })
+
   it('keeps the context-free presentation without empty secondary rows', () => {
     expect(renderView(PROMPT)).not.toContain('permission-panel__context')
   })

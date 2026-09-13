@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   answerPrompt,
+  confirmPrompt,
+  hasSessionPermission,
   cancelPrompt,
   selectOption,
   resolvePendingOption,
@@ -9,12 +11,62 @@ import {
 import { answerModalCommand, cancelModalCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 
+describe('confirmed session permission', () => {
+  const prompt: ModalPrompt = { conversationId: 'chat', modalId: 'grant', class: 'permission',
+    title: 'Permission', prompt: 'Review', defaultOptionId: 'reject_once',
+    options: ['allow_once', 'allow_always', 'reject_once', 'reject_always', 'proceed'].map(id => ({ id, label: id })),
+    alwaysAllow: { offered: true, rules: ['Read', 'Bash(touch:*)'] } }
+
+  it.each(['allow_once', 'allow_always', 'reject_once', 'reject_always', 'proceed'])(
+    'grants only supplied allow options on Confirm: %s', optionId => {
+      const sendCommand = vi.fn()
+      confirmPrompt(prompt, { modalId: prompt.modalId, optionId }, prompt, { sendCommand, dispatch: vi.fn() })
+      expect(sendCommand).toHaveBeenCalledWith(answerModalCommand({ modal_id: 'grant', option_id: optionId,
+        ...(['allow_once', 'allow_always'].includes(optionId) ? { always_allow: true } : {}) }))
+    })
+
+  it('never grants unchecked, stale, unavailable or trust consent', () => {
+    const sendCommand = vi.fn()
+    const replacements: ModalPrompt[] = [{ ...prompt, alwaysAllow: undefined },
+      { ...prompt, alwaysAllow: { offered: false, rules: [] } }, { ...prompt, class: 'trust' },
+      { ...prompt, modalId: 'other' }, { ...prompt, conversationId: 'other-chat' },
+      { ...prompt, alwaysAllow: { ...prompt.alwaysAllow!, rules: ['Read'] } }]
+    for (const current of replacements) {
+      expect(hasSessionPermission(current, prompt)).toBe(false)
+      confirmPrompt(current, { modalId: current.modalId, optionId: 'allow_once' }, prompt, { sendCommand, dispatch: vi.fn() })
+      expect(sendCommand.mock.lastCall![0].payload).not.toHaveProperty('always_allow')
+    }
+    confirmPrompt(prompt, { modalId: 'grant', optionId: 'allow_once' }, null, { sendCommand, dispatch: vi.fn() })
+    expect(sendCommand.mock.lastCall![0].payload).not.toHaveProperty('always_allow')
+  })
+
+  it('does not answer an invalid request or removed option', () => {
+    const sendCommand = vi.fn()
+    for (const pending of [null, { modalId: 'other', optionId: 'allow_once' }, { modalId: 'grant', optionId: 'missing' }]) {
+      confirmPrompt(prompt, pending, prompt, { sendCommand, dispatch: vi.fn() })
+    }
+    expect(sendCommand).not.toHaveBeenCalled()
+  })
+})
+
 // answerPrompt / cancelPrompt are pure, React-free helpers (the composerSend precedent): their two
 // effects — the guarded sendCommand and the unconditional local `dismissed` dispatch — are injected,
 // so they are exercised here with plain spies (no store, no Electron, no DOM). This is the behavioral
 // coverage the `node` test environment cannot get by firing clicks on the view.
 
 describe('answerPrompt', () => {
+  it('logs static lifecycle/error codes without response or exception content', () => {
+    const sendDiagnostic = vi.fn()
+    vi.stubGlobal('window', { pyry: { sendDiagnostic } })
+    try {
+      answerPrompt('private-request', 'allow_once', { sendCommand: () => { throw new Error('private-content') }, dispatch: vi.fn() }, true)
+      expect(sendDiagnostic.mock.calls).toEqual([
+        [{ event: 'permission-response', code: 'session-grant-requested' }],
+        [{ event: 'permission-response', code: 'answer-send-failed' }]
+      ])
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('sends the answerModal command with the camelCase→snake_case rename, then dispatches dismissed', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()

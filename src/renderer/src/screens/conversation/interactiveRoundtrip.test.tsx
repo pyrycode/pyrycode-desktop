@@ -117,6 +117,8 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     const markup = renderToStaticMarkup(
       <PermissionModalView
         responseAvailable={true}
+        sessionPermissionChecked={false}
+        onSessionPermissionChange={() => {}}
         prompt={outstanding[0]}
         pendingOption={null}
         selectedOption={null}

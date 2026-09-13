@@ -78,3 +78,8 @@ Pending for documentation stage: update `docs/knowledge/features/conversation-sh
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+- 2026-09-13: Resolved the live witness question from daemon `TestInteractiveStreamStdioAlwaysAllowIsSessionScoped`: run the identical `touch pyrycode-always-allow-witness.txt` command and reset its mtime to one second after epoch before each repeat. The desktop drive additionally creates its fresh session in the same workspace and reads fresh session-settings replies to prove distinct session identity. No product-contract change; one live test remains one live test.
+- The existing styled inputs receive pointer activation through their labels. Fake checks therefore exercise label clicks and native Space activation, then assert checked state; clicking the visually hidden input itself is not a valid pointer drive.

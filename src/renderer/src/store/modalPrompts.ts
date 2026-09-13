@@ -36,6 +36,7 @@ export interface ModalPrompt {
   blockedPath?: string
   description?: string
   defaultToNo?: boolean
+  alwaysAllow?: { offered: boolean; rules: string[] }
 }
 
 /**
@@ -72,6 +73,7 @@ export type ModalEvent =
       blockedPath?: string
       description?: string
       defaultToNo?: boolean
+      alwaysAllow?: ModalPrompt['alwaysAllow']
     }
   // `outcome`/`source` are carried for the follow-up consumer (a resolution toast) but NOT consulted
   // by the reduce — only `modalId` drives the clear — mirroring threadTimeline's carried-but-unused `seq`.
@@ -267,6 +269,16 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
       // conversation scopes the CLEAR, never the lookup, so a re-delivered id is suppressed no matter
       // which conversation re-delivers it.
       if (state.resolved.some((r) => r.modalId === event.modalId)) return state
+      const previous = state.outstanding.find((p) => p.modalId === event.modalId)
+      const offer = event.alwaysAllow
+      // Preserve identity only while the same ordered offer stays continuously available.
+      // Store-level comparison observes replacements even when React batches their renders.
+      const unchangedOffer = previous?.class === event.class && previous.conversationId === event.conversationId
+        && previous.alwaysAllow?.offered === offer?.offered && offer !== undefined
+        && previous.alwaysAllow?.rules.length === offer.rules.length
+        && previous.alwaysAllow.rules.every((rule, index) => rule === offer.rules[index])
+      const alwaysAllow = unchangedOffer ? previous.alwaysAllow
+        : offer ? { offered: offer.offered, rules: [...offer.rules] } : undefined
       const prompt: ModalPrompt = {
         // #878: COPIED from the event, never derived. `modalId` is a one-time, opaque nonce (ADR 0009)
         // and computing a conversation id from it would misattribute every prompt while pushing the
@@ -282,7 +294,8 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
         ...('reasonType' in event ? { reasonType: event.reasonType } : {}),
         ...('blockedPath' in event ? { blockedPath: event.blockedPath } : {}),
         ...('description' in event ? { description: event.description } : {}),
-        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {})
+        ...('defaultToNo' in event ? { defaultToNo: event.defaultToNo } : {}),
+        ...(alwaysAllow !== undefined ? { alwaysAllow } : {})
       }
       // Re-delivery of a still-outstanding id: replace in place from the RE-DELIVERED fields
       // (match-and-replace takes the latest) — position + length preserved, no duplicate append.

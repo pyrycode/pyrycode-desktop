@@ -96,8 +96,9 @@ roles. These values are untrusted display context, never filesystem inputs,
 attributes, authorization or log content. Session grants remain daemon-owned;
 see [modal answer carriage](daemon-connection-methods.md#modal-answers-and-cancellation).
 The [renderer translator](modal-store-bridge.md#the-translator--binding-srcrenderersrcstoremodalbridgets)
-still omits this context from its store; reason display and session-offer controls
-are separate consumers tracked by #1408 and #1409.
+and reducer retain `reason`, `reasonType`, `blockedPath`, `description` and `defaultToNo`
+for the [permission panel](conversation-shell-permission-modal.md#presentation).
+`alwaysAllow` remains outside renderer prompt state; #1409 owns its session-offer control.
 
 Decoder tests cover complete JSON values and declared-shape rejection. Connection
 tests drive encoded frames through that decoder to the IPC sink and use exact

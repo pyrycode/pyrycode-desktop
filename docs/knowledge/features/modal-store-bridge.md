@@ -53,7 +53,7 @@ originOf(event: DaemonEvent): ConversationListOrigin
 
 translateModalEvent(event: DaemonEvent, conversationIdsFor: (origin: ConversationListOrigin) => ReadonlySet<string>): ModalEvent | null
 // Owns exactly modalShown / modalDismissed / modalAnswerRejected / connected, each rebuilt as a fresh
-// named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
+// named-field literal (never `return event` or spread the whole event). Every other arm -> null via explicit
 // fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 // `connected` returns { type: 'reconnected', conversationIds: conversationIdsFor(originOf(event)) } —
 // conversationIdsFor is INJECTED (#1140), never read from a store here, so the translator stays a pure
@@ -91,6 +91,14 @@ bridge's owned arms do not: `modalShown` → `type: 'shown'`, `modalDismissed` �
 so the copy is still a filter, not a rename — just the tag itself changes. The translator tests pin
 `translated.type === 'shown'`/`'dismissed'`/`'rejected'` specifically to catch a blind clone carrying
 the wrong tag forward.
+
+Optional `reason`, `reasonType`, `blockedPath`, `description` and `defaultToNo` also pass by name,
+only when present. The IPC contract alone does not deliver them: both this translator and
+[`reduceModal`](modal-prompt-model.md#types) reconstruct the prompt. Keep `null`, `false` and `0`
+intact and leave omitted fields absent instead of manufacturing own `undefined` properties.
+Bridge tests check property presence as well as values. The
+[permission panel](conversation-shell-permission-modal.md#presentation) narrows reason JSON for
+escaped display and applies the focus hint; none of this context supplies answer authority.
 
 ### No cast
 

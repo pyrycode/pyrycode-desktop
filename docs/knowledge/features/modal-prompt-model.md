@@ -42,10 +42,17 @@ interface ModalPrompt {
   prompt: string
   options: readonly ModalOption[]
   defaultOptionId: string
+  reason?: unknown
+  reasonType?: string
+  blockedPath?: string
+  description?: string
+  defaultToNo?: boolean
 }
 
 type ModalEvent =
-  | { type: 'shown'; conversationId: string; modalId: string; class: ModalClass; title: string; prompt: string; options: readonly ModalOption[]; defaultOptionId: string }
+  | { type: 'shown'; conversationId: string; modalId: string; class: ModalClass; title: string;
+      prompt: string; options: readonly ModalOption[]; defaultOptionId: string;
+      reason?: unknown; reasonType?: string; blockedPath?: string; description?: string; defaultToNo?: boolean }
   | { type: 'dismissed'; modalId: string; outcome: string; source: 'remote' | 'local' | 'timeout' }
   // #249: a modal answer that round-tripped to a daemon `error`. Produced by the bridge from the
   // content-free `modalAnswerRejected` daemon event (#248) — carries ONLY the `modalId` nonce.
@@ -96,6 +103,14 @@ reads it — see § The reducer and § Edge cases and limitations below. **There
 class** —
 the shipped `class` set is `permission | trust` only; a destructive second-confirm is a client-side
 UX policy on the answer path, not a wire distinction.
+
+The optional context fields are copied by name and presence from `shown` into the held prompt.
+`reason` remains opaque decoded JSON; `null`, `false` and `0` are meaningful values. A same-ID
+re-delivery builds a fresh prompt from the new event, so omitted context removes the old fields
+rather than retaining them through a merge. Reducer tests assert both retained values and absent own
+properties after replacement. The [permission panel](conversation-shell-permission-modal.md#presentation)
+owns reason/category presentation and the [initial-focus hint](conversation-shell-permission-modal.md#selection-and-confirmation);
+this context never changes resolution policy or enters answer commands.
 
 `outstanding` is an **ordered array**, not a `Map`/`Record`, correlated by `modalId` (the sole
 correlation key for *answering* a prompt — a `modal_answer`/`modal_cancel` still carries no

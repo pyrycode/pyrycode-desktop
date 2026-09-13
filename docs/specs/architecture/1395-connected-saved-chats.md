@@ -69,3 +69,29 @@ Pending for the documentation stage: update `docs/knowledge/features/chat-histor
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-13
+
+## Revisions
+
+### 2026-09-13 — verifier regressions
+
+The verifier found that connected reopening replaced a newly created chat's unstamped
+optimistic echo. Add `dispatchLocalEcho(serverId, conversationId, userText)` to
+`conversationTimelineStore`, wired from the host resolved by Composer's existing
+`connectedConversationHostNow` send gate. Stamp ownership when composing, retaining
+only explicitly same-host rows, rather than adopting unowned rows during restoration.
+Reuse the bounded holder and reducer; no existing exported signature changes.
+The writer continues to admit local echoes through its existing message-id and
+unique-list-owner checks.
+
+The two healthy-host interaction tests now require exactly the empty saved-storage
+notice, preserving their assertion that another host's failure adds no connection
+warning. No presentation or Figma changes are needed. Extend admission tests for
+echo reopening, cross-host replacement and rejection of a pending read after a send;
+rerun the three reported interaction specs plus the recording spec.
+
+Security re-review: PASS. The new local write uses a host resolved synchronously by
+the existing send gate, accepts only user-text events, and cannot adopt differently
+owned or unowned content. Existing snapshot validation, cancellation, writer admission,
+IPC, logging, storage and network boundaries remain unchanged. Total scope remains
+within limits: three production files across the PR, no signature migrations, one
+store method, three acceptance criteria, no new failure branches, under 800 written lines.

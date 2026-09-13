@@ -3305,10 +3305,9 @@ function Composer({
   // — content lives in one store. The send gate below still reads sessionStore's connection status;
   // two stores in one component is fine (status vs. content are orthogonal facets).
   const dispatch = useTimelineStore((s) => s.dispatch)
-  // #756: the echo's second write path — the same event folded into the keyed holder under the
-  // conversation it is sent to. `dispatchFor`'s identity is stable for the same reason `dispatch`'s is,
-  // so selecting it adds no re-render churn either.
-  const dispatchFor = useConversationTimelineStore((s) => s.dispatchFor)
+  // Stamp the local echo with the resolved send host so saved-chat reopening retains it.
+  // The store action is stable, just like the flat timeline's dispatch.
+  const dispatchLocalEcho = useConversationTimelineStore((s) => s.dispatchLocalEcho)
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
@@ -3345,7 +3344,8 @@ function Composer({
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    if (!canSend || connectedConversationHostNow(activeConversationId) === null) return false
+    const serverId = connectedConversationHostNow(activeConversationId)
+    if (!canSend || serverId === null) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not
@@ -3353,7 +3353,9 @@ function Composer({
     const sent = submitMessage(value, activeConversationId, {
       sendCommand: window.pyry.sendCommand,
       dispatch,
-      dispatchFor,
+      dispatchFor: (conversationId, event) => {
+        if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
+      },
       newMessageId: () => crypto.randomUUID(),
       // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
       // `false` returns, so a refused submit never stamps. `Date.now` rather than a store value because

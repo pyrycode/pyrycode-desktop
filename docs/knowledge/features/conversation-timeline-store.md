@@ -114,7 +114,7 @@ changes permission or mutates turn lifecycle. The `stoppingBanner` reading share
 the in-memory timeline lifetime. Received banner rows are saved by
 [local chat history](chat-history.md#snapshot-contract), including `stopsTurn`,
 without restoring the separate live reading. History replay of banners is absent;
-offline snapshot restoration remains pending.
+offline snapshot restoration displays saved rows without reviving that reading.
 
 The shipped daemon producer maps Claude's `informational` subtype, including a
 captured hook-block reason. That subtype is distinct from the payload's open `level`.
@@ -333,8 +333,8 @@ This proves Desktop dispatch and UI behavior, without requiring a live Claude re
 - **Held state and saved rows have separate lifetimes.** A timeline reset, holder
   clear or eviction drops its in-memory dividers and pending association.
   [Local chat history](chat-history.md#storage-and-concurrency) retains received
-  divider rows on disk, never the pending association; offline restoration remains
-  pending. This feature does not recover missed offline events or replay
+  divider rows on disk and restores them on demand while offline, never the pending
+  association. This feature does not recover missed offline events or replay
   `compaction_boundary` from history. History's existing `compacting` decoder carries
   outcomes, but prepending its reduced rows does not create a live pending association.
 - **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot

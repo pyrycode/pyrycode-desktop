@@ -36,7 +36,8 @@ first-write order. #758 remains the reader cutover, now depending on this rather
 Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
 `stalled`, `apiRetry`, `compacting`, `localSendPending`, `thinkingTokens` and optional
 `latestTurnEnd`. The `ConversationSlice` wrapper also holds history-request state,
-the prepend count and live/history join keys. A key **absent** from the map means
+the prepend count, live/history join keys, supplying `serverId`, local-read status
+and explicit restored host/coverage evidence. A key **absent** from the map means
 "nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
 **present, empty** slice ("observed; nothing in the thread yet"). `selectTimelineFor` preserves that
 distinction rather than collapsing it, the same three-way reading [background-task roster
@@ -85,6 +86,7 @@ exactly the thread the operator stepped away from.
      preserves position) — this is what makes "written constantly, viewed never" fail to protect a slice.
   2. A fold that **creates** a key inserts it at the **head**, ahead of every slice already held.
   3. `markViewed` moves the key to the **tail**, creating it there if absent.
+     On-demand `beginLocalTimelineRead` also installs its pending slice at the tail.
 
   Neither [#757](../codebase/757.md) clear is an exception: `Map.prototype.delete` preserves the position
   of every remaining entry, so a removal re-orders nothing, and dropping the whole map leaves nothing left
@@ -145,8 +147,8 @@ exactly the thread the operator stepped away from.
   no re-export of the constant from this module (so a collapse needs a deliberate import from
   `threadTimeline`, not a nearby default), and the AC4 tests asserting the three-way distinction through
   the read surface alone.
-- **The hard import constraint, checkable by grep:** this module's only imports are `zustand/vanilla`,
-  `zustand`, and `./threadTimeline`. No `activeConversationStore`, no `./timelineStore`, no
+- **The import boundary:** Zustand, shared types/history validation and thread-timeline
+  helpers are used. No `activeConversationStore`, no `./timelineStore`, no
   `src/renderer/src/screens/`. With no reference to the open conversation in scope, the `?? activeConversation`
   fallback banned in prose at the four turn-stream arms (#751-#754) is not something a developer must
   remember to avoid here — it is unavailable.
@@ -158,6 +160,21 @@ exactly the thread the operator stepped away from.
   saves display snapshots through main's protected storage with captured host
   ownership. Clearing or evicting a slice leaves its saved copy and any buffered
   snapshot intact; live session state remains confined to the holder.
+
+### Local timeline admission
+
+`beginLocalTimelineRead` admits validated saved rows through an explicit completion
+handle, not fabricated daemon events. Exact pending-slice identity rejects stale
+success/failure after mutation, cancellation, replacement, clear or eviction.
+The holder remains keyed by conversation id; per-slice host evidence and the
+screen's selected-host check prevent equal ids from sharing saved content.
+Receipt-stamped mutations cannot append one host's content to another's restored
+rows. Successful restoration preserves durable identity metadata and coverage
+while resetting transient state and conferring writer ownership without a save.
+See [chat-history admission](chat-history.md#received-state-admission-and-ownership)
+for cache reuse and cancellation, and [saved coverage](chat-history.md#snapshot-contract)
+for its distinction from current server history. Evicted saved slices reload on
+opening within the same ten-slot bound; eviction never deletes their disk copies.
 
 ### Stopped records and history isolation
 

@@ -68,6 +68,10 @@ exactly the thread the operator stepped away from.
     See [live tool progress](conversation-timeline-store.md#live-tool-progress). A
     reduce that changes nothing on an already-held key returns the state object itself, so zustand's
     `Object.is` short-circuit fires and no subscriber wakes.
+  - `dispatchLocalEcho(serverId, conversationId, userText)` — folds a composer echo
+    using the host resolved by the current send gate. Retains only explicitly
+    same-host content and clears local-read status, invalidating pending completion.
+    This lets connected reopening reuse the echo without admitting unowned rows.
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a
     same-object no-churn return (the common case: `activateConversation`'s `onOpen` fires on every row
     click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
@@ -168,7 +172,8 @@ exactly the thread the operator stepped away from.
 handle, not fabricated daemon events. Exact pending-slice identity rejects stale
 success/failure after mutation, cancellation, replacement, clear or eviction.
 The holder remains keyed by conversation id; per-slice host evidence and the
-screen's selected-host check prevent equal ids from sharing saved content.
+screen's selected-host check prevent equal ids from sharing saved content, including
+while connected. Reconnect and list refresh do not clear the slice or its ownership.
 Receipt-stamped mutations cannot append one host's content to another's restored
 rows. Successful restoration preserves durable identity metadata and coverage
 while resetting transient state and conferring writer ownership without a save.
@@ -199,7 +204,8 @@ boundary and transient reading with their slice.
   every one of the eight id-carrying owned arms (`assistantDelta`/`turnEnd`/`turnState`/`toolUse`/
   `toolResult`/`stallDetected`/`apiRetry`/`compacting` — the whole #675 family), keyed by each event's own
   `conversationId`, never the open conversation's; and the composer's optimistic echo
-  (`composerSend.ts`) calls it too, keyed by the conversation the message was sent to. Both writers also
+  (`composerSend.ts`) is wired through Composer to `dispatchLocalEcho`, keyed by the
+  resolved send host and conversation. Both writers also
   keep writing the flat `timelineStore` unchanged (dual-write). **`markViewed` gained its first caller in
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
   eviction ordering is now armed in production rather than degrading to first-write order; see § Edge

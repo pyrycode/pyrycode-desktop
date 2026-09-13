@@ -8,12 +8,12 @@ hosts remain separate.
 
 The app records received lists, live timeline content, composer echoes and loaded
 history pages automatically. Saved lists restore into the sidebar on launch,
-including unavailable and pairing-rejected hosts. Opening a saved chat while its
-host is unavailable restores its timeline on demand for scrolling and copying.
-Downloads require explicit upward thread input, including after reconnect. Connected
-opening restoration remains [#1395](https://github.com/pyrycode/pyrycode-desktop/issues/1395);
+including unavailable and pairing-rejected hosts. Opening a saved chat restores its
+timeline on demand whether its host is connected or unavailable. Restored rows remain
+readable through reconnect and subsequent same-host receipts continue saving.
+Downloads require explicit upward thread input, including after reconnect;
 explicit host/conversation removal integration remains separate.
-Observing, saving, flushing and offline restoration add no history requests.
+Observing, saving, flushing and restoration add no history requests.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
 retention is independent of the renderer holder's ten-conversation memory limit.
 
@@ -80,8 +80,8 @@ does not establish coverage or the beginning of history.
 Restoration preserves this coverage, durable row order, optional identity metadata
 and `prependedRows`, but initializes transient timeline state afresh. Saved coverage
 records what was received previously, not the server's current history or freshness.
-Before the oldest saved row, the view shows “Older messages require a connection.”
-unless coverage explicitly reports `atStart: true`; neither a short nor an empty
+While offline, before the oldest saved row, the view shows “Older messages require
+a connection.” unless coverage explicitly reports `atStart: true`; neither a short nor an empty
 saved snapshot proves completeness. This notice sends no request.
 
 The holder retains successful `ConversationSlice.coverage` independently of transient
@@ -125,8 +125,10 @@ Connection state, running-turn phase, in-flight requests, pending permissions,
 recovery offers/actions and credentials are excluded. Retained reports and denial
 text are display data; they cannot restore a live permission or recovery action.
 Resetting transient state is insufficient for display: a partial assistant tail
-and unresolved grouped tools derive working indicators from row shape. Offline
-rendering separately suppresses the streaming cursor and grouped-tool running label.
+and unresolved grouped tools derive working indicators from row shape. Offline or
+locally restored rendering separately suppresses the streaming cursor and grouped-tool
+running label, including on connected opening and after reconnect. New live receipts
+resume normal rendering; connection status alone cannot revive saved working state.
 Renderer web storage remains prohibited for conversation content.
 
 ### Received-state admission and ownership
@@ -190,11 +192,14 @@ request. List restoration does not restore timeline messages or establish timeli
 recording ownership. Received lists still replace their host's displayed list.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
-uses only `readTimeline`. `PairedShell` starts it from the clicked unavailable
-host's stamped sidebar row and retains those coordinates explicitly: active
-metadata reseeding projects wire fields and can discard an incidental host stamp.
-The view checks the selected host against the held slice before displaying it;
+uses only `readTimeline`. `PairedShell` starts it from every clicked host-stamped
+sidebar row, regardless of connection status, and retains those coordinates explicitly:
+active metadata reseeding projects wire fields and can discard an incidental host stamp.
+The view checks the selected host against the held slice in either connection state;
 another host's rows under an equal conversation id cannot substitute.
+Reconnect and received list refreshes retain that selected timeline. Actual selected-host
+status controls offline notices; local-read status controls saved-row presentation and
+exclusion of unrelated conversation-id-only queue rows.
 
 `conversationTimelineStore.beginLocalTimelineRead(serverId, conversationId)`
 installs a pending slice in the existing ten-slot holder at the viewed tail. A
@@ -204,6 +209,14 @@ snapshot and exact coordinates, then admits it only if the exact pending slice i
 still held. Replacement, received mutations, clear, eviction and cancellation
 invalidate late success and failure. Opening eleven saved chats and reopening the
 first therefore reads it again from disk without increasing the memory bound.
+
+Composer echoes must already have explicit ownership before reopening. Composer
+passes the host synchronously resolved by `connectedConversationHostNow` to
+`dispatchLocalEcho(serverId, conversationId, userText)`. That write retains only
+same-host rows, stamps the slice and invalidates any pending read. An unstamped echo
+would be replaced on connected reopening; admitting unowned rows during restoration
+would weaken host isolation. The writer still requires its existing message-id and
+unique-list-owner checks before saving an echo.
 
 Cancellation removes only the pending slice, never saved data, and cannot abort
 IPC or change selection. Sidebar activation, active-id changes, actual departure
@@ -253,7 +266,8 @@ in a timeline have no observed owner and cannot establish one by later live deli
 Both list and timeline restoration use explicit handles, outside live reducers.
 The writer recognizes a newly admitted `restored` marker before receipt checks,
 adopting its host and coverage without scheduling a save. Starting a local read
-clears prior observation/comparison metadata. A later unambiguous same-host
+clears prior observation/comparison metadata. Reconnect and metadata-only list refresh
+do not reset restored ownership. A later unambiguous same-host
 received change continues recording under that owner with the restored coverage;
 conflicting list claims still refuse recording. Receipt-stamped holder mutations
 start from an empty slice when the supplying host differs, preventing mixed-host
@@ -280,9 +294,11 @@ cap, automatic eviction, total collection-size bound or history-download policy.
 
 ## Results and failure preservation
 
-Timeline reading shows “Loading saved messages…” while pending, then “Offline.
-Showing saved messages.” for nonempty content. Both `missing` and a stored empty
-timeline succeed and show “No messages are saved on this device.” Errors, rejected
+Timeline reading shows “Loading saved messages…” while pending in either connection
+state. Nonempty restored content shows “Offline. Showing saved messages.” only while
+the selected host is unavailable; connected opening and reconnect show no offline
+notice. Both `missing` and a stored empty timeline succeed and show “No messages
+are saved on this device.” Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
 results instead show “Could not read saved messages on this device.” A local read
 failure changes neither `SessionState.statuses` nor saved data and creates no
@@ -458,10 +474,15 @@ silently stopped recording the held chat.
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host
 isolation, delayed success/failure after invalidation, and eleven-chat eviction
-and reload. Writer tests pair restoration with a subsequent same-host receipt:
+and reload. Echo regressions cover same-host reopening, cross-host replacement and
+rejection of a delayed read after sending. Writer tests pair restoration with a
+subsequent same-host receipt:
 restoration and eviction must write nothing, but later content must save with the
 restored owner and coverage. Static screen tests cover local notices, host-bound
-display, cursor suppression and held versus restored queue visibility.
+display and partial-row cursor suppression both connected and offline, normal rendering
+after live receipts, and held versus restored queue visibility. Healthy-host interaction
+tests assert exactly the local empty-storage notice, so they still reject an additional
+connection warning caused by another host's failure.
 
 [`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
 covers ordered host isolation with equal ids, missing/empty/error results, duplicate
@@ -492,6 +513,17 @@ Reload fixtures wait for saved-list persistence and use a newly named received r
 as their receipt barrier; saved rows can return without a status replay, so row
 count alone is not that barrier. The test encryption backend does not prove the OS
 keychain adapter.
+
+The continuity scenario starts with incomplete saved coverage, restarts offline,
+reads, reconnects and receives new same-host text, then demands one older page with
+the saved cursor. A connected restart checks ordered older/restored/new content and
+the advanced coverage, with no duplicate rows on reopening. Holding the local read
+and observing commands before host routing proves opening, pending demand, settlement
+and reconnect send zero history requests; only fresh qualifying input requests a page.
+Overlap fixtures must place the live overlap at the newest end of the newest-first
+page. Putting an unmatched older entry first exercises the intentional
+stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead
+of testing overlap suppression.
 
 The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
 [`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).

@@ -294,7 +294,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   **This slice reads the frame's reading only** — `conversation_id`, `model`, `total_tokens`,
   `max_tokens`, `percentage`. The frame's three inventories (`categories`, `mcp_tools`, `memory_files`)
   and their three dropped counts are on every real frame and are deliberately not declared or read yet:
-  the fresh five-field literal tolerates and drops them, which the follow-on slices decode. Provenance
+  the fresh five-field literal tolerates and drops them, which the follow-on slices (#1455, #1459, #1460)
+  decode. Provenance
   is mixed within the one payload — `conversation_id` is daemon-authored, `model` is claude-authored and
   unsanitized — and the reading is informational: no range check and no cross-field check on the three
   integers, since the daemon neither recomputes nor normalizes claude's figures. Takes no
@@ -312,5 +313,16 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   whole frame closed. The rows arrive as a prefix in descending-token order; `dropped_categories`
   accumulates two independent cuts and is never cross-checked against the retained length. One malformed
   row throws the whole frame rather than yielding a partial breakdown. `mcp_tools`/`memory_files` and
-  their two dropped counts remain undeclared, for #1456. Full account in [Extension
+  their two dropped counts remain undeclared, for #1459 and #1460 respectively. Full account in [Extension
   history](inbound-message-decode-history.md).
+- [#1459](https://github.com/pyrycode/pyrycode-desktop/issues/1459) extended it once more, additively:
+  the payload's second inventory, `mcp_tools: ContextUsageMCPTool[]` plus its own
+  `dropped_mcp_tools: number`, via a per-row narrower, `parseContextUsageMCPTool`, one field wider than
+  `parseContextUsageCategory` and otherwise its shape. `mcp_tools` is never `null` — an empty array is
+  claude's positive report of no MCP tools, while `null`/absent/non-array fails the whole frame closed;
+  the rows arrive as a prefix in descending-token order and `dropped_mcp_tools` is never cross-checked
+  against the retained length, nor against `dropped_categories`. `server_name` is decoded as **inert**:
+  its name collides with the actuation-crossing `ServerName` on the daemon's MCP reconnect payload, so it
+  is never an actuation target, never an authorization input, and never joined against `mcp_status`, the
+  same constraint `name` already carries. `memory_files` and its dropped count remain undeclared, for
+  #1460. Full account in [Extension history](inbound-message-decode-history.md).

@@ -406,9 +406,13 @@ export function ConversationScreen({
           so the banner is now the first thing under the overflow menu's gate; nothing else in this
           region moved. */}
       <ConnectionBannerControl />
-      {(offline || (selectedHost !== null && (localStatus !== 'loaded' ||
-        (ownSlice?.localRead === 'loaded' && items.length === 0)))) &&
-        <SavedTimelineNotice status={localStatus} empty={items.length === 0} />}
+      {/* #1447: a read that settled on nothing gets no notice. An empty local copy is the ordinary state
+          of a chat opened for the first time on this machine, and announcing it in the error-red band
+          read as a fault. What survives is a read that has not settled (loading, failed) and an offline
+          host whose read DID return rows — the one case where "Offline. Showing saved messages." is a
+          true sentence. The disconnection itself is still announced, by the #279 banner above. */}
+      {selectedHost !== null && (localStatus !== 'loaded' || (offline && items.length > 0)) &&
+        <SavedTimelineNotice status={localStatus} />}
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
@@ -980,12 +984,12 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // Timeline is still pure props-in / markup-out: the fold is a pure function of the two lists, evaluated
 // during render, holding no state between renders. That is what makes a replacement snapshot free (see
 // foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
-export function SavedTimelineNotice({ status, empty }: {
-  status: 'loading' | 'loaded' | 'failed'; empty: boolean
+export function SavedTimelineNotice({ status }: {
+  status: 'loading' | 'loaded' | 'failed'
 }): JSX.Element {
   const text = status === 'failed' ? 'Could not read saved messages on this device.'
     : status === 'loading' ? 'Loading saved messages…'
-      : empty ? 'No messages are saved on this device.' : 'Offline. Showing saved messages.'
+      : 'Offline. Showing saved messages.'
   return <p className="conversation__banner" role="status">{text}</p>
 }
 

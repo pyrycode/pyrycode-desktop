@@ -5263,7 +5263,10 @@ describe('saved timeline notices', () => {
         if (serverId === 'a') expect(html).toContain('a saved copy')
         else {
           expect(html).not.toContain('b saved copy')
-          expect(html).not.toContain('No messages are saved on this device.')
+          // The rejected other-host slice reads as a read still pending, never as a settled result.
+          // Asserted positively since #1447: the settled-empty copy it used to exclude no longer exists,
+          // which would leave a negative assertion passing over any render at all.
+          expect(html).toContain('Loading saved messages…')
         }
       }
     } finally { held.mockRestore(); reset() }
@@ -5273,14 +5276,30 @@ describe('saved timeline notices', () => {
     expect(html).toContain('saved')
     expect(html).not.toContain('bubble__cursor')
   })
-  it('distinguishes local failure, pending and saved-empty results', () => {
-    const render = (status: 'loading' | 'loaded' | 'failed', empty: boolean) =>
-      renderToStaticMarkup(<SavedTimelineNotice status={status} empty={empty} />)
-    expect(render('failed', true)).toContain('Could not read saved messages on this device.')
-    expect(render('failed', true)).not.toContain('No messages are saved')
-    expect(render('loading', true)).toContain('Loading saved messages…')
-    expect(render('loaded', true)).toContain('No messages are saved on this device.')
-    expect(render('loaded', false)).toContain('Offline. Showing saved messages.')
+  it('distinguishes local failure, pending and offline saved results', () => {
+    const render = (status: 'loading' | 'loaded' | 'failed') =>
+      renderToStaticMarkup(<SavedTimelineNotice status={status} />)
+    expect(render('failed')).toContain('Could not read saved messages on this device.')
+    expect(render('loading')).toContain('Loading saved messages…')
+    expect(render('loaded')).toContain('Offline. Showing saved messages.')
+  })
+  // #1447's AC1, both connection states in one case: an empty local copy is the ordinary state of a chat
+  // first opened on this machine, not a fault, so it gets no notice at all. The offline leg's second
+  // assertion is the other half of that AC — the #279 banner is what announces a disconnection, and it
+  // still does, which is why the notice going quiet here costs the reader nothing.
+  it.each([false, true])('shows no saved-timeline notice for a loaded, empty local read (connected=%s)', connected => {
+    const reset = stageOpenConnection(connected
+      ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } }
+      : { type: 'disconnected' })
+    const store = createConversationTimelineStore(undefined, () => 'host')
+    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
+    try {
+      store.getState().beginLocalTimelineRead('host', 'open')!.complete(null)
+      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
+      expect(html).not.toContain('No messages are saved on this device.')
+      expect(html).not.toContain('Offline. Showing saved messages.')
+      expect(html.includes(CONNECTION_BANNER_COPY)).toBe(!connected)
+    } finally { held.mockRestore(); reset() }
   })
   it('puts the saved coverage notice before rows without a history action', () => {
     const html = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'saved row' }]} olderSaved />)

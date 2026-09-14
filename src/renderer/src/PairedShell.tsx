@@ -331,6 +331,24 @@ export function PairedShellView(props: {
                 onOpenArchive={props.onOpenArchive}
                 onRepairHost={props.onRepairHost}
                 onPairNewHost={props.onOpenPairServer}
+                // #1422 — the Edit host dialog's Unpair host button needs the two nav effects the
+                // Settings row's unpair already has, and BOTH ALREADY EXIST AS PROPS ON THIS VIEW, so
+                // neither the container below nor `PairedShell` above gains a binding of its own.
+                //
+                // `onUnpaired` is the same prop `SettingsScreen` receives one case down — already
+                // `applyPairingChange(pairingChangeDeps, 'unpaired')` — so both unpair paths flip the
+                // route through one function.
+                //
+                // `onBack` is `clearServerScopedState`'s `navigateToList` for this caller, and it is the
+                // right one rather than a convenient one: `PairedShell` binds it to
+                // `() => { leaveRecovery(); dispatch({ type: 'back' }) }`, the arrow it ALSO spreads into
+                // `exitConversationDeps` at its delete and archive exits — the same act on the same
+                // trigger shape. `back` is absolute to `list`, so from `list` it is a no-op and from
+                // `thread` it leaves the departed host's chat, which is exactly when
+                // `exitActiveConversation` fires it. The Settings row's `() => {}` would be wrong here:
+                // this container renders on the `thread` route too.
+                onHostUnpaired={props.onUnpaired}
+                onLeaveConversation={props.onBack}
               />
             </div>
             <div className="paired-shell__pane">

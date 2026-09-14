@@ -173,6 +173,11 @@ test('the host row’s pen renames the machine, clears it, and the name outlives
   await page.keyboard.press('Escape')
   await expect(dialog).toBeVisible()
   await nameField.fill('Discard this draft')
+  // TWO tabs since #1422: the Unpair host button sits between the field and the footer. Stepping THROUGH
+  // it rather than onto it is the point of the intermediate assertion — an Enter one tab early would arm
+  // the confirmation instead of dismissing the draft, and this step is about the draft.
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Unpair host', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
   await page.keyboard.press('Enter')
@@ -339,6 +344,14 @@ test('long host details wrap at minimum width and all controls remain reachable 
   const field = dialog.getByRole('textbox', { name: 'Host name:' })
   await expect(field).toBeFocused()
   await expect(field).toBeInViewport()
+  // #1422 inserted the Unpair host button between the field and the footer — it sits in the content
+  // area below the field, so document order puts it here. Asserted rather than skipped over: this is the
+  // one place the new control's KEYBOARD reachability is proven, and at 800x240 it must scroll into view
+  // like every other control in this sweep.
+  await page.keyboard.press('Tab')
+  const unpair = dialog.getByRole('button', { name: 'Unpair host', exact: true })
+  await expect(unpair).toBeFocused()
+  await expect(unpair).toBeInViewport()
   await page.keyboard.press('Tab')
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
@@ -348,11 +361,76 @@ test('long host details wrap at minimum width and all controls remain reachable 
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Shift+Tab')
   await expect(close).toBeFocused()
   await expect(close).toBeInViewport()
   await page.screenshot({ path: '/tmp/builder-1348-modal/short-header-800x240.png' })
   await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
+})
+
+// #1422 — AC2's transition, and the ONE part of the unpair slot that needs a running window. Every ARM's
+// markup (idle, confirming, in flight, failed) is `EditHostDialog.test.tsx`'s, and the erase→refresh→
+// route-or-clear decision behind a confirmed answer is `unpairServerAction.test.ts`'s and
+// `settings-per-server-unpair.spec.ts`'s. What neither tier can answer is what a CLICK does: this file's
+// own header states why (`environment: 'node'`, every renderer spec a `renderToStaticMarkup` string).
+//
+// ⭐ DELIBERATELY NON-DESTRUCTIVE. It arms and disarms and never confirms, so nothing is erased and the
+// drive needs no second pairing to survive its own assertions. The claim under test is precisely that
+// clicking the verb does NOT unpair — the host rows are still there afterwards — which is the half of AC2
+// a confirming drive could not distinguish from a working erase.
+test('the Unpair host button arms a confirmation instead of unpairing, and discards it on close', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp()
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const hostRows = page.locator('.channel-list__host')
+  const dialog = page.getByRole('dialog', { name: 'Edit host' })
+  const slot = dialog.locator('.edit-host__actions')
+  const verb = slot.getByRole('button', { name: 'Unpair host', exact: true })
+  // The SLOT's answers, scoped to `.edit-host__actions` — the footer carries its own 'Cancel' and a
+  // dialog-wide locator would match both. That separate addressability is what
+  // `EditHostDialog.test.tsx` pins in markup; this is the live half of it.
+  const slotCancel = slot.getByRole('button', { name: 'Cancel', exact: true })
+  const confirm = slot.getByRole('button', { name: 'Confirm', exact: true })
+  const rowsBefore = await hostRows.count()
+  expect(rowsBefore).toBeGreaterThan(0)
+
+  await page.locator('.channel-list__host-edit').first().click()
+  await expect(dialog).toBeVisible()
+  await expect(verb).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+
+  // --- AC2: the click ARMS. The verb leaves its slot, the prompt and both answers take it, and nothing
+  // is erased — the rows are all still there and the dialog is still open on the same machine. ---
+  await verb.click()
+  await expect(slot.getByText('Forget this host?', { exact: true })).toBeVisible()
+  await expect(confirm).toBeEnabled()
+  await expect(slotCancel).toBeEnabled()
+  await expect(verb).toHaveCount(0)
+  await expect(hostRows).toHaveCount(rowsBefore)
+  // Arming freezes nothing: the rename half of the dialog is still usable behind a confirmation.
+  await expect(dialog.getByRole('textbox', { name: 'Host name:' })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'OK', exact: true })).toBeEnabled()
+
+  // --- AC2: the slot's Cancel DISARMS, returning the slot to the idle button without closing. ---
+  await slotCancel.click()
+  await expect(verb).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+  await expect(dialog).toBeVisible()
+
+  // --- AC2: an armed state does not survive a close. Re-arm, leave by the footer's own Cancel, reopen,
+  // and the slot is idle — the container re-seeds the status cell on every open, so there is no armed
+  // state to carry. The footer's Cancel is reached from the footer, never from the slot. ---
+  await verb.click()
+  await expect(confirm).toBeVisible()
+  await dialog.locator('.modal__footer').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await page.locator('.channel-list__host-edit').first().click()
+  await expect(verb).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+  // Nothing was erased by any of it.
+  await expect(hostRows).toHaveCount(rowsBefore)
 })
 
 // #1361: the real build and renderer image policy must allow the shared close asset.

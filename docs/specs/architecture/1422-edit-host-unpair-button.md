@@ -246,6 +246,31 @@ one is a compile error rather than a silent `undefined`.
 - Whether the failure line belongs in the actions slot or the existing message slot. AC4 says "rendered
   in the same message slot", so it goes beneath the field beside the rename copy.
 
+## Revisions
+
+**2026-09-14 — the plan's "no new Playwright spec" was wrong, and `e2e/sidebar-host-edit.spec.ts` had to
+move regardless.** Two things surfaced in Phase B that the plan had not accounted for.
+
+1. *AC2 is an interaction, and no tier above `e2e/` can answer it.* The plan leaned on the ticket's note
+   that a live check is not required — true of the **erase**, which `settings-per-server-unpair.spec.ts`
+   and `unpairServerAction.test.ts` already prove, but not of AC2's own claim, which is that clicking
+   *Unpair host* **does not** unpair and arms instead. A static render cannot distinguish an arming click
+   from a working erase, because it cannot click at all. A non-destructive spec was added to the dialog's
+   existing drive: arm, assert the rows are all still there, disarm, re-arm, close by the footer, reopen
+   idle. It confirms nothing, so it erases nothing and needs no second pairing.
+2. *The new button lands in the middle of the dialog's tab order,* between the Host name field and the
+   footer, and two existing assertions in that spec walked `field → Cancel → OK` by pressing Tab. Both
+   were corrected to step through the new control, with an intermediate `toBeFocused` on it rather than a
+   silent extra Tab — that is also where the button's keyboard reachability is now proven. This is a
+   consequence of the design the plan chose (the Figma's placement), not a change to it.
+
+The plan's Testing strategy should be read with these two additions; nothing else in it moved. Also
+dropped, and never in the plan: a first draft of the view test invoked each button's `onClick` off the
+rendered element tree. There is no precedent for that anywhere in this repo's renderer tier — CLAUDE.md
+says in as many words that nothing here can click and that interaction belongs in `e2e/` — so it was
+replaced with a markup assertion that the slot's Cancel and the footer's Cancel are separately
+addressable, which is the property `e2e/` then needs to target them apart.
+
 ## Security review
 
 **Verdict:** PASS

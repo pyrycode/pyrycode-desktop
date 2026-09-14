@@ -39,8 +39,6 @@ the host, separate from connection dots and repair; see [local read failures](ch
   itself survives for its three other callers (§ Why the row carries no message preview below).
 - Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
   conversation. See § Edge cases.
-- A [new-discussion FAB](new-discussion-fab.md) floats bottom-right over the list, present in all
-  three states — a sibling of the section/row rendering described above, added by [#242](../codebase/242.md).
 - A [Settings](settings-screen.md) entry button (gear glyph, `aria-label="Settings"`) is pinned
   top-right over the list, likewise present in all three states — added by [#333](../codebase/333.md).
 - An [Archive](archive-screen.md) entry button (Material `archive`-box glyph, `aria-label="Archive"`)
@@ -385,7 +383,8 @@ before. See that dialog's write-up for the caller.
 **Fixture note.** `conversationStateFake` (`e2e/fixtures/conversationStateFake.ts`) has to hold one
 label per `cwd`, the same invariant the daemon holds, or the suite's two-trees idiom lies:
 `workspace-collapse.spec.ts`'s pattern of seeding one promoted row and minting a second, unpromoted
-one with the FAB puts both rows under the *same* `cwd` (`DEFAULT_CREATED_CWD` equals the default
+one via the host row's Add-workspace plus (#1426) puts both rows under the *same* `cwd`
+(`DEFAULT_CREATED_CWD` equals the default
 seed's `/fake/workspace`), and the two trees group independently — so a fake minting a `null` label
 for the created row would show the daemon name in one tree and the folder segment in the other,
 reddening a spec against correct production code. The fake derives a `Map<string, string | null>`
@@ -503,12 +502,13 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   grouped by workspace, with no host row above it (§ Server grouping above). Unreachable in
   production since #1068 stamps every daemon event main-side; the type still admits it.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
-  (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (The
-  new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md) — see [its feature
-  doc](new-discussion-fab.md); the settings gear, also once deferred here as "inside a future top app
-  bar," instead shipped in [#333](../codebase/333.md) as its own pinned button, since ChannelList still
-  has no top app bar.) A screenshot of this screen will not match the full Figma frame 15-8 for this
-  reason — fidelity is scoped to the two-section list body only.
+  (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (A
+  new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md), was never in the
+  drawing (103:2959), and was deleted in #1426 — see [its retired doc](new-discussion-fab.md); the
+  settings gear, also once deferred here as "inside a future top app bar," instead shipped in
+  [#333](../codebase/333.md) as its own pinned button, since ChannelList still has no top app bar.) A
+  screenshot of this screen will not match the full Figma frame 15-8 for this reason — fidelity is
+  scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
 - **Both section headers and the divider render unconditionally whenever anything is paired**, since
@@ -549,8 +549,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the transport
   decode; documents the no-message-text wire gap this screen's row shape is scoped by.
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.
-- [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the floating `+`
-  affordance rendered as a sibling of this screen's rows.
+- [The create → nav bridge, formerly the new-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md)
+  — the FAB was deleted in #1426; the bridge survives as the nav wiring behind this screen's create controls.
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the settings entry button
   rendered as a sibling of this screen's rows, and the `settings` route it navigates to.
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the archive entry button sharing

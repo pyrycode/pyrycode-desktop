@@ -8,9 +8,9 @@ daemon choose"); the daemon answers `conversation_created` with the new conversa
 
 Introduced in [#241](../codebase/241.md). Transport data path only — command → reply → one typed
 event. The write-side twin of the [conversation list fetch](conversation-list-fetch.md) (#139). The
-renderer FAB that fires the command and opens the new thread is
-[the new-discussion FAB](new-discussion-fab.md) (#242), which shipped after this ticket and
-consumes both pieces unchanged.
+renderer side that fires the command and opens the new thread is
+[the create → nav bridge](new-discussion-fab.md) (#242), which shipped after this ticket and consumes
+both pieces unchanged; its first caller was the new-discussion FAB, later deleted (#1426).
 
 ## The wire contract
 
@@ -160,9 +160,10 @@ By #241, three independent `assertNever`-guarded `DaemonEvent` switches exist
 [`modalBridge.ts`](modal-store-bridge.md)), so adding `conversationCreated` forced a one-line case in
 all three — `daemonEventBridge`/`timelineBridge` return `null`, `modalBridge` folds it into its
 existing null fall-through list. The real consumer at #241 time was
-[the new-discussion FAB's bridge](new-discussion-fab.md) (#242), which subscribes directly via
-`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above. `requestNewConversation`
-got a second caller in [#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178):
+[the create → nav bridge](new-discussion-fab.md) (#242, then the new-discussion FAB's bridge), which
+subscribes directly via `window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges
+above. `requestNewConversation` got a second caller in
+[#1178](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178):
 each sidebar workspace row's hover-revealed plus, sending that group's own `cwd` rather than the client's
 saved default — the first caller to pass this constructor a `cwd` that is daemon-asserted text rather than
 a client-side setting, verbatim and unnormalised, relying on `isCreateConversationPayload` and the
@@ -194,8 +195,8 @@ subscriptions are separate and side-effect-disjoint (nav vs. re-list), so they n
 ## Data flow
 
 ```
-new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand, defaultCwd, serverId)
-  → sendCommand({serverId, type:'createConversation', payload:{is_promoted,name,cwd:defaultCwd}})
+Chats-tree "Create chat" plus (#1178) → requestNewConversation(window.pyry.sendCommand, cwd, serverId)
+  → sendCommand({serverId, type:'createConversation', payload:{is_promoted,name,cwd}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
   → authenticated connection check → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage
     unavailable/build/send failure → host-stamped conversationCreateRejected
@@ -206,6 +207,12 @@ daemon → conversation_created frame → onDriverEvent 'message' → parseInbou
   → DAEMON_EVENT_CHANNEL → all three assertNever bridges → null (no store consumer)
                           → useConversationCreatedNav's own subscription (#242) → dispatch({type:'open'})
 ```
+
+The diagram traces `requestNewConversation`'s one production caller today; the Channels-tree plus and the
+Add-workspace dialog feed the same `conversationCreated` event into the same subscription through their
+own constructors (`requestNewChannel`, `requestNewWorkspaceChat` — see [the create → nav
+bridge](new-discussion-fab.md)). The original caller, the new-discussion FAB, sent a client-settings
+`defaultCwd` here instead of a daemon-asserted group `cwd`; it was deleted in #1426.
 
 ## Error handling
 
@@ -284,8 +291,9 @@ for pending-entry lifetime and the accepted concurrent-caller limitation.
   request-attribution limit (a host stamp does not identify the calling surface or attempt).
 - [Channel List — the host row § The Add workspace dialog](channel-list-host-row.md#the-add-workspace-dialog-1308)
   (#1308) — the third caller, `requestNewWorkspaceChat`, and the first consumer of the rejection arm above.
-- [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
-  renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
+- [The create → nav bridge, formerly the new-discussion FAB](new-discussion-fab.md) / [#242 codebase
+  notes](../codebase/242.md) — the renderer consumer: fires `createConversation`, navigates on
+  `conversationCreated`. The FAB itself, its original caller, was deleted in #1426.
 - [Channel List — the row's desktop geometry § The workspace row's own nest and its create-chat plus](channel-list-desktop-row-geometry.md#the-workspace-rows-own-nest-and-its-create-chat-plus-1178)
   (#1178) — the second caller, sending a workspace group's own `cwd` instead of the saved default.
 - [Create-channel dialog](create-channel-dialog.md) (#1179) — `requestNewChannel`, the sibling
@@ -294,7 +302,7 @@ for pending-entry lifetime and the accepted concurrent-caller limitation.
   promotion.
 - [Conversation list store](conversation-list-store.md) / [#515 codebase notes](../codebase/515.md) —
   the second `conversationCreated` consumer, added later: re-requests the list so the new row lands in
-  the store on the same event the FAB navigates on.
+  the store on the same event the create → nav bridge navigates on.
 - [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
   widened `requestNewConversation`'s `cwd` from a hardcoded `null` to the caller's saved default
   (`null` still means "take the daemon default"); no wire/payload change.

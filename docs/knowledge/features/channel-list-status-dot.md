@@ -78,10 +78,15 @@ keeps a click on the dot's box opening the conversation rather than being swallo
 on the accessibility tree, so the dot's `role="img"` label is still announced.
 
 Making `.channel-list__row` a positioned element was checked for blast radius rather than assumed
-harmless: it moves the row into the positioned-descendants paint layer, where the two sticky top-right
-siblings (`.channel-list__actions`, `.channel-list__fab`) win on document order alone — both already carry
-`z-index: 1`, so rows still paint under them, and no fixed-position element renders inside a row. No
-regression, but worth recording since it's the one edit here whose cost isn't local to the row itself.
+harmless: at the time, it moved the row into the positioned-descendants paint layer, where the two sticky
+top-right siblings (`.channel-list__actions`, `.channel-list__fab`) won on document order alone — both
+already carried `z-index: 1`, so rows still painted under them, and no fixed-position element rendered
+inside a row. No regression, but worth recording since it was the one edit here whose cost wasn't local
+to the row itself. **Both siblings are gone since**: the FAB was deleted in
+[#1426](https://github.com/pyrycode/pyrycode-desktop/issues/1426), and
+[#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443) moved `.channel-list__actions` into the
+card's own Top bar, outside `.channel-list__tree` entirely — it no longer shares a scroller or a
+stacking-context slot with a row at all, so this concern has no live sibling to apply to any more.
 
 **Vertical alignment is a measurement, not an inheritance — and it doesn't work the way this file's own
 prior reasoning for `.channel-list__host-dot` claimed.** The Figma frame's `Status dot` instance sits a few

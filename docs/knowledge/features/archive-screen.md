@@ -18,11 +18,13 @@ security-sensitive.
 
 ## What it does
 
-- A new icon-only **Archive** entry button (Material `archive`-box glyph, `aria-label="Archive"`)
-  renders alongside the existing [Settings entry](settings-screen.md) inside a shared top-right
-  `.channel-list__actions` cluster on the [Channel List](channel-list.md)'s root `<section>` — present
-  in all three list states (not-yet-loaded / loaded-zero / non-empty). Archive leads, Settings trails
-  (conventional gear-rightmost).
+- A new icon-only **Archive** entry button (`aria-label="Archive"`) renders alongside the existing
+  [Settings entry](settings-screen.md) on the [Channel List](channel-list.md)'s root `<section>` —
+  present in all three list states (not-yet-loaded / loaded-zero / non-empty). Originally a Material
+  `archive`-box glyph leading Settings inside a shared, sticky, top-right `.channel-list__actions`
+  cluster; since [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443) both are drawn glyphs
+  in the card's own non-scrolling Top bar, Settings leading — see the [Channel List](channel-list.md)
+  overview's "What it does" for the current geometry.
 - Clicking it navigates the [paired shell](paired-shell.md) to a new `archive` route.
 - The Archive screen shows a back header: a back affordance (`aria-label="Back"`, the same 48px
   `arrow_back` glyph as `SettingsScreen`'s `BackControl`, cloned verbatim) beside an `<h1>` reading
@@ -260,18 +262,20 @@ BackControl onClick → onBack → PairedShell dispatch({ type: 'back' }) → ne
   active-marker render both derive from the same `tab.key`, so a mismatch is structurally impossible.
   The restore-dispatch contract itself is pinned directly: `requestUnarchiveConversation` is tested by
   calling it with a fake `sendCommand` and asserting the exact command shape.
-- **Entry glyph is a developer choice.** No Figma node pins the desktop-invented `ArchiveButton`; any
-  recognizable archive glyph was acceptable (mirrors `SettingsButton`'s own precedent). Likewise the
-  restore glyph (a Material `replay` circular arrow) is a reasonable stand-in for Figma's undo/restore
-  icon — not load-bearing, since the accessible name comes from `aria-label`, not the glyph.
+- **Restore glyph is a developer choice; the sidebar entry glyph no longer is.** The restore glyph (a
+  Material `replay` circular arrow) is a reasonable stand-in for Figma's undo/restore icon — not
+  load-bearing, since the accessible name comes from `aria-label`, not the glyph. The `ArchiveButton`
+  glyph was the same kind of stand-in until
+  [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443) replaced it with the drawing's own
+  export (`box-archive-solid-full 1`, Figma `117:3839`).
 
 ## Related
 
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the router this screen's `archive`
   route slots into, now `list ⇄ thread ⇄ settings ⇄ pairServer ⇄ archive`.
-- [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — hosts the entry button
-  inside the shared `.channel-list__actions` cluster, and the `titleFor`/`partitionByPromotion`/
-  `formatLastActivity` reuse source in `channelListViewModel.ts`.
+- [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — hosts the entry button in
+  its own Top bar, and the `titleFor`/`partitionByPromotion`/`formatLastActivity` reuse source in
+  `channelListViewModel.ts`.
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the direct structural precedent
   the #347 scaffold mirrored beat-for-beat (route + entry + empty shell as one unit).
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the

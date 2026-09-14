@@ -200,9 +200,14 @@ test('the overflowing thread draws no scrollbar while its neighbours keep theirs
   expect(await scrollbarWidthOf(page, '.conversation__thread')).toBe('none')
 
   // --- AC5, and the proof that the read above discriminates rather than answering `none` for everything.
-  // Both regions are on screen in this same launch: `.channel-list` is the sidebar column beside the
-  // thread, `.composer__input` the textarea below it whose bar past five lines is deliberate (#1056). ---
-  expect(await scrollbarWidthOf(page, '.channel-list')).toBe('auto')
+  // Both regions are on screen in this same launch: `.channel-list__tree` is what scrolls in the sidebar
+  // beside the thread, `.composer__input` the textarea below it whose bar past five lines is deliberate
+  // (#1056). The control names the TREE and not `.channel-list` since #1443: the drawn top bar split that
+  // column into a padded card column that no longer scrolls and a tree wrapper inside it that does, and a
+  // control pointed at a non-scrolling element is a weaker one — `scrollbar-width` computes `auto` by
+  // default on any element at all, so it would still answer `auto` and prove nothing about a region that
+  // draws a bar. ---
+  expect(await scrollbarWidthOf(page, '.channel-list__tree')).toBe('auto')
   expect(await scrollbarWidthOf(page, '.composer__input')).toBe('auto')
 
   // --- AC3. Nothing else about the element moved. `overflow-anchor` unset computes `auto`, which is what

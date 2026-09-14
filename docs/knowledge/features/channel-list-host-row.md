@@ -355,6 +355,13 @@ of slack from the header sitting between the row and the cluster means no placem
 plausibly write closes the gap. Each pill spec has to re-measure its own detector rather than copy a
 sibling's answer.
 
+**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443).** The bar moved
+outside the scroller entirely, so the 30px of slack measured above became the whole tree: the clearance
+now holds by construction rather than against a live sticky edge. The assertion is kept rather than
+deleted — it still reads a relation between two live boxes and would catch a bar that grew back down into
+the tree — but as this paragraph already states, it was never the detector for a wrong placement here;
+the band assertion is, and stays unchanged by #1443.
+
 **The row's right padding goes from 0 to 52px** (`calc(var(--space-8) + var(--space-5))`,
 `.channel-list__workspace`'s own value) **in both states, not only on hover** — reserving the trailing
 slot unconditionally is what stops a long label re-truncating the moment the pointer arrives. The row

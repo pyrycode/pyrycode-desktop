@@ -1,14 +1,15 @@
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
-import type { ConversationSummary } from '../src/shared/wire/types'
+import { encodeEnvelope } from '../src/main/transport/codec'
+import type { ConversationSummary, ConversationsPayload } from '../src/shared/wire/types'
 import type { Locator } from '@playwright/test'
 
-// Fake-stack UI e2e for THE SIDEBAR TREE'S PLACEMENT (Figma Sidebar 132:3902 / "Channels and chats"
-// 103:2959): where each level of the tree sits inside the 400px card, and what separates the two
-// sections. Only this tier can prove it: `vitest.config.ts` sets `environment: 'node'`, every renderer
-// spec is a `renderToStaticMarkup` string assertion, and there is no layout engine there to measure an
-// x coordinate with.
+// Fake-stack UI e2e for THE SIDEBAR CARD'S PLACEMENT (Figma Sidebar 132:3902 / "Channels and chats"
+// 103:2959): its inset, the top bar and rule that head it since #1443, and where each level of the tree
+// sits inside the 400px column. Only this tier can prove it: `vitest.config.ts` sets
+// `environment: 'node'`, every renderer spec is a `renderToStaticMarkup` string assertion, and there is
+// no layout engine there to measure an x coordinate with.
 //
 // A DEDICATED FILE beside sidebar-row-geometry.spec.ts, which owns the ROW's own box (its height, padding,
 // corner, type and pitch) and scopes itself to that. This spec owns the row's position relative to the
@@ -59,6 +60,40 @@ const HEADER_TO_HOST_PX = 32
 // 103:2959 gap-[28px], on both sides of the 1px divider 103:3009.
 const DIVIDER_MARGIN_PX = 28
 
+// --- #1443, the drawn top bar and the card's vertical inset. ---
+
+// 103:2959 pt-[24px] / pb-[20px]. Not the pair this card wore until #1443: the top 4 was the sticky
+// actions cluster's rest position and the bottom 24 the deleted FAB's sticky offset, neither of them a
+// number the design ever drew.
+const CARD_TOP_INSET_PX = 24
+const CARD_BOTTOM_INSET_PX = 20
+// Top bar 115:3693 — a 24px row of two 24px boxes (Settings 115:3834, Archive 117:3835) inside the 76px
+// `Buttons` frame 497:1874, whose `justify-between` lands the second box's left edge 52 in; then
+// `gap-[20px]` down to the 1px rule 497:1852. The 52 is DERIVED in the stylesheet from a --space-7 gap
+// between two --space-6 boxes, so what is restated here is the drawing's number, not the rule's.
+const BAR_ROW_PX = 24
+const BAR_BOX_PX = 24
+const ARCHIVE_BOX_X = 52
+const BAR_TO_RULE_PX = 20
+// ⭐ THE COLOUR'S FIGMA NAME IS NOT ITS TOKEN NAME. Both rectangles are STYLED `inverse-primary` in the
+// file and both resolve to #9dcbfc, which is this repo's --color-primary; `tokens.css` has its own
+// --color-inverse-primary at #32628d, a different colour one name-lookup away. The glyphs carry the same
+// fill, so this constant is read back on four elements below.
+const PRIMARY_INK = 'rgb(157, 203, 252)' /* --color-primary #9dcbfc */
+const RULE_OPACITY = '0.6'
+// The number the whole bar exists to produce: 24 (card top) + 24 (bar row) + 20 (bar gap) + 1 (rule) +
+// 28 (the card's column gap, carried as the tree's top padding). #1444's first message row takes the same
+// 97 from ITS card's top edge, which is what makes the two panes read as one design — each is measured
+// from its own card and neither ticket reads the other's number.
+const HEADER_TOP_PX = 97
+
+// Enough rows that the tree really overruns the 800px window the app opens at, for the scroll block that
+// closes the drive. The sibling pill specs' count, and deliberately not tuned to the exact overflow: a
+// taller window must still scroll here.
+const TALL_ROW_COUNT = 40
+
+const TIMEOUT_MS = 15_000
+
 // Sub-pixel tolerance for a device-pixel-ratio-scaled layout, copied from the sibling specs.
 const GEOMETRY_TOLERANCE_PX = 1
 
@@ -91,16 +126,51 @@ const expectAbout = (actual: number, expected: number): void => {
 
 const gapBetween = (above: Box, below: Box): number => below.y - (above.y + above.height)
 
-test('the sidebar tree sits at the desktop card inset: 20px card, 28px list indent, 28px around the divider', async ({
+// The two rectangles' paint, read as one object so a single failure diff shows colour and opacity at once.
+const paintOf = (locator: Locator): Promise<{ colour: string; opacity: string }> =>
+  locator.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return { colour: style.backgroundColor, opacity: style.opacity }
+  })
+
+// The tall list for the closing scroll block, pushed as an UNSOLICITED `conversations` envelope. It
+// cannot be the launch seed: `launchPairedApp` reaches the thread by clicking a single STRICT
+// `.channel-list__row-open`, so a multi-row list strict-violates before the drive's first line runs. The
+// sibling pill specs' idiom — `daemonConnection`'s inbound `conversations` arm dispatches on the inner
+// frame's `type` with no correlation-id match, so an unsolicited one is consumed exactly like a reply.
+// Pushed LAST, after every box above has been read, so the stateful fake's own list is never consulted
+// again and cannot disagree with what the store now holds.
+const tallListFrame = (): Uint8Array =>
+  encodeEnvelope({
+    id: 1,
+    type: 'conversations',
+    ts: '2026-07-07T12:00:00.000Z',
+    payload: {
+      conversations: Array.from({ length: TALL_ROW_COUNT }, (_, index) =>
+        seed({ id: `tall-row-${index}`, name: `Channel ${index}`, is_promoted: true })
+      )
+    } satisfies ConversationsPayload
+  })
+
+test('the sidebar card sits at its drawn inset under its top bar: 24/20/20, a 24px bar, a rule, and the header at 97', async ({
   launchPairedApp
 }) => {
   const buildReplyFrames = conversationStateFake({
     conversations: [seed({ is_promoted: true })]
   })
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
 
   const card = page.locator('.paired-shell__sidebar')
+  // ⭐ TWO ELEMENTS WHERE THERE USED TO BE ONE, and the split is the whole of #1443's fallout. Until then
+  // `.channel-list` was both the padded card column and the scrollport; now it is the padded column only
+  // and `.channel-list__tree` inside it scrolls and clips. Every read below that depends on WHICH box
+  // scrolls — the trailing-edge derivation, the bottom inset, the closing scroll block — names the tree.
   const list = page.locator('.channel-list')
+  const tree = page.locator('.channel-list__tree')
+  const bar = page.locator('.channel-list__actions')
+  const rule = page.locator('.channel-list__actions-rule')
+  const gear = page.locator('.channel-list__settings')
+  const archive = page.locator('.channel-list__archive')
   const headers = page.locator('.channel-list__section-header')
   const hosts = page.locator('.channel-list__host')
   const hostIcons = page.locator('.channel-list__host-icon')
@@ -130,9 +200,27 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
 
   const cardBox = await boxOf(card, 'sidebar card')
   const left = cardBox.x
-  // The trailing edge is read off the scroll column's CLIENT width rather than the card's box, so a
-  // classic (non-overlay) scrollbar on the host machine cannot move it.
-  const right = left + (await list.evaluate((el) => el.clientWidth))
+  // The trailing edge is the card's own right edge less whatever a classic (non-overlay) scrollbar took
+  // from THE ELEMENT THAT SCROLLS, so a scrollbar on the host machine cannot move it. Since #1443 that
+  // element is the tree wrapper, not `.channel-list`: the scrollbar moved inward with the scrollport, so
+  // a derivation left on the column would drift these reads by a scrollbar width on a classic-scrollbar
+  // machine. Same shape as the `clientWidth` read it replaces, one level down — on an overlay-scrollbar
+  // machine the difference is 0 and this is the card's edge exactly.
+  const scrollbarPx = await tree.evaluate((el) => el.offsetWidth - el.clientWidth)
+  const right = left + cardBox.width - scrollbarPx
+
+  // ⭐ ...AND THE STRIP THAT SCROLLBAR TAKES IS THE CARD'S RIGHT INSET, which is a regression read rather
+  // than a restatement of block 1. The tree's own box bleeds back through that inset — leading edge at the
+  // content edge, trailing edge flush with the CARD's — so whatever width a bar takes lands in the 20 the
+  // card already reserves instead of over the column of trailing controls that every row, section header
+  // and workspace head ends at. It shipped once without the bleed and the derivation above could not see
+  // it: an OVERLAY bar takes no width, so `scrollbarPx` read 0, every assertion in this file stayed green,
+  // and the three name-pill specs timed out instead with `.channel-list__tree` intercepting the pointer at
+  // each trailing control. One read covers both bar kinds — a classic one is taken out of this box's
+  // content and `right` already carries it.
+  const treeSpan = await boxOf(tree, 'sidebar tree')
+  expectAbout(treeSpan.x - left, CARD_INSET_PX)
+  expectAbout(left + cardBox.width - (treeSpan.x + treeSpan.width), 0)
 
   // --- 1. Every level shares the card's 20px inset: the header, the host row and the workspace row all
   // start at the content edge, and the rows one list-indent further in. `x` is the box's left edge, so
@@ -192,4 +280,93 @@ test('the sidebar tree sits at the desktop card inset: 20px card, 28px list inde
   expectAbout(right - (dividerBox.x + dividerBox.width), CARD_INSET_PX)
   expectAbout(gapBetween(await boxOf(rows.nth(0), 'Channels row'), dividerBox), DIVIDER_MARGIN_PX)
   expectAbout(gapBetween(dividerBox, await boxOf(headers.nth(1), 'Chats header')), DIVIDER_MARGIN_PX)
+
+  // --- 6. THE TOP BAR (#1443, Figma 115:3693) — the card's first child, a 24px row at the card's 24px top
+  // inset with the gear at the content edge and the archive box 52 in, both 24 × 24. The ALIGNMENT and the
+  // ORDER both flip here: until #1443 this was an archive-then-gear cluster pinned top-RIGHT, and the
+  // drawing puts the gear first at the left edge. ---
+  const barBox = await boxOf(bar, 'top bar')
+  expectAbout(barBox.y - cardBox.y, CARD_TOP_INSET_PX)
+  expectAbout(barBox.height, BAR_ROW_PX)
+
+  const gearBox = await boxOf(gear, 'settings button')
+  const archiveBox = await boxOf(archive, 'archive button')
+  expectAbout(gearBox.x - left, CARD_INSET_PX)
+  expectAbout(archiveBox.x - left, CARD_INSET_PX + ARCHIVE_BOX_X)
+  for (const [role, box] of [
+    ['settings', gearBox],
+    ['archive', archiveBox]
+  ] as const) {
+    expect(Math.abs(box.width - BAR_BOX_PX), `${role} box width`).toBeLessThanOrEqual(
+      GEOMETRY_TOLERANCE_PX
+    )
+    expect(Math.abs(box.height - BAR_BOX_PX), `${role} box height`).toBeLessThanOrEqual(
+      GEOMETRY_TOLERANCE_PX
+    )
+    expect(Math.abs(box.y - barBox.y), `${role} box top`).toBeLessThanOrEqual(GEOMETRY_TOLERANCE_PX)
+  }
+
+  // The ink is the token and the ground is NOTHING. The 48px pair these replace carried the
+  // `.settings__back` treatment — transparent until hover, then surface-container-high — and the drawing
+  // fills both glyphs --color-primary and draws no circle in any state it draws. A hover fill left behind
+  // reads back here at rest as a transparent ground, so this pins the resting half; the rule that used to
+  // paint it is deleted rather than overridden.
+  for (const [role, control] of [
+    ['settings', gear],
+    ['archive', archive]
+  ] as const) {
+    const drawn = await control.evaluate((el) => {
+      const style = getComputedStyle(el)
+      return { colour: style.color, ground: style.backgroundColor }
+    })
+    expect(drawn, `${role} button`).toEqual({ colour: PRIMARY_INK, ground: 'rgba(0, 0, 0, 0)' })
+  }
+
+  // --- 7. THE RULE under it (497:1852): 1px, 20 below the bar, spanning the card's content box. Its span
+  // is read against the CARD's own box and NOT against `right` — the rule sits outside the scroller, so a
+  // classic scrollbar moves the rows inward and leaves this line exactly where the card's inset put it. ---
+  const ruleBox = await boxOf(rule, 'top bar rule')
+  expectAbout(ruleBox.height, 1)
+  expectAbout(gapBetween(barBox, ruleBox), BAR_TO_RULE_PX)
+  expectAbout(ruleBox.x - left, CARD_INSET_PX)
+  expectAbout(left + cardBox.width - (ruleBox.x + ruleBox.width), CARD_INSET_PX)
+
+  // --- 8. AC2's colour claim, written as an EQUALITY between two live reads rather than as two literals
+  // that happen to agree: the node draws the section divider (103:3009) and the bar's rule (497:1852) as
+  // the SAME rectangle, and the 2026-09-05 inset fix left the divider on --color-outline-variant while
+  // deliberately leaving the colour question open. A change that moved only one of them still satisfies
+  // its own literal and fails here. The rule's own absolute values are pinned first, so "equal" cannot be
+  // satisfied by both being wrong together. ---
+  const rulePaint = await paintOf(rule)
+  expect(rulePaint).toEqual({ colour: PRIMARY_INK, opacity: RULE_OPACITY })
+  expect(await paintOf(divider)).toEqual(rulePaint)
+
+  // --- 9. THE NUMBER THE WHOLE BAR EXISTS TO PRODUCE, and the card's other inset. The Channels header's
+  // top sits 97 below the card's top edge; the tree's bottom edge is the only element that can report the
+  // card's 20px bottom inset, the column itself being stretched to the card's full height. ---
+  expectAbout((await boxOf(headers.nth(0), 'Channels header')).y - cardBox.y, HEADER_TOP_PX)
+  const treeBox = await boxOf(tree, 'tree wrapper')
+  expectAbout(cardBox.y + cardBox.height - (treeBox.y + treeBox.height), CARD_BOTTOM_INSET_PX)
+
+  // --- 10. AC2's first clause, and the one block that can tell the tree wrapper from the column it was
+  // split out of: with a list tall enough to overflow, scrolling moves the ROWS and leaves the bar and its
+  // rule exactly where they are. A bar left inside the scroller satisfies every block above and fails
+  // here. `.channel-list` is read back as NOT overflowing in the same breath — that is what says the
+  // scrollport really moved rather than there being two of them. ---
+  daemon.pushFrame(tallListFrame())
+  await expect(rows).toHaveCount(TALL_ROW_COUNT, { timeout: TIMEOUT_MS })
+  expect(await tree.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
+  expect(await list.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
+
+  const restingRow = await boxOf(rows.first(), 'first row at rest')
+  const scrolled = await tree.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+    return el.scrollTop
+  })
+  // Read back rather than assumed: writing `scrollTop` to an element that does not scroll is a SILENT
+  // no-op, which is exactly how this whole family of reads fails open rather than red.
+  expect(scrolled).toBeGreaterThan(0)
+  expect((await boxOf(rows.first(), 'first row after the scroll')).y).toBeLessThan(restingRow.y)
+  expectAbout((await boxOf(bar, 'top bar after the scroll')).y, barBox.y)
+  expectAbout((await boxOf(rule, 'rule after the scroll')).y, ruleBox.y)
 })

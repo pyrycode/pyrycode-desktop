@@ -264,6 +264,10 @@ Sidebar 132:3902 and fixed directly, five declarations in one stylesheet:
   is the design's own 360px, so every node's x coordinate transfers literally — which is also what let
   the host dots' rule stop arguing with the design (below). The actions cluster and the FAB move 20px
   inward with it, an accepted side effect on two controls that are not on the node at all.
+  **Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443):** the guess only
+  half-landed — the cluster became the card's own Top bar and the already-deleted FAB (#1426) left
+  nothing else sticky, but the inset that arrived is 24 top / 20 sides / 20 bottom, not the uniform 20
+  predicted here. Only the bottom pair matches.
 - **The section header drops its horizontal and top padding and keeps 12 below** (103:2984, 103:2966
   gap-[12px]). Its box is the bare 20px line, so the host row lands 32px under the header's top.
 - **The host row's right padding goes to 0**, so the two connection dots sit flush with the content edge.

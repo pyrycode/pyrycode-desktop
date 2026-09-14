@@ -211,8 +211,10 @@ floors a flex item at its *content's* min-content width regardless of the basis.
 \#834 gave the [sidebar's host row](channel-list-host-row.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
 an operator-typed name up to `MAX_HOST_LABEL_LENGTH` (128) with `white-space: nowrap`: a nowrap string's
 min-content size is the whole string, measured at ~1063px, which took the sidebar with it and left the
-label unable to ellipsize no matter what `channels.css` said. `.channel-list`'s `overflow-x` (computed
-`auto`, a side effect of its `overflow-y: auto`) does not save it — a scroll container's automatic
+label unable to ellipsize no matter what `channels.css` said. The scroller's `overflow-x` (computed
+`auto`, a side effect of its `overflow-y: auto` — that scroller is `.channel-list__tree` since
+[#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443), `.channel-list` before it) does not
+save it — a scroll container's automatic
 minimum size is 0 for *itself*, but its min-content *contribution* to an ancestor is still
 content-derived. `.channel-list__title` and `.channel-list__workspace-label` are nowrap too and had the
 same latent reach; this one declaration pins all three. Landed as its own commit (d6fdc3a) alongside

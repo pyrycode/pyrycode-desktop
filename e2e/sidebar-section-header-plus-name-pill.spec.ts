@@ -1,7 +1,7 @@
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { ConversationSummary, ConversationsPayload } from '../src/shared/wire/types'
-import type { Locator, Page } from '@playwright/test'
+import type { Locator } from '@playwright/test'
 
 // #1304 — the name pill the SECTION HEADERS' pair-new-host plus shows on hover and on keyboard focus, in
 // the one tier that can hover or focus anything. `vitest.config.ts` sets `environment: 'node'` and every
@@ -18,21 +18,29 @@ import type { Locator, Page } from '@playwright/test'
 // `.channel-list__workspace-create …`, and `.channel-list__pair` shares no token with either.
 //
 // ⭐ A BOUNDING BOX IS NOT A DETECTOR FOR A CLIP, which is why the geometry here is containment inside
-// `.channel-list` and never `toBeVisible()` or "inside the window" — #1172's and #1181's finding for the
-// same treatment: a layout box comes back whether or not an ancestor clipped the pixels away.
-// `.channel-list` is `overflow-y: auto`, which forces `overflow-x` off `visible` too, so it clips on BOTH
-// axes, and `.paired-shell__sidebar` is a second `overflow: hidden` outside it.
+// THE SCROLLER and never `toBeVisible()` or "inside the window" — #1172's and #1181's finding for the
+// same treatment: a layout box comes back whether or not an ancestor clipped the pixels away. The scroller
+// is `overflow-y: auto`, which forces `overflow-x` off `visible` too, so it clips on BOTH axes, and
+// `.paired-shell__sidebar` is a second `overflow: hidden` outside it.
 //
-// ⭐ AND THIS CONTROL HAS A SECOND CRITERION THE OTHER THREE DID NOT: `.channel-list__actions` is the
-// Channels header's immediately preceding sibling, sticky at `z-index: 1`, and it paints over anything
-// that reaches it — and its bottom edge measures 4px INSIDE this header at scroll top, because its sticky
-// `top` resolves against the scrollport's CONTENT box rather than its padding box. So the pill hangs BELOW
-// its plus rather than centred on the plus's band: the ticket's own named fallback, and a stated deviation
-// from the three shipped pills. `channels.css` carries the measured numbers. The ACTIONS-EDGE assertion in
-// the geometry block below is the criterion itself — a relation between two elements, so it also catches a
-// cluster that grew or a sticky offset that changed — and it is the line a pill aligned to the header's
-// top reddens (72 against a cluster bottom of 76, measured); band-centring is caught one line earlier, by
-// the assertion pinning the pill's top edge to the plus's bottom.
+// ⭐ SINCE #1443 THE SCROLLER IS `.channel-list__tree`, NOT `.channel-list`. The drawn top bar split the
+// column in two: `.channel-list` is the padded card column and no longer scrolls or clips at all, and the
+// tree wrapper inside it is the scrollport. `scrollTreeTo`, the overflow precondition, `expectInsideTree`
+// and the horizontal-scroll read all name it, through ONE `tree` locator so they cannot drift apart —
+// writing `scrollTop` to an element that does not scroll is a SILENT no-op, so a read left on the column
+// would fail open rather than red.
+//
+// ⭐ THIS CONTROL'S PILL HANGS BELOW ITS PLUS RATHER THAN CENTRED ON THE PLUS'S BAND, and #1443 RETIRED
+// THE REASON WITHOUT RETIRING THE PLACEMENT. The reason was that `.channel-list__actions` was the Channels
+// header's immediately preceding sibling, sticky at `z-index: 1`, its bottom edge measuring 4px INSIDE
+// this header at scroll top (its sticky `top` resolving against the scrollport's CONTENT box rather than
+// its padding box), so a band-centred pill put 6px of itself underneath it. The bar now sits OUTSIDE this
+// scroller entirely and overlaps nothing, so the ACTIONS-EDGE assertion in the geometry block below is
+// satisfied BY CONSTRUCTION — every pill in the tree is below the bar because the whole tree is. It is
+// kept, not deleted: it still catches a bar that grew down into the tree, which is the one way the old
+// collision could return. Re-centring the pill is deliberately NOT this ticket's (#1443's ruling), so the
+// placement ships exactly as it was and the detector for it is unchanged: the assertion pinning the pill's
+// top edge to the plus's bottom, one line earlier.
 //
 // ONE test() block, ONE launch, ONE continuous drive: each launch pays a full handshake, and the ordering
 // is load-bearing throughout — every absence assertion sits AFTER a positive, auto-waiting read of the
@@ -69,7 +77,7 @@ const SIDEBAR_WIDTH_PX = 400
 // Sub-pixel tolerance, the sibling specs' EPSILON.
 const EPSILON_PX = 1.5
 
-// Enough promoted rows that the list really overruns the 800px window the app opens at, so `.channel-list`
+// Enough promoted rows that the list really overruns the 800px window the app opens at, so the tree
 // really scrolls and "at scroll top" below is a genuine position rather than a list that never moved.
 // Deliberately not tuned to the exact overflow: a taller window must still scroll here.
 const PROMOTED_ROW_COUNT = 40
@@ -134,14 +142,14 @@ const onlyOneShowing = async (pills: Locator): Promise<void> => {
 }
 
 // THE CRITERION. Not `toBeVisible()`, not "inside the window" — see this file's header.
-const expectInsideList = (pill: Box, list: Box, role: string): void => {
-  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(list.x - EPSILON_PX)
-  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(list.y - EPSILON_PX)
+const expectInsideTree = (pill: Box, tree: Box, role: string): void => {
+  expect(pill.x, `${role}: left edge`).toBeGreaterThanOrEqual(tree.x - EPSILON_PX)
+  expect(pill.y, `${role}: top edge`).toBeGreaterThanOrEqual(tree.y - EPSILON_PX)
   expect(pill.x + pill.width, `${role}: right edge`).toBeLessThanOrEqual(
-    list.x + list.width + EPSILON_PX
+    tree.x + tree.width + EPSILON_PX
   )
   expect(pill.y + pill.height, `${role}: bottom edge`).toBeLessThanOrEqual(
-    list.y + list.height + EPSILON_PX
+    tree.y + tree.height + EPSILON_PX
   )
 }
 
@@ -165,17 +173,17 @@ const expectUnderThePlus = (pill: Box, plus: Box, header: Box, role: string): vo
   expect(pill.width, `${role}: width`).toBeGreaterThan(plus.width)
 }
 
-const scrollListTo = (page: Page, offset: 'top' | 'bottom'): Promise<void> =>
-  page.locator('.channel-list').evaluate((el, where) => {
+const scrollTreeTo = (tree: Locator, offset: 'top' | 'bottom'): Promise<void> =>
+  tree.evaluate((el, where) => {
     el.scrollTop = where === 'top' ? 0 : el.scrollHeight
   }, offset)
 
-test('the section headers’ plus names itself in a pill on hover and on focus, clear of the sticky actions', async ({
+test('the section headers’ plus names itself in a pill on hover and on focus, clear of the top bar', async ({
   launchPairedApp
 }) => {
   const { page, daemon } = await launchPairedApp()
 
-  const list = page.locator('.channel-list')
+  const tree = page.locator('.channel-list__tree')
   const sidebar = page.locator('.paired-shell__sidebar')
   const actions = page.locator('.channel-list__actions')
   const headers = page.locator('.channel-list__section-header')
@@ -208,12 +216,12 @@ test('the section headers’ plus names itself in a pill on hover and on focus, 
   // The list really does overrun its own viewport, so "at scroll top" below is a position rather than a
   // list that never scrolled. Asserted rather than assumed: a window that grew, or a pitch that shrank,
   // would otherwise quietly make the claim vacuous.
-  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
+  expect(await tree.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
 
   // --- AC1, the hover, on the CHANNELS header's plus at scroll top — the tightest case for the actions
   // cluster below, since that is where the header sits directly against it. The positive read comes first;
   // the set read beside it is what makes this "that control's pill" rather than "a pill somewhere". ---
-  await scrollListTo(page, 'top')
+  await scrollTreeTo(tree, 'top')
   await channelsPlus.hover()
   await expect(channelsPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(channelsPill).toHaveText(PAIR_NEW_HOST_NAME)
@@ -256,31 +264,33 @@ test('the section headers’ plus names itself in a pill on hover and on focus, 
   })
 
   // --- AC3, the placement, on the Channels header at scroll top: the drawn 24, hung under the plus,
-  // right-aligned to the header, and CLEAR OF THE STICKY ACTIONS CLUSTER — the assertion the whole
-  // deviation from the three shipped pills exists for, and the tightest case for it, since this is the
-  // header the cluster overlaps. MEASURED: `.channel-list__actions` is sticky at `top: var(--space-1)`
-  // resolved against the scrollport's CONTENT box, so at scroll top it sits --space-1 past its flow
-  // position and its bottom edge lands 4px INSIDE this header — a pill centred on the control's 20px band
-  // would put 6px of itself under it, and one aligned to the header's top 4px. Then containment. ---
+  // right-aligned to the header, and CLEAR OF THE TOP BAR. The clearance read is kept from when the bar
+  // was a sticky cluster inside this scroller whose bottom edge landed 4px INSIDE this header — the
+  // overlap the below-the-plus placement was chosen for. #1443 moved the bar out of the scroller, so the
+  // relation now holds BY CONSTRUCTION: every pill in the tree is below the bar because the whole tree is.
+  // It stays because it is still a relation between two live boxes rather than a literal, so a bar that
+  // grew down into the tree reddens here — the one way that collision can return. What it is no longer is
+  // the detector for THIS pill's placement; that is `expectUnderThePlus` on the line above, and the
+  // placement itself is unchanged (#1443 rules re-centring a separate ticket). Then containment. ---
   const channelsBox = await boxOf(channelsPill, 'channels header pill')
   const channelsHeaderBox = await boxOf(headers.nth(0), 'channels header')
-  const actionsBox = await boxOf(actions, 'actions cluster')
+  const actionsBox = await boxOf(actions, 'top bar')
   expectUnderThePlus(
     channelsBox,
     await boxOf(channelsPlus, 'channels header plus'),
     channelsHeaderBox,
     'channels header pill'
   )
-  expect(channelsBox.y, 'channels header pill: clear of the sticky actions').toBeGreaterThanOrEqual(
+  expect(channelsBox.y, 'channels header pill: clear of the top bar').toBeGreaterThanOrEqual(
     actionsBox.y + actionsBox.height - EPSILON_PX
   )
-  expectInsideList(channelsBox, await boxOf(list, 'channel list'), 'channels header pill')
+  expectInsideTree(channelsBox, await boxOf(tree, 'sidebar tree'), 'channels header pill')
 
   // --- AC3's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows right
   // or bottom, and this one grows leftward inside its header — measured rather than argued. ---
   expect((await boxOf(sidebar, 'sidebar')).width).toBeCloseTo(SIDEBAR_WIDTH_PX, 0)
-  expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
+  expect(await tree.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
   // --- AC2's other half: the added child minted no second name and took none away. Read while the pill is
   // showing, which is when its text is actually in the render — `aria-hidden` is what keeps this at two. ---
@@ -308,7 +318,7 @@ test('the section headers’ plus names itself in a pill on hover and on focus, 
     await boxOf(headers.nth(1), 'chats header'),
     'chats header pill'
   )
-  expectInsideList(chatsBox, await boxOf(list, 'channel list'), 'chats header pill')
+  expectInsideTree(chatsBox, await boxOf(tree, 'sidebar tree'), 'chats header pill')
 
   // --- AC1's other half of the hover: leaving hides it. Ordered after the positive read above, so the
   // hidden-ness measures the pointer leaving rather than a pill that was never up. ---
@@ -317,13 +327,19 @@ test('the section headers’ plus names itself in a pill on hover and on focus, 
   await allHidden(pills)
 
   // --- AC1, the keyboard: focus shows it and blur hides it, with the pointer parked off the list — so
-  // this can only be `:focus-visible` firing, never a stray hover. Reached by focusing the Settings entry
-  // and pressing Tab (the Channels plus is the actions cluster's next focusable), NOT by `locator.focus()`:
-  // `:focus-visible` is Chromium's keyboard-modality heuristic and a programmatic focus after a pointer
-  // interaction does not match it, so the assertion would be testing the heuristic rather than the rule.
-  // #1181's spec records the same reasoning one level down. ---
-  await scrollListTo(page, 'top')
-  await page.locator('.channel-list__settings').focus()
+  // this can only be `:focus-visible` firing, never a stray hover. Reached by focusing THE ARCHIVE ENTRY
+  // and pressing Tab, NOT by `locator.focus()`: `:focus-visible` is Chromium's keyboard-modality
+  // heuristic and a programmatic focus after a pointer interaction does not match it, so the assertion
+  // would be testing the heuristic rather than the rule. #1181's spec records the same reasoning one
+  // level down.
+  //
+  // THE ARCHIVE ENTRY AND NOT THE GEAR SINCE #1443, and the swap is the drawn order rather than a
+  // workaround: the bar used to render archive-then-gear, so the gear was its LAST focusable and the
+  // Channels plus its next; the drawing puts the gear FIRST, so tabbing off the gear now lands on the
+  // archive box beside it. The step this block needs is the bar's last focusable, whichever control that
+  // is, and naming it explicitly is what keeps the intent readable if the pair ever swaps again. ---
+  await scrollTreeTo(tree, 'top')
+  await page.locator('.channel-list__archive').focus()
   await page.keyboard.press('Tab')
   await expect(channelsPlus).toBeFocused()
   await expect(channelsPill).toBeVisible({ timeout: TIMEOUT_MS })

@@ -390,6 +390,75 @@ const RATE_LIMITED = {
   truncated_fields: null
 }
 
+/** A `context_usage` envelope's plaintext bytes, wrapping an arbitrary payload (#1454). */
+function encodeContextUsage(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 901, type: 'context_usage', ts: FIXED_TS, payload })
+}
+
+/** The daemon's committed `internal/protocol/testdata/context_usage.json` payload, transcribed whole
+ *  (#1454). The six inventory / dropped keys are carried VERBATIM and deliberately: this slice reads
+ *  only the five-field reading, so the fixture is simultaneously the forward-compat case — the drop is
+ *  proven against a real frame rather than an invented extra key. Two of the inventory values are
+ *  adversarial upstream on purpose (`../../../etc/passwd`, markup metacharacters); neither is read here,
+ *  and both are a MUST-review item for whichever slice decodes them. */
+const CONTEXT_USAGE_FRAME = {
+  conversation_id: 'conversation-context',
+  model: 'claude-opus-5',
+  total_tokens: 128_400,
+  max_tokens: 200_000,
+  percentage: 64,
+  categories: [
+    { name: 'System prompt', tokens: 41_200 },
+    { name: 'Messages <&>', tokens: 9800 }
+  ],
+  dropped_categories: 3,
+  mcp_tools: [
+    { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+    { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+  ],
+  dropped_mcp_tools: 5,
+  memory_files: [
+    { path: '/Users/dev/project/CLAUDE.md', type: 'project', tokens: 3100 },
+    { path: '../../../etc/passwd', type: 'user', tokens: 240 }
+  ],
+  dropped_memory_files: 7
+}
+
+/** The five-field READING that fixture must narrow to — the decoder's whole output for it (#1454). */
+const CONTEXT_USAGE = {
+  conversation_id: 'conversation-context',
+  model: 'claude-opus-5',
+  total_tokens: 128_400,
+  max_tokens: 200_000,
+  percentage: 64
+}
+
+/** The daemon's committed `context_usage_empty.json` payload (#1454). Its two empty strings and three
+ *  zeroes are VALUES, not absences: no field carries `omitempty`, so this is ordinary traffic and a
+ *  truthiness test anywhere in the decode would misread the whole frame as missing. */
+const CONTEXT_USAGE_EMPTY_FRAME = {
+  conversation_id: '',
+  model: '',
+  total_tokens: 0,
+  max_tokens: 0,
+  percentage: 0,
+  categories: [],
+  dropped_categories: 0,
+  mcp_tools: [],
+  dropped_mcp_tools: 0,
+  memory_files: [],
+  dropped_memory_files: 0
+}
+
+/** The five-field reading the empty fixture narrows to (#1454). */
+const CONTEXT_USAGE_EMPTY = {
+  conversation_id: '',
+  model: '',
+  total_tokens: 0,
+  max_tokens: 0,
+  percentage: 0
+}
+
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
  *  carries a DISTINCT non-empty value, so a field swap or a dropped field fails the round-trip (AC1),
  *  and the `description` is deliberately adversarial: HTML metacharacters, a quote, a shell redirect
@@ -2955,6 +3024,156 @@ describe('parseInboundMessage — rate_limited recognition (#1318, additive)', (
       'status',
       'truncated_fields'
     ])
+  })
+})
+
+describe('parseInboundMessage — context_usage recognition (#1454, AC1/AC4)', () => {
+  it("narrows the daemon's POPULATED fixture into { kind: context-usage } carrying the five fields", () => {
+    expect(parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))).toEqual({
+      kind: 'context-usage',
+      contextUsage: CONTEXT_USAGE
+    })
+  })
+
+  it('narrows the daemon\'s EMPTY fixture — "" and 0 survive as VALUES, not absences (AC4)', () => {
+    // The sharp half of AC1: `requireString` / `requireNumber` police the TYPE and never truthiness,
+    // so a cut-to-nothing string and a zero reading both decode. A `!value` guard anywhere in the
+    // decode would read this whole frame as missing and drop a legitimate one.
+    expect(parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_EMPTY_FRAME))).toEqual({
+      kind: 'context-usage',
+      contextUsage: CONTEXT_USAGE_EMPTY
+    })
+  })
+
+  it('drops the six inventory keys the frame really carries, keeping exactly the five (forward-compat)', () => {
+    // Not a hypothetical unknown key: `categories` / `mcp_tools` / `memory_files` and their three
+    // dropped counts are on EVERY real frame, and this slice must tolerate them without copying them
+    // through. The fresh five-key literal is what does that — and is also what makes the narrower
+    // prototype-pollution-safe against a planted `__proto__`.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    expect(decoded?.kind === 'context-usage' && Object.keys(decoded.contextUsage).sort()).toEqual([
+      'conversation_id',
+      'max_tokens',
+      'model',
+      'percentage',
+      'total_tokens'
+    ])
+    // The adversarial inventory values must not cross even as opaque data. `../../../etc/passwd` is
+    // the daemon's own fixture value and is the clearest statement that the inventories are a
+    // path-traversal surface for whichever slice decodes them.
+    const json = JSON.stringify(decoded)
+    expect(json).not.toContain('etc/passwd')
+    expect(json).not.toContain('read_file')
+  })
+
+  it('drops a planted turn_id — the frame is conversation-scoped and must never carry one', () => {
+    const planted = { ...CONTEXT_USAGE_FRAME, turn_id: 'turn-1', utilization: 0.64 }
+    expect(parseInboundMessage(encodeContextUsage(planted))).toEqual({
+      kind: 'context-usage',
+      contextUsage: CONTEXT_USAGE
+    })
+  })
+
+  it('no longer reaches the unmodeled default — the frame is recognised, not dropped (AC1)', () => {
+    // The behaviour this slice exists to change, asserted as the transition: before the arm the type
+    // fell through `default:` and the decode returned null.
+    expect(parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))).not.toBeNull()
+  })
+
+  it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
+    // #1225's FrameTimestamp marks exactly the arms decodeHistoryEvent draws. This type gains none, so
+    // a stamp here would advertise a join nothing can perform.
+    expect(parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))).not.toHaveProperty('ts')
+  })
+})
+
+describe('parseInboundMessage — context_usage unvalidated integers and open model (#1454, AC1)', () => {
+  // The tests that redden if someone later "hardens" this parser into the shape the daemon forbids.
+  // THE READING IS INFORMATIONAL: the daemon neither recomputes nor normalizes claude's integers, so
+  // nothing may assume `percentage` is derivable from `total_tokens` and `max_tokens`, nor that any of
+  // the three lies in a sane range. Rejecting one would be a validation rule with no captured negative
+  // case behind it, and the Infinity-into-a-gauge hazard belongs to the render slice's
+  // `contextUsagePercent`, not to this boundary.
+  it.each([
+    ['a percentage over 100 — claude\'s figure, not the client\'s arithmetic', { percentage: 127 }],
+    ['a percentage of 0 beside a full window', { percentage: 0 }],
+    ['total_tokens EXCEEDING max_tokens — no cross-field check', { total_tokens: 400_000 }],
+    ['a max_tokens of 0 beside a non-zero total — the render slice guards the division', { max_tokens: 0 }],
+    ['a negative reading', { total_tokens: -1 }],
+    ['an absurd magnitude', { max_tokens: 1_262_304_000_000 }]
+  ])('decodes %s — the decoder polices type, never range', (_label, override) => {
+    const frame = { ...CONTEXT_USAGE_FRAME, ...override }
+    expect(parseInboundMessage(encodeContextUsage(frame))).toEqual({
+      kind: 'context-usage',
+      contextUsage: { ...CONTEXT_USAGE, ...override }
+    })
+  })
+
+  // `model` is claude-authored descriptive text, neither validated nor sanitized upstream. Narrowing it
+  // to a client-side set would fail-close a valid future frame — the drift risk CLAUDE.md / ADR 0002
+  // rank above cosmetic robustness — and it is NOT the identity authority (`model_announced` is).
+  it.each([
+    ['a model no client has ever seen', 'claude-from-a-later-release'],
+    ['an EMPTY model', ''],
+    ['markup metacharacters — inert text here, escaped at whatever sink renders it', '<img src=x>']
+  ])('decodes %s — no membership check on claude-authored text', (_label, model) => {
+    expect(parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, model }))).toEqual({
+      kind: 'context-usage',
+      contextUsage: { ...CONTEXT_USAGE, model }
+    })
+  })
+})
+
+describe('parseInboundMessage — context_usage fail-closed (#1454, AC2)', () => {
+  it.each([
+    ['conversation_id', 42],
+    ['model', 42],
+    ['total_tokens', '128400'],
+    ['max_tokens', '200000'],
+    ['percentage', '64']
+  ])('throws when %s is absent, mistyped, or null', (field, mistyped) => {
+    // The frame is dropped AS A WHOLE, never as a partial value — the way every other arm drops one.
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent[field]
+    const bad: unknown[] = [
+      absent,
+      { ...CONTEXT_USAGE_FRAME, [field]: mistyped },
+      { ...CONTEXT_USAGE_FRAME, [field]: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeContextUsage(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws a message naming the failure CATEGORY only — never a decoded value', () => {
+    // AC2's second half. `model` is unsanitized claude-authored text and `conversation_id` a
+    // correlating identifier; an error string is a log line's worth of leak if it interpolates either.
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_MODEL = 'secret-model-text'
+    try {
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          conversation_id: SECRET_CONV,
+          model: SECRET_MODEL,
+          percentage: '64'
+        })
+      )
+      expect.unreachable('a mistyped percentage must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WireDecodeError)
+      const message = (error as WireDecodeError).message
+      expect(message).toContain('percentage')
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain(SECRET_MODEL)
+      expect(message).not.toContain('128400')
+    }
+  })
+
+  it('throws when a context_usage payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeContextUsage('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeContextUsage(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeContextUsage(null))).toThrow(WireDecodeError)
   })
 })
 
@@ -6619,6 +6838,63 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a context_usage content-free, never the conversation_id, the model or an integer (#1454)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_MODEL = 'secret-model-text'
+    const plaintext = encodeContextUsage({
+      ...CONTEXT_USAGE_FRAME,
+      conversation_id: SECRET_CONV,
+      model: SECRET_MODEL,
+      total_tokens: 4242,
+      max_tokens: 8484,
+      percentage: 7373
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    // AC3: the client-owned type LITERAL, never the wire-supplied envelope.type the `default:` arm
+    // this replaces for the type used to log.
+    expect(record.code).toBe('context_usage')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new DiagnosticEvent
+    // field is introduced (reuses the existing set), so #131's renderer pin is untouched.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    // `model` is claude-authored text that crossed the subprocess trust boundary; logging it would put
+    // unsanitized model-influenced text into a file whose readers assume it is machine-written.
+    expect(lines[0]).not.toContain(SECRET_MODEL)
+    // The three integers disclose how much private work is in the window — a side-channel as unwelcome
+    // in a log an operator may send off-box as the correlating conversation_id beside it.
+    // All three probes are DISTINCTIVE four-digit values on purpose: a realistic two-digit
+    // `percentage` collides with the record's own `bytes` count and with the hex hash, so a short probe
+    // would fail against a log that leaks nothing. The exact-key-set assertion above is the structural
+    // half of this claim; these three are the value half.
+    expect(lines[0]).not.toContain('4242')
+    expect(lines[0]).not.toContain('8484')
+    expect(lines[0]).not.toContain('7373')
+  })
+
+  it('writes NO inbound-unmodeled record for a context_usage any more (#1454, AC3)', () => {
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME), log)
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).event).not.toBe('inbound-unmodeled')
+  })
+
+  it('does NOT log on a malformed context_usage throw path (#1454, AC3)', () => {
+    // Narrowing runs BEFORE the log call, so a malformed frame leaves no record at all.
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, percentage: '64' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a model_announced content-free, never the conversation_id, the model or the cut flag (#587)', () => {
     const { log, lines } = captureLog()
     const SECRET_CONV = 'secret-conversation-id'
@@ -8577,10 +8853,10 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     expect(JSON.stringify(decoded)).not.toContain('SHOULD-NOT-CROSS')
   })
 
-  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first eight
+  // AC3: a stored type the timeline does not draw is skipped rather than crossing. The first nine
   // this client DOES decode on the live lane and never draws in the thread — `thinking_progress`
-  // joined them at #1312 and `rate_limited` at #1318, each given a live-lane parser and deliberately
-  // no arm here; the last is a type it has never seen.
+  // joined them at #1312, `rate_limited` at #1318 and `context_usage` at #1454, each given a live-lane
+  // parser and deliberately no arm here; the last is a type it has never seen.
   it.each([
     'background_task_started',
     'background_task_updated',
@@ -8590,6 +8866,7 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     'slash_command_list',
     'thinking_progress',
     'rate_limited',
+    'context_usage',
     'a_frame_type_from_a_later_daemon'
   ])('skips a stored %s — undrawn, and not an error', (type) => {
     expect(decodedEntries([historyEntry(type, { conversation_id: 'c1' })])).toEqual([])
@@ -8617,6 +8894,14 @@ describe('parseInboundMessage — history entry payload decode (#1227)', () => {
     // its own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the
     // payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
     expect(decodedEntries([historyEntry('rate_limited', RATE_LIMITED)])).toEqual([])
+  })
+
+  it('skips a WELL-FORMED stored context_usage — armless dispatch, not a payload failure (#1454)', () => {
+    // The discriminating version of the row above, and the one that stays honest now that the type HAS
+    // a live-lane parser. That row's payload would fail `parseContextUsagePayload` anyway, so on its
+    // own it cannot tell "skipped because decodeHistoryEvent has no arm" from "skipped because the
+    // payload failed" — the distinction the neighbouring skips-by-stored-TYPE test draws.
+    expect(decodedEntries([historyEntry('context_usage', CONTEXT_USAGE_FRAME)])).toEqual([])
   })
 
   it('skips by stored TYPE, not by payload failure — one payload valid for both parsers', () => {

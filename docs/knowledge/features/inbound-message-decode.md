@@ -286,3 +286,21 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   inbound switch has no catch-all, so the report stops at this boundary until the carry slice claims it.
   Also corrected three comments left behind by #1312 that had named `rate_limited` as having no parser
   at all. Full account in [Extension history](inbound-message-decode-history.md).
+- [#1454](https://github.com/pyrycode/pyrycode-desktop/issues/1454) extended it once more, additively:
+  the `context_usage` kind, `parseContextUsagePayload` (`parseRateLimitedPayload`'s shape minus one
+  string and its nullable list plus two numbers — two `requireString` calls, three `requireNumber`
+  calls, no new helper), and claude's own report of what is in the context window, the display source
+  that displaces the `session_settings`/`screen_snapshot` transcript-scan route (decided 2026-09-14).
+  **This slice reads the frame's reading only** — `conversation_id`, `model`, `total_tokens`,
+  `max_tokens`, `percentage`. The frame's three inventories (`categories`, `mcp_tools`, `memory_files`)
+  and their three dropped counts are on every real frame and are deliberately not declared or read: the
+  fresh five-field literal tolerates and drops them, which the two follow-on slices decode. Provenance
+  is mixed within the one payload — `conversation_id` is daemon-authored, `model` is claude-authored and
+  unsanitized — and the reading is informational: no range check and no cross-field check on the three
+  integers, since the daemon neither recomputes nor normalizes claude's figures. Takes no
+  `FrameTimestamp` and gains no arm in `decodeHistoryEvent`, the `thinking_progress`/`rate_limited`
+  precedent. Content-free-logged as `inbound-decoded(code: 'context_usage')` before the `default`
+  branch; neither `model` nor the three integers nor `conversation_id` ever reaches a log line. Ships
+  dormant: `daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops here until the
+  IPC carry slice (#1419) claims it; the store is #1420, the surfaces #1421. Full account in [Extension
+  history](inbound-message-decode-history.md).

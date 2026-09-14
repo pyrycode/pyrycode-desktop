@@ -140,6 +140,25 @@ export type EnvelopeType =
   // that as the realistic client bug. SSOT pyrycode#1405 (shape) / #1410 (producer) /
   // internal/protocol/codes.go TypeRateLimited; binary → phone only.
   | 'rate_limited'
+  // Claude's own report of what is IN the context window (#1454). Placed beside the three frames above
+  // because it shares their provenance — the daemon's translation of something claude said — and their
+  // shape: conversation-scoped, no `turn_id`, and receiving one neither opens nor closes a turn. It is a
+  // periodic READING like `thinking_progress`, not a condition report or an identity report; #2371
+  // publishes one after every turn end on the interactive path.
+  //
+  // WHY IT EXISTS HERE AT ALL: the desktop's only context figure until now is the `used_tokens` /
+  // `window_tokens` pair on `session_settings`, which the daemon reconstructs by scanning the transcript
+  // on disk — a route that reads 0% for a conversation opened in a workspace (pyrycode#2423) and whose
+  // window half is a guess until a turn ends. Decided 2026-09-14: the claude-reported figure becomes the
+  // display source and the transcript route becomes the fallback.
+  //
+  // NEVER ACCEPTED FROM A CLIENT — binary → phone only, v2-only, interactive-capability-gated, and
+  // deliberately absent from the daemon's inbound type set, which is the structural guarantee that
+  // nothing upstream accepts a context reading FROM a phone. `request_context_usage` (pyrycode#2431) is
+  // the separate client → daemon ASK and is a different type with a different payload; do not conflate
+  // the two. SSOT pyrycode#2370 (shape) / #2371 (producer) / internal/protocol/codes.go
+  // TypeContextUsage.
+  | 'context_usage'
   | 'dequeue_message'
   // v2-only phone→binary control frame — stops the running turn in the conversation it names, which
   // the daemon maps to the neutral turnevent.Cancel and routes to that conversation's bound runner as
@@ -960,6 +979,62 @@ export interface RateLimitedPayload {
   // rather than by a type change.
   resets_at: number
   truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `context_usage` event (daemon → client), THE READING HALF ONLY (#1454). Mirrors the first five
+ * fields of the daemon's ContextUsagePayload (SSOT pyrycode#2370 declared / #2371 emitted,
+ * internal/protocol/interactive.go), wire order `conversation_id, model, total_tokens, max_tokens,
+ * percentage` — all five ALWAYS PRESENT (no `omitempty`). Fanned out ONLY to `interactive`-capable
+ * clients, after every turn end on the interactive path. Conversation-scoped like RateLimitedPayload
+ * above: no `turn_id`, and receiving one neither opens nor closes a turn.
+ *
+ * THE FRAME CARRIES SIX MORE KEYS THAT THIS TYPE DELIBERATELY DOES NOT DECLARE: three inventories
+ * (`categories`, `mcp_tools`, `memory_files`) and their three dropped counts. They are on every real
+ * frame and are decoded by the two follow-on slices. Declaring one here without parsing it would put a
+ * field on the wire surface with no narrowing behind it — a promise the decoder does not keep — so the
+ * declaration and the parsing land together or not at all. `parseContextUsagePayload` returns a fresh
+ * five-field literal, so the six are tolerated and dropped rather than copied through.
+ *
+ * PROVENANCE IS MIXED WITHIN THIS ONE STRUCT, and it is the field-level fact a reader is likeliest to get
+ * wrong. `conversation_id` is DAEMON-authored: the mapper fills it from the daemon's own registry record,
+ * never from claude's bytes. `model` is CLAUDE-authored descriptive text. Assuming one provenance for the
+ * whole payload errs in a harmful direction half the time, because it promotes `model` to a value it was
+ * never checked to be. The daemon says so in those words, and the split is why this docblock names the
+ * two fields separately rather than giving the type one blanket sentence.
+ *
+ * THE READING IS INFORMATIONAL. The daemon neither recomputes nor normalizes claude's integers, so
+ * NOTHING MAY ASSUME `percentage` IS DERIVABLE from `total_tokens` and `max_tokens` — a client that
+ * recomputes it disagrees with the figure claude reported, which is the whole reason this frame displaces
+ * the transcript route. None of the three is range-checked in either direction: a `percentage` over 100,
+ * a `total_tokens` exceeding `max_tokens`, a `max_tokens` of `0` beside a non-zero total, and a negative
+ * are all representable and none is rejected. `0` is claude's reading of zero, never an absence. A
+ * consumer formatting these must guard its own arithmetic — a `max_tokens` of `0` yields `Infinity`,
+ * which the renderer's `contextUsagePercent` already documents — and must never allocate, iterate or
+ * size anything proportional to any of them; they are unbounded daemon-supplied values, and that is
+ * AttachmentChunkPayload's never-allocate-from-a-claim rule one frame over.
+ *
+ * SECURITY: `model` is a claude-authored string that crossed the SUBPROCESS TRUST BOUNDARY. The daemon
+ * bounds it at construction but does NOT validate or sanitize it, so it stays untrusted,
+ * model-influenced text all the way here: safe to render as INERT TEXT, never fed to an HTML sink
+ * (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL, and never used as a Map key, an
+ * icon lookup, a CSS class, a lookup path or a filename — it is exactly the shape of short token that
+ * invites one, the finding `limit_type` drew at #1318. IT IS ALSO NOT AN IDENTITY: `model_announced`
+ * remains the authority on which model is running, and this string is descriptive text beside a token
+ * count, never a key to match a model menu against. `conversation_id` is a daemon-asserted routing key,
+ * never an authorization signal and never resolved against a filesystem. NOTHING DECODED REACHES A LOG:
+ * the three integers disclose how much private work is in the window, a side-channel as unwelcome in a
+ * log an operator may send off-box as the correlating id beside them. See #1454 (this decode); the IPC
+ * carry is #1419, the store #1420, the surfaces #1421.
+ */
+export interface ContextUsagePayload {
+  conversation_id: string
+  model: string
+  // Go `int`; plain `number`s like every other integer on this wire. The no-range-check rule above
+  // covers a value past Number.MAX_SAFE_INTEGER rather than a type change.
+  total_tokens: number
+  max_tokens: number
+  percentage: number
 }
 
 /**

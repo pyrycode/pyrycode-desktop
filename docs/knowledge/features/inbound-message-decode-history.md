@@ -9,4 +9,4 @@ Split a second time, 2026-09-08, once the combined list grew past the cap again:
 - [Early extensions](inbound-message-decode-history-early.md) — the boundary's introduction
   ([#68](../codebase/68.md)) through `attachment_stored` (#964).
 - [Recent extensions](inbound-message-decode-history-recent.md) — `model_list` (#972) onward,
-  including `thinking_progress` (#1312) and `rate_limited` (#1318).
+  including `thinking_progress` (#1312), `rate_limited` (#1318) and `context_usage` (#1454).

@@ -27,6 +27,7 @@ import type {
   ModelAnnouncedPayload,
   ThinkingProgressPayload,
   RateLimitedPayload,
+  ContextUsagePayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -347,6 +348,69 @@ describe('rate-limited wire vocabulary (#1318)', () => {
       truncated_fields: null
     }
     expect(stale.resets_at).toBeLessThan(0)
+  })
+})
+
+describe('context-usage wire vocabulary (#1454)', () => {
+  it('admits the context_usage inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType. Admission is
+    // NOT compile-forced — `Envelope.type` is `EnvelopeType | string`, so an arm on an unadmitted
+    // literal typechecks fine — which is exactly why it is pinned here, as `rate_limited` is at #1318.
+    const usage: EnvelopeType = 'context_usage'
+    expect(usage).toBe('context_usage')
+  })
+
+  it("shapes ContextUsagePayload as this slice's five fields — no turn_id, and no inventories", () => {
+    // The three inventories (`categories` / `mcp_tools` / `memory_files`) and their three dropped
+    // counts ARE on the wire and are deliberately not declared here: a declared-but-unparsed field
+    // would be a type with no narrowing behind it. The follow-on slices add each with its parsing.
+    const payload: ContextUsagePayload = {
+      conversation_id: 'conversation-context',
+      model: 'claude-opus-5',
+      total_tokens: 128_400,
+      max_tokens: 200_000,
+      percentage: 64
+    }
+    expect(payload).toEqual({
+      conversation_id: 'conversation-context',
+      model: 'claude-opus-5',
+      total_tokens: 128_400,
+      max_tokens: 200_000,
+      percentage: 64
+    })
+    // Conversation-scoped, not turn-scoped: receiving one neither opens nor closes a turn.
+    expect(payload).not.toHaveProperty('turn_id')
+    expect(payload).not.toHaveProperty('categories')
+  })
+
+  it('admits the EMPTY reading — two empty strings and three zeroes are VALUES, not absences', () => {
+    // The daemon's committed `context_usage_empty.json`. No field carries `omitempty`, so this is real
+    // traffic: `0` is claude's reading of zero, never "unreported", and `''` is a real empty string.
+    const empty: ContextUsagePayload = {
+      conversation_id: '',
+      model: '',
+      total_tokens: 0,
+      max_tokens: 0,
+      percentage: 0
+    }
+    expect([empty.conversation_id, empty.model]).toEqual(['', ''])
+    expect([empty.total_tokens, empty.max_tokens, empty.percentage]).toEqual([0, 0, 0])
+  })
+
+  it('admits a percentage NOT derivable from the token pair — the reading is informational', () => {
+    // The daemon neither recomputes nor normalizes claude's integers, so nothing may assume
+    // `percentage` follows from `total_tokens` and `max_tokens`. A client that recomputes disagrees
+    // with the figure claude reported, which is the whole reason this frame displaces the transcript
+    // route. A `max_tokens` of 0 beside a non-zero `total_tokens` is representable for the same reason.
+    const inconsistent: ContextUsagePayload = {
+      conversation_id: 'c1',
+      model: 'claude-opus-5',
+      total_tokens: 128_400,
+      max_tokens: 0,
+      percentage: 64
+    }
+    expect(inconsistent.percentage).toBe(64)
+    expect(inconsistent.max_tokens).toBe(0)
   })
 })
 

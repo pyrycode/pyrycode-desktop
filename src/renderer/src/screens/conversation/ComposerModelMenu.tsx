@@ -5,7 +5,12 @@ import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import { useRunSettingsWriteStore, selectEffectiveSettings } from '../../store/runSettingsWriteStore'
 import { useAnnouncedModelStore, selectAnnouncedModelFor } from '../../store/announcedModelStore'
-import { publishedRowFor, useSessionSettingsConnected, changeConnectedSetting } from './RunConfigSections'
+import {
+  publishedRowFor,
+  effortRowFor,
+  useSessionSettingsConnected,
+  changeConnectedSetting
+} from './RunConfigSections'
 import { isAddressableSessionId } from './runSettingsControls'
 
 // #988: the composer footer's MODEL menu (Figma 115:3683) — the SECOND live host of the shared options
@@ -145,24 +150,34 @@ export interface ComposerModelMenuModel {
  *
  * THREE RENDERINGS:
  *
- *   no layer has anything               → null      nothing is known about the model; draw nothing
- *   something to show, no usable rows   → no options   AC4's inert label
- *   something to show and rows          → the menu
+ *   no layer has anything, and no inherited-default row → null   nothing is known; draw nothing
+ *   something to show, no usable rows                   → no options   AC4's inert label
+ *   something to show and rows                          → the menu
  *
- * The first is not in #988's ACs and was a decision that slice took; #1053's AC4 is now its criterion,
- * widened from "the session's model is unset" to "no layer has anything". It stays reachable in the app's
- * ordinary startup window — the run-config snapshot arrives on a turn end, and until then
- * selectEffectiveSettings resolves `model` to '' — but a session on the daemon's INHERITED DEFAULT sits
- * there permanently, which is what #1053 exists to answer. Every other rendering would draw an empty gap
- * where a label belongs. ContextUsageControl takes exactly this posture for its own unavailable reading,
- * and #811's no-placeholder rule points the same way. It invents no name for '' — the daemon's
- * held-verbatim "inherited default" — it just says nothing about it.
+ * The first is not in #988's ACs and was a decision that slice took; #1053's AC4 widened its criterion
+ * from "the session's model is unset" to "no layer has anything", and #1423 NARROWED IT AGAIN by the
+ * clause above. It stays reachable in the app's ordinary startup window — the run-config snapshot arrives
+ * on a turn end, and until then selectEffectiveSettings resolves `model` to ''. Every other rendering
+ * would draw an empty gap where a label belongs. ContextUsageControl takes exactly this posture for its
+ * own unavailable reading, and #811's no-placeholder rule points the same way.
+ *
+ * #1423 IS WHY IT IS NO LONGER WHERE AN UNCONFIGURED CHAT LIVES. An empty model is not an absence — the
+ * wire contract calls it the daemon's INHERITED DEFAULT, and the daemon publishes an ordinary row for it,
+ * so there is a name to draw after all and this control need invent none. #1053 answered the same state
+ * by LAYERING, which only helps once claude has announced something; since pyrycode#2085 the child is
+ * deferred to the first message while the session is minted at creation, so a new chat sits with no
+ * announcement and no stored choice for exactly as long as nobody messages it — which is when its model
+ * is most worth choosing. #1168 deliberately left this menu out of the substitution it made for the two
+ * effort surfaces and pinned that omission with a test; this is that open question answered, and the
+ * pinned case (an announcement over no session model) is untouched, because '' is never the shown string
+ * there.
  *
  * TWO STRINGS COME OUT OF THE LAYERS AND THEY ARE NOT THE SAME STRING. The LABEL is the first layer with
  * something to show; the MARKING is the SESSION's model, which is the pick over the stored choice and
  * NEVER the announcement (#1053 AC5) — the daemon is set to what the session says, not to what claude
- * reported running. They collapse to one answer whenever a pick is in force and differ exactly in the
- * state this ticket exists for, so they are two lookups rather than one.
+ * reported running. They collapse to one answer whenever a pick is in force, and again when NOTHING is
+ * (#1423, where both take '' and the one inherited-default row serves both), and they differ exactly in
+ * the state #1053 exists for, so they are two lookups rather than one.
  *
  * BOTH resolve by exact equality on `value` through publishedRowFor — the one home of the rule, which
  * #988 exported and which RunningModelSection joins the announced identifier by. A MISS IS ORDINARY, not
@@ -191,12 +206,25 @@ export function composerModelMenuModel(
   layers: ComposerModelLayers
 ): ComposerModelMenuModel | null {
   const shown = firstShown(layers.picked, layers.announced, layers.stored)
-  if (shown === '') return null
-  const row = publishedRowFor(models, shown)
+  // #1423 — the INHERITED-DEFAULT branch, and the one input that reaches it is ''. `effortRowFor` is
+  // publishedRowFor with that single substitution, so nothing else about the lookup widens: the comparing
+  // is still one `===` on raw strings, and ' ', 'Default' and 'default-x' miss exactly the rows they
+  // missed before. With no such row published — or no model_list frame at all — this is still `undefined`
+  // and the function still returns null below, which is the rendering #988 shipped for this state.
+  //
+  // ONE ROW ANSWERS BOTH LOOKUPS HERE and that is a property of this state rather than a shortcut: a shown
+  // string of '' means every layer is '', so `firstShown(picked, stored)` is '' too and the marking would
+  // take the identical argument. If a fourth layer ever makes those two diverge at '', they must separate
+  // again.
+  const inherited = shown === '' ? effortRowFor(models, shown) : undefined
+  if (shown === '' && inherited === undefined) return null
+  const row = inherited ?? publishedRowFor(models, shown)
   // The SESSION's model, which is the only thing a row may be marked current by. Exact equality stays the
-  // whole rule here too: a daemon that published a row whose `value` is '' would have that row marked on
-  // an inherited-default session, which is the lookup answering honestly rather than a case to guard.
-  const sessionRow = publishedRowFor(models, firstShown(layers.picked, layers.stored))
+  // whole rule here too. PRECEDENCE, since #1423: an empty session model resolves the inherited-default
+  // row and consults no other, so a daemon that published a row whose `value` is literally '' no longer
+  // has that row marked on such a session — the same one-rule-one-answer posture effortRowFor's docblock
+  // states for the effort surfaces, which this control now shares instead of contradicting.
+  const sessionRow = inherited ?? publishedRowFor(models, firstShown(layers.picked, layers.stored))
   // #1095's SOURCE CHAIN for the trigger: on a hit the row's `resolved_model`, then that same row's
   // `value`; on a miss the shown string itself. `resolved_model` leads because the trigger's job is to
   // name what RUNS, and it is the one field naming the concrete identifier behind an alias. The `value`

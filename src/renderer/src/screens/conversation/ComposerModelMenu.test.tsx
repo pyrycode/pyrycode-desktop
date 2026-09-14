@@ -186,9 +186,15 @@ describe('composerModelMenuModel', () => {
   // The one rendering no AC names: before the daemon answers request_session_settings the effective model
   // is '' (selectEffectiveSettings' final fallback), and there is no name to draw. ContextUsageControl's
   // posture for its own unavailable reading, and #811's no-placeholder rule.
-  it('returns null when the session model is not known', () => {
+  //
+  // #1423 MADE THE CRITERION CONDITIONAL and this is now its second arm rather than its only one: an
+  // empty model resolves the inherited-default row, so nothing is drawn only when there is no such row to
+  // resolve. All three of those readings are seeded here — a list without one, no frame at all, and an
+  // empty published list — and none of them may start drawing a label with no name behind it.
+  it('returns null when no layer has anything and no inherited-default row is published', () => {
     expect(composerModelMenuModel(LIST, layers())).toBeNull()
     expect(composerModelMenuModel(null, layers())).toBeNull()
+    expect(composerModelMenuModel(EMPTY, layers())).toBeNull()
   })
 
   // Claude may legitimately publish two rows sharing a `value` (RunConfigSections.tsx:303-307). Both are
@@ -490,8 +496,12 @@ describe('ComposerModelMenuView', () => {
     expect(markup).not.toContain('composer__model-icon')
   })
 
-  it('renders nothing when the session model is not known', () => {
+  // #1423's second arm through the markup: with no inherited-default row to resolve, an empty model still
+  // draws NOTHING — not an empty label element, and not the inert span AC4 renders for a known model with
+  // no rows behind it.
+  it('renders nothing when no layer has anything and no inherited-default row is published', () => {
     expect(view(LIST, '')).toBe('')
+    expect(viewLayers(null, layers())).toBe('')
   })
 
   // The rows reach the SHARED panel: the menu's own static render cannot show an open panel
@@ -526,6 +536,10 @@ describe('ComposerModelMenuView', () => {
 // picked anything, and #1053's answer for this control (LAYERING, never a widened join) would be
 // silently overwritten. Whether this trigger should mark that row is a separate question, deliberately
 // out of that ticket's scope; this pins that it does not start doing so by accident.
+//
+// #1423 ANSWERED THAT QUESTION AND THIS BLOCK IS UNCHANGED BY IT, which is the whole reason it was worth
+// writing: both cases here carry an ANNOUNCEMENT, so the shown string is never '' and the new branch is
+// never reached. What #1423 resolves is the state with NO announcement either — see the block below it.
 describe('composerModelMenuModel — an inherited-default session (#1168)', () => {
   const INHERITED = row({ value: 'default', display_name: 'Inherited default' })
   const list: ModelListEntry = { models: [...ROWS, INHERITED], droppedModels: 0 }
@@ -543,5 +557,86 @@ describe('composerModelMenuModel — an inherited-default session (#1168)', () =
     const menu = composerModelMenuModel(list, layers({ announced: 'unpublished-identifier' }))
     expect(menu?.label).toBe('Unpublished')
     expect(menu?.currentId).toBeNull()
+  })
+})
+
+// #1423 — the state the block above deliberately left alone: no pick, no announcement, no stored choice.
+// #1053's rendering table calls that "nothing is known about the model" and draws nothing, and a chat on
+// the daemon's inherited default sits there PERMANENTLY. Since pyrycode#2085 a conversation's session is
+// minted and bound at creation while the claude child is deferred to the first message, so that is now
+// every new chat until it is messaged — which is exactly when someone wants to choose the model.
+//
+// An empty model is not an absence: the wire contract calls it the inherited daemon default, and the
+// daemon publishes an ORDINARY ROW for it. So this resolves THAT row — #1168's `effortRowFor`, the one
+// home of the substitution — and the row answers both of this function's lookups, because '' as the shown
+// string means every layer is '' and the marking's input is '' too.
+describe('composerModelMenuModel — a chat with no explicit model (#1423)', () => {
+  const INHERITED = row({ value: 'default', display_name: 'Inherited default' })
+  const list: ModelListEntry = { models: [...ROWS, INHERITED], droppedModels: 0 }
+
+  // AC1's decision half, all three claims at once: there IS a model now (not null), it is labelled from
+  // the inherited-default row, and that row is the marked one. The options are still exactly the published
+  // rows in the daemon's order — the inherited row is one of them and is not lifted, hidden or moved.
+  it('labels and marks the inherited-default row when no layer has anything (AC1)', () => {
+    const menu = composerModelMenuModel(list, layers())
+    expect(menu?.label).toBe('Default')
+    expect(menu?.currentId).toBe('default')
+    expect(menu?.options.map((o) => o.id)).toStrictEqual([...ROWS.map((r) => r.value), 'default'])
+  })
+
+  // THE LABEL COMES THROUGH THE EXISTING SOURCE CHAIN, not from a new rule: the trigger reads the matched
+  // row's `resolved_model` first and a ROW still reads its own `value` (#1095 AC3). Seeded so the two
+  // disagree, because the shared fixture cannot tell them apart — `row()` builds every `resolved_model` as
+  // the value plus a suffix, and a suffix cannot change a leading run of letters.
+  it('reads the inherited row resolved_model for the trigger and its value for the row (AC1)', () => {
+    const only: ModelListEntry = {
+      models: [row({ value: 'default', display_name: 'Inherited default', resolved_model: 'claude-zeta-5' })],
+      droppedModels: 0
+    }
+    const menu = composerModelMenuModel(only, layers())
+    expect(menu?.label).toBe('Zeta')
+    expect(menu?.options).toStrictEqual([{ id: 'default', label: 'Default' }])
+    expect(menu?.currentId).toBe('default')
+  })
+
+  // AC2: '' IS THE ONLY INPUT THAT TAKES THE BRANCH. Three near-misses of the daemon's own word, because
+  // "exact equality, no trim, no case fold, no prefix" is three claims rather than one — and the failure
+  // this guards is a substitution written as anything looser than `model === ''`. Each still renders the
+  // ordinary miss (a label, nothing marked), which is what it rendered before this slice.
+  it.each([
+    ['surrounding whitespace', ' '],
+    ['the daemon word capitalised', 'Default'],
+    ['a superstring', 'default-x']
+  ])('leaves the inherited-default row unresolved on %s (AC2)', (_why, model) => {
+    const menu = composerModelMenuModel(list, stored(model))
+    expect(menu).not.toBeNull()
+    expect(menu?.currentId).toBeNull()
+  })
+
+  // AC1's rendering half: the OPENABLE trigger, not the inert span AC4 draws and not nothing. The chevron
+  // is the design's "this opens a panel" mark and belongs here for the same reason it is withheld there.
+  it('draws the openable trigger rather than nothing (AC1)', () => {
+    const markup = viewLayers(list, layers())
+    expect(markup).toContain('class="composer__footer-button composer__model"')
+    expect(markup).toContain('aria-haspopup="menu"')
+    expect(markup).toContain('<span class="composer__model-label">Default</span>')
+    expect(markup).toContain('composer__model-icon')
+  })
+
+  // The marking reaches the SHARED panel, fed directly — a static render cannot open one. Exactly one row
+  // is current and it is the inherited-default row, which is the half `currentId` alone cannot show.
+  it('marks the inherited-default row in the shared panel (AC1)', () => {
+    const menu = composerModelMenuModel(list, layers())
+    const markup = renderToStaticMarkup(
+      <ComposerOptionsPanel
+        options={menu?.options ?? []}
+        currentId={menu?.currentId ?? null}
+        onSelect={noop}
+        ariaLabel={COMPOSER_MODEL_MENU_LABEL}
+        focusedIndex={0}
+      />
+    )
+    expect(countOf(markup, 'aria-current')).toBe(1)
+    expect(markup).toContain('aria-current="true">Default<')
   })
 })

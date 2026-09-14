@@ -98,9 +98,11 @@ export function changeConnectedSetting(conversationId: string | null, change: Se
 // a refactor that ticket does not need. It stays declared here, beside the two of three callers that
 // already read it.
 //
-// #1168 DID NOT TOUCH IT, and that is a decision rather than an omission — see effortRowFor below. The
-// two EFFORT surfaces now resolve an empty model to the inherited-default row; the other three callers
-// must not, and the cheapest way to be sure of that is that this body never learned about the case.
+// #1168 DID NOT TOUCH IT, and that is a decision rather than an omission — see effortRowFor below. Some
+// callers resolve an empty model to the inherited-default row and some must not, and the cheapest way to
+// be sure of the second group is that this body never learned about the case. #1423 kept it that way when
+// it moved a fourth surface into the first group: it changed one call site in ComposerModelMenu.tsx, not
+// this rule.
 export function publishedRowFor(
   models: ModelListEntry | null | undefined,
   model: string
@@ -132,14 +134,28 @@ const INHERITED_DEFAULT_MODEL_VALUE = 'default'
  * only input that takes the branch, and ` `, `Default` and `default-x` all miss exactly as they did.
  *
  * WHY A SEPARATE FUNCTION RATHER THAN A BRANCH INSIDE publishedRowFor. That helper has five callers
- * joining three different strings, and three of them must NOT gain this case:
+ * joining three different strings, and the case belongs to some of them and not others:
  * `RunningModelSection` joins what claude ANNOUNCED (a different identifier answering a different
- * question — an announcement of `''` is a real one the daemon emitted and renders verbatim);
- * `composerModelMenuModel` joins the session model for its marking, which #1053 settled by LAYERING and
- * would start claiming a row was picked on a chat where nobody picked one; and
+ * question — an announcement of `''` is a real one the daemon emitted and renders verbatim); and
  * `composerPermissionModeMenuModel` reads `supports_auto_mode` off the row it resolves, so it would
  * start hiding the `auto` entry on every inherited-default chat — a behaviour change to a third control,
- * invisible to every criterion this slice is judged by. All three are pinned by tests in their own files.
+ * invisible to every criterion #1168 was judged by. Both are pinned by tests in their own files.
+ *
+ * `composerModelMenuModel` WAS THE THIRD OF THOSE AND IS NOW A CALLER (#1423), which is why this docblock
+ * no longer reads as three-against-two. #1168 held it out because widening its MARKING lookup outright
+ * would claim a row was picked on a chat where nobody picked one, and #1053 had settled that state by
+ * LAYERING — but layering only speaks once claude has announced something, and since pyrycode#2085 a new
+ * chat has no announcement until it is messaged. It therefore takes this substitution on ONE state only:
+ * no pick, no announcement and no stored choice, where the row it resolves is both what the trigger reads
+ * and, honestly, what the session is set to. Its own docblock carries that reasoning; the case #1168
+ * pinned (an announcement over an empty session model) still marks nothing and is still pinned.
+ *
+ * THE NAME NOW LAGS THE CALLERS, and #1423 declined the rename rather than overlooking it. The rule is
+ * "the row a SESSION MODEL resolves to, the empty one being the daemon's inherited default", which is not
+ * about effort at all — `publishedRowFor` above was named for its rule on exactly this occasion, its
+ * second caller. Renaming would touch three further files plus an e2e comment and staleify five knowledge
+ * documents for no behavioural gain, which is adjacent-refactor work a slice changing one call site does
+ * not need. Recorded here so the next reader finds a decision rather than an accident.
  *
  * IT IS A JOIN, NEVER A VOCABULARY. With no inherited-default row published, or no `model_list` frame
  * received, this returns `undefined` and both surfaces render exactly what they rendered before #1168 —

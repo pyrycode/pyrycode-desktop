@@ -345,10 +345,15 @@ names are meant to make visible.
 **Since #1168, an empty `model` — the wire's inherited daemon default, not an absence — resolves onto
 the row the daemon publishes for that default (`value: 'default'`) instead of matching nothing.**
 `effortRowFor` is `publishedRowFor` with only that lookup argument substituted; every other model, and
-every other `publishedRowFor` caller (`RunningModelSection`, `ModelSection`, both composer menus except
-the effort one), is unmoved. See [Composer effort
+every other `publishedRowFor` caller (`RunningModelSection`, `ModelSection`, and
+`composerPermissionModeMenuModel`), is unmoved. **Since
+[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423), `effortRowFor` has a third caller
+outside the two effort surfaces:** the composer's model menu resolves its own empty-session-model state
+(no pick, no announcement, no stored choice) through the same helper, for the same reason — see [Composer
+model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings).
+See [Composer effort
 menu](composer-effort-menu.md#composereffortmenumodel-one-pure-function-deciding-all-three-renderings)
-for the shared wrapper both effort surfaces now call.
+for the shared wrapper's docblock, which now states the rule for all three callers rather than two.
 
 **Four inputs, three renderings** — the section's own `nothingKnown` guard is the one place this table
 is written down in code:

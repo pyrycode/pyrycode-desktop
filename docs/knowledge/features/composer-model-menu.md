@@ -83,18 +83,24 @@ uses the inert span described in [The write](#the-write).
 
 | Input | Rendering |
 |---|---|
-| no layer has anything (`picked === announced === stored === ''`) | `null` — nothing in the row |
+| no layer has anything, and `models` publishes no inherited-default row (`picked === announced === stored === ''`, and `effortRowFor(models, '')` is `undefined`) | `null` — nothing in the row |
 | something to show, and `models` is `null` or `models.models` is empty | an inert `<span>`: the label, no chevron, no role, no tabindex, no handler, no `.composer-options-anchor` |
-| something to show and rows are present | `ComposerOptionsMenu` with the rows as options |
+| something to show and rows are present, or no layer has anything but the inherited-default row is published | `ComposerOptionsMenu` with the rows as options |
 
 The first rendering is not in #988's ACs; it was that ticket's own decision, taken because it is otherwise
 reachable in the app's ordinary startup window (see § Turn-end dependency below), and #1053's AC4 widened
-its criterion from "the session's model is unset" to "no layer has anything" without changing its shape —
-a session on the daemon's inherited default with no announcement yet sits in this state permanently, which
-is the state #1053 exists to get the control out of once an announcement arrives. `ContextUsageControl`
-takes the identical posture for its own unavailable reading, and #811's no-placeholder rule points the
-same way — rendering nothing invents no name for the daemon's own held-verbatim `''` ("inherited
-default").
+its criterion from "the session's model is unset" to "no layer has anything" without changing its shape.
+**[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423) narrowed it again**, and this is the
+state that ticket exists for: a session on the daemon's inherited default with no announcement yet used to
+sit in the `null` rendering permanently, which mattered because since pyrycode#2085 that is every new
+chat's state until its first turn — exactly the window in which a model is most worth choosing.
+`ContextUsageControl` takes the identical posture for its own unavailable reading, and #811's no-placeholder
+rule points the same way — rendering nothing invents no name for the daemon's own held-verbatim `''`
+("inherited default"). #1423 resolves the emptiness a different way: `''` is not an absence, it is the
+daemon's own name for its inherited default, and the daemon publishes an ordinary row for it. When `shown`
+is `''`, `composerModelMenuModel` looks that row up through `effortRowFor(models, '')` — #1168's helper (see
+below) — before falling through to `null`. `null` survives only when no such row is published, or no
+`model_list` frame has arrived at all, which is AC2's second arm.
 
 The second rendering is AC4, and it cannot be `options={[]}`: `ComposerOptionsMenu` renders
 `aria-haspopup="menu"` and `aria-expanded` unconditionally and would open exactly the empty panel AC4
@@ -134,11 +140,20 @@ where `session` is the first non-empty of picked and stored — **never** the an
 the marking read different layer-sets on purpose: the label answers "what's shown", the marking answers
 "what would picking do nothing" / "what is the daemon actually set to", and the daemon is set to what the
 session says, never to what claude reported running. The two collapse to the same row whenever a pick is
-in force and differ exactly in the state #1053 exists for (an announcement with no pick and no stored
-choice: the label shows the announcement, nothing is marked current). Exact equality stays the whole rule
-for this lookup too, including its edge case: a daemon publishing a row whose `value` is `''` would have
-that row marked current on an inherited-default session with no pick — the lookup answering honestly,
-not a case this code guards against.
+in force, and again since #1423 when *nothing* is (`shown === ''` implies picked and stored are both `''`
+too, so the marking lookup would take the identical `''` argument — one inherited-default row honestly
+answers both lookups in that state). They differ exactly in the state #1053 exists for: an announcement
+with no pick and no stored choice, where the label shows the announcement and nothing is marked current.
+
+**Precedence changed under #1423.** Exact equality was always the whole rule for this lookup, but before
+\#1423 that meant a daemon publishing a row whose `value` was literally `''` would have that row marked
+current on an inherited-default session with no pick — an honest reading of an edge case nobody expected
+to hit. Since #1423, an empty session model resolves the inherited-default row through `effortRowFor` and
+consults no other row, so that literal-`''`-value edge case no longer reaches `publishedRowFor` at all.
+This is the same one-rule-one-answer posture `effortRowFor`'s own docblock states for the two effort
+surfaces (see [Composer effort menu](composer-effort-menu.md) and
+[Run-configuration sections](conversation-shell-run-configuration.md)), which this control now shares
+instead of contradicting.
 
 **The options:** `entry.models.map((row) => ({ id: row.value, label: ... }))`, exactly the published rows,
 in the daemon's order — nothing deduped, dropped, reordered or synthesized, per AC2. `id` is the row's
@@ -204,6 +219,24 @@ a lone `idle` push fires nothing, since the refresh trigger is a running→idle 
 `Set.delete` on an id never inserted returns `false`) or a fresh `connected` frame. What changed is only
 that a drive no longer needs either edge just to get *a* snapshot onto the screen — the activation that
 opens the conversation already supplied one.
+
+**A known, accepted gap since #1423: switching to a chat whose snapshot hasn't arrived yet can render the
+*previous* chat's inherited-default row for one settings round trip.** `activateConversation` clears
+`runConfigStore` and `sessionIdStore` on every switch, but deliberately never clears `modelListStore` — that
+store's own docs rule out an activation- or connected-edge clear, since #1166's model-list ask is
+per-conversation and the list itself does not vary by chat. The container collapses "no snapshot yet" and
+"snapshot says the model is empty" into the same layer (`stored: snapshot?.model ?? ''`), so between the
+clear and the next `runConfigReceived` frame, `shown === ''` and the already-held model list resolves the
+inherited-default row — the same row the *previous* chat may have been showing — even on a chat whose
+actual stored model may be something else entirely. It is inert (the session id rides the same
+`runConfigReceived` frame as the snapshot, so no pick can be sent against the wrong session) and self-heals
+in one round trip once the new snapshot lands. #1167's `activateConversation` docblock states the clear
+exists so controls "say nothing instead of something false"; this is the one control on the row for which
+that is no longer quite true during that window. Verifier-flagged on #1423 as a SHOULD FIX and left open
+deliberately — the ticket's acceptance criteria direct resolving `''` to the inherited-default row with no
+carve-out for this window, and the fix (distinguishing "not yet known" from "explicitly empty" one layer up,
+in `ComposerModelLayers.stored`) is a layer-shape change belonging to its own ticket rather than a rework of
+this one.
 
 ## CSS: the shared footer-button treatment, lifted on its second consumer
 
@@ -413,4 +446,6 @@ See [PR #1018](https://github.com/pyrycode/pyrycode-desktop/pull/1018) and
 `## Revisions` entry recording the `composerModelMenuModel` extraction and the 120px measurement. See
 `docs/specs/architecture/1053-footer-model-announced-layer.md` for #1053's plan and security review, and
 `docs/specs/architecture/1095-model-family-only-in-the-footer.md` for #1095's plan, security review and
-`## Revisions` entry.
+`## Revisions` entry. See `docs/specs/architecture/1423-inherited-default-model-menu.md` for #1423's plan
+and [PR #1432](https://github.com/pyrycode/pyrycode-desktop/pull/1432) for its verifier review, including
+the switch-window gap recorded above.

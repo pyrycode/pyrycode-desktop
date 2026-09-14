@@ -270,10 +270,11 @@ const api = {
    * outcome arrives later on the push channel below, because the flow reports MORE THAN ONE message
    * per intent once #864 adds progress.
    *
-   * CALLED WITH THE DESTINATION AND NOTHING ELSE (#1205; with no argument at all before it): this window
-   * names an INTENT and the conversation the bytes are for, never a file. The one string that crosses is
-   * the open chat's daemon-minted id, which reaches the wire on every chunk as a lookup key the daemon
-   * validates against its own registry — and reaches no host path, no declared filename and no log line.
+   * CALLED WITH THE DESTINATION AND ITS HOST (#1205 made the first required; with no argument at all
+   * before it): this window names an INTENT and the conversation the bytes are for, never a file. The
+   * conversation id reaches the wire on every chunk as a lookup key the daemon validates against its own
+   * registry; the `serverId` beside it is resolved against the connection registry and discarded — and
+   * neither reaches a host path, a declared filename or a log line.
    * The picker, the path and the bytes all stay in the background process. ATTACHMENT_UPLOAD_CHANNEL is
    * fixed here so the renderer cannot address arbitrary IPC channels, and ipcRenderer never crosses the
    * bridge.
@@ -282,8 +283,20 @@ const api = {
    * tell the picker from the drop, and an ask that has to carry a field cannot be told apart by having
    * none. A bare send now matches no guard on the main side and is dropped.
    */
-  requestAttachmentUpload: ({ conversationId }: { conversationId: string }): void => {
-    const request: AttachmentPickRequest = { source: ATTACHMENT_PICK_SOURCE, conversationId }
+  requestAttachmentUpload: ({
+    conversationId,
+    serverId
+  }: {
+    conversationId: string
+    serverId?: string
+  }): void => {
+    // The host rides only when the caller names one: a spread of `{}` leaves the property ABSENT,
+    // where `{ serverId }` would carry `serverId: undefined` across structured clone as a present key.
+    const request: AttachmentPickRequest = {
+      source: ATTACHMENT_PICK_SOURCE,
+      conversationId,
+      ...(serverId === undefined ? {} : { serverId })
+    }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 
@@ -317,7 +330,10 @@ const api = {
    * the window is untrusted at the boundary regardless of the declared parameter type, so
    * `isAttachmentUploadRequest` re-checks on the main side and drops a malformed ask there.
    */
-  dropAttachmentFile: (file: File, { conversationId }: { conversationId: string }): void => {
+  dropAttachmentFile: (
+    file: File,
+    { conversationId, serverId }: { conversationId: string; serverId?: string }
+  ): void => {
     let path: string
     try {
       path = webUtils.getPathForFile(file)
@@ -327,7 +343,11 @@ const api = {
     if (path === '') return
     // #1205: the destination rides beside the path. Same rule as the other two asks — see
     // `requestAttachmentUpload` above for what the id does and does not reach.
-    const request: AttachmentUploadRequest = { path, conversationId }
+    const request: AttachmentUploadRequest = {
+      path,
+      conversationId,
+      ...(serverId === undefined ? {} : { serverId })
+    }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 
@@ -349,7 +369,7 @@ const api = {
    * ⭐ #1129 ADMITS ONE EXCEPTION TO "NOTHING", AND EXTENDS THE REASONING RATHER THAN DROPPING IT.
    * `AttachmentPasteRequest` now carries an optional `serverId` naming which paired server the
    * image is for, so that a pasted file lands on the host whose chat is open rather than on
-   * whichever was paired most recently. THIS SENDER STILL SUPPLIES NONE — see the last paragraph —
+   * whichever was paired most recently. THIS SENDER FORWARDS THE ONE ITS CALLER NAMES — see the last paragraph —
    * but the shape admits one, so the sentence above owes the qualification. It holds: a routing key
    * is not a path, a filename, a byte or a wire value. Main resolves it against the connection
    * registry's held entry set (`serverRouter.ts`) and discards it; the window can NAME a server it
@@ -367,16 +387,26 @@ const api = {
    *
    * ipcRenderer does not cross the bridge and ATTACHMENT_UPLOAD_CHANNEL is fixed here, so the
    * renderer cannot address arbitrary channels. There is nothing to throw and nothing to filter.
-   * Since #1205 it takes ONE argument, the destination — the open chat's daemon-minted id, required
-   * because the daemon refuses a chunk naming no conversation (pyrycode #2143) — and still no
-   * `serverId`, which is deliberate and temporary: the composer has no per-server surface to name a
-   * server from until #1086, so every ask this sender emits takes the resolver's unnamed path — the
-   * sole connection when the registry holds exactly one entry, a refusal when it holds more. The day a
-   * caller has a server to pass, this is where the parameter goes, and it is a routing key that is
-   * looked up and discarded, never a value main acts on.
+   * Since #1205 it takes the destination — the open chat's daemon-minted id, required because the
+   * daemon refuses a chunk naming no conversation (pyrycode #2143) — and beside it the chat's
+   * `serverId`, which `useAttachmentUpload` reads off the conversation list at the keystroke. The key
+   * is forwarded only when the caller supplies one, so an ask for a chat the list does not hold goes
+   * out WITHOUT the property rather than with an undefined one, and takes the resolver's unnamed path —
+   * the sole connection when the registry holds exactly one entry, a refusal when it holds more. It is
+   * a routing key that is looked up and discarded, never a value main acts on.
    */
-  pasteAttachmentImage: ({ conversationId }: { conversationId: string }): void => {
-    const request: AttachmentPasteRequest = { source: ATTACHMENT_PASTE_SOURCE, conversationId }
+  pasteAttachmentImage: ({
+    conversationId,
+    serverId
+  }: {
+    conversationId: string
+    serverId?: string
+  }): void => {
+    const request: AttachmentPasteRequest = {
+      source: ATTACHMENT_PASTE_SOURCE,
+      conversationId,
+      ...(serverId === undefined ? {} : { serverId })
+    }
     ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL, request)
   },
 

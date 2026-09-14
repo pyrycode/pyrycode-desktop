@@ -1127,7 +1127,7 @@ app.whenReady().then(() => {
        *
        * ROUTED BY SERVER (#1129), the last entry point off `registry.active`. `servers.route`
        * answers the connection for the server the window named, or — when the ask carries no id,
-       * which is every ask until #1086 gives the composer a per-server surface — the sole
+       * which the composer now sends only for a chat its conversation list does not hold — the sole
        * connection if the registry holds exactly one entry. Anything else REFUSES: an id no held
        * entry matches, or an absent id with more than one entry. There is no fallback to the first
        * or the most recent connection.
@@ -1149,9 +1149,9 @@ app.whenReady().then(() => {
        * decision `serverRouter.ts` owns. The distinction is not lost: `resolve` logs
        * `server-route-refused` with `ambiguous-server` vs `server-not-connected`, so the
        * operator-facing diagnostic is precise while the composer sentence is coarse. There is also
-       * no action a truer sentence could invite today. When #1086 gives the composer a server to
-       * name, a truer literal becomes worth minting — and at that point the resolver must report
-       * WHICH refusal it made, which is a change to `serverRouter.ts`.
+       * no action a truer sentence could invite today. Now that the composer names a server, a
+       * truer literal may become worth minting — and at that point the resolver must report WHICH
+       * refusal it made, which is a change to `serverRouter.ts`.
        *
        * With exactly one held entry this reduces to the expression it replaces, which is what keeps
        * single-server behaviour byte-for-byte unchanged.

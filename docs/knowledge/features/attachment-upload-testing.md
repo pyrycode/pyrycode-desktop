@@ -23,8 +23,9 @@ the edge cases these tests cover.
   paste ask above.
 - **The routing-key describe (#1129), stated as a scenario table rather than restated per guard.** Both
   `isAttachmentUploadRequest` and `isAttachmentPasteRequest` accept an ask naming a server (`serverId` a
-  non-empty string); accept an ask with **no** `serverId` key at all — the bare ask every shipped sender
-  emits today; accept an ask with an explicitly-`undefined` `serverId` — the structured-clone trap
+  non-empty string); accept an ask with **no** `serverId` key at all — the bare ask a sender emits for
+  a chat the conversation list does not hold; accept an ask with an explicitly-`undefined` `serverId`,
+  the structured-clone trap
   ([[structured-clone-preserves-an-undefined-property]]) stated as a test rather than as a comment; accept
   `serverId: ''` — type, not emptiness, refused one layer later by `serverRouter.resolve`; and reject a
   non-string `serverId`, table-driven over the shapes a hostile or buggy renderer can produce (a number, a

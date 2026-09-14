@@ -326,10 +326,10 @@ describe('the optional routing key on both asks', () => {
     ).toBe(true)
   })
 
-  it('accepts an ask with no serverId key, which is what every shipped sender emits', () => {
-    // The load-bearing half of "absent-or-undefined-or-string" in the REFUSAL direction: no
-    // renderer sender has a per-server surface to name a server from until #1086, so a present-key
-    // REJECTION would refuse the ordinary bare ask both current senders produce.
+  it('accepts an ask with no serverId key, which a sender emits for a chat its list does not hold', () => {
+    // The load-bearing half of "absent-or-undefined-or-string" in the REFUSAL direction: the composer
+    // omits the key outright when the conversation list does not hold the chat, so a present-key
+    // REJECTION would refuse that ordinary bare ask.
     expect(isAttachmentUploadRequest({ path: '/tmp/a', ...CONV })).toBe(true)
     expect(isAttachmentPasteRequest({ source: ATTACHMENT_PASTE_SOURCE, ...CONV })).toBe(true)
   })

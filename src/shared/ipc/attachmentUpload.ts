@@ -206,12 +206,14 @@ function hasValidConversationId(value: object): boolean {
  * (`DiagnosticEvent` is `{ event, code? }` and has no identifier-shaped member, so a server id is
  * structurally unrepresentable in a log line from there).
  *
- * OPTIONAL, and it will stay unfilled for a while. No renderer sender has a per-server surface to
- * source an id from until #1086 lands, so both shipped senders emit the bare ask and every upload
- * takes the resolver's unnamed path — the sole connection when the registry holds exactly one
- * entry, a refusal when it holds more. That is the bridge `serverRouter.ts`'s header describes:
- * bounded and observable, today's single-server behaviour preserved, no fallback to "the first" or
- * "the most recent" connection anywhere.
+ * OPTIONAL, AND FILLED BY EVERY SENDER THAT KNOWS ITS HOST. `useAttachmentUpload` reads the open
+ * chat's server off the conversation list at the gesture (`attachmentAskTarget`) and the three
+ * preload senders forward it, so an upload lands on the host whose chat is open. The key is omitted
+ * only for a chat the list does not hold, and that ask takes the resolver's unnamed path — the sole
+ * connection when the registry holds exactly one entry, a refusal when it holds more. That is the
+ * bridge `serverRouter.ts`'s header describes: bounded and observable, no fallback to "the first" or
+ * "the most recent" connection anywhere. While every ask went out bare, a second paired host turned
+ * every upload into that refusal, rendered as the composer's not-connected sentence.
  *
  * ABSENT-OR-`undefined`-OR-STRING, and every word is load-bearing. `hasValidServerId` in
  * `commands.ts` states the same rule for the six server-scoped commands, and this is a deliberate
@@ -288,8 +290,8 @@ export const ATTACHMENT_PASTE_SOURCE = 'clipboard-image' as const
  * host was paired most recently. It cannot reach a server the operator has not paired —
  * `connectionFor` is the boundary. That is the same choice #1118 gave every conversation-scoped
  * command and #1120 gave the six server-scoped ones, so it is not a new capability class; and the
- * mitigation that would matter, the operator seeing the destination, is #1086's composer surface
- * rather than anything expressible here.
+ * mitigation that would matter, the operator seeing the destination, is the sidebar's host grouping
+ * (#1086) rather than anything expressible here.
  *
  * THIS ENTRY IS STILL THE NARROWEST OF THE THREE. The picker's ask has no object at all; this one
  * has a discriminator a renderer cannot vary plus a key that is looked up and thrown away; only the

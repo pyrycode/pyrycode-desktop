@@ -294,6 +294,18 @@ inventory and the pointer re-aimed at #1460:
 
 `docs/specs/architecture/1455-context-usage-category-breakdown.md` is a shipped plan and stays as written.
 
+## Revisions
+
+**2026-09-15 — sizing overage recorded, no design change.** The committed plan came to 383 lines, ~80 of
+them the label-mandated `## Security review`, so projected total written work is ~880 against the
+800-line boundary. Five of the six boundary lines hold comfortably (2 production files, 1 new exported
+type, 3 consumer call sites, 5 AC, 6 new reject branches); only the total trips. The parent chain is
+#1459 → #1456 → #1418, so the depth cap closes the split route — and the floor rule closes it
+independently: the only seam inside this slice is declaration-vs-parsing, and cutting there yields a
+child nothing outside the family consumes while contradicting the rule the shipped code states in its own
+docblocks. `needs-human:sizing` applied and the measurement posted on the ticket; built as one slice per
+the depth-cap rule. Nothing in the Design section moved.
+
 ## Security review
 
 **Verdict:** PASS

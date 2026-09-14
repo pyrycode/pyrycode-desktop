@@ -1026,40 +1026,100 @@ export interface ContextUsageCategory {
 }
 
 /**
- * Inbound `context_usage` event (daemon → client), THE READING PLUS THE CATEGORY BREAKDOWN (#1454 the
- * reading, #1455 the breakdown). Mirrors the first seven fields of the daemon's ContextUsagePayload
- * (SSOT pyrycode#2370 declared / #2371 emitted,
+ * ONE ROW of a `context_usage` frame's MCP-tool inventory (daemon → client, #1459). Mirrors the daemon's
+ * `ContextUsageMCPTool` field-for-field (SSOT pyrycode#2370, internal/protocol/interactive.go), wire
+ * order `name, server_name, tokens`. One tool DEFINITION's contribution to the reading in
+ * ContextUsagePayload below.
+ *
+ * NAMED WITHOUT THE `Wire` PREFIX and with the acronym CAPITALISED, both for ContextUsageCategory's
+ * stated reason: a nested row already qualified by its frame is named plainly after the daemon's own
+ * type, as `BackgroundTask`, `QueuedItem` and `HistoryEntry` are. `QrPayload` is the one exported name
+ * here that lowercases an acronym and it does NOT govern — it is a house-named client-side type with no
+ * daemon counterpart to mirror, so it is evidence about naming a new type rather than about mirroring one.
+ *
+ * ALL THREE KEYS ARE ALWAYS PRESENT, with no `omitempty` on any, so `name: ''` and `server_name: ''` are
+ * VALUES and `tokens: 0` is claude's reading of zero. An absent key is a real defect rather than an empty
+ * row, and a truthiness test on any of the three would read a legitimate row as malformed and drop the
+ * whole frame with it.
+ *
+ * SECURITY — `server_name` IS INERT, AND THE NAME COLLISION IS THE TRAP THIS BLOCK EXISTS TO DEFUSE. The
+ * daemon's `MCPReconnectPayload.ServerName` spells the same field name, crosses an ACTUATION SEAM
+ * verbatim, and is validated by nothing in its package or in internal/relay. THIS ONE NAMES A
+ * CONTRIBUTOR TO A READING: it is never an actuation target, never an authorization input, and MUST NOT
+ * BE FED TO AN MCP VERB — a reconnect, a tool invocation, a server lookup — on the strength of having
+ * appeared here, nor joined against `mcp_status` to look one up. Having the same spelling as a field
+ * that actuates is not having its meaning. `name` carries the same constraint: it is a tool
+ * definition's LABEL, never a handle to call it by.
+ *
+ * Both strings crossed the SUBPROCESS TRUST BOUNDARY. The producer bounds them at construction but
+ * neither validates nor sanitizes them, so they stay untrusted all the way here — safe to render as
+ * INERT TEXT, never fed to an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute or a
+ * URL, and never used as a lookup path, a filename, a CSS class or an icon name. A tool name is
+ * frequently path- or command-shaped in practice (`read_file` is the committed fixture's own), which is
+ * exactly the shape that invites a later `path.join`. **IF A CONSUMER INDEXES ROWS BY EITHER STRING, THE
+ * INDEX IS A `Map`, NEVER A PLAIN OBJECT** — an inventory keyed by server is the obvious view model, so
+ * this row is a STRONGER invitation than the category row was, and `byServer[row.server_name]` with a
+ * `__proto__` server name writes through to `Object.prototype`. The same goes for a React `key`.
+ *
+ * The committed fixture carries an EMBEDDED NEWLINE (`query\ndocs`) and `remote<mcp>` metacharacters on
+ * purpose and this decoder passes them through byte-for-byte: the escaping is owed at the RENDER SINK
+ * (CLAUDE.md's 2026-08-20 operator ruling), and escaping here would corrupt the value for every
+ * non-HTML sink while buying false safety at the real one. That newline is also why NEITHER STRING MAY
+ * REACH A LOG FIELD for an INTEGRITY reason and not merely a privacy one: the diagnostic stream is
+ * line-delimited JSON, so a logged tool name lets a daemon-supplied string FORGE A RECORD.
+ *
+ * `tokens` IS ONE CONTRIBUTION, AND THE CONTRIBUTIONS DO NOT RECONCILE — ContextUsageCategory's rule one
+ * inventory over. It is not range-checked in either direction, the figures being claude's own, and a
+ * consumer must not derive a total from these rows or read a gap against `total_tokens` as an error.
+ *
+ * See #1459 (this decode); the IPC carry is #1419, the store #1420, the surfaces #1421.
+ */
+export interface ContextUsageMCPTool {
+  name: string
+  server_name: string
+  // Go `int`; a plain `number` like every other integer on this wire.
+  tokens: number
+}
+
+/**
+ * Inbound `context_usage` event (daemon → client), THE READING PLUS TWO OF ITS THREE INVENTORIES (#1454
+ * the reading, #1455 the category breakdown, #1459 the MCP-tool inventory). Mirrors the first nine fields
+ * of the daemon's ContextUsagePayload (SSOT pyrycode#2370 declared / #2371 emitted,
  * internal/protocol/interactive.go), wire order `conversation_id, model, total_tokens, max_tokens,
- * percentage, categories, dropped_categories` — all seven ALWAYS PRESENT (no `omitempty`). Fanned out
- * ONLY to `interactive`-capable clients, after every turn end on the interactive path.
- * Conversation-scoped like RateLimitedPayload above: no `turn_id`, and receiving one neither opens nor
- * closes a turn.
+ * percentage, categories, dropped_categories, mcp_tools, dropped_mcp_tools` — all nine ALWAYS PRESENT
+ * (no `omitempty`). Fanned out ONLY to `interactive`-capable clients, after every turn end on the
+ * interactive path. Conversation-scoped like RateLimitedPayload above: no `turn_id`, and receiving one
+ * neither opens nor closes a turn.
  *
- * THE FRAME CARRIES FOUR MORE KEYS THAT THIS TYPE DELIBERATELY DOES NOT DECLARE: two inventories
- * (`mcp_tools`, `memory_files`) and their two dropped counts. They are on every real frame and are
- * decoded by #1456. Declaring one here without parsing it would put a field on the wire surface with no
- * narrowing behind it — a promise the decoder does not keep — so the declaration and the parsing land
- * together or not at all. `parseContextUsagePayload` returns a fresh seven-field literal, so the four
- * are tolerated and dropped rather than copied through.
+ * THE FRAME CARRIES TWO MORE KEYS THAT THIS TYPE DELIBERATELY DOES NOT DECLARE: the last inventory,
+ * `memory_files`, and its dropped count. They are on every real frame and are decoded by #1460.
+ * Declaring one here without parsing it would put a field on the wire surface with no narrowing behind
+ * it — a promise the decoder does not keep — so the declaration and the parsing land together or not at
+ * all. `parseContextUsagePayload` returns a fresh nine-field literal, so the two are tolerated and
+ * dropped rather than copied through.
  *
- * `categories` IS A PLAIN ARRAY AND NEVER `ContextUsageCategory[] | null`: the daemon's `MarshalJSON`
- * normalises a nil slice to `[]` precisely so a client never has to tell the two apart, and `omitempty`
- * is deliberately out. AN EMPTY `[]` IS THE POSITIVE STATEMENT THAT CLAUDE REPORTED NO CATEGORIES, which
- * a consumer must keep distinguishable from the absence a frame that never arrived yields; a `null` or
- * an absent key is a real defect. THE ROWS ARRIVE AS A PREFIX IN THE PRODUCER'S DESCENDING-TOKEN ORDER,
- * any cut taking entries off the TAIL — so a shortened list is never a list with holes, and re-sorting
- * or de-duplicating destroys the only ordering signal a consumer gets.
+ * EACH INVENTORY IS A PLAIN ARRAY AND NEVER `...[] | null`: the daemon's `MarshalJSON` normalises every
+ * nil inventory slice to `[]` precisely so a client never has to tell the two apart, and `omitempty` is
+ * deliberately out. AN EMPTY `[]` IS THE POSITIVE STATEMENT THAT CLAUDE REPORTED NO CATEGORIES, OR NO MCP
+ * TOOLS, which a consumer must keep distinguishable from the absence a frame that never arrived yields;
+ * a `null` or an absent key is a real defect. THE ROWS ARRIVE AS A PREFIX IN THE PRODUCER'S
+ * DESCENDING-TOKEN ORDER, any cut taking entries off the TAIL — so a shortened list is never a list with
+ * holes, and re-sorting or de-duplicating destroys the only ordering signal a consumer gets. Both rules
+ * hold PER LIST: the two are decoded independently and neither is ever consulted about the other.
  *
- * `dropped_categories` IS INDEPENDENT AND NOT INFERABLE, and it is the field a reader is likeliest to
- * try to reconcile. It accumulates TWO SEPARATE CUTS: the producer's entry and string caps, plus the
+ * EACH DROPPED COUNT IS INDEPENDENT AND NOT INFERABLE, and they are the fields a reader is likeliest to
+ * try to reconcile. Each accumulates TWO SEPARATE CUTS: the producer's entry and string caps, plus the
  * mapper's own frame-byte budget spent keeping the envelope under the v2 cap. So a retained list's
- * LENGTH IS NO EVIDENCE OF COMPLETENESS in either direction — the committed fixture's `3` sits beside
- * exactly two retained rows — and `categories.length + dropped_categories` is the breakdown's true size
- * rather than something to check. A client that reads a full list as proof nothing was dropped, or an
- * empty one as proof everything was, is wrong both times. `0` is a VALUE, never consulted for
- * truthiness: the key is always written, so an absent one is a defect rather than a valid zero. The
- * producer's caps are DAEMON-SIDE and may change without any change to this contract, so a client must
- * never hardcode one, treat a particular length as a signal, or re-decide a bound here.
+ * LENGTH IS NO EVIDENCE OF COMPLETENESS in either direction — the committed fixture's `3` and `5` each
+ * sit beside exactly two retained rows — and `list.length + its OWN dropped count` is that inventory's
+ * true size rather than something to check. A client that reads a full list as proof nothing was
+ * dropped, or an empty one as proof everything was, is wrong both times. THE COUNTS ARE ALSO
+ * INDEPENDENT OF EACH OTHER AND ARE NEVER CROSS-READ: the daemon divides ONE envelope across THREE lists
+ * and can cut all three at once, so `dropped_categories` is no evidence about `dropped_mcp_tools` and
+ * neither says anything about the other's length. `0` is a VALUE, never consulted for truthiness: the
+ * key is always written, so an absent one is a defect rather than a valid zero. The producer's caps are
+ * DAEMON-SIDE and may change without any change to this contract, so a client must never hardcode one,
+ * treat a particular length as a signal, or re-decide a bound here.
  *
  * PROVENANCE IS MIXED WITHIN THIS ONE STRUCT, and it is the field-level fact a reader is likeliest to get
  * wrong. `conversation_id` is DAEMON-authored: the mapper fills it from the daemon's own registry record,
@@ -1079,22 +1139,31 @@ export interface ContextUsageCategory {
  * size anything proportional to any of them; they are unbounded daemon-supplied values, and that is
  * AttachmentChunkPayload's never-allocate-from-a-claim rule one frame over.
  *
- * SECURITY: `model` — and every `name` on the rows — is a claude-authored string that crossed the
- * SUBPROCESS TRUST BOUNDARY. The daemon
- * bounds it at construction but does NOT validate or sanitize it, so it stays untrusted,
- * model-influenced text all the way here: safe to render as INERT TEXT, never fed to an HTML sink
+ * SECURITY: `model`, every `name` on either inventory's rows, and every `server_name` are strings that
+ * crossed the SUBPROCESS TRUST BOUNDARY. The daemon
+ * bounds them at construction but does NOT validate or sanitize them, so they stay untrusted
+ * text all the way here: safe to render as INERT TEXT, never fed to an HTML sink
  * (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL, and never used as a Map key, an
  * icon lookup, a CSS class, a lookup path or a filename — it is exactly the shape of short token that
- * invites one, the finding `limit_type` drew at #1318. IT IS ALSO NOT AN IDENTITY: `model_announced`
- * remains the authority on which model is running, and this string is descriptive text beside a token
- * count, never a key to match a model menu against. `conversation_id` is a daemon-asserted routing key,
- * never an authorization signal and never resolved against a filesystem. NOTHING DECODED REACHES A LOG:
- * the three integers disclose how much private work is in the window, a side-channel as unwelcome in a
- * log an operator may send off-box as the correlating id beside them. The BREAKDOWN is a finer instance
- * of that same side-channel and is excluded for the same reason — a per-category figure discloses how
- * the window is composed and not merely how full it is, and the list's LENGTH is a weak reading of the
- * same thing. See #1454 (the reading) and #1455 (this breakdown); the IPC carry is #1419, the store
- * #1420, the surfaces #1421.
+ * invites one, the finding `limit_type` drew at #1318. `model` IS ALSO NOT AN IDENTITY:
+ * `model_announced` remains the authority on which model is running, and this string is descriptive text
+ * beside a token count, never a key to match a model menu against. AND `server_name` IS INERT DESPITE
+ * ITS NAME: it collides with the actuation-crossing `ServerName` on the daemon's MCP reconnect payload,
+ * and must never be fed to an MCP verb or joined against `mcp_status` on the strength of appearing here
+ * — see ContextUsageMCPTool, which states the trap in full. `conversation_id` is a daemon-asserted
+ * routing key, never an authorization signal and never resolved against a filesystem.
+ *
+ * NOTHING DECODED REACHES A LOG: the three integers disclose how much private work is in the window, a
+ * side-channel as unwelcome in a log an operator may send off-box as the correlating id beside them.
+ * Each INVENTORY is a finer instance of that same side-channel and is excluded for the same reason — a
+ * per-row figure discloses how the window is composed and not merely how full it is, and a list's LENGTH
+ * is a weak reading of the same thing. The MCP-tool inventory adds TWO further grounds of its own: a
+ * `server_name` is WORKSPACE CONFIGURATION, making it the first field on this frame that discloses what
+ * the operator WIRED UP rather than what claude read, so a server named after internal infrastructure
+ * must not ride into such a log; and the committed fixture's EMBEDDED NEWLINE makes the exclusion an
+ * INTEGRITY rule too, since this stream is line-delimited JSON and a logged tool name could FORGE A
+ * RECORD. See #1454 (the reading), #1455 (the breakdown) and #1459 (the MCP-tool inventory); the IPC
+ * carry is #1419, the store #1420, the surfaces #1421.
  */
 export interface ContextUsagePayload {
   conversation_id: string
@@ -1106,6 +1175,8 @@ export interface ContextUsagePayload {
   percentage: number
   categories: ContextUsageCategory[]
   dropped_categories: number
+  mcp_tools: ContextUsageMCPTool[]
+  dropped_mcp_tools: number
 }
 
 /**

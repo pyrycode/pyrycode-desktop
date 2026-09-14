@@ -26,12 +26,14 @@ discipline, no held state. Where pairing-status *reads* a fact, unpair *triggers
 destructive-action counterpart in the same family as the [diagnostics channel](diagnostics-channel.md)
 (#131), which established the general "ship the IPC boundary ahead of its UI consumer" shape #173 reused.
 
-**Current callers, both delegating to the same helper.** The Settings screen's per-row Unpair action
+**Current callers, all three delegating to the same helper.** The Settings screen's per-row Unpair action
 ([#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)) calls `runUnpairServer` directly.
 The composer's Re-pair control ([#166](../codebase/166.md), migrated by
 [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)) resolves the server whose
 conversation is open and calls `runUnpair`, which now **delegates** to `runUnpairServer` rather than
-restating its erase→refresh→maybe-flip sequence. See [§ The two renderer callers](#the-two-renderer-callers) below.
+restating its erase→refresh→maybe-flip sequence. The Edit host dialog's Unpair host button
+([#1422](https://github.com/pyrycode/pyrycode-desktop/issues/1422)) also calls `runUnpairServer` directly,
+behind its own confirm step. See [§ The three renderer callers](#the-three-renderer-callers) below.
 
 **Forgetting one of several servers now clears that machine's renderer state too, since
 [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196).** Before #1196, `runUnpairServer`
@@ -197,10 +199,10 @@ above both registrations, which used to enumerate "four seams, four disjoint `Pi
 `hostLabelStore`, now says three: `pairingHandler`'s `saveFor`, this handler's `clearFor`, and
 `hostLabelHandler`'s `load`.
 
-## The two renderer callers
+## The three renderer callers
 
-Both callers share one rule — forgetting a server flips the route to the pairing screen only when the
-*refreshed* collection comes back empty — implemented once, in `runUnpairServer`, because that helper
+All three callers share one rule — forgetting a server flips the route to the pairing screen only when
+the *refreshed* collection comes back empty — implemented once, in `runUnpairServer`, because that helper
 is the only one holding the post-erase list. Since [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)
 they share a second rule the same way: when a record *does* remain, the departed server's own renderer
 state — its conversation rows, every one of its conversations' retained threads, its open chat if one was
@@ -224,9 +226,16 @@ drift between two enumerations of the same clear set is exactly the half-fix thi
 prevent. The one member that legitimately differs per caller is `navigateToList`: the Settings row's
 `ServerRowControl` supplies a no-op (`nextPairedRoute`'s only exit from `settings` is the already-absolute
 `back`, and `settings-per-server-unpair.spec.ts` pins Settings staying visible after a non-last unpair),
-while the composer's `ComposerErrorSlotControl` supplies `() => onBack?.()` — unconditionally, since
+the composer's `ComposerErrorSlotControl` supplies `() => onBack?.()` — unconditionally, since
 `serverIdForOpenConversation` (below) means the open conversation on this path is always one of the
-departing machine's. See [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+departing machine's — and the Edit host dialog's `ChannelList` container
+([#1422](https://github.com/pyrycode/pyrycode-desktop/issues/1422)) supplies `onLeaveConversation`, a
+required prop bound in `PairedShellView` to the shell's existing back nav
+(`() => { leaveRecovery(); dispatch({ type: 'back' }) }` — the same arrow `PairedShell` already spreads
+into `exitConversationDeps` at its delete and archive exits). Copying the Settings row's no-op into the
+dialog would strand the operator on a thread route for a host that no longer exists: unlike the Settings
+screen, `ChannelList` renders on both the `list` and `thread` routes, so the departed host's own chat can
+be the one on screen when its dialog's Unpair host button is confirmed. See [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
 for `clearConversationsFor` and `selectExclusiveConversationIdsFor`, and [Conversation last-read
 store](conversation-last-read-store.md) for `clearLastReadFor` — the three store-level primitives this
 clear composes — and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
@@ -298,6 +307,20 @@ flipped the route unconditionally on `ok` — correct only while there was ever 
 that unconditional flip would have forgotten server B and dropped its connection while recovering
 server A's dead one — the exact failure this migration exists to close.
 
+**The Edit host dialog's Unpair host button** ([#1422](https://github.com/pyrycode/pyrycode-desktop/issues/1422),
+`src/renderer/src/screens/channels/EditHostDialog.tsx` + `ChannelList.tsx`) is the third caller, and the
+first reached from a host row rather than from Settings or an already-terminal connection error. It asks
+before it acts, arming an inline `confirming-unpair` state that mirrors the Settings row's
+`idle`/`confirming`/`unpairing` `UnpairPhase` shape, because Juhana ruled on 2026-09-14 that the same act
+also deletes that host's saved chats — unlike the composer's control, which has no confirm step at all.
+A confirmed answer calls `runEditHostUnpair`, which sets an in-flight status, awaits `runUnpairServer`
+with the Settings row's own deps object (`window.pyry.unpairServer`, the same `loadServerInfo` re-read,
+`serverScopedClearDeps` spread with `navigateToList` overridden per above), and maps the `'ok' | 'error'`
+result onto the dialog's own status cell — close-on-success, a client-owned failure line on error. See
+[Edit host dialog](edit-host-dialog.md) for the dialog-side state machine, its widened `EditHostStatus`
+union, and the rework leg that closed the gap between "the cell is exclusive" and "the two round trips
+are exclusive."
+
 ## Data flow
 
 ```
@@ -352,7 +375,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
 - **A confused or hostile daemon cannot steer a Re-pair onto the wrong server.** The composer resolves
   the server to erase by matching the *daemon-supplied* open-conversation id against a flat, multi-server
   row list. `serverIdForOpenConversation` refuses an ambiguous match rather than resolving it via `find`
-  (§ The two renderer callers) — this was flagged and closed at plan time, before #1163 shipped. Note
+  (§ The three renderer callers) — this was flagged and closed at plan time, before #1163 shipped. Note
   what is *not* attacker-controlled: the id ultimately compared is the row's client-bound `serverId`
   stamp, never a wire field, so the worst a daemon can achieve is making the lookup ambiguous, which now
   erases nothing.
@@ -424,7 +447,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   architecture spec (split into [#1150](https://github.com/pyrycode/pyrycode-desktop/issues/1150), then
   #1196), this was a stale-display gap only — no credential and no live connection ever survived
   (`reconcile()` already dropped the connection) — and both unpair paths now reach the fix through the
-  one `clearServerScopedState` implementation (§ The two renderer callers).
+  one `clearServerScopedState` implementation (§ The three renderer callers).
 - **Closed by [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197), the last open slice of
   the #1090 family: the same departed-machine residue #1196 closed for rows now closes for read marks.**
   Since [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162)/[#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163)
@@ -432,12 +455,15 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   departed conversations' [last-read marks](conversation-last-read-store.md) in `localStorage`
   indefinitely — the one residue #1196 named and deliberately did not reach, because it is the only member
   of the departed-state set that survives outside memory. `clearServerScopedState` now drops them too,
-  last, through `conversationLastReadStore`'s new `clearLastReadFor` (§ The two renderer callers above).
+  last, through `conversationLastReadStore`'s new `clearLastReadFor` (§ The three renderer callers above).
   Still out of scope, named rather than silently left: `queueStore`'s backlogs, `backgroundTaskRosterStore`'s
   rosters, and `modalPrompts`' outstanding prompts — the remaining #1090 slices.
 
 ## Related
 
+- [Edit host dialog](edit-host-dialog.md) — the third renderer caller: `runEditHostUnpair`, the dialog's
+  widened `EditHostStatus` union, and the rework that closed the gap between an exclusive status cell and
+  the two round trips behind it.
 - [#504 codebase notes](../codebase/504.md) — the `onUnpaired` teardown trigger, the registration move
   below `connection`, and why the callback deliberately deviates from `onPaired`'s inside-the-try
   placement.
@@ -474,7 +500,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
 - [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196) · Spec:
   `docs/specs/architecture/1196-scoped-clear-on-per-server-unpair.md` — gave `runUnpairServer`'s
   non-last-server arm a scoped clear, closing the gap #1163's spec left open (both unpair callers now
-  reach `clearServerScopedState`; see § The two renderer callers). [Conversation list
+  reach `clearServerScopedState`; see § The three renderer callers). [Conversation list
   store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196) —
   `clearConversationsFor` and `selectExclusiveConversationIdsFor`, the two store primitives this clear
   composes.

@@ -39,8 +39,8 @@ import { HostLabelData } from '../../store/hostLabelLoader'
 // #1199: the paired-server list is what tells the row WHICH machine it names, and it is the list #1070
 // then iterates to draw one row per server. `ServerInfoData` is the shipped one-shot that fills it,
 // mounted here beside `HostLabelData` — the Settings idiom applied to the screen that draws the row.
-import { useServerInfoStore, selectServers } from '../../store/serverInfoStore'
-import { ServerInfoData } from '../../store/serverInfoLoader'
+import { useServerInfoStore, selectServers, serverInfoStore } from '../../store/serverInfoStore'
+import { ServerInfoData, loadServerInfo } from '../../store/serverInfoLoader'
 // #801's three per-row reads, #874's fourth, and the two pure modules that reduce them. All six are
 // consumed EXACTLY as shipped: none takes a `conversationId` except the four selector FACTORIES, which is
 // what keeps the untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-33,
@@ -86,8 +86,16 @@ import { EditWorkspaceDialogView, requestRenameWorkspace } from './EditWorkspace
 import {
   EditHostDialogView,
   requestSetHostLabel,
-  type EditHostSaveStatus
+  runEditHostUnpair,
+  type EditHostStatus
 } from './EditHostDialog'
+// #1422 — the dialog's Unpair host button. The decision helper is IMPORTED FROM THE SETTINGS SCREEN
+// rather than copied: `runUnpairServer` already owns erase → refresh → route-or-clear with the chat
+// history removal lifecycle around it, and a second implementation here would be a second enumeration of
+// one contract. The clear set and its store wiring come from the one shared `serverScopedClearDeps`, for
+// the reason that module's own header gives — a deps literal per call site is how the two halves drift.
+import { runUnpairServer } from '../settings/unpairServerAction'
+import { clearServerScopedState, serverScopedClearDeps } from '../../clearServerScopedState'
 // #1308 — the host row PLUS's first caller, and the only dialog on this screen imported as a CONTAINER
 // rather than as a view. Its round trip (an outstanding create, and #1307's rejection arm) is its whole
 // substance, so its state and its two subscriptions live with its markup, the `SaveAsChannelDialog` shape.
@@ -130,7 +138,9 @@ export function ChannelList({
   onOpenSettings,
   onOpenArchive,
   onPairNewHost,
-  onRepairHost
+  onRepairHost,
+  onHostUnpaired,
+  onLeaveConversation
 }: {
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
@@ -141,6 +151,27 @@ export function ChannelList({
   // handler, and the container decides where cancel lands from the route rather than from the caller.
   onPairNewHost: () => void
   onRepairHost?: (serverId: string) => void
+  /**
+   * #1422 — the route flip when the Edit host dialog's unpair erased the LAST paired record. Bound in
+   * `PairedShellView` to the very `onUnpaired` prop `SettingsScreen` already receives, so both unpair
+   * paths flip the route through one function and neither reaches for a store shortcut. REQUIRED rather
+   * than optional, `onPairNewHost`'s rule: forgetting to wire it is the exact regression it exists to
+   * prevent, so it is a compile error rather than a silent `undefined` that would strand the operator in
+   * a shell with nothing paired.
+   */
+  onHostUnpaired: () => void
+  /**
+   * #1422 — `clearServerScopedState`'s `navigateToList`, the ONE member `serverScopedClearDeps`
+   * deliberately omits because the two existing callers legitimately differ.
+   *
+   * ⭐ IT IS NOT THE SETTINGS ROW'S NO-OP HERE, and copying that would be a silent defect no criterion
+   * but its own would catch. `ServerRowControl` binds `() => {}` because the Settings route has no thread
+   * to leave; this sidebar does. `PairedShellView` renders this container on the `list` AND `thread`
+   * routes, so the departed host's chat can be the one on screen, and `exitActiveConversation` fires this
+   * exactly when it is. Bound in the shell to its existing back nav, leaving the operator on the list
+   * rather than on a thread route for a host that is gone.
+   */
+  onLeaveConversation: () => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   // The client-owned default workspace (#403), read reactively so the FAB always closes over the current
@@ -230,7 +261,11 @@ export function ChannelList({
   // `editHostStatus` is the round trip this dialog has and the four above do not.
   const [editHostServerId, setEditHostServerId] = useState<string | null>(null)
   const [editHostName, setEditHostName] = useState('')
-  const [editHostStatus, setEditHostStatus] = useState<EditHostSaveStatus>('idle')
+  // #1422 widened this cell rather than adding a sibling: it now spans the unpair's confirm and round
+  // trip too, so "saving" and "unpairing" cannot both be true — see `EditHostStatus`'s docblock. It is
+  // re-seeded to `idle` on every open by the same `onEditHost` handler that seeds the other two, which is
+  // what makes AC2's "the dialog reopens idle" true with no reset code of its own.
+  const [editHostStatus, setEditHostStatus] = useState<EditHostStatus>('idle')
   // The Add-workspace dialog's open cell (#1308) — ONE cell, not the pairs above it, because the path and
   // the round-trip status live in the dialog container rather than here: it is mounted only while this
   // holds a server id, so its subscription's lifetime IS the dialog's open lifetime, which is what makes
@@ -433,13 +468,79 @@ export function ChannelList({
             void requestSetHostLabel(window.pyry.setHostLabelFor, serverId, editHostName).then(
               (next) => {
                 if (next === null) {
-                  setEditHostStatus('failed')
+                  // #1422 — guarded for the same reason the unpair arm below is, now that one cell
+                  // spans two round trips: this write may only report against its OWN flight. The
+                  // dialog's disabled verb keeps a save and an erase from being launched together,
+                  // but the footer Cancel is never disabled, so a dismissal mid-save and a reopen can
+                  // still leave this resolution arriving over an erase that started afterwards.
+                  // Unguarded it would clear `unpairing` mid-flight — unfreezing the field, OK and
+                  // both answers, and swallowing the erase's own failure line, whose guard would then
+                  // no longer recognise the arm it left behind.
+                  setEditHostStatus((prev) => (prev === 'saving' ? 'failed' : prev))
                   return
                 }
                 hostLabelStore.getState().setHostLabelFor(serverId, next)
                 setEditHostServerId(null)
               }
             )
+          }}
+          // #1422 — the unpair slot. Arm and cancel are pure cell moves; only confirm acts.
+          unpair={{
+            onArm: () => setEditHostStatus('confirming-unpair'),
+            onCancel: () => setEditHostStatus('idle'),
+            onConfirm: () => {
+              // ⭐ THE ERASE IS KEYED BY THE ID CAPTURED IN THIS CLOSURE, fixed BEFORE the await and never
+              // re-read from state after it — the save arrow's rule above, applied to the destructive
+              // path where it matters more: keying off anything else would let one machine's answer
+              // erase, or report against, another machine's record.
+              const serverId = editHostServerId
+              void runEditHostUnpair({
+                // `window.pyry` is dereferenced HERE, at interaction time, never during render — the
+                // `onNewConversation` discipline, so this container stays server-renderable.
+                unpair: () =>
+                  runUnpairServer(
+                    {
+                      unpairServer: window.pyry.unpairServer,
+                      // The SAME loader the mount fetch uses, so the refreshed host rows and the "do any
+                      // records remain?" decision come from one read and cannot disagree.
+                      refreshServers: () =>
+                        loadServerInfo(
+                          window.pyry.serverInfo,
+                          serverInfoStore.getState().setServers
+                        ),
+                      onLastServerUnpaired: onHostUnpaired,
+                      // SPREAD, never restated. `getDepartedConversationIds` binds to the stricter
+                      // `selectExclusiveConversationIdsFor` in that one shared object, and that is a
+                      // security property rather than a detail: the departed ids are the departing
+                      // daemon's OWN claim, so an over-broad answer turns "forget host A" into destroying
+                      // host B's retained threads and closing the chat being read on B, with no backfill
+                      // in either timeline store. `navigateToList` is the one member it omits — see
+                      // `onLeaveConversation`'s docblock for why this caller must NOT copy the Settings
+                      // row's no-op into it.
+                      clearServerScopedState: (departedServerId) =>
+                        clearServerScopedState(
+                          { ...serverScopedClearDeps, navigateToList: onLeaveConversation },
+                          departedServerId
+                        )
+                    },
+                    serverId
+                  ),
+                // ⭐ BOTH ARMS ARE FUNCTIONAL UPDATERS, and that is load-bearing rather than stylistic.
+                // AC4 keeps the footer Cancel enabled during the flight (the invoke has no timeout), so
+                // the operator can dismiss this dialog mid-erase and reopen it against a DIFFERENT host
+                // before the answer lands — at which point these arrows still hold the departed host's
+                // cells. The erase itself is immune by construction, keyed by the id captured above; the
+                // MESSAGE is not, and unguarded it would close host B's freshly opened dialog or report a
+                // failure against it. Reading `prev` closes both: in that case it is B's id and `idle`
+                // respectively, so each is a no-op, and on the ordinary path both behave exactly as the
+                // unguarded calls would. The updaters are pure, so StrictMode's double invoke is inert.
+                setStatus: (next) =>
+                  setEditHostStatus((prev) =>
+                    next === 'unpairing' || prev === 'unpairing' ? next : prev
+                  ),
+                close: () => setEditHostServerId((prev) => (prev === serverId ? null : prev))
+              })
+            }
           }}
         />
       )}

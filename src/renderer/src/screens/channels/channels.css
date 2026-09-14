@@ -1930,6 +1930,74 @@
   overflow-wrap: anywhere;
 }
 
+/* #1422 — the unpair slot, the Figma's content-slot Actions frame: left-aligned below the Host name
+   field, above the centred footer. Its own namespace, sharing no class with .settings__server-unpair or
+   with the workspace and conversation dialogs, so each surface stays separately addressable from e2e. */
+.edit-host__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+/* The footer Cancel's outlined recipe against the same tokens (.modal__action--cancel), because the
+   design draws this button as that button. Restated rather than shared: a class from modal.css would tie
+   this slot to the shared panel's own actions, which is the coupling the namespace rule exists to avoid. */
+.edit-host__unpair {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: calc(var(--space-2) - 1px) calc(var(--space-5) - 1px);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight-emphasized);
+  overflow-wrap: anywhere;
+}
+
+.edit-host__unpair:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.edit-host__unpair:enabled:hover {
+  opacity: 0.88;
+}
+
+.edit-host__unpair:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* The destructive answer carries the error role, so Confirm never reads as the same weight of action as
+   the Cancel beside it — `.settings__server-unpair--confirm`'s rule, which is the governing precedent
+   because the Figma draws only the idle button and leaves this state undrawn. Both the text and the
+   border move: the recipe above is an OUTLINED button rather than the Settings row's text-only one, so
+   recolouring the text alone would leave a primary frame around an error-coloured word. The focus ring
+   follows for the same reason — a primary ring on an error button is the same half-applied role. */
+.edit-host__unpair--confirm {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.edit-host__unpair--confirm:focus-visible {
+  outline-color: var(--color-error);
+}
+
+/* The confirming arm's copy, alongside the two answers in the slot the button vacated. */
+.edit-host__unpair-prompt {
+  color: var(--color-on-primary-container);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 .edit-host__error {
   margin: 0;
   color: var(--color-error);

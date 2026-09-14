@@ -1282,6 +1282,17 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   gives that row its own pill. Verifier PASS, two non-blocking SHOULD FIXes (a click-through comment's
   rationale and a missing paint-order paragraph, both prose-only — addressed here).
 
+- [Windows packaging (electron-builder)](features/windows-packaging.md) — `npm run dist:win` (`npm run
+  build` then `electron-builder --win`), producing an unsigned NSIS installer from `electron-builder.yml`.
+  Records the traps a first real packaging run surfaced: `electron-builder --win` with no `arch` key
+  defaults to the **build host's** architecture (fixed here as `[x64, arm64]`); `productName` in the
+  config never reaches `app.getPath('userData')`, only `extraMetadata.productName` does, which is what
+  puts installed data under `%APPDATA%\Pyrycode Desktop` instead of renaming the macOS dev data
+  directory; the `files: [out/**, package.json]` allowlist is what keeps `src/`/`e2e/` test scaffolding
+  out of the shipped asar; and macOS-without-Rosetta-2 cross-builds fail only at the final `makensis`
+  spawn (`EBADARCH`), after the entire packaging stage — including both archs' icon embedding — already
+  succeeded. (#1416)
+
 ## Architecture
 
 _None yet._

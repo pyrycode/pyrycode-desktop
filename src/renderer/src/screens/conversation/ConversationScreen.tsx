@@ -4399,9 +4399,10 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
 // `onBack` deliberately SURVIVES the control it was named for: it is the screen's "am I mounted in the
 // paired shell" signal, and the overflow menu above is gated on it. The header row this control led is
 // also staying — #1061 deleted the bare row and Juhana will draw its replacement, carrying a channel
-// title and a channel settings button — so the overflow trigger floats over the thread's top-right
-// corner until that lands, and the thread starts higher by this control's 48px + margins. Both are
-// expected: no padding, spacer or reserved band compensates for the offset.
+// title and a channel settings button. #1444 ended the interim this note used to describe: the overflow
+// trigger no longer floats over the thread's top-right corner but sits in the card's drawn top bar, and
+// the thread starts at the drawn 97 from the card's top edge rather than "higher by the deleted control".
+// The back affordance itself stays deleted: no padding, spacer or reserved band holds its old offset.
 
 // #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the single
 // entry point to per-conversation actions, on the right edge. Props-in /
@@ -4409,9 +4410,13 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
 // states directly (the entire tested contract, the ComposerSendButton / ThinkingIndicator posture). The
 // interaction shell (toggle, Escape / outside-click dismiss, focus-return) lives in the container below.
 //
-// The trigger is an icon-only <button> carrying the 24px more_vert glyph (Figma 16-17) in a 48px frame,
-// the .composer__send treatment (it named the back arrow's until #1064 deleted that rule; outside this
-// screen .settings__back is the surviving 48px square); aria-label supplies its accessible name, aria-haspopup="menu"
+// The trigger is an icon-only <button> carrying, since #1444, the drawing's 6 × 24 ellipsis export
+// (`ellipsis-vertical-solid-full 1`, 498:1919) in a 24px box drawn at rest with no ground — the
+// `.channel-list__settings` treatment, replacing the 48px round .composer__send one it wore while it had
+// no node of its own. The export ships #9DCBFC, which is --color-primary and NOT --color-inverse-primary
+// despite the node's Figma style name; `fill="currentColor"` over the button's `color` reaches it through
+// the token. The path string lives here rather than being fetched at build time because the Figma asset
+// URLs expire after seven days. aria-label supplies its accessible name, aria-haspopup="menu"
 // advertises the popup, and aria-expanded tracks open/closed (React stringifies the aria boolean under
 // server render → "true"/"false", both directly assertable). When `open`, a role="menu" surface drops
 // below it holding one role="menuitem" per action — the extension slot #155 documented, which #962
@@ -4470,13 +4475,13 @@ export function ThreadOverflowMenuView({
       >
         <svg
           className="conversation__overflow-icon"
-          viewBox="0 0 24 24"
-          width="24"
+          viewBox="0 0 6 24"
+          width="6"
           height="24"
           fill="currentColor"
           aria-hidden="true"
         >
-          <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+          <path d="M3 6C1.34464 6 0 4.65536 0 3C0 1.34464 1.34464 0 3 0C4.65536 0 6 1.34464 6 3C6 4.65536 4.65536 6 3 6ZM3 18C4.65536 18 6 19.3446 6 21C6 22.6554 4.65536 24 3 24C1.34464 24 0 22.6554 0 21C0 19.3446 1.34464 18 3 18ZM6 12C6 13.6554 4.65536 15 3 15C1.34464 15 0 13.6554 0 12C0 10.3446 1.34464 9 3 9C4.65536 9 6 10.3446 6 12Z" />
         </svg>
       </button>
       {open && (
@@ -4565,15 +4570,25 @@ function ThreadOverflowMenu({
   }, [open])
 
   return (
-    <div ref={wrapperRef} className="conversation__overflow">
-      <ThreadOverflowMenuView
-        open={open}
-        onToggle={() => setOpen((o) => !o)}
-        onSelectChannelInfo={select(onChannelInfo)}
-        onSelectRunConfiguration={select(onRunConfiguration)}
-        onSelectBackgroundTasks={select(onBackgroundTasks)}
-        triggerRef={triggerRef}
-      />
+    // #1444: .conversation__overflow is the card's drawn TOP BAR — a full-width in-flow row over a 1px
+    // rule — where it used to be an absolute box the size of the trigger. `wrapperRef` moved off it and
+    // onto the anchor below, and that move is not cosmetic: dismissal is
+    // `!wrapperRef.current.contains(target)`, so left here a mousedown anywhere across the pane's full
+    // width would count as inside the menu and stop dismissing it. The anchor is also what the menu is
+    // positioned from (`top: 100%; right: 0`), so the ref and the anchor must stay the same element —
+    // `.conversation__overflow-anchor`'s rule carries both halves of the argument.
+    <div className="conversation__overflow">
+      <div ref={wrapperRef} className="conversation__overflow-anchor">
+        <ThreadOverflowMenuView
+          open={open}
+          onToggle={() => setOpen((o) => !o)}
+          onSelectChannelInfo={select(onChannelInfo)}
+          onSelectRunConfiguration={select(onRunConfiguration)}
+          onSelectBackgroundTasks={select(onBackgroundTasks)}
+          triggerRef={triggerRef}
+        />
+      </div>
+      <div className="conversation__overflow-rule" />
     </div>
   )
 }

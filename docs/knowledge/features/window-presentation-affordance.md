@@ -58,4 +58,4 @@ The builder self-review verdict is **PASS**. The finding the `security-sensitive
 ## Related
 
 - [E2E test harness § Desktop isolation](e2e-harness.md#desktop-isolation-default-tier-launches) — the sole consumer: `e2e/fixtures/desktopIsolation.ts` sets `HIDDEN_WINDOW_ENV_FLAG` alongside the Chromium renderer-throttling switches.
-- [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) and [Secret-backend dev affordance](secret-backend-affordance.md) / [#99](../codebase/99.md) — the two prior instances of this exact shape; this is their third.
+- [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) and [Secret-backend dev affordance](secret-backend-affordance.md) / [#99](../codebase/99.md) — the two prior instances of this exact shape; this is their third. [Dock icon (dev-only, macOS)](dock-icon-affordance.md) / [#1446](https://github.com/pyrycode/pyrycode-desktop/issues/1446) is the fourth, though it gates an unconditional dev affordance rather than an env-opt-in relaxation.

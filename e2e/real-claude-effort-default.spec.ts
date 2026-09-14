@@ -103,9 +103,10 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // the same way as the sibling specs and is never echoed into a message or a failure diagnostic. The
 // levels are daemon-published display values, never a token or a key.
 
-// The seeded row is opened and messaged, so it is seeded as a promoted discussion —
-// real-daemon-session-settings.spec.ts's reason for the same option, one tier over.
-test.use({ seedPromoted: true })
+// #1426 — UNPROMOTED so the seed lands in the Chats tree, whose workspace row carries the `Create chat`
+// plus this spec mints through now that the FAB is gone. The row is still opened and messaged exactly as
+// before; nothing here reads which section it sits in.
+test.use({ seedPromoted: false })
 
 const HANDSHAKE_TIMEOUT_MS = 45_000
 // One turn = cold claude (spawn + model load + first reply), the sibling specs' per-turn budget.
@@ -275,7 +276,7 @@ test('a level set before a chat’s first message survives into the first turn',
   // child, which is exactly the state this ticket's write has to survive. The empty thread is what proves
   // the app actually navigated: the seeded chat it came from holds a settled exchange, so this count can
   // only be reached by arriving somewhere else. ---
-  await page.getByRole('button', { name: 'New discussion' }).click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(page.locator('.bubble')).toHaveCount(0, { timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 

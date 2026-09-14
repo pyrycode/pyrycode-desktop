@@ -37,12 +37,13 @@ import type { ConversationSummary } from '../src/shared/wire/types'
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
 // `.channel-list__row-open`, so a second seed would strict-violate at launch (the sibling specs' constraint).
 // The second conversation this drive needs is therefore MINTED by the FAB rather than seeded — which is
-// what makes the create path drivable here too. Promoted + named so its title is a crisp filter target,
+// #1426 — UNPROMOTED so the seed lands in the Chats tree, whose workspace row carries the `Create chat`
+// plus this spec now mints through (the deleted FAB needed no group). Named so its title is a crisp filter target,
 // distinct from the minted row's. Fixed literals only — deterministic, no Date.now()/randomness.
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
   name: 'Seeded channel',
-  is_promoted: true,
+  is_promoted: false,
   is_archived: false,
   cwd: '/fake/workspace',
   last_message_ts: '2026-07-07T12:00:00.000Z',
@@ -50,7 +51,7 @@ const SEED: ConversationSummary = {
   workspace_label: null
 }
 
-// The FAB-created row's displayed title: it is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
+// The plus-created row's displayed title: it is minted unnamed (name: null), so titleFor(null) = 'Untitled'.
 const UNTITLED = 'Untitled'
 
 // Two distinct drafts, one per pane occupant, so a failure diagnostic names WHICH conversation's state
@@ -80,12 +81,12 @@ test('switching conversations without leaving the thread remounts the chat pane'
   await composer.fill(DRAFT_IN_SEED)
   await expect(composer).toHaveValue(DRAFT_IN_SEED)
 
-  // --- 2. The CREATE path: the FAB mints a second conversation and the correlated conversation_created
+  // --- 2. The CREATE path: the workspace plus mints a second conversation and the correlated conversation_created
   // drives useConversationCreatedNav → activate + `open`. The route was ALREADY `thread`, so `open` is a
   // no-op transition and nothing about the route changes — the pane's occupant does. The draft above must
   // not survive that. This assertion auto-waits the whole create round trip: until the nav lands, the box
   // still holds DRAFT_IN_SEED and the poll retries. ---
-  await page.locator('.channel-list__fab').click()
+  await page.getByRole('button', { name: 'Create chat', exact: true }).click({ force: true })
   await expect(composer).toHaveValue('', { timeout: ROUNDTRIP_TIMEOUT_MS })
   // The pane never emptied on the way: the switch happened THROUGH the thread route, not via the list.
   await expect(thread).toHaveCount(1)

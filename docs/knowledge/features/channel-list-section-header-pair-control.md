@@ -94,6 +94,15 @@ ink, type, padding, radius, `right: 0`, `pointer-events: none` and `nowrap` are 
 Declined: `top: var(--space-1)` (centred in the header's 32px box) clears the cluster too, but only by an
 exact tangency a one-pixel change would reopen, while covering the glyph it names.
 
+**Superseded by [#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443), which retired the
+reason without retiring the placement.** `.channel-list__actions` is now the card's own Top bar, sits
+outside the scroller entirely, and overlaps nothing — every pill in the tree is below it because the
+whole tree is, so the clearance this section measured against a live sticky collision is now satisfied
+by construction. The `top: 100%` deviation ships exactly as it was: re-centring it onto the shared band
+is deliberately a separate ticket (#1443's ruling), not a consequence of the collision going away. The
+spec's geometry block keeps the same assertion — the pill's top edge pinned to the plus's bottom — since
+it still catches the one way the old collision could return, a bar that grows back down into the tree.
+
 **The move downward changes what the pill sits under, not just what it clears.** `.channel-list` is
 deliberately not a stacking context (`position: relative; z-index: auto`), and `.channel-list__section-header`
 and `.channel-list__host` are both `position: relative` with `z-index: auto` — the same stacking-context

@@ -39,12 +39,13 @@ the host, separate from connection dots and repair; see [local read failures](ch
   itself survives for its three other callers (§ Why the row carries no message preview below).
 - Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
   conversation. See § Edge cases.
-- A [Settings](settings-screen.md) entry button (gear glyph, `aria-label="Settings"`) is pinned
-  top-right over the list, likewise present in all three states — added by [#333](../codebase/333.md).
-- An [Archive](archive-screen.md) entry button (Material `archive`-box glyph, `aria-label="Archive"`)
-  joins it inside the same top-right `.channel-list__actions` cluster, leading the Settings button
-  (gear-rightmost) — added by [#347](../codebase/347.md). Two independent sticky top-right children
-  would have stacked awkwardly, so both buttons now share one sticky flex-row wrapper.
+- A [Settings](settings-screen.md) entry button (`aria-label="Settings"`, [#333](../codebase/333.md))
+  and an [Archive](archive-screen.md) entry button (`aria-label="Archive"`, [#347](../codebase/347.md))
+  lead the card's Top bar ([#1443](https://github.com/pyrycode/pyrycode-desktop/issues/1443)): gear
+  first, archive 52px right, both 24×24, `--color-primary`, no hover fill, over a 1px rule at 60%
+  opacity. Before #1443, 48px round buttons sat sticky top-right in `.channel-list__actions`; the class
+  token stays, outside the scrollport — nothing in the sidebar is sticky (#1426 deleted the FAB).
+  Present in all three states.
 - Each section header ("Channels" and "Chats") now carries its own plus, `aria-label="Pair new host"`,
   drawn at rest and filled `--color-primary` — unlike every other trailing control in this tree, which
   reveals only on hover. It opens the same pairing flow Settings' "Pair another server" row opens, and
@@ -451,8 +452,9 @@ to preserve, which is the whole reason the two rules differ.
 Lifting `min-width` on the label alone was not sufficient — the *ancestor* flex item,
 `.paired-shell__sidebar`, still had `min-width: auto`, and a `white-space: nowrap` descendant's
 min-content size is the whole string: a 128-character label measured the sidebar to ~1063px before
-this fix, and `.channel-list`'s `overflow-x: auto` (a side effect of its `overflow-y: auto`) does not
-stop that propagation — a scroll container's automatic minimum size is 0 for *itself*, but its
+this fix, and `.channel-list__tree`'s `overflow-x: auto` (a side effect of its `overflow-y: auto`,
+`.channel-list`'s before #1443) does not stop that propagation — a scroll container's automatic
+minimum size is 0 for *itself*, but its
 min-content *contribution* to an ancestor is still content-derived. See [Paired shell § the sidebar's
 `min-width: 0`](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
 fix, landed as its own commit so it stayed independently reviewable.
@@ -553,8 +555,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   — the FAB was deleted in #1426; the bridge survives as the nav wiring behind this screen's create controls.
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the settings entry button
   rendered as a sibling of this screen's rows, and the `settings` route it navigates to.
-- [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the archive entry button sharing
-  the Settings button's top-right actions cluster, and the `archive` route it navigates to.
+- [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the archive button in the card's
+  Top bar since #1443, and the `archive` route it opens.
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
   save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
   sibling shape described above.

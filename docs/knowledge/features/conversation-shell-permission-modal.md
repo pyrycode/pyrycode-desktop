@@ -112,6 +112,38 @@ markers are also cleared: merely rendering them as inert would let a removed opt
 later same-request delivery restored it. Chat switches retain the existing pane remount behavior
 and require a fresh permission selection.
 
+### Session permission checkbox (#1409)
+
+A third local marker, `opted`, holds the whole `ModalPrompt` snapshot whose session-permission
+checkbox is checked — not just its id, because the checkbox's own validity tracks the same ordered
+`alwaysAllow` offer staying live, not just the request. `hasSessionPermission(prompt, opted)` in
+[`modalResolution.ts`](../../../src/renderer/src/screens/conversation/modalResolution.ts) requires
+matching `modalId` and `conversationId`, `class === 'permission'` on both, and reference equality of
+the two `alwaysAllow` objects; the container clears `opted` during render exactly like `selected`/
+`pending` whenever that check fails. `reduceModal` keeps the previous `alwaysAllow` object only when
+a re-delivery carries the same class, conversation and ordered rule list — object identity, not text
+equality, so a removal-then-restoration or a same-`modalId` replacement with edited rules always
+allocates a new object and drops any checked consent, even across React-batched updates.
+
+For a permission prompt (`prompt.class === 'permission'`) whose current offer has
+`alwaysAllow.offered === true`, `PermissionModalView` shows one initially unchecked checkbox inside
+`.permission-panel__content`, above the action separator: the client-owned label "Don't ask again
+this session for:" followed by every supplied rule as an escaped `<li>`, in original order, sharing
+[`QuestionTick`](../../../src/renderer/src/screens/conversation/QuestionPanel.tsx)'s glyph (exported
+for this reuse) with the questionnaire's own checkbox. Absent/unavailable offers and trust prompts
+render no checkbox. Toggling only updates `opted` locally and sends nothing — it applies to the
+complete offer, never a per-rule choice.
+
+Confirm's grant path lives in `confirmPrompt`: it resolves the pending option through the same
+`resolvePendingOption` validity check, and adds `always_allow: true` to the answer only when that
+option's id is a supplied `allow_once` or `allow_always` **and** `hasSessionPermission` still holds
+for the current offer. Every other path — unchecked approval, any rejection, deny, cancel, trust, an
+unavailable offer, or the default-option direct-Continue path (which never opens Confirm at all, even
+for an affirmative default) — calls `answerPrompt` with its default `alwaysAllow = false` and omits
+the field from the payload entirely; the renderer never sends rule text or a destination. The daemon
+(`docs/protocol-mobile.md`, Modal (v2)) remains the sole authority that validates the grant and scopes
+it to the current session.
+
 ## Rejection surface (#249)
 
 Optimistic removal can precede a daemon rejection, so feedback has an independent lifetime from

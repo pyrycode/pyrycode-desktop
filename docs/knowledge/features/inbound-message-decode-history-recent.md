@@ -311,12 +311,31 @@ a workspace and whose window half is a guess until a turn ends — becomes the f
 (`categories`, `mcp_tools`, `memory_files`) and their three dropped counts — on every real frame, not a
 hypothetical future one; they are deliberately not declared on `ContextUsagePayload` and the fresh
 five-field literal tolerates and drops them. A declared-but-unparsed field would put a type on the wire
-surface with no narrowing behind it, so the two follow-on slices own both the declaration and the parsing
+surface with no narrowing behind it, so the follow-on slices own both the declaration and the parsing
 of each inventory together. The test fixture transcribes the daemon's own committed `context_usage.json`
 whole (rather than inventing an extra key), which proves the drop against real traffic and against
 deliberately adversarial inventory values — a `../../../etc/passwd` memory-file path, markup
-metacharacters in a tool name — none of which cross even as opaque data. Whichever slice decodes
-`memory_files` inherits a path-traversal surface.
+metacharacters in a tool name — none of which cross even as opaque data at this slice. Whichever slice
+decodes `memory_files` inherits a path-traversal surface.
+
+**[#1455](https://github.com/pyrycode/pyrycode-desktop/issues/1455) decodes the first of those
+inventories, additively.** `categories: ContextUsageCategory[]` plus its own
+`dropped_categories: number` join `ContextUsagePayload` (now seven fields), via
+`parseContextUsageCategory` — an `isRecord` gate, one `requireString` for `name`, one `requireNumber` for
+`tokens` — mapped over the array by `parseContextUsagePayload`'s new `Array.isArray`-then-`raw.map` guard,
+the `parseModelListPayload`/`parseModelOption` shape. This is the point where the prior paragraph's "none
+of which cross even as opaque data" stops being true for `categories`: the adversarial fixture's
+`Messages <&>` now crosses as a decoded, typed value, byte-for-byte and unescaped — decoding makes the
+row's *shape* trusted, never its *content*, and the escaping obligation is written into
+`ContextUsageCategory`'s docblock for the IPC carry (#1419) and the surfaces (#1421) to read.
+`null`/absent/non-array `categories` fails the whole frame closed, since `MarshalJSON` normalises a nil
+slice to `[]` and an empty array is claude's positive report of no categories. The rows arrive as a
+prefix in descending-token order; `dropped_categories` accumulates two independent cuts (the producer's
+entry/string caps plus the mapper's frame-byte budget) and is never cross-checked against the retained
+length — the committed fixture's `3` beside two retained rows is the case that proves it. One malformed
+row throws `WireDecodeError` for the whole frame, naming the failure category only. `mcp_tools`,
+`memory_files` and their two dropped counts remain undeclared, still #1456's, `../../../etc/passwd`
+included.
 
 **PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact this kind's docblock names
 separately rather than giving the type one blanket sentence: `conversation_id` is DAEMON-authored, filled

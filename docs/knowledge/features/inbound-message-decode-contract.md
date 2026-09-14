@@ -29,7 +29,7 @@ export type InboundDaemonMessage =
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }    // #1318, additive — a usage-limit window report, `status`/`limit_type` OPEN strings, `resets_at` unvalidated, no FrameTimestamp, ships dormant
-  | { kind: 'context-usage'; contextUsage: ContextUsagePayload }  // #1454, additive — the reading half only (conversation_id/model/total_tokens/max_tokens/percentage); mixed provenance, informational (no range/cross-field check), no FrameTimestamp, ships dormant
+  | { kind: 'context-usage'; contextUsage: ContextUsagePayload }  // #1454, additive — the reading (conversation_id/model/total_tokens/max_tokens/percentage); #1455 adds the category breakdown (categories/dropped_categories); mixed provenance, informational (no range/cross-field check), no FrameTimestamp, ships dormant
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -386,11 +386,42 @@ the display source, displacing the `session_settings`/`screen_snapshot` transcri
 `parseRateLimitedPayload`'s shape minus one string and its nullable list plus two numbers: two
 `requireString` calls, three `requireNumber` calls, no new helper.
 
-**THE FRAME'S THREE INVENTORIES ARE ON EVERY REAL FRAME AND ARE DELIBERATELY NOT DECLARED HERE.**
-`categories`, `mcp_tools`, `memory_files` and their three dropped counts ride the same wire; the fresh
-five-field literal tolerates and drops them rather than copying them through. A declared-but-unparsed
-field would put a type on the wire surface with no narrowing behind it, so the declaration and the parsing
-of each inventory land together in the two follow-on slices, not split across tickets.
+**Extended once more by [#1455](https://github.com/pyrycode/pyrycode-desktop/issues/1455), additively.**
+`ContextUsagePayload` gains its first inventory, `categories: ContextUsageCategory[]` plus its own
+`dropped_categories: number`, via a per-row narrower, `parseContextUsageCategory`, on the
+`parseModelListPayload` / `parseModelOption` pattern: an `isRecord` gate, `Array.isArray`-then-`raw.map`
+over the rows, and a plain `requireNumber` for the dropped count. `ContextUsageCategory{name, tokens}`
+takes no `Wire` prefix — its bare name is already qualified by its frame, the same reasoning that leaves
+`BackgroundTask`/`QueuedItem`/`HistoryEntry` unprefixed despite each colliding with a daemon Go type name.
+
+**`categories` is never `null` and an empty array is a positive statement, not an absence.** The daemon's
+`MarshalJSON` normalises a nil slice to `[]` so a client never has to tell the two apart; `null`, an
+absent key, or any non-array value fails the whole frame closed (`Array.isArray(null)` is `false`), while
+`[]` decodes as claude reporting no categories and stays distinguishable from the `undefined` an
+unobserved frame yields. **The rows arrive as a prefix in the producer's descending-token order**, any
+cut taking entries off the tail, so a shortened list is never a list with holes. **`dropped_categories` is
+independent and not inferable** — it accumulates two separate cuts, the producer's entry and string caps
+plus the mapper's own frame-byte budget — so a retained list's length is no evidence of completeness in
+either direction and `categories.length + dropped_categories` is the true size, never something to
+reconcile; nothing cross-checks the two. One malformed row throws `WireDecodeError` for the whole frame
+rather than yielding a partial breakdown, naming the failure category only — never a row's `name`, its
+`tokens`, the row's index, or the frame's `conversation_id`.
+
+**THE FRAME CARRIES FOUR MORE KEYS THAT ARE STILL DELIBERATELY NOT DECLARED HERE.** `mcp_tools`,
+`memory_files` and their two dropped counts ride the same wire; `parseContextUsagePayload` returns a
+fresh seven-field literal, so the four are tolerated and dropped rather than copied through. A
+declared-but-unparsed field would put a type on the wire surface with no narrowing behind it, so the
+declaration and the parsing of each remaining inventory land together in [#1456](https://github.com/pyrycode/pyrycode-desktop/issues/1456),
+not split across tickets. `../../../etc/passwd` as a `memory_files` path remains that slice's must-review
+item.
+
+`name` is claude-authored descriptive text that crossed the subprocess trust boundary, bounded by the
+producer and neither validated nor sanitized upstream — inert text only, safe to render but never a
+lookup key, a React `key`, a `Map`-or-plain-object index, a path, a filename or a log field. Decoding
+makes the row's *shape* trusted, never its *content*; the committed fixture's `Messages <&>` crosses
+byte-for-byte, unescaped, and the escaping is owed at the render sink (#1421), not here. A category
+figure joins `model` and the three reading integers in the never-logged set — a per-category token count
+discloses how the window is composed, a finer side-channel than the reading's own three integers.
 
 **PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact a reader is likeliest to get wrong:
 `conversation_id` is daemon-authored, `model` is claude-authored descriptive text that crossed the

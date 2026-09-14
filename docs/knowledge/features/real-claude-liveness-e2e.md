@@ -202,8 +202,11 @@ this feature" any other way.
 
 The check necessarily runs **after** `waitForDaemonReady`, the one exception to this file's "skip
 before creating any resource" rule: reading what the daemon supports needs the daemon already
-running. The fixture's `try`/`finally` reaps the process group and both temp dirs on every exit path
-regardless, so this late skip leaks nothing.
+running. Since [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413) reordered the device
+mint to run after readiness too (see § Fixture chain and teardown), the capability check also lands
+after the mint — it consumes `pairFields`, so it necessarily stays last. The fixture's `try`/`finally`
+reaps the process group and the temp `daemonHome` on every exit path regardless, so this late skip
+leaks nothing.
 
 The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
 
@@ -249,11 +252,23 @@ daemon/relay dropping:
 - **`relay`** — `startFakeRoutingRelay()` ([#251](../codebase/251.md)); `close()` on teardown.
 - **`daemon`** — skip-gates, then: creates an isolated `daemonHome` (`mkdtemp`), copies the operator's
   real `~/.claude.json` into it at `0o600` (on the OAuth path — otherwise interactive PTY claude
-  reads the onboarding theme picker as "ready" and deadlocks, `pyrycode#496`), runs `pyry pair`
-  under that HOME to mint credentials, **seeds the registry** (see below), spawns `pyry` with
-  `detached: true` on the relay's `/v1/server` leg, and waits for its control socket to become
-  dialable. Wrapped in `try`/`finally` so setup failure, test failure, and success all reap the
-  subprocess and remove every temp dir.
+  reads the onboarding theme picker as "ready" and deadlocks, `pyrycode#496`), **seeds the registry**
+  (see below), spawns `pyry` with `detached: true` on the relay's `/v1/server` leg, waits for its
+  control socket to become dialable, and only then runs `pyry pair` under that HOME to mint
+  credentials **from the running daemon**. Wrapped in `try`/`finally` so setup failure, mint failure,
+  test failure, and success all reap the subprocess and remove `daemonHome`.
+
+  **This order changed with [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413).**
+  Upstream pyrycode#2393 turned bare `pyry pair` into a **running-service** operation: it resolves
+  the service named by `-pyry-name`, dials that service's control socket, and the live daemon mints
+  — it no longer works offline. Before #1413 the fixture called it ahead of `spawn`, which aborted
+  every spec in the tier at setup with `pyry pair exited with code 1 … connect: no such file or
+  directory` against any daemon carrying pyrycode#2393. **The tier now requires a daemon carrying
+  pyrycode#2393**; the reordered fixture no longer supports the pre-#2393 offline mint (the
+  `-pyry-socket` flag it relied on is gone, per § Daemon spawn above). The mint does not need the
+  relay leg up — probed 2026-09-13, it succeeded while the daemon was still failing to dial a
+  deliberately dead relay URL — so gating it on `waitForDaemonReady` (the control socket) rather than
+  on `connected` is correct and does not add handshake latency to the mint.
 - **`page`** — launches the built app (`args: ['.']`, `ELECTRON_RENDERER_URL` stripped) with the two
   `app.isPackaged`-gated dev flags — `PYRY_ALLOW_LOOPBACK_RELAY` ([#97](../codebase/97.md)) and
   `PYRY_TEST_SECRET_BACKEND` ([#99](../codebase/99.md)) — and an isolated `--user-data-dir` for a
@@ -273,10 +288,22 @@ first is sufficient. This is legal because `ConversationID` is an opaque string 
 validated UUID. Field-for-field port of `pyrycode#854`'s `seedBootstrapRegistry`/
 `seedBoundConversation`, with `'default'` in place of a generated UUID.
 
+**This still holds after [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413) reordered
+the device mint to run after `spawn`, and for a different reason than before.** The registry seed and
+the device credential now land before/after `spawn` for reasons that are no longer the same: the
+registry is read once at daemon **startup**, with no reload, so it must exist before the process
+starts — while the device mint (since upstream pyrycode#2393 made bare `pyry pair` a
+running-service operation) lands in the **running** daemon's own state, so it can only happen after
+the process is up and dialable. `seedRegistry`'s `mkdir(..., { recursive: true, mode: 0o700 })` also
+became load-bearing for a second reason under the new order: the daemon refuses to start at all on a
+key directory (`$HOME/.pyry/<name>`) laxer than `0700` — before #1413 this was incidental, since the
+offline `pyry pair` created that directory first; now `seedRegistry` is the only thing that creates it
+before the daemon looks at it.
+
 ### Daemon spawn — the load-bearing flags
 
 ```
--pyry-socket=<short /tmp path>   -pyry-name=test   -pyry-claude=<claudeBin>
+-pyry-name=test   -pyry-claude=<claudeBin>
 -pyry-idle-timeout=0             -pyry-workdir=<isolated workdir>
 -pyry-relay=<relay.url>/v1/server
 -- --model haiku --dangerously-skip-permissions
@@ -294,9 +321,25 @@ env: `PYRY_ALLOW_INSECURE_RELAY=1` (lets the daemon dial a loopback `ws://` rela
 - **`/v1/server`, never `/v2/server`.** The fake routing relay identifies legs by exact upgrade path
   and drops anything else; `/v2/server` is a Go-fake-relay-only convention from `pyrycode#854` that
   does not apply here.
-- **A short socket path is mandatory.** `os.tmpdir()` on macOS returns a long `/var/folders/...` path
-  that overflows the 104-byte unix `sun_path` limit — `bind(2)` fails and the daemon never starts
-  (`pyrycode#860`). The fixture uses a fresh `mkdtemp('/tmp/pyry-sock-')` instead.
+- **No `-pyry-socket` flag, since [#1413](https://github.com/pyrycode/pyrycode-desktop/issues/1413).**
+  The daemon derives its control-socket path from `-pyry-name` alone —
+  `$HOME/.pyry/<name>.sock` — and bare `pyry pair` (upstream pyrycode#2393) dials that same
+  name-derived path in the same binary, so listen and dial agree structurally instead of by an
+  equality the fixture would otherwise have to assert between its own `join` and the daemon's
+  resolver. The fixture still computes that path once, under the module constant
+  `DAEMON_INSTANCE_NAME`, for one purpose only — the readiness dial below — so a future change to the
+  daemon's naming convention reddens as a loud `waitForDaemonReady` timeout rather than as a silent
+  mint against a socket nothing listens on.
+- **A short HOME is mandatory, and the short base moved with the socket.** `os.tmpdir()` on macOS
+  returns a long `/var/folders/...` path that overflows the 104-byte unix `sun_path` limit — `bind(2)`
+  fails and the daemon never starts (`pyrycode#860`). Before #1413 that constraint fell on a socket
+  directory the fixture created separately (`mkdtemp('/tmp/pyry-sock-')`); since the socket now lives
+  under the daemon's own `HOME` (`$HOME/.pyry/<name>.sock`), `daemonHome` itself is what needs the
+  short base, and the fixture now `mkdtemp`s it from `/tmp` directly rather than `os.tmpdir()`.
+  Measured 2026-09-13: `os.tmpdir()` yields an 83-byte socket path on that machine — binds today, but
+  the margin is a property of the machine's `TMPDIR`, not of this code — while the fixed `/tmp` base
+  yields 39. The separate socket temp dir and its own teardown line are gone; the socket is reaped for
+  free as part of the recursive removal of `daemonHome`.
 
 ### Readiness — Send-enabled, not `relay.whenReady()`
 

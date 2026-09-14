@@ -85,11 +85,17 @@ why a chat nobody has set a model on now reaches the **menu** rendering below in
 drew permanently before #1168 — measured against a live daemon, that was the common case for an
 unconfigured chat, not an edge one. With no `default` row published, or no `model_list` frame received at
 all, `effortRowFor` still returns `undefined` and this control still draws the inert arm.
-`RunningModelSection`, `ModelSection` and the model menu's two lookups keep calling `publishedRowFor`
-directly and are unmoved — in particular
-[the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022) deliberately did
-not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on every
-inherited-default chat.
+`RunningModelSection` and `ModelSection` keep calling `publishedRowFor` directly and are unmoved — in
+particular [the permission-mode menu](composer-permission-mode-menu.md#the-auto-hiding-join-1022)
+deliberately did not follow, since its `supports_auto_mode` read would otherwise start hiding `auto` on
+every inherited-default chat. **[#1423](https://github.com/pyrycode/pyrycode-desktop/issues/1423) moved
+the model menu's *marking* lookup onto `effortRowFor` too, but on one input only** — the state where its
+label lookup already takes `''` (no pick, no announcement, no stored choice), where the marking lookup
+would take the identical `''` argument. Its other lookup, over the announced-vs-picked-vs-stored label
+string, is unmoved for every other input; see [Composer model
+menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings) for
+why one row can honestly answer both of that control's lookups in that one state, and for the case #1168's
+own tests pinned (an announcement with no session model, which still marks nothing) staying untouched.
 
 **`truncated_fields` is deliberately not read.** The shared panel's option is `{ id, label }` with one
 text child, so a cut report here would need either a new prop on a component four tickets share

@@ -242,3 +242,60 @@ permission/question state sits 12px in from the message box until its own node i
 3. **Does any shipped fake-tier spec read `.composer-status`'s or `.conversation__banner`'s x?**
    `composer-message-box` reads heights as deltas and `banner-reports` reads text, so the answer looks like
    no. Confirm by running the touched-scope set in Phase B.
+
+## Revisions
+
+### 2026-09-15 — the two edits to `.conversation__thread` had three dependents, and the plan named none
+
+Driven by the verifier's triage on PR #1453 (`npx playwright test` red on `assistant-whitespace`,
+`tool-groups`, `tool-row-toggle`; install, `check:docs`, `npm test` and `npm run build` all green). Both
+regressions trace to the two declarations this plan's § Spacing changed, and the design section treated
+both as local retunes when each is read by a rule elsewhere in `conversation.css`.
+
+**1. The thread's gap is a value two other rules are measured off, not a local one.** The plan moved it
+`--space-3` → `--space-4` and stopped there.
+
+- `.tool-row + .tool-row, .tool-group-row--joined-above > .tool-row` sets a negative `margin-top` whose
+  whole job is to cancel the thread's gap and then overlap by one border width. Left at `--space-3` it
+  drew `16 - 13 = 3px` of daylight plus the border — the `Received: 4` both specs reported. Rebound to
+  `--space-4`. `e2e/tool-row-toggle.spec.ts` already asserted this against the thread's *live* gap
+  ("rather than as -13px"), so the spec was written to survive the retune and the CSS was the half that
+  hardcoded it.
+- `.session-delimiter`'s `padding: var(--space-1) 0` topped the old 12px gap up to the 16px of clearance
+  its node draws. Its own comment warned that "if that container gap ever changes, this number is what
+  silently breaks", and it did: 16 + 4 = 20. The declaration is deleted rather than zeroed — a `div` has no
+  UA padding, and this file's own rule is that restating a settled value is how it gets lost — with the
+  comment keeping the reason there is none. **No spec reads this distance**: it is the one of the three
+  that the tier could not have caught, found only by reading the comment the plan's Files-read list never
+  opened.
+
+**2. Open Question 2 asked about the wrong edge.** It asked whether deleting the thread's horizontal
+padding moves a row's *trailing* edge onto a control; the new spec's full-content-width read answers that,
+and the answer is no. The **leading** edge is what broke, and nothing in the new spec looks at it.
+
+`.conversation__thread` clips on both axes — `overflow-y: auto` makes `overflow-x` compute to `auto`, and a
+scroll container clips at its padding box, where left-side overflow in LTR is unreachable by scrolling. A
+three-digit ordered-list marker paints out there: `.bubble__markdown`'s list rule works the budget out in
+full and lands on `100.` reaching 36px left of the row's content edge, 20 of it inside `.bubble`'s own
+inline padding and the remaining 16 inside the thread's. Deleting that 16 clipped the marker.
+
+**The new contract:** the rows keep the card's content box, and the clip box is widened back under them —
+`margin-left: calc(-1 * var(--space-4))` with an equal `padding-left`. This is `.channel-list__tree`'s
+shipped idiom (it takes back the sidebar's `--space-5` for its scrollbar strip), mirrored on the left and
+for the marker instead. The borrowed strip lands on the card's own 20px inset with 4 to spare, and
+`threadPaddingLeftPx` reads 16 again, so `assistant-whitespace`'s budget arithmetic is bit-for-bit what it
+was. Left side only: the scrollbar edge needs nothing, being hidden and taking no width.
+
+Both halves of the borrow are pinned, by two specs that were already written: `assistant-whitespace`'s
+budget bound fires if the padding goes away, and `chat-top-bar-geometry`'s per-row content-box read fires
+if the padding returns without the margin. No new assertion was added — a third would only restate them.
+
+**3. The plan's Testing strategy was the process cause, and it changed.** It scoped this run to the
+touched files plus `npm run build` and deferred the Playwright tier to the dispatcher's gate. That is § B2
+as written, but the new spec drives plain bubbles only — it never renders a tool-row run or a list, which
+is exactly why it proved the new geometry while missing what the same two declarations broke. When a
+change edits a *container's* spacing, the touched scope is its occupants, not its own spec. This leg ran
+the full fake tier before pushing.
+
+**Unchanged by this revision:** the bar, the anchor, the button, the glyph, the rule, and every other
+§ Spacing edit. Open Questions 1 and 3 are answered green by the run and needed no design change.

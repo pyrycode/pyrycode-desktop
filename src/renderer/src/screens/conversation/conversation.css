@@ -227,15 +227,31 @@
    apply between every child of the column and would turn the drawn 8px between `.composer-status` and
    `.composer` into 20 — see .conversation's own block.
 
-   NO HORIZONTAL PADDING: the card's 20px inset is the rows'. The drawing's `Message area` (132:4171) is
-   full-width inside the inset frame with no strip of its own, and this element clips only on the block
-   axis, so nothing had to be borrowed back the way `.channel-list__tree` borrows the sidebar's 20 for its
-   scrollbar strip — the bar here is hidden (`scrollbar-width: none`, above) and takes no width either way.
-   Two rules that state their x as "the thread's" followed it out: `.conversation__banner` and
+   NO HORIZONTAL INSET ON THE ROWS: the card's 20px is theirs. The drawing's `Message area` (132:4171) is
+   full-width inside the inset frame with no strip of its own, so the content box sits exactly on the
+   card's. Two rules that state their x as "the thread's" followed it out: `.conversation__banner` and
    `.conversation__workspace-chip`.
 
+   BUT THE LEFT PADDING IS BORROWED BACK, and #1444 shipped without it once — the regression PR #1453's
+   first push carried. This element clips on BOTH axes: `overflow-y: auto` makes the other axis compute to
+   `auto` too, and a scroll container clips at its PADDING box, where left-side overflow in LTR is
+   unreachable by scrolling. A three-digit ordered-list marker is what lives out there — the
+   `.bubble__markdown` list rule works the budget out in full, and its answer is that `100.` reaches 36px
+   left of the row's content edge, 20 of which .bubble's own inline padding covers. The remaining 16 was
+   this element's inline padding until the rows moved to the card's edge, and `e2e/assistant-whitespace`
+   reads it as `threadPaddingLeftPx` in exactly that sum.
+
+   So the strip is taken back the way `.channel-list__tree` takes the sidebar's 20 for its scrollbar: a
+   negative margin widens the border box, an equal padding returns the content box to where it was. The
+   rows are unmoved and the clip box gains the 16 the marker paints into, which lands on the card's own
+   20px inset with 4 to spare. LEFT ONLY — the scrollbar edge needs nothing, being hidden
+   (`scrollbar-width: none`, above) and taking no width either way.
+
    The gap is the message area's own gap-[16px], one step up from the 12 it carried while the rows sat in
-   an uninset pane. */
+   an uninset pane. TWO RULES ARE MEASURED OFF IT and moved with it, both silently wrong at the old value:
+   the tool-row join margin (`.tool-row + .tool-row`), which cancels this gap before overlapping by a
+   border, and `.session-delimiter`'s padding, which tops this gap up to the clearance its own block
+   draws. */
 .conversation__thread {
   flex: 1 1 auto;
   min-height: 0;
@@ -244,7 +260,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-3) 0;
+  margin-left: calc(-1 * var(--space-4));
+  padding: var(--space-3) 0 var(--space-3) var(--space-4);
 }
 
 /* The inert fallback for the rule above — see its comment. `scrollbar-width: none` is what hides the bar on
@@ -899,7 +916,9 @@
    needed, because the overhang lands in padding that already exists: `10.` needs 28px and overhangs 12px
    into .bubble's own 20px (#969 — 14px when this was written), and the bubble's fill paints its padding
    box, so the marker lands ON the bubble;
-   `100.` needs 40px and overhangs 24px into that 20 plus .conversation__thread's 16 (:240) = 36px. That 36
+   `100.` needs 40px and overhangs 24px into that 20 plus .conversation__thread's left 16 = 36px. Since #1444
+   that 16 is a borrowed clip strip rather than an inset on the rows — see that rule, which names this
+   paragraph as the reason it is there at all, and do not zero it without reading both. That 36
    is a HARD edge rather than a scrollbar — the thread declares overflow-y: auto, so its other axis computes
    to `auto`, a scroll container clips at its PADDING box, and left-side overflow in LTR is unreachable by
    scrolling. Indent also COMPOUNDS with depth and lists are where depth actually lives: at --space-6 a
@@ -1875,8 +1894,9 @@
    the smallest element containing both, so the rendered result is identical to the region's.
 
    NOTHING ELSE FROM THE REGION NEEDED A HOME. Its flex/column/gap/padding existed to make a standalone
-   strip sit thread-consistent, and .conversation__thread already declares the same gap: var(--space-3)
-   and padding: var(--space-2) var(--space-4) — so a merged row inherits the rhythm with no rule at all. */
+   strip sit thread-consistent, and .conversation__thread already declares that rhythm as its own gap and
+   padding — so a merged row inherits it with no rule at all, at whatever step those are currently at
+   (--space-4 and --space-3 since #1444; the point is that the row restates neither). */
 .message-row--queued {
   opacity: 0.5;
 }
@@ -1970,7 +1990,7 @@
    THE SHADOW (the 2026-09-05 shadow fix, Figma "Tool use" 134:4939): --shadow-thread as a box-shadow, the
    value every element of the message area casts. The design puts it on each single row and ONCE on the
    grouped stack (384:7103). THIS RULE IS NOW THE LONE ROW'S HALF ONLY: #1073 joined consecutive rows, which
-   falsified the argument that used to stand here — that "the thread's 12px gap is wider than the shadow's 9px
+   falsified the argument that used to stand here — that "the thread's gap is wider than the shadow's 9px
    reach (4 down plus a 5px blur), so no row's shadow lands on the next" — since closing that gap is exactly
    what #1073 does. A row with a tool-row successor now computes `box-shadow: none` and the run's last row
    carries the group's one shadow; see the #1073 comment below for why the last rather than the first. A row
@@ -2021,10 +2041,14 @@
    Each selector targets one side of a join; a visible non-tool row or a depth change ends the stack.
 
    THE MARGIN. gap cannot be varied per pair, so the join is a negative top margin on the lower row: the
-   column's gap and the item's margin both apply, so the pair's effective separation is 12 + (-13) = -1px and
+   column's gap and the item's margin both apply, so the pair's effective separation is 16 + (-17) = -1px and
    the lower row's 1px top border lands on exactly the pixel band the upper row's bottom border occupies. One
-   line, not two and not a 2px-looking one. Tokenised rather than -13px so the gap follows --space-3 if it
-   ever moves; the 1px stays a literal because it is the BORDER WIDTH, not a spacing step. On the lower row
+   line, not two and not a 2px-looking one. IT IS THE THREAD'S GAP THIS CANCELS, so it is written as whichever
+   token `.conversation__thread` declares — #1444 moved that gap --space-3 -> --space-4 and left this at the
+   old token, which is how `tool-groups` and `tool-row-toggle` came back measuring 4px of daylight at every
+   join (16 - 13 = 3, plus the border). e2e/tool-row-toggle.spec.ts states the invariant outright, reading the
+   thread's LIVE gap rather than -13px, and that is the spec to trust over any figure written here; the 1px
+   stays a literal because it is the BORDER WIDTH, not a spacing step. On the lower row
    rather than Figma's own mb-[-1px] on the upper one — equivalent under a flex gap, and `+` is the cheaper
    selector, so :has() is spent only where the property genuinely lives on the upper element.
 
@@ -2037,7 +2061,7 @@
 
    THE SHADOW, and it is the half most easily missed. The design casts --shadow-thread ONCE on the wrapper
    frame where a lone row (134:4939) casts its own, and .tool-row's own comment above says in as many words
-   that per-row shadows are safe only because "the thread's 12px gap is wider than the shadow's 9px reach" —
+   that per-row shadows are safe only because "the thread's gap is wider than the shadow's 9px reach" —
    which is precisely what this rule falsifies. Left alone every interior row would drop 9px of shadow across
    its join onto the row below and smear ~2.5px past the stack's sides at each join, and where a pending row
    precedes a resolved one its atomic paint group (see below) would put that shadow fully on top. So every row
@@ -2068,7 +2092,7 @@
    and e2e/thread-scroll-pin.spec.ts, which each drive exactly one row and so form no run. */
 .tool-row + .tool-row,
 .tool-group-row--joined-above > .tool-row {
-  margin-top: calc(-1 * var(--space-3) - 1px);
+  margin-top: calc(-1 * var(--space-4) - 1px);
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
@@ -2642,19 +2666,25 @@
 /* #286, redrawn #690 — the session-boundary delimiter (Figma node 119-3843): ONE 16px-tall row, rule /
    centred label / rule, marking where a /clear, an idle eviction or a workspace change started a fresh
    session. The desktop chat screen's inline separator, replacing #286's mobile-derived (node 16-35)
-   title stacked above a full-width rule. A child of .conversation__thread's flex column (inherits its
-   horizontal padding). Token only — every value below exists in tokens.css.
+   title stacked above a full-width rule. A child of .conversation__thread's flex column, so it spans that
+   column's content box — the card's, since #1444. Token only — every value below exists in tokens.css.
 
    flex-wrap is left at its nowrap default, and THAT IS THE WHOLE OF AC5. Two siblings carrying an
    identical `flex: 1 0 0` split the leftover width into equal halves at every container width, with
    nothing to keep in sync — no width, no percentage — and nowrap is what makes "a rule stranded on a
    line of its own" unreachable rather than merely unobserved.
 
-   CLEARANCE ARITHMETIC: .conversation__thread (:233) is a flex column with gap: var(--space-3) = 12px,
-   which already separates this row from the messages above and below. 12 + this --space-1 = the 16px of
-   clearance the design asks for, while the row's own content box stays the Figma's exact 16px (the
-   label's line-height). Writing --space-4 here would yield 28px. Padding, not margin, as #286 used —
-   and if that container gap ever changes, this number is what silently breaks.
+   CLEARANCE ARITHMETIC, AND IT HAS ALREADY BROKEN ONCE THE WAY THIS PARAGRAPH WARNED IT WOULD.
+   .conversation__thread is a flex column whose gap already separates this row from the messages above and
+   below, and the padding here used to top that gap up to the 16px of clearance the design asks for: 12 + 4.
+   #1444 moved the thread's gap to --space-4, so the gap alone is now the whole 16 and the --space-1 that
+   stood here drew 20 — no spec reads this distance, which is exactly the silent break the old note
+   predicted. The declaration is DELETED rather than set to 0, per this file's own rule that restating a
+   settled value is how it gets lost (.session-delimiter__title's --font-mono below, .tool-row__summary):
+   a div has no UA padding, so a zero here would assert nothing. What the paragraph is for is the reason
+   there is none — this distance is a REMAINDER of the thread's gap, never a value of its own, so it comes
+   back the moment that gap drops below 16 again. The row's own content box is untouched either way at the
+   Figma's exact 16px (the label's line-height).
 
    NO SHADOW ON THE ROW, though the design draws its effect here: "Session reset" 119:3843 carries the
    --shadow-thread effect on the frame (the 2026-09-05 shadow fix). That frame has no fill, and Figma
@@ -2665,7 +2695,6 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) 0;
 }
 
 /* The centred label (Figma node 119:3844): M3 body/small in --color-primary. No font-family — the

@@ -190,3 +190,34 @@ paragraph. Both readings are replaced by the drawn top bar — the gear at the c
    `min-width: 0` is what holds it, and that rule's own comment already records that `.channel-list`'s
    computed `overflow-x` "does not save it" — so the answer looks like no, and the parenthetical is
    repointed at the tree. Confirm against `sidebar-tree-geometry`'s width reads in Phase B.
+
+## Revisions
+
+### 2026-09-14 — the tree bleeds back through the card's right inset so the scrollbar rides in it
+
+**What drove it.** The verifier's triage on PR #1449: three regressions this PR introduced —
+`sidebar-control-name-pill`, `sidebar-section-header-plus-name-pill` and
+`sidebar-workspace-plus-name-pill`, each timing out with `<div class="channel-list__tree"> intercepts
+pointer events` at a trailing control, and each immediately after a programmatic scroll of the tree. All
+three pass at the merge base; no pre-existing failure was involved.
+
+**What the plan got wrong.** The Design section gave `.channel-list__tree` no horizontal padding, on the
+argument that "the card's inset is the column's". That is right about the CONTENT box and blind about the
+SCROLLBAR. While `.channel-list` was the scroller its own 20px inset held the bar's strip, clear of the
+column of trailing controls that every row, section header and workspace head ends flush with; moving the
+scrollport one level in moved that strip inward with it, straight onto those controls. An overlay bar
+takes no width, so it hit-tests as the scroller while every geometry read stays green.
+
+**The new contract.** `.channel-list__tree` takes `margin-right: calc(-1 * var(--space-5))` with
+`padding-right: var(--space-5)`. Its border box's trailing edge reaches the card's own edge and its
+content box stays exactly the 360 it was, so nothing drawn moves and the strip lands in the 20 the card
+already reserves — for both bar kinds. Written as geometry rather than as `scrollbar-gutter: stable`,
+which has no effect on overlay bars, the only kind this defect has. The card's inset stays a single
+declaration on `.channel-list`; the pair on the tree borrows 20 of it back rather than restating it.
+
+**What the Testing strategy owed and did not have.** The trailing-edge derivation (`offsetWidth -
+clientWidth` on the tree) cannot see this defect: on an overlay machine it reads 0 whether the strip is
+reserved or not. `e2e/sidebar-tree-geometry.spec.ts` gains a direct read — the tree's leading edge at the
+card's content edge and its trailing edge flush with the card's — which fails in one assertion where the
+three pill specs fail in three 30-second actionability timeouts. Both are kept: the pill specs are the
+behavioural detector, this read is the one that names the cause.

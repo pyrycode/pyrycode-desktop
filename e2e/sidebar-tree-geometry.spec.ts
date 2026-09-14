@@ -209,6 +209,19 @@ test('the sidebar card sits at its drawn inset under its top bar: 24/20/20, a 24
   const scrollbarPx = await tree.evaluate((el) => el.offsetWidth - el.clientWidth)
   const right = left + cardBox.width - scrollbarPx
 
+  // ⭐ ...AND THE STRIP THAT SCROLLBAR TAKES IS THE CARD'S RIGHT INSET, which is a regression read rather
+  // than a restatement of block 1. The tree's own box bleeds back through that inset — leading edge at the
+  // content edge, trailing edge flush with the CARD's — so whatever width a bar takes lands in the 20 the
+  // card already reserves instead of over the column of trailing controls that every row, section header
+  // and workspace head ends at. It shipped once without the bleed and the derivation above could not see
+  // it: an OVERLAY bar takes no width, so `scrollbarPx` read 0, every assertion in this file stayed green,
+  // and the three name-pill specs timed out instead with `.channel-list__tree` intercepting the pointer at
+  // each trailing control. One read covers both bar kinds — a classic one is taken out of this box's
+  // content and `right` already carries it.
+  const treeSpan = await boxOf(tree, 'sidebar tree')
+  expectAbout(treeSpan.x - left, CARD_INSET_PX)
+  expectAbout(left + cardBox.width - (treeSpan.x + treeSpan.width), 0)
+
   // --- 1. Every level shares the card's 20px inset: the header, the host row and the workspace row all
   // start at the content edge, and the rows one list-indent further in. `x` is the box's left edge, so
   // these read the container's padding, not each element's own. ---

@@ -355,8 +355,9 @@ cap, automatic eviction, total collection-size bound or history-download policy.
 Timeline reading shows “Loading saved messages…” while pending in either connection
 state. Nonempty restored content shows “Offline. Showing saved messages.” only while
 the selected host is unavailable; connected opening and reconnect show no offline
-notice. Both `missing` and a stored empty timeline succeed and show “No messages
-are saved on this device.” Errors, rejected
+notice. Both `missing` and a stored empty timeline succeed and draw no notice at
+all — a loaded, empty local read reads as the ordinary state of a chat opened for
+the first time on this machine, not a fault (\#1447). Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
 results instead show “Could not read saved messages on this device.” A local read
 failure changes neither `SessionState.statuses` nor saved data and creates no
@@ -584,8 +585,16 @@ restoration and eviction must write nothing, but later content must save with th
 restored owner and coverage. Static screen tests cover local notices, host-bound
 display and partial-row cursor suppression both connected and offline, normal rendering
 after live receipts, and held versus restored queue visibility. Healthy-host interaction
-tests assert exactly the local empty-storage notice, so they still reject an additional
+tests assert no `.conversation__banner` at all, so they still reject an additional
 connection warning caused by another host's failure.
+`beginLocalTimelineRead(host, id)!.complete(null)` is the shortest way to stage a
+settled-empty local read in a static screen test: it parses a synthesized empty
+snapshot and settles `localRead: 'loaded'` with no items, which is otherwise awkward
+to reach through the store's public surface. Removing a piece of rendered copy
+silently deletes every `not.toContain`/absence assertion aimed at it too — those
+assertions keep passing against a screen that renders nothing at all, so a copy
+removal needs a sweep for such assertions and a flip to a positive claim about what
+does render (\#1447).
 
 [`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
 covers ordered host isolation with equal ids, missing/empty/error results, duplicate

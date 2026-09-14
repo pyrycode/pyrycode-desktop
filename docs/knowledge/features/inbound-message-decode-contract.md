@@ -29,6 +29,7 @@ export type InboundDaemonMessage =
   | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
   | { kind: 'thinking-progress'; thinkingProgress: ThinkingProgressPayload }  // #1312, additive — a periodic reading, no rising/falling edge, no FrameTimestamp, ships dormant
   | { kind: 'rate-limited'; rateLimited: RateLimitedPayload }    // #1318, additive — a usage-limit window report, `status`/`limit_type` OPEN strings, `resets_at` unvalidated, no FrameTimestamp, ships dormant
+  | { kind: 'context-usage'; contextUsage: ContextUsagePayload }  // #1454, additive — the reading half only (conversation_id/model/total_tokens/max_tokens/percentage); mixed provenance, informational (no range/cross-field check), no FrameTimestamp, ships dormant
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -373,6 +374,52 @@ here until the carry slice claims it. This ticket also corrected three comments 
 the AC3 skip-table comment in `inboundMessage.test.ts` — that had named `rate_limited` as the one type
 with no parser at all, a claim left behind when [#1312](https://github.com/pyrycode/pyrycode-desktop/issues/1312)
 moved `thinking_progress` off that same list. Full account in [Extension
+history](inbound-message-decode-history.md).
+
+**Extended once more by [#1454](https://github.com/pyrycode/pyrycode-desktop/issues/1454), additively.**
+`context_usage` → `{ kind: 'context-usage', contextUsage: ContextUsagePayload }` via
+`parseContextUsagePayload` — claude's own report of what is in the context window, published after every
+turn end on the interactive path (pyrycode#2370 shape / #2371 producer). Decided 2026-09-14: this becomes
+the display source, displacing the `session_settings`/`screen_snapshot` transcript-scan route, which reads
+0% for a conversation opened in a workspace and whose window half is a guess until a turn ends.
+`ContextUsagePayload{conversation_id, model, total_tokens, max_tokens, percentage}` is
+`parseRateLimitedPayload`'s shape minus one string and its nullable list plus two numbers: two
+`requireString` calls, three `requireNumber` calls, no new helper.
+
+**THE FRAME'S THREE INVENTORIES ARE ON EVERY REAL FRAME AND ARE DELIBERATELY NOT DECLARED HERE.**
+`categories`, `mcp_tools`, `memory_files` and their three dropped counts ride the same wire; the fresh
+five-field literal tolerates and drops them rather than copying them through. A declared-but-unparsed
+field would put a type on the wire surface with no narrowing behind it, so the declaration and the parsing
+of each inventory land together in the two follow-on slices, not split across tickets.
+
+**PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact a reader is likeliest to get wrong:
+`conversation_id` is daemon-authored, `model` is claude-authored descriptive text that crossed the
+subprocess trust boundary and is neither validated nor sanitized upstream. Assuming one provenance for the
+whole struct errs in the harmful direction half the time — promoting `model` to a checked value. `model`
+stays inert text: never a lookup key, a Map key, a path, an icon name, an attribute or a URL, and never an
+identity to match against a model menu (`model_announced` remains that authority).
+
+**THE READING IS INFORMATIONAL — no range check and no cross-field check on any of the three integers.**
+The daemon neither recomputes nor normalizes claude's figures, so nothing may assume `percentage` is
+derivable from `total_tokens` and `max_tokens`; a client that recomputed it would disagree with the figure
+claude reported, which is the whole reason this frame displaces the transcript route. `requireNumber`
+checks the type, not truthiness, so `0` survives as `0` — exactly what the daemon's committed empty
+fixture (`context_usage_empty.json`) carries for all three integers, alongside `''` for both strings via
+the same posture in `requireString`. The unguarded-`Infinity` hazard a `max_tokens` of `0` creates belongs
+to the render slice (#1421), where `contextUsagePercent` already documents it.
+
+**Takes no `FrameTimestamp`**, the `thinking_progress`/`rate_limited` precedent — the mix-in marks exactly
+the arms `decodeHistoryEvent` draws, and this kind gains no arm there (a regression pin: even a
+fully well-formed stored `context_usage` still skips). Content-free-logged as `inbound-decoded(code:
+'context_usage')` before the `default` branch; neither `conversation_id`, `model` nor any of the three
+integers ever reaches a log line — `model` is unsanitized claude-influenced text, and the three integers
+disclose how much private work is in the window, a side-channel as unwelcome as the correlating
+`conversation_id` beside them. Ships dormant, the same two-step already taken for `question_shown`
+(#884/#885), `modal_shown` (#870/#871) and `thinking_progress`/`rate_limited` themselves:
+`daemonConnection.ts`'s inbound switch has no catch-all, so the reading stops here until the IPC carry
+slice claims it. This is the first of four slices replacing #1254's first criterion, on the `rate_limited`
+precedent: decode here (#1454), IPC carry #1419, store #1420, surfaces #1421. Architect (builder)
+self-review PASS, no MUST FIX findings. Full account in [Extension
 history](inbound-message-decode-history.md).
 
 **[#965](https://github.com/pyrycode/pyrycode-desktop/issues/965) widens `daemon-error` by a field, not a

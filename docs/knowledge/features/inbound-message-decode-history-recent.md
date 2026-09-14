@@ -295,3 +295,61 @@ with no parser at all, a claim left behind when #1312 moved `thinking_progress` 
 Architect (builder) self-review PASS, no MUST FIX findings; one SHOULD FIX recorded for the carry slice
 — never schedule, allocate or iterate from `resets_at`, since a delay derived from it can fire both too
 early and immediately-instead-of-never.
+
+[#1454](https://github.com/pyrycode/pyrycode-desktop/issues/1454) extended it once more, additively, with
+`context_usage` → `{ kind: 'context-usage', contextUsage: ContextUsagePayload }` via
+`parseContextUsagePayload` — claude's own report of what is in the context window, the daemon's
+translation published after every turn end on the interactive path (pyrycode#2370 shape / #2371
+producer). Decided 2026-09-14: the claude-reported figure becomes the display source; the
+`session_settings`/`screen_snapshot` transcript-scan route — which reads 0% for a conversation opened in
+a workspace and whose window half is a guess until a turn ends — becomes the fallback.
+`ContextUsagePayload{conversation_id, model, total_tokens, max_tokens, percentage}` is
+`parseRateLimitedPayload`'s shape minus one string and its nullable list plus two numbers: two
+`requireString` calls, three `requireNumber` calls, no new helper.
+
+**THIS SLICE DECODES THE FRAME'S READING ONLY.** The frame carries six more keys — three inventories
+(`categories`, `mcp_tools`, `memory_files`) and their three dropped counts — on every real frame, not a
+hypothetical future one; they are deliberately not declared on `ContextUsagePayload` and the fresh
+five-field literal tolerates and drops them. A declared-but-unparsed field would put a type on the wire
+surface with no narrowing behind it, so the two follow-on slices own both the declaration and the parsing
+of each inventory together. The test fixture transcribes the daemon's own committed `context_usage.json`
+whole (rather than inventing an extra key), which proves the drop against real traffic and against
+deliberately adversarial inventory values — a `../../../etc/passwd` memory-file path, markup
+metacharacters in a tool name — none of which cross even as opaque data. Whichever slice decodes
+`memory_files` inherits a path-traversal surface.
+
+**PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact this kind's docblock names
+separately rather than giving the type one blanket sentence: `conversation_id` is DAEMON-authored, filled
+from the daemon's own registry record; `model` is CLAUDE-authored descriptive text that crossed the
+subprocess trust boundary, neither validated nor sanitized upstream. A reader assuming one provenance for
+the whole struct is wrong half the time, in the direction that promotes `model` to a checked value.
+`model` stays inert text — never a lookup key, a Map key, a path, an icon name, an attribute or a URL —
+and it is NOT an identity: `model_announced` remains the authority on which model is running, and this
+string is descriptive text beside a token count.
+
+**THE READING IS INFORMATIONAL: no range check and no cross-field check on any of the three integers.**
+The daemon neither recomputes nor normalizes claude's figures, so nothing may assume `percentage` is
+derivable from `total_tokens` and `max_tokens` — a client that recomputed it would disagree with the
+figure claude reported, which is the whole reason this frame displaces the transcript route. A
+`percentage` over 100, a `total_tokens` exceeding `max_tokens`, a `max_tokens` of `0` beside a non-zero
+total, and a negative are all ordinary, undecoded-rejecting traffic; a table of exactly those cases pins
+the no-range-check posture in the tests. `requireNumber` checks the type, not truthiness, so `0` survives
+as `0` — precisely what the daemon's committed `context_usage_empty.json` fixture carries for all three
+integers, alongside `''` for both strings via the same posture in `requireString`. The unguarded-
+`Infinity` hazard a `max_tokens` of `0` creates is a RENDER concern, already documented on the renderer's
+`contextUsagePercent`, and does not belong at this boundary.
+
+**Takes no `FrameTimestamp`**, the `thinking_progress`/`rate_limited` precedent — the mix-in marks exactly
+the arms `decodeHistoryEvent` draws, and this kind gains no arm there (a regression pin: even a fully
+well-formed stored `context_usage` still skips). Content-free-logged as `inbound-decoded(code:
+'context_usage')` before the `default` branch; neither `conversation_id`, `model` nor any of the three
+integers ever reaches a log line — `model` is unsanitized claude-influenced text that would otherwise land
+in a file whose readers assume it is machine-written, and the three integers disclose how much private
+work is in the window, a side-channel as unwelcome as the correlating `conversation_id` beside them. That
+is strictly safer than the `default:` arm it replaces for the type, which logged the wire-supplied
+`envelope.type`. Ships dormant, the same two-step already taken for `question_shown` (#884/#885),
+`modal_shown` (#870/#871) and `thinking_progress`/`rate_limited` themselves: `daemonConnection.ts`'s
+inbound switch has no catch-all, so the reading stops here until the carry slice claims it. This is the
+first of four slices replacing #1254's first criterion, on the `rate_limited` precedent: decode here
+(#1454), IPC carry #1419, store #1420, surfaces #1421 — #1254 is re-cut to the popover alone. Architect
+(builder) self-review PASS, no MUST FIX findings.

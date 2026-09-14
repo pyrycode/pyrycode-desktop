@@ -45,6 +45,7 @@ import type {
   ThinkingProgressPayload,
   RateLimitedPayload,
   ContextUsageCategory,
+  ContextUsageMCPTool,
   ContextUsagePayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
@@ -486,27 +487,33 @@ interface FrameTimestamp {
  * here until the carry slice claims it.
  *
  * The `context-usage` kind (#1454) carries the decoded ContextUsagePayload — claude's own report of what
- * is in the context window, published after every turn end on the interactive path. THE READING AND THE
- * CATEGORY BREAKDOWN: #1455 decodes `categories` and `dropped_categories`, while the frame's remaining
- * two inventories (`mcp_tools` / `memory_files`) and their two dropped counts are on the wire and are
- * decoded by #1456, not here. Conversation-scoped like the two kinds above — no `turn_id`, and it
+ * is in the context window, published after every turn end on the interactive path. THE READING AND TWO
+ * OF ITS THREE INVENTORIES: #1455 decodes `categories` / `dropped_categories` and #1459 `mcp_tools` /
+ * `dropped_mcp_tools`, while the frame's last inventory (`memory_files`) and its dropped count are on
+ * the wire and are decoded by #1460, not here. Conversation-scoped like the two kinds above — no
+ * `turn_id`, and it
  * opens and closes no turn. The fail-closed defence is two required strings and three required NUMBERS,
  * each through the type-not-truthiness helpers, so `''` and `0` survive as the values the daemon's empty
- * fixture states them to be rather than being read as absences — and, for the breakdown, a list-shape
+ * fixture states them to be rather than being read as absences — and, per inventory, a list-shape
  * guard plus a per-row narrowing where ONE BAD ROW DROPS THE WHOLE FRAME rather than yielding a partial
- * breakdown.
+ * inventory.
  *
- * `categories` IS NEVER NULL and an empty list is the POSITIVE STATEMENT that claude reported no
- * categories; the rows are a PREFIX in the producer's descending-token order, so a short list is never a
- * list with holes. `dropped_categories` IS INDEPENDENT AND NOT INFERABLE — two cuts' worth of loss, so a
- * retained list's length says nothing about completeness and nothing here reconciles the two.
+ * NEITHER INVENTORY IS EVER NULL and an empty list is the POSITIVE STATEMENT that claude reported no
+ * categories, or no MCP tools; the rows are a PREFIX in the producer's descending-token order, so a short
+ * list is never a list with holes. EACH DROPPED COUNT IS INDEPENDENT AND NOT INFERABLE — two cuts' worth
+ * of loss apiece, so a retained list's length says nothing about completeness, nothing here reconciles a
+ * count with a length, and the two counts are never read against each other either.
  *
  * PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD, which is what separates this kind from every neighbour
  * here: `conversation_id` is daemon-authored, `model` and every row's `name` are claude-authored and
- * unsanitized. A consumer assuming one provenance for the whole value is wrong half the time, in the
+ * unsanitized, and every `server_name` is workspace configuration. A consumer assuming one provenance
+ * for the whole value is wrong half the time, in the
  * direction that promotes those strings to checked values. A row's `name` is a LABEL, never a selector,
- * and if a consumer indexes rows by it the index is a `Map`, never a plain object. See
- * ContextUsagePayload and ContextUsageCategory, which name the split field by field.
+ * and if a consumer indexes rows by it the index is a `Map`, never a plain object. **AND
+ * `server_name` IS INERT DESPITE ITS NAME** — it collides with the actuation-crossing `ServerName` on
+ * the daemon's MCP reconnect payload, so it must never be fed to an MCP verb, a reconnect or a server
+ * lookup, nor joined against `mcp_status`, on the strength of having appeared in this reading. See
+ * ContextUsagePayload, ContextUsageCategory and ContextUsageMCPTool, which name the split field by field.
  *
  * THE THREE INTEGERS ARE NOT RANGE-CHECKED and are NOT mutually consistent by contract. The daemon
  * neither recomputes nor normalizes claude's figures, so a consumer must not derive `percentage` from
@@ -2266,47 +2273,104 @@ function parseContextUsageCategory(payload: unknown): ContextUsageCategory {
 }
 
 /**
- * Narrow an opaque payload into a ContextUsagePayload (#1454 the reading, #1455 the category breakdown).
- * Fail-closed like parseRateLimitedPayload directly above, extended with parseModelListPayload's
- * list-frame shape: two `requireString`s, three `requireNumber`s, the inline Array.isArray-then-`raw.map`
- * over the rows, and a plain `requireNumber` for the dropped count. No helper is invented here, and
- * nothing is cross-validated.
+ * Narrow one row of a `context_usage` frame's MCP-tool inventory into a ContextUsageMCPTool (#1459).
+ * parseContextUsageCategory directly above with one more string, which is parseModelOption's shape
+ * scaled to three fields: an isRecord gate, two requireStrings, one requireNumber, returning a fresh
+ * three-field literal. No helper is invented here.
  *
- * THE FOUR REMAINING INVENTORY KEYS ARE DROPPED, NOT READ. `mcp_tools`, `memory_files` and their two
- * dropped counts are on EVERY real frame, so this parser's forward-compatibility is load-bearing rather
- * than hypothetical: the fresh seven-field literal tolerates them without copying them through, which
+ * WHAT IS DELIBERATELY NOT CHECKED, each of which would fail-close valid traffic:
+ *
+ *   - NO emptiness check on `name` OR `server_name`, and requireString rather than
+ *     requireNonEmptyString ON PURPOSE. That sibling exists for a field whose `''` is a DISTINCT
+ *     FAILURE MODE: every key is optional to Go's `encoding/json`, so a truncated payload arrives
+ *     present, typed and empty, and through requireString a LOOKUP KEY like `attachment_id` would
+ *     decode to a success naming nothing. THAT HAZARD NEEDS A LOOKUP TO ARISE, AND NOTHING LOOKS THESE
+ *     STRINGS UP — they are inert by contract — so `''` here is a display value rather than a
+ *     resolution that silently found nothing, and the daemon states all three keys stay present when
+ *     the strings are empty. The two facts are ONE DECISION: if a later slice ever makes `server_name`
+ *     a lookup key, this helper choice must be revisited together with the never-actuate prohibition.
+ *   - NO range check on `tokens`, and no running total. The frame's own no-range-check rule one level
+ *     down: the figures are claude's and the daemon neither recomputes nor normalizes them. The
+ *     inventory NEED NOT SUM to `total_tokens` by contract, and a cut list makes the sum smaller still.
+ *   - NO server lookup, NO membership check against a known-servers list, and NO JOIN WITH
+ *     `mcp_status`. `server_name` is INERT — it names a contributor to a READING, never an actuation
+ *     target — and its collision with the actuation-crossing `MCPReconnectPayload.ServerName` is the
+ *     trap ContextUsageMCPTool's docblock states in full. A client-side set of server names would also
+ *     fail-close a valid frame the moment a workspace adds a server.
+ *   - NO trim, normalise, strip, escape, re-encode or length cap on either string. Both crossed the
+ *     subprocess trust boundary; the producer bounds them at construction and parseInboundMessage's
+ *     MAX_PLAINTEXT_BYTES guard backstops the frame, so a third bound here would be a client-invented
+ *     one to keep in agreement (the parseSlashCommand posture). The committed fixture's embedded
+ *     NEWLINE (`query\ndocs`) and `remote<mcp>` metacharacters cross byte-for-byte on purpose:
+ *     ESCAPING AT A DECODER IS ESCAPING AT THE WRONG LAYER, and CLAUDE.md's 2026-08-20 operator ruling
+ *     puts it at the render sink, which is #1421's.
+ *
+ * Its message names the failure CATEGORY only, never a value and NEVER THE ROW INDEX — parseModelOption's
+ * rule verbatim. It matters more here than one inventory over: `name` is model-influenced text,
+ * `server_name` is WORKSPACE CONFIGURATION naming infrastructure, daemonConnection catches
+ * WireDecodeError into a caller that may log it, and that fixture newline would FORGE A RECORD in a
+ * line-delimited log.
+ */
+function parseContextUsageMCPTool(payload: unknown): ContextUsageMCPTool {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed context usage mcp tool')
+  }
+  const name = requireString(payload, 'name')
+  const server_name = requireString(payload, 'server_name')
+  const tokens = requireNumber(payload, 'tokens')
+  return { name, server_name, tokens }
+}
+
+/**
+ * Narrow an opaque payload into a ContextUsagePayload (#1454 the reading, #1455 the category breakdown,
+ * #1459 the MCP-tool inventory).
+ * Fail-closed like parseRateLimitedPayload directly above, extended with parseModelListPayload's
+ * list-frame shape applied TWICE: two `requireString`s, three `requireNumber`s, then per inventory an
+ * inline Array.isArray-then-`.map` over the rows and a plain `requireNumber` for its dropped count. No
+ * helper is invented here, and nothing is cross-validated.
+ *
+ * THE TWO REMAINING MEMORY-FILE KEYS ARE DROPPED, NOT READ. `memory_files` and its dropped count are on
+ * EVERY real frame, so this parser's forward-compatibility is load-bearing rather
+ * than hypothetical: the fresh nine-field literal tolerates them without copying them through, which
  * also makes it prototype-pollution-safe against a planted `__proto__` and keeps the daemon fixture's
- * deliberately adversarial remaining values (a `../../../etc/passwd` memory-file path, markup
- * metacharacters in a tool name) from crossing even as opaque data. #1456 decodes them and owns their
- * validation — that path value is the clearest possible statement that those two are a PATH-TRAVERSAL
+ * deliberately adversarial remaining value — a `../../../etc/passwd` memory-file path — from crossing
+ * even as opaque data. #1460 decodes them and owns their
+ * validation; that path value is the clearest possible statement that the inventory is a PATH-TRAVERSAL
  * SURFACE and is a must-review item for it.
  *
- * `categories` FAILS CLOSED ON `null`, ON AN ABSENT KEY AND ON ANY NON-ARRAY, while an EMPTY ARRAY
- * DECODES TO `[]`. The daemon's MarshalJSON normalises a nil slice to `[]` precisely so a client never
- * has to tell the two apart, which makes `[]` the POSITIVE STATEMENT that claude reported no categories
- * and makes a `null` a real defect; `Array.isArray(null)` is `false`, which is exactly what fails it, and
- * an omitted key (`undefined`) fails the same way. That empty list must stay distinguishable from the
- * absence a frame that never arrived yields — which is a CONSUMER obligation from #1419 onward, since
- * this decoder only ever returns one or throws. ORDER IS PRESERVED FROM THE WIRE: the rows are a prefix
- * of the producer's descending-token order with any cut taken off the TAIL, so a shortened list is never
- * a list with holes and re-sorting would destroy the only ordering signal a consumer gets. ONE BAD ROW
- * THROWS THE WHOLE FRAME rather than yielding a partial breakdown — `raw.map` propagates the first
- * throw — and a half-populated breakdown is worse than none, because nothing downstream could tell the
- * two apart once `dropped_categories` no longer accounts for the loss.
+ * EACH INVENTORY FAILS CLOSED ON `null`, ON AN ABSENT KEY AND ON ANY NON-ARRAY, while an EMPTY ARRAY
+ * DECODES TO `[]`. The daemon's MarshalJSON normalises every nil inventory slice to `[]` precisely so a
+ * client never has to tell the two apart, which makes `[]` the POSITIVE STATEMENT that claude reported no
+ * categories, or no MCP tools, and makes a `null` a real defect; `Array.isArray(null)` is `false`, which
+ * is exactly what fails it, and an omitted key (`undefined`) fails the same way. That empty list must
+ * stay distinguishable from the absence a frame that never arrived yields — which is a CONSUMER
+ * obligation from #1419 onward, since this decoder only ever returns one or throws. ORDER IS PRESERVED
+ * FROM THE WIRE: the rows are a prefix of the producer's descending-token order with any cut taken off
+ * the TAIL, so a shortened list is never a list with holes and re-sorting would destroy the only
+ * ordering signal a consumer gets. ONE BAD ROW IN EITHER LIST THROWS THE WHOLE FRAME rather than
+ * yielding a partial inventory — `.map` propagates the first throw — and a half-populated inventory is
+ * worse than none, because nothing downstream could tell the two apart once its dropped count no longer
+ * accounts for the loss. THE TWO LISTS ARE NEVER CROSSED: each is guarded, mapped and counted on its
+ * own, and a well-formed sibling neither rescues nor validates the other.
  *
- * `dropped_categories` decodes through plain requireNumber, correct PRECISELY BECAUSE the Go field has
+ * EACH DROPPED COUNT decodes through plain requireNumber, correct PRECISELY BECAUSE the Go fields have
  * no `omitempty`: the key is always written, so `0` is a genuine value carried as `0` and never
- * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS IT AGAINST
- * `categories.length` AND NOTHING CAPS THE ENTRY COUNT (AC4). The count is TWO CUTS' worth of loss — the
+ * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS EITHER AGAINST ITS
+ * LIST'S LENGTH, NOTHING CROSS-READS THE TWO COUNTS, AND NOTHING CAPS EITHER ENTRY COUNT (AC4). Each
+ * count is TWO CUTS' worth of loss — the
  * producer's entry and string caps plus the mapper's own frame-byte budget — so a retained list's length
- * is no evidence of completeness in either direction, and the committed fixture's `3` beside exactly two
- * rows is the case that proves it; `categories.length + dropped_categories` is the true size, not
- * something to reconcile. The producer's caps are DAEMON-SIDE and may change without any change to this
+ * is no evidence of completeness in either direction, and the committed fixture's `3` and `5` each beside
+ * exactly two rows are the cases that prove it; `list.length + its OWN dropped count` is the true size,
+ * not something to reconcile. The daemon divides ONE envelope across THREE lists and can cut all three
+ * at once, so one count is no evidence about another. The producer's caps are DAEMON-SIDE and may change
+ * without any change to this
  * contract, so re-deciding a bound here would be a second place the limit lives, free to disagree
- * silently. NOTHING IS ALLOCATED, SIZED OR LOOPED FROM THE CLAIMED COUNT: `raw.map` allocates from the
+ * silently. NOTHING IS ALLOCATED, SIZED OR LOOPED FROM A CLAIMED COUNT: each `.map` allocates from the
  * array that ACTUALLY arrived, which is AttachmentChunkPayload's never-allocate-from-a-claim rule, and
- * the array itself is already bounded because parseInboundMessage checks MAX_PLAINTEXT_BYTES as its
- * first statement — ahead of decodeEnvelope and therefore ahead of the JSON.parse that materialises it.
+ * the arrays themselves are already bounded because parseInboundMessage checks MAX_PLAINTEXT_BYTES as its
+ * first statement — ahead of decodeEnvelope and therefore ahead of the JSON.parse that materialises them.
+ * Iterating a SECOND daemon-supplied list does not double that exposure: both are materialised by that
+ * one parse, so they COMPETE FOR ONE BYTE BUDGET rather than each getting their own.
  *
  * NO RANGE CHECK ON ANY OF THE THREE INTEGERS AND NO CROSS-FIELD CHECK, and the daemon's contract is why:
  * the reading is INFORMATIONAL — claude's own integers, which the daemon neither recomputes nor
@@ -2333,8 +2397,8 @@ function parseContextUsageCategory(payload: unknown): ContextUsageCategory {
  *
  * Any missing / mistyped field throws WireDecodeError (never a partial value), dropping the frame as a
  * whole the way every other arm drops one. Its messages name the failure CATEGORY only, never
- * interpolating a value: `model` and every row's `name` are untrusted claude-authored text and
- * `conversation_id` a correlating identifier.
+ * interpolating a value: `model` and every row's `name` are untrusted claude-authored text, every
+ * `server_name` is workspace configuration, and `conversation_id` is a correlating identifier.
  */
 function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   if (!isRecord(payload)) {
@@ -2351,6 +2415,12 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
   }
   const categories = raw.map(parseContextUsageCategory)
   const dropped_categories = requireNumber(payload, 'dropped_categories')
+  const rawTools = payload.mcp_tools
+  if (!Array.isArray(rawTools)) {
+    throw new WireDecodeError('malformed context usage mcp tools list')
+  }
+  const mcp_tools = rawTools.map(parseContextUsageMCPTool)
+  const dropped_mcp_tools = requireNumber(payload, 'dropped_mcp_tools')
   return {
     conversation_id,
     model,
@@ -2358,7 +2428,9 @@ function parseContextUsagePayload(payload: unknown): ContextUsagePayload {
     max_tokens,
     percentage,
     categories,
-    dropped_categories
+    dropped_categories,
+    mcp_tools,
+    dropped_mcp_tools
   }
 }
 

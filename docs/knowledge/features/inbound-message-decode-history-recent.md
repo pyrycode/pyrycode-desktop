@@ -316,7 +316,7 @@ of each inventory together. The test fixture transcribes the daemon's own commit
 whole (rather than inventing an extra key), which proves the drop against real traffic and against
 deliberately adversarial inventory values — a `../../../etc/passwd` memory-file path, markup
 metacharacters in a tool name — none of which cross even as opaque data at this slice. Whichever slice
-decodes `memory_files` inherits a path-traversal surface.
+decodes `memory_files` inherits a path-traversal surface (that slice is #1460).
 
 **[#1455](https://github.com/pyrycode/pyrycode-desktop/issues/1455) decodes the first of those
 inventories, additively.** `categories: ContextUsageCategory[]` plus its own
@@ -333,8 +333,35 @@ slice to `[]` and an empty array is claude's positive report of no categories. T
 prefix in descending-token order; `dropped_categories` accumulates two independent cuts (the producer's
 entry/string caps plus the mapper's frame-byte budget) and is never cross-checked against the retained
 length — the committed fixture's `3` beside two retained rows is the case that proves it. One malformed
-row throws `WireDecodeError` for the whole frame, naming the failure category only. `mcp_tools`,
-`memory_files` and their two dropped counts remain undeclared, still #1456's, `../../../etc/passwd`
+row throws `WireDecodeError` for the whole frame, naming the failure category only. `mcp_tools` and
+`memory_files`, with their two dropped counts, remain undeclared, now #1459's and #1460's respectively,
+`../../../etc/passwd` still #1460's.
+
+**[#1459](https://github.com/pyrycode/pyrycode-desktop/issues/1459) decodes the second of those
+inventories, additively.** `mcp_tools: ContextUsageMCPTool[]` plus its own `dropped_mcp_tools: number`
+join `ContextUsagePayload` (now nine fields), via `parseContextUsageMCPTool` — `parseContextUsageCategory`
+one field wider: an `isRecord` gate, two `requireString` calls (`name`, `server_name`), one
+`requireNumber` for `tokens` — mapped over the array by the same `Array.isArray`-then-`.map` guard
+`categories` uses, applied a second time. `mcp_tools` is never `null`, an empty array is claude's positive
+report of no MCP tools, and the rows arrive as a prefix in descending-token order — the never-null /
+positive-empty / prefix-order rule extended rather than re-derived, and the committed fixture's `5` beside
+two retained rows is this inventory's case proving `dropped_mcp_tools` is no evidence of completeness.
+**The two inventories are never cross-read**: the daemon divides one envelope across three lists and can
+cut all three at once, so neither list's length nor either dropped count says anything about the other.
+
+**`server_name` is the new field, and it is decoded as inert.** Its name collides with the
+actuation-crossing `ServerName` on the daemon's `MCPReconnectPayload`, which crosses an actuation seam
+verbatim and is validated by nothing; this one names a contributor to a reading, never an actuation
+target, an authorization input, or a value to join against `mcp_status` — the prohibition is written at
+three levels (the row type, the payload type, and the union docblock) because a consumer reading only
+one of them must still see it. Both `name` and `server_name` are narrowed with plain `requireString`
+rather than `requireNonEmptyString`, on purpose: that helper exists for a field whose `''` is a *failed
+lookup*, and nothing resolves either of these strings, so an empty one is a legitimate display value
+the daemon's contract keeps present. The committed fixture's embedded newline (`query\ndocs`) and
+`remote<mcp>` metacharacters cross byte-for-byte and unescaped, the escaping owed at the render sink
+(#1421); the newline is also why neither string may reach a log field for an integrity reason, not only
+a privacy one — the diagnostic stream is line-delimited JSON, and a logged tool name could forge a
+record. `memory_files` and its dropped count remain undeclared, still #1460's, `../../../etc/passwd`
 included.
 
 **PROVENANCE IS MIXED WITHIN THE ONE PAYLOAD**, the field-level fact this kind's docblock names

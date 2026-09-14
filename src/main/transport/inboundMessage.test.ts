@@ -396,12 +396,13 @@ function encodeContextUsage(payload: unknown): Uint8Array {
 }
 
 /** The daemon's committed `internal/protocol/testdata/context_usage.json` payload, transcribed whole
- *  (#1454). Since #1455 the `categories` pair IS read and the remaining FOUR inventory / dropped keys are
- *  carried verbatim and deliberately, so the fixture is still simultaneously the forward-compat case —
- *  the drop is proven against a real frame rather than an invented extra key. `Messages <&>` is
- *  adversarial upstream on purpose and now CROSSES, byte-for-byte and unescaped, which is the point:
+ *  (#1454). Since #1459 the `categories` and `mcp_tools` pairs are BOTH read and the remaining TWO
+ *  memory-file keys are carried verbatim and deliberately, so the fixture is still simultaneously the
+ *  forward-compat case — the drop is proven against a real frame rather than an invented extra key.
+ *  `Messages <&>` (#1455) and the MCP row's embedded newline and `remote<mcp>` metacharacters (#1459)
+ *  are adversarial upstream on purpose and all CROSS, byte-for-byte and unescaped, which is the point:
  *  escaping is owed at the render sink, not at this decoder. `../../../etc/passwd` is still unread and
- *  remains a MUST-review item for #1456. */
+ *  remains a MUST-review item for #1460. */
 const CONTEXT_USAGE_FRAME = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
@@ -425,10 +426,12 @@ const CONTEXT_USAGE_FRAME = {
   dropped_memory_files: 7
 }
 
-/** The reading plus the category breakdown that fixture must narrow to — the decoder's whole output for
- *  it (#1454 the five, #1455 the pair). The two rows come out in WIRE ORDER, which is the producer's
- *  descending-token order; `dropped_categories: 3` sits beside exactly two retained rows, so this
- *  constant is also the case proving nothing reconciles the count against the length. */
+/** The reading plus both decoded inventories that fixture must narrow to — the decoder's whole output
+ *  for it (#1454 the five, #1455 the category pair, #1459 the MCP-tool pair). Every row comes out in
+ *  WIRE ORDER, which is the producer's descending-token order; `dropped_categories: 3` and
+ *  `dropped_mcp_tools: 5` each sit beside exactly two retained rows, so this constant is also the case
+ *  proving nothing reconciles either count against either length — nor the two counts against each
+ *  other. */
 const CONTEXT_USAGE = {
   conversation_id: 'conversation-context',
   model: 'claude-opus-5',
@@ -439,7 +442,12 @@ const CONTEXT_USAGE = {
     { name: 'System prompt', tokens: 41_200 },
     { name: 'Messages <&>', tokens: 9800 }
   ],
-  dropped_categories: 3
+  dropped_categories: 3,
+  mcp_tools: [
+    { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+    { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+  ],
+  dropped_mcp_tools: 5
 }
 
 /** The daemon's committed `context_usage_empty.json` payload (#1454). Its two empty strings and three
@@ -459,9 +467,9 @@ const CONTEXT_USAGE_EMPTY_FRAME = {
   dropped_memory_files: 0
 }
 
-/** What the empty fixture narrows to (#1454, extended #1455). The empty `categories` is the POSITIVE
- *  statement that claude reported no categories — not an absence — and `dropped_categories: 0` is a
- *  genuine zero beside it. */
+/** What the empty fixture narrows to (#1454, extended #1455 and #1459). Each empty inventory is the
+ *  POSITIVE statement that claude reported no categories, or no MCP tools — not an absence — and each
+ *  `0` beside one is a genuine zero. */
 const CONTEXT_USAGE_EMPTY = {
   conversation_id: '',
   model: '',
@@ -469,7 +477,9 @@ const CONTEXT_USAGE_EMPTY = {
   max_tokens: 0,
   percentage: 0,
   categories: [],
-  dropped_categories: 0
+  dropped_categories: 0,
+  mcp_tools: [],
+  dropped_mcp_tools: 0
 }
 
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
@@ -3058,27 +3068,32 @@ describe('parseInboundMessage — context_usage recognition (#1454, AC1/AC4)', (
     })
   })
 
-  it('drops the FOUR inventory keys still unread, keeping exactly the seven (#1455, forward-compat)', () => {
-    // Not a hypothetical unknown key: `mcp_tools` / `memory_files` and their two dropped counts are on
-    // EVERY real frame, and this decoder must tolerate them without copying them through. The fresh
-    // seven-key literal is what does that — and is also what makes the narrower prototype-pollution-safe
-    // against a planted `__proto__`. #1456 decodes the remaining pair.
+  it('drops the TWO memory-file keys still unread, keeping exactly the nine (#1459, forward-compat)', () => {
+    // Not a hypothetical unknown key: `memory_files` and its dropped count are on EVERY real frame, and
+    // this decoder must tolerate them without copying them through. The fresh nine-key literal is what
+    // does that — and is also what makes the narrower prototype-pollution-safe against a planted
+    // `__proto__`. #1460 decodes the last pair.
     const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
     expect(decoded?.kind === 'context-usage' && Object.keys(decoded.contextUsage).sort()).toEqual([
       'categories',
       'conversation_id',
       'dropped_categories',
+      'dropped_mcp_tools',
       'max_tokens',
+      'mcp_tools',
       'model',
       'percentage',
       'total_tokens'
     ])
-    // The two adversarial values still unread must not cross even as opaque data. `../../../etc/passwd`
-    // is the daemon's own fixture value and is the clearest statement that the inventories are a
-    // path-traversal surface for the slice that decodes them.
     const json = JSON.stringify(decoded)
+    // The adversarial value still unread must not cross even as opaque data. `../../../etc/passwd` is
+    // the daemon's own fixture value and is the clearest statement that its inventory is a
+    // path-traversal surface for the slice that decodes it — #1460's must-review item.
     expect(json).not.toContain('etc/passwd')
-    expect(json).not.toContain('read_file')
+    // The INVERSION #1459 owns: `read_file` was pinned as NOT crossing while `mcp_tools` was dropped,
+    // and now it crosses as a decoded value. Asserted rather than deleted, so the pin keeps saying
+    // something true about which inventories this decoder reads.
+    expect(json).toContain('read_file')
   })
 
   it('drops a planted turn_id — the frame is conversation-scoped and must never carry one', () => {
@@ -3393,6 +3408,288 @@ describe('parseInboundMessage — context_usage dropped_categories (#1455, AC4)'
     const many = Array.from({ length: 200 }, (_unused, i) => ({ name: `c${i}`, tokens: i }))
     const frame = { ...CONTEXT_USAGE_FRAME, categories: many, dropped_categories: 9_000_000 }
     expect(categoriesOf(frame)).toHaveLength(200)
+  })
+})
+
+/** Read one decoded frame's mcp_tools, or fail the test if the arm did not narrow (#1459). The
+ *  `categoriesOf` reader one inventory over. */
+function mcpToolsOf(payload: unknown): { name: string; server_name: string; tokens: number }[] {
+  const decoded = parseInboundMessage(encodeContextUsage(payload))
+  if (decoded?.kind !== 'context-usage') {
+    throw new Error('expected a context-usage decode')
+  }
+  return decoded.contextUsage.mcp_tools
+}
+
+describe('parseInboundMessage — context_usage mcp_tool rows (#1459, AC1/AC5)', () => {
+  it("carries the daemon's two fixture rows in WIRE ORDER, all three values untouched", () => {
+    // Wire order IS the producer's descending-token order, and a cut takes entries off the TAIL — so a
+    // shortened list is never a list with holes, and re-sorting here would destroy the only ordering
+    // signal a consumer gets. Asserted as a sequence, never as a set.
+    expect(mcpToolsOf(CONTEXT_USAGE_FRAME)).toEqual([
+      { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+      { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+    ])
+  })
+
+  it("crosses the FIXTURE's own newline and metacharacters byte-for-byte (AC5)", () => {
+    // AC5's sharp half, asserted against the committed fixture's literal strings rather than a
+    // paraphrase. The upstream fixture carries these on purpose, so a decoder that trims, escapes or
+    // normalises either string reddens here.
+    const rows = mcpToolsOf(CONTEXT_USAGE_FRAME)
+    // The embedded newline is not merely decoration: it is why the never-a-log-field rule on this row
+    // is an INTEGRITY rule and not only a privacy one, since the diagnostic stream is line-delimited
+    // JSON and a logged tool name would forge a record.
+    expect(rows[1].name).toBe('query\ndocs')
+    expect(rows[1].name).toContain('\n')
+    expect(rows[1].server_name).toBe('remote<mcp>')
+  })
+
+  it('decodes a row whose BOTH strings are empty and whose tokens are 0 — all three are values', () => {
+    // The daemon states all three keys remain present even when the strings are empty. `requireString`
+    // and `requireNumber` police the TYPE, never truthiness, so a `!value` guard on any of the three
+    // would read a legitimate row as malformed and drop the whole frame with it. This is also the pin
+    // on `requireString` over `requireNonEmptyString`: nothing resolves these strings against
+    // anything, so `''` is a display value rather than a lookup that silently found nothing.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: '', server_name: '', tokens: 0 }]
+    }
+    expect(mcpToolsOf(frame)).toEqual([{ name: '', server_name: '', tokens: 0 }])
+  })
+
+  it.each([
+    ['a negative contribution', -1],
+    ['an absurd magnitude', 1_262_304_000_000],
+    ['a contribution exceeding the whole window', 400_000]
+  ])('decodes %s — the row polices type, never range', (_label, tokens) => {
+    // The frame-level no-range-check rule one level down. The inventory need not sum to `total_tokens`
+    // by contract, so no per-row bound and no running total is checked here.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens }]
+    }
+    expect(mcpToolsOf(frame)).toEqual([{ name: 'read_file', server_name: 'filesystem', tokens }])
+  })
+
+  it('crosses an adversarial name AND server_name unescaped, untrimmed, un-normalised', () => {
+    // Both strings crossed the subprocess trust boundary and neither is validated or sanitized
+    // upstream; escaping them HERE would be escaping at the wrong layer — it corrupts the value for
+    // every non-HTML sink and buys false safety at the real one. The operator ruling (CLAUDE.md,
+    // 2026-08-20) puts the escaping at the render sink, so this test reddens if a later change
+    // sanitizes at the decoder.
+    const name = '  <img src=x onerror="alert(1)">\n&amp; __proto__  '
+    const server_name = '../../../etc/passwd\r\n{"event":"forged"}'
+    const frame = { ...CONTEXT_USAGE_FRAME, mcp_tools: [{ name, server_name, tokens: 1 }] }
+    expect(mcpToolsOf(frame)).toEqual([{ name, server_name, tokens: 1 }])
+  })
+
+  it('does NOT narrow server_name against any known-server set — no membership check, no join', () => {
+    // `server_name` is INERT: it names a contributor to a reading, never an actuation target. A
+    // client-side set of server names would fail-close a valid frame the moment a workspace adds a
+    // server, and pairing this reading against an actuation surface (an `mcp_status` join, a reconnect
+    // verb) is exactly the crossing the daemon's own comment forbids. Both halves pinned here.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: 'a-tool-no-client-knows', server_name: 'a-server-no-client-knows', tokens: 1 }]
+    }
+    expect(mcpToolsOf(frame)).toEqual([
+      { name: 'a-tool-no-client-knows', server_name: 'a-server-no-client-knows', tokens: 1 }
+    ])
+  })
+
+  it("drops a row's unknown keys — including a planted __proto__ — without copying them through", () => {
+    // Each row returns its own FRESH three-field literal, which is what makes the row parser
+    // forward-compatible AND prototype-pollution-safe against a hostile daemon response. An inventory
+    // keyed by server is the obvious downstream view model, so this row is a STRONGER invitation to
+    // index on a plain object than the category row was.
+    //
+    // The row is built through JSON.parse ON PURPOSE. A `__proto__:` key written in an object literal
+    // sets the prototype rather than an own property, so JSON.stringify would drop it before it ever
+    // reached the wire and this test would pass without proving anything.
+    const row: unknown = JSON.parse(
+      '{"name":"read_file","server_name":"filesystem","tokens":1450,"scope":"x","__proto__":{"polluted":1}}'
+    )
+    expect(Object.keys(row as object)).toContain('__proto__')
+    const decoded = mcpToolsOf({ ...CONTEXT_USAGE_FRAME, mcp_tools: [row] })
+    expect(decoded).toEqual([{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }])
+    expect(Object.keys(decoded[0])).toEqual(['name', 'server_name', 'tokens'])
+    expect({}).not.toHaveProperty('polluted')
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+})
+
+describe('parseInboundMessage — context_usage mcp_tools list shape (#1459, AC2)', () => {
+  it('decodes an EMPTY list to [] — a positive statement, not an absence', () => {
+    // MarshalJSON normalises a nil slice to `[]` precisely so a client never has to tell the two apart.
+    // `[]` says claude reported no MCP tools; it must stay distinguishable from the `undefined` a frame
+    // that never arrived yields, which is what the second assertion pins.
+    expect(mcpToolsOf(CONTEXT_USAGE_EMPTY_FRAME)).toEqual([])
+    const neverArrived: { mcp_tools?: unknown } = {}
+    expect(neverArrived.mcp_tools).toBeUndefined()
+  })
+
+  it.each([
+    ['null — the daemon never sends one, so it is a real defect', null],
+    ['a string', 'read_file'],
+    ['a number', 42],
+    ['an object keyed by server name', { filesystem: 1450 }],
+    ['a boolean', false]
+  ])('fails the WHOLE frame closed when mcp_tools is %s', (_label, mcp_tools) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, mcp_tools }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when mcp_tools is ABSENT — the key is always written, so a missing one is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.mcp_tools
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — context_usage malformed mcp_tool row (#1459, AC3)', () => {
+  it.each([
+    ['a non-record row', 'read_file'],
+    ['a null row', null],
+    ['an array row', ['read_file', 'filesystem', 1450]],
+    ['a row missing name', { server_name: 'filesystem', tokens: 1450 }],
+    ['a row missing server_name', { name: 'read_file', tokens: 1450 }],
+    ['a row missing tokens', { name: 'read_file', server_name: 'filesystem' }],
+    ['a row whose name is mistyped', { name: 42, server_name: 'filesystem', tokens: 1450 }],
+    ['a row whose name is null', { name: null, server_name: 'filesystem', tokens: 1450 }],
+    ['a row whose server_name is mistyped', { name: 'read_file', server_name: 42, tokens: 1450 }],
+    ['a row whose server_name is null', { name: 'read_file', server_name: null, tokens: 1450 }],
+    ['a row whose tokens are mistyped', { name: 'read_file', server_name: 'filesystem', tokens: '1450' }],
+    ['a row whose tokens are null', { name: 'read_file', server_name: 'filesystem', tokens: null }]
+  ])('throws on %s rather than yielding a partial inventory', (_label, row) => {
+    // ONE bad row drops the WHOLE frame. A half-populated inventory presented as complete is the
+    // outcome this narrower exists to prevent — and it is worse than no inventory, because a consumer
+    // cannot tell the two apart once `dropped_mcp_tools` no longer accounts for the loss.
+    const frame = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens: 1450 }, row]
+    }
+    expect(() => parseInboundMessage(encodeContextUsage(frame))).toThrow(WireDecodeError)
+  })
+
+  it('throws a message naming the failure CATEGORY only — no name, no server, no id, no count, no INDEX', () => {
+    // AC3's second half. Every string on a row is untrusted text — `name` claude-authored, `server_name`
+    // workspace CONFIGURATION that names infrastructure — a `conversation_id` correlates a
+    // conversation, and `daemonConnection` catches WireDecodeError into a caller that may log it, so a
+    // value echoed here rides into that log. The row INDEX is excluded too: a weak oracle over the
+    // inventory for no diagnostic gain (`parseModelOption`'s rule).
+    const SECRET_TOOL = 'secret-tool-name'
+    const SECRET_SERVER = 'secret-server-name'
+    const SECRET_CONV = 'secret-conversation-id'
+    try {
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          conversation_id: SECRET_CONV,
+          mcp_tools: [
+            { name: SECRET_TOOL, server_name: SECRET_SERVER, tokens: 1450 },
+            { name: 'query', server_name: 'remote', tokens: '620' }
+          ]
+        })
+      )
+      expect.unreachable('a mistyped tokens field must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WireDecodeError)
+      const message = (error as WireDecodeError).message
+      expect(message).toContain('tokens')
+      expect(message).not.toContain(SECRET_TOOL)
+      expect(message).not.toContain(SECRET_SERVER)
+      expect(message).not.toContain(SECRET_CONV)
+      expect(message).not.toContain('1450')
+      expect(message).not.toContain('620')
+      expect(message).not.toMatch(/\b(index|row 1|\[1\])\b/i)
+    }
+  })
+
+  it('never crosses the two inventories, even in failure', () => {
+    // The two lists are decoded independently and neither is consulted about the other. A malformed row
+    // in EITHER drops the whole frame, and a well-formed sibling does not rescue it — which is what
+    // pins that no fallback, no partial and no cross-read exists between them.
+    const badCategory = { ...CONTEXT_USAGE_FRAME, categories: [{ name: 'System prompt', tokens: '1' }] }
+    const badTool = {
+      ...CONTEXT_USAGE_FRAME,
+      mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens: '1' }]
+    }
+    expect(() => parseInboundMessage(encodeContextUsage(badCategory))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeContextUsage(badTool))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — context_usage dropped_mcp_tools (#1459, AC4)', () => {
+  it('carries 5 beside TWO retained rows — the count is independent, never reconciled', () => {
+    // The count accumulates TWO cuts: the producer's entry and string caps, plus the mapper's own
+    // frame-byte budget. So a retained list's length is no evidence of completeness in either
+    // direction, and `mcp_tools.length + dropped_mcp_tools` is the inventory's true size rather than
+    // something to check. This test reddens if anyone adds that check.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_mcp_tools).toBe(5)
+  })
+
+  it('carries 3 and 5 side by side — the two counts are independent of EACH OTHER', () => {
+    // The daemon divides one envelope across three lists and can cut all three at once, so a sibling's
+    // count is no evidence about this one either. The fixture's two differing counts are the case.
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))
+    if (decoded?.kind !== 'context-usage') {
+      throw new Error('expected a context-usage decode')
+    }
+    expect([
+      decoded.contextUsage.dropped_categories,
+      decoded.contextUsage.dropped_mcp_tools
+    ]).toEqual([3, 5])
+  })
+
+  it.each([
+    ['0 beside a populated list — nothing was dropped', { dropped_mcp_tools: 0 }],
+    ['a count far exceeding the retained rows', { dropped_mcp_tools: 900 }],
+    ['a negative count — no client-invented range check', { dropped_mcp_tools: -1 }],
+    ['a zero category count beside a non-zero tool count', { dropped_categories: 0, dropped_mcp_tools: 5 }]
+  ])('decodes %s untouched', (_label, override) => {
+    const frame = { ...CONTEXT_USAGE_FRAME, ...override }
+    expect(parseInboundMessage(encodeContextUsage(frame))).toEqual({
+      kind: 'context-usage',
+      contextUsage: { ...CONTEXT_USAGE, ...override }
+    })
+  })
+
+  it('decodes 0 beside an EMPTY list — a zero is a value, never an absence', () => {
+    const decoded = parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_EMPTY_FRAME))
+    expect(decoded?.kind === 'context-usage' && decoded.contextUsage.dropped_mcp_tools).toBe(0)
+  })
+
+  it.each([
+    ['mistyped', { dropped_mcp_tools: '5' }],
+    ['null', { dropped_mcp_tools: null }]
+  ])('fails the whole frame closed when dropped_mcp_tools is %s', (_label, override) => {
+    expect(() =>
+      parseInboundMessage(encodeContextUsage({ ...CONTEXT_USAGE_FRAME, ...override }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('fails closed when dropped_mcp_tools is ABSENT — no omitempty, so an absent key is a defect', () => {
+    const absent: Record<string, unknown> = { ...CONTEXT_USAGE_FRAME }
+    delete absent.dropped_mcp_tools
+    expect(() => parseInboundMessage(encodeContextUsage(absent))).toThrow(WireDecodeError)
+  })
+
+  it('caps nothing and allocates nothing from the CLAIMED count', () => {
+    // The never-allocate-from-a-claim rule (AttachmentChunkPayload's `new Array(total_chunks)` hazard).
+    // A huge count beside the rows that ARRIVED must decode instantly and yield exactly those — the
+    // decoder sizes from the array it actually got, never from the number the daemon asserts. AC4 also
+    // forbids a client-side entry cap, so a long list decodes whole. Both lists long at once, because
+    // they compete for ONE frame-byte budget rather than each getting their own.
+    const tools = Array.from({ length: 200 }, (_unused, i) => ({
+      name: `t${i}`,
+      server_name: `s${i}`,
+      tokens: i
+    }))
+    const frame = { ...CONTEXT_USAGE_FRAME, mcp_tools: tools, dropped_mcp_tools: 9_000_000 }
+    expect(mcpToolsOf(frame)).toHaveLength(200)
   })
 })
 
@@ -7062,6 +7359,8 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const SECRET_CONV = 'secret-conversation-id'
     const SECRET_MODEL = 'secret-model-text'
     const SECRET_CATEGORY = 'secret-category-name'
+    const SECRET_TOOL = 'secret-tool-name'
+    const SECRET_SERVER = 'secret-server-name'
     const plaintext = encodeContextUsage({
       ...CONTEXT_USAGE_FRAME,
       conversation_id: SECRET_CONV,
@@ -7070,7 +7369,9 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
       max_tokens: 8484,
       percentage: 7373,
       categories: [{ name: SECRET_CATEGORY, tokens: 5151 }],
-      dropped_categories: 6262
+      dropped_categories: 6262,
+      mcp_tools: [{ name: SECRET_TOOL, server_name: SECRET_SERVER, tokens: 3939 }],
+      dropped_mcp_tools: 2828
     })
 
     parseInboundMessage(plaintext, log)
@@ -7106,6 +7407,17 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines[0]).not.toContain(SECRET_CATEGORY)
     expect(lines[0]).not.toContain('5151')
     expect(lines[0]).not.toContain('6262')
+    // #1459: the MCP-tool inventory is excluded on THREE grounds rather than the breakdown's one. A
+    // per-tool figure is the same composition side-channel; a tool name is model-influenced text; and a
+    // SERVER NAME IS WORKSPACE CONFIGURATION — the first field on this frame disclosing what the
+    // operator wired up rather than what claude read, so a server named after internal infrastructure
+    // would ride into a log an operator may send off-box. The fixture's embedded newline makes it an
+    // INTEGRITY rule too: this stream is line-delimited JSON, so a logged tool name could forge a
+    // record. The exact-key-set assertion above is what pins the list's LENGTH out as well.
+    expect(lines[0]).not.toContain(SECRET_TOOL)
+    expect(lines[0]).not.toContain(SECRET_SERVER)
+    expect(lines[0]).not.toContain('3939')
+    expect(lines[0]).not.toContain('2828')
   })
 
   it('writes NO inbound-unmodeled record for a context_usage any more (#1454, AC3)', () => {
@@ -7133,6 +7445,23 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
         encodeContextUsage({
           ...CONTEXT_USAGE_FRAME,
           categories: [{ name: 'secret-category-name', tokens: '41200' }]
+        }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log on a malformed MCP-TOOL row throw path (#1459, AC3)', () => {
+    // The MCP row parser runs inside the same pre-log narrowing, so a bad row is as unlogged as a bad
+    // top-level field — including the row's own untrusted name and its workspace-configuration server
+    // name, neither of which reaches the file.
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeContextUsage({
+          ...CONTEXT_USAGE_FRAME,
+          mcp_tools: [{ name: 'secret-tool-name', server_name: 'secret-server-name', tokens: '1450' }]
         }),
         log
       )

@@ -28,6 +28,7 @@ import type {
   ThinkingProgressPayload,
   RateLimitedPayload,
   ContextUsageCategory,
+  ContextUsageMCPTool,
   ContextUsagePayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
@@ -352,7 +353,7 @@ describe('rate-limited wire vocabulary (#1318)', () => {
   })
 })
 
-describe('context-usage wire vocabulary (#1454, #1455)', () => {
+describe('context-usage wire vocabulary (#1454, #1455, #1459)', () => {
   it('admits the context_usage inbound envelope type', () => {
     // Compile-time membership: this assigns only if the member is part of EnvelopeType. Admission is
     // NOT compile-forced — `Envelope.type` is `EnvelopeType | string`, so an arm on an unadmitted
@@ -361,12 +362,12 @@ describe('context-usage wire vocabulary (#1454, #1455)', () => {
     expect(usage).toBe('context_usage')
   })
 
-  it('shapes ContextUsagePayload as the reading PLUS the category breakdown (#1455)', () => {
-    // #1454 declared the five-field reading alone and pinned `categories` as absent. #1455 decodes the
-    // first inventory, so that pin INVERTS here rather than being deleted. The remaining two
-    // inventories (`mcp_tools` / `memory_files`) and their two dropped counts are still on the wire and
-    // still deliberately undeclared: a declared-but-unparsed field would be a type with no narrowing
-    // behind it, so the declaration and the parsing land together. #1456 adds both with their parsing.
+  it('shapes ContextUsagePayload as the reading PLUS two inventories (#1459)', () => {
+    // #1454 declared the five-field reading alone and pinned all three inventories as absent; #1455
+    // inverted the `categories` pin and #1459 inverts the `mcp_tools` one. The LAST inventory
+    // (`memory_files`) and its dropped count are still on the wire and still deliberately undeclared: a
+    // declared-but-unparsed field would be a type with no narrowing behind it, so the declaration and
+    // the parsing land together. #1460 adds the pair with its parsing.
     const payload: ContextUsagePayload = {
       conversation_id: 'conversation-context',
       model: 'claude-opus-5',
@@ -377,18 +378,48 @@ describe('context-usage wire vocabulary (#1454, #1455)', () => {
         { name: 'System prompt', tokens: 41_200 },
         { name: 'Messages <&>', tokens: 9800 }
       ],
-      dropped_categories: 3
+      dropped_categories: 3,
+      mcp_tools: [
+        { name: 'read_file', server_name: 'filesystem', tokens: 1450 },
+        { name: 'query\ndocs', server_name: 'remote<mcp>', tokens: 620 }
+      ],
+      dropped_mcp_tools: 5
     }
     // Wire order is the producer's descending-token order and a cut takes entries off the TAIL, so the
-    // rows are a sequence and never a set.
+    // rows are a sequence and never a set. Asserted for both inventories.
     expect(payload.categories.map((row) => row.name)).toEqual(['System prompt', 'Messages <&>'])
-    // The count is INDEPENDENT of the retained length — two cuts' worth of loss beside two rows here —
-    // so `categories.length + dropped_categories` is the true size, not something to reconcile.
+    expect(payload.mcp_tools.map((row) => row.name)).toEqual(['read_file', 'query\ndocs'])
+    // Each count is INDEPENDENT of its OWN retained length — two cuts' worth of loss apiece — and the
+    // two are never cross-read. The daemon divides one envelope across three lists and can cut all
+    // three at once, so `3` here says nothing about `5` and neither says anything about a length.
     expect(payload.dropped_categories).toBe(3)
+    expect(payload.dropped_mcp_tools).toBe(5)
     // Conversation-scoped, not turn-scoped: receiving one neither opens nor closes a turn.
     expect(payload).not.toHaveProperty('turn_id')
-    expect(payload).not.toHaveProperty('mcp_tools')
+    // #1460's pin, deliberately NOT deleted with the `mcp_tools` one above — removing it would retire
+    // the last inventory's declaration guard a slice early.
     expect(payload).not.toHaveProperty('memory_files')
+  })
+
+  it('shapes ContextUsageMCPTool as three always-present keys — "" and 0 are VALUES (#1459)', () => {
+    // The daemon states all three keys remain present even when the strings are empty, so none is
+    // optional and a truthiness test on any would read a legitimate row as malformed. `requireString`
+    // and not `requireNonEmptyString` is the decoder's matching choice: nothing resolves these strings
+    // against anything, so `''` is a display value rather than a lookup that found nothing.
+    const row: ContextUsageMCPTool = { name: '', server_name: '', tokens: 0 }
+    expect(row).toEqual({ name: '', server_name: '', tokens: 0 })
+    // `server_name` IS INERT. Its name collides with the actuation-crossing `ServerName` on the
+    // daemon's MCP reconnect payload, and that collision is the trap this pin exists to mark: this one
+    // names a contributor to a READING, is never an actuation target or an authorization input, and
+    // must not be fed to an MCP verb on the strength of having appeared here. `name` carries the same
+    // constraint. Both are declared as plain strings precisely so the type system makes no promise the
+    // wire has not kept — and never a Map key on a plain object.
+    const hostile: ContextUsageMCPTool = {
+      name: '<img src=x>',
+      server_name: '__proto__',
+      tokens: 1
+    }
+    expect([hostile.name, hostile.server_name]).toEqual(['<img src=x>', '__proto__'])
   })
 
   it('shapes ContextUsageCategory as two always-present keys — "" and 0 are VALUES (#1455)', () => {
@@ -413,15 +444,20 @@ describe('context-usage wire vocabulary (#1454, #1455)', () => {
       max_tokens: 0,
       percentage: 0,
       categories: [],
-      dropped_categories: 0
+      dropped_categories: 0,
+      mcp_tools: [],
+      dropped_mcp_tools: 0
     }
     expect([empty.conversation_id, empty.model]).toEqual(['', ''])
     expect([empty.total_tokens, empty.max_tokens, empty.percentage]).toEqual([0, 0, 0])
-    // `MarshalJSON` normalises a nil slice to `[]`, so the type is a plain array and never
-    // `ContextUsageCategory[] | null` — an empty list is the POSITIVE statement that claude reported no
-    // categories, and a consumer never has to branch on null to read it.
+    // `MarshalJSON` normalises EVERY nil inventory slice to `[]`, so each type is a plain array and
+    // never `ContextUsageCategory[] | null` / `ContextUsageMCPTool[] | null` — an empty list is the
+    // POSITIVE statement that claude reported no categories, or no MCP tools, and a consumer never has
+    // to branch on null to read one.
     expect(empty.categories).toEqual([])
     expect(empty.dropped_categories).toBe(0)
+    expect(empty.mcp_tools).toEqual([])
+    expect(empty.dropped_mcp_tools).toBe(0)
   })
 
   it('admits a percentage NOT derivable from the token pair — the reading is informational', () => {
@@ -435,14 +471,18 @@ describe('context-usage wire vocabulary (#1454, #1455)', () => {
       total_tokens: 128_400,
       max_tokens: 0,
       percentage: 64,
-      // The categories need not sum to `total_tokens` either, by the same contract — and a cut list
-      // makes the sum smaller still. One contribution beside a six-figure total is representable.
+      // Neither inventory need sum to `total_tokens` either, by the same contract — and a cut list
+      // makes the sum smaller still. One contribution beside a six-figure total is representable, and
+      // so is a negative one: the rows police type, never range.
       categories: [{ name: 'System prompt', tokens: 41_200 }],
-      dropped_categories: 0
+      dropped_categories: 0,
+      mcp_tools: [{ name: 'read_file', server_name: 'filesystem', tokens: -1 }],
+      dropped_mcp_tools: 0
     }
     expect(inconsistent.percentage).toBe(64)
     expect(inconsistent.max_tokens).toBe(0)
     expect(inconsistent.categories[0].tokens).toBe(41_200)
+    expect(inconsistent.mcp_tools[0].tokens).toBe(-1)
   })
 })
 
